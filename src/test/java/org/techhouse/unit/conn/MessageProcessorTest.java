@@ -6,9 +6,7 @@ import static org.mockito.Mockito.*;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -16,7 +14,6 @@ import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.techhouse.analyze.AnalyzeResult;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -46,19 +43,9 @@ public class MessageProcessorTest {
         TestUtils.standardTearDown();
     }
 
-    private Socket mockSocket(InputStream in, OutputStream out) throws Exception {
-        Socket s = Mockito.mock(Socket.class);
-        InetAddress addr = Mockito.mock(InetAddress.class);
-        when(s.getInetAddress()).thenReturn(addr);
-        when(addr.getHostAddress()).thenReturn("127.0.0.1");
-        when(s.getInputStream()).thenReturn(in);
-        when(s.getOutputStream()).thenReturn(out);
-        return s;
-    }
-
     @Test
     public void test_handles_null_or_blank_messages() throws Exception {
-        Socket mockSocket = mockSocket(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)),
+        Socket mockSocket = TestUtils.clientSocket(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)),
                 new ByteArrayOutputStream());
         MessageProcessor messageProcessor = new MessageProcessor(mockSocket);
         Thread thread = new Thread(messageProcessor);
@@ -71,7 +58,7 @@ public class MessageProcessorTest {
     public void test_valid_message_is_processed_and_response_written() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "{\"type\":\"LIST_DATABASES\"}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -87,7 +74,7 @@ public class MessageProcessorTest {
     public void test_close_connection_message_exits_loop() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "{\"type\":\"CLOSE_CONNECTION\"}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -102,7 +89,7 @@ public class MessageProcessorTest {
     public void test_invalid_json_responds_with_exception_message() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "not_valid_json\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -122,7 +109,7 @@ public class MessageProcessorTest {
             TestUtils.setPrivateField(config, "maxConnections", -1);
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            Socket socket = mockSocket(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)), out);
+            Socket socket = TestUtils.clientSocket(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)), out);
 
             MessageProcessor mp = new MessageProcessor(socket);
             Thread t = new Thread(mp);
@@ -142,7 +129,7 @@ public class MessageProcessorTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         // SAVE with a 2-char databaseName violates the naming rule
         String msg = "{\"type\":\"SAVE\",\"databaseName\":\"ab\",\"collectionName\":\"myColl\",\"object\":{}}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -158,7 +145,7 @@ public class MessageProcessorTest {
     public void test_unauthenticated_request_returns_unauthenticated() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "{\"type\":\"SAVE\",\"databaseName\":\"testDb\",\"collectionName\":\"testColl\",\"object\":{}}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -171,21 +158,15 @@ public class MessageProcessorTest {
 
     @Test
     public void test_authenticated_request_is_processed() throws Exception {
-        final var createReq = new CreateUserRequest();
-        createReq.setUsername("msg_proce_admin");
-        createReq.setPassword("password123");
-        createReq.setAdmin(true);
-        createReq.setGlobalPermissions(new HashSet<>());
-        createReq.setDatabasePermissions(new HashMap<>());
-        createReq.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(createReq);
+        TestUtils.createAdmin("msg_proce_admin");
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String messages = """
                 {"type":"AUTHENTICATE","username":"msg_proce_admin","password":"password123"}
                 {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{"name":"test"}}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+                out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -199,21 +180,15 @@ public class MessageProcessorTest {
 
     @Test
     public void test_authenticated_close_connection() throws Exception {
-        final var createReq = new CreateUserRequest();
-        createReq.setUsername("msg_closer");
-        createReq.setPassword("password123");
-        createReq.setAdmin(true);
-        createReq.setGlobalPermissions(new HashSet<>());
-        createReq.setDatabasePermissions(new HashMap<>());
-        createReq.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(createReq);
+        TestUtils.createAdmin("msg_closer");
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String messages = """
                 {"type":"AUTHENTICATE","username":"msg_closer","password":"password123"}
                 {"type":"CLOSE_CONNECTION"}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+                out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -239,7 +214,8 @@ public class MessageProcessorTest {
                 {"type":"AUTHENTICATE","username":"noPermsUser","password":"password123"}
                 {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{}}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+                out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -251,19 +227,13 @@ public class MessageProcessorTest {
     }
 
     private void createAnalyzeAdmin(String username) {
-        final var createReq = new CreateUserRequest();
-        createReq.setUsername(username);
-        createReq.setPassword("password123");
-        createReq.setAdmin(true);
-        createReq.setGlobalPermissions(new HashSet<>());
-        createReq.setDatabasePermissions(new HashMap<>());
-        createReq.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(createReq);
+        TestUtils.createAdmin(username);
     }
 
     private String runMessages(String messages) throws Exception {
         final var out = new ByteArrayOutputStream();
-        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
+        final var socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+                out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
@@ -406,7 +376,8 @@ public class MessageProcessorTest {
         OutputStream throwingOut = mock(OutputStream.class);
         doThrow(new IOException("write failed")).when(throwingOut).write(any(byte[].class), anyInt(), anyInt());
         String msg = "{\"type\":\"LIST_DATABASES\"}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), throwingOut);
+        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)),
+                throwingOut);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);

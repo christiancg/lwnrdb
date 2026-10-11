@@ -25,17 +25,21 @@ public class EnumTypeAdapter<T extends Enum<T>> implements TypeAdapter<T> {
 
     @Override
     public String toJson(T value) {
-        return "\"" + value + "\"";
+        return "\"" + nameOf(value) + "\"";
     }
 
     @Override
     public void toJson(T value, StringBuilder out) {
-        out.append('"').append(value).append('"');
+        out.append('"').append(nameOf(value)).append('"');
+    }
+
+    private String nameOf(T value) {
+        return value == null ? String.valueOf((Object) null) : value.name();
     }
 
     @Override
     public T fromJson(JsonBaseElement value) {
-        if (value.getJsonType() == JsonBaseElement.JsonType.STRING) {
+        if (value.isJsonString()) {
             final var name = value.asJsonString().getValue();
             final var constant = byName.get(name);
             if (constant == null) {

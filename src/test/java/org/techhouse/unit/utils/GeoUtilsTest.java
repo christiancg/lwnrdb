@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.techhouse.utils.GeoPoint;
 import org.techhouse.utils.GeoUtils;
 
@@ -64,6 +66,36 @@ public class GeoUtilsTest {
     }
 
     @Test
+    public void test_bounding_box_of_widens_across_the_antimeridian() {
+        final var bbox = GeoUtils.boundingBoxOf(
+                List.of(new GeoPoint(1, 170), new GeoPoint(1, 175), new GeoPoint(1, -175), new GeoPoint(1, -170)));
+
+        assertEquals(-180, bbox.minLng(), 1e-9);
+        assertEquals(180, bbox.maxLng(), 1e-9);
+        assertTrue(bbox.contains(new GeoPoint(1, 178)),
+                "a point just across the antimeridian must fall inside the widened box");
+    }
+
+    @Test
+    public void test_bounding_box_of_does_not_widen_an_ordinary_polygon() {
+        final var bbox = GeoUtils.boundingBoxOf(
+                List.of(new GeoPoint(1, 10), new GeoPoint(1, 12), new GeoPoint(1, 15), new GeoPoint(1, 11)));
+
+        assertEquals(10, bbox.minLng(), 1e-9);
+        assertEquals(15, bbox.maxLng(), 1e-9);
+    }
+
+    @Test
+    public void test_bounding_box_of_single_point() {
+        final var bbox = GeoUtils.boundingBoxOf(List.of(new GeoPoint(3, 178)));
+
+        assertEquals(3, bbox.minLat(), 1e-9);
+        assertEquals(3, bbox.maxLat(), 1e-9);
+        assertEquals(178, bbox.minLng(), 1e-9);
+        assertEquals(178, bbox.maxLng(), 1e-9);
+    }
+
+    @Test
     public void test_bounding_box_for_radius_contains_center() {
         final var center = new GeoPoint(40.0, -74.0);
         final var bbox = GeoUtils.boundingBoxForRadius(center, 1000);
@@ -116,5 +148,81 @@ public class GeoUtilsTest {
 
         assertFalse(prefixes.isEmpty());
         assertTrue(prefixes.size() <= 32, "covering should stay bounded, was " + prefixes.size());
+    }
+
+    @Test
+    public void test_bounding_box_contains_every_point_at_the_radius() {
+        final var radii = new double[]{100, 1_000, 100_000, 1_000_000};
+        final var centers = List.of(new GeoPoint(0.0, 0.0), new GeoPoint(45.0, -73.5), new GeoPoint(-33.9, 151.2),
+                new GeoPoint(70.0, 20.0));
+        for (final var center : centers) {
+            for (final var radius : radii) {
+                final var bbox = GeoUtils.boundingBoxForRadius(center, radius);
+                for (var bearing = 0; bearing < 360; bearing += 5) {
+                    final var point = destination(center, radius, bearing);
+                    if (GeoUtils.haversineMeters(center, point) > radius) {
+                        continue;
+                    }
+                    assertTrue(bbox.contains(point), "a true match at bearing " + bearing + " for radius " + radius
+                            + " around " + center.lat() + "," + center.lng() + " was excluded by the candidate box");
+                }
+            }
+        }
+    }
+
+    @Test
+    public void test_bounding_box_is_sized_from_the_haversine_sphere() {
+        final var bbox = GeoUtils.boundingBoxForRadius(new GeoPoint(0.0, 0.0), 100_000);
+        final var edge = new GeoPoint(bbox.maxLat(), 0.0);
+
+        assertTrue(GeoUtils.haversineMeters(new GeoPoint(0.0, 0.0), edge) >= 100_000,
+                "the box edge must lie at or beyond the requested radius, or true matches near the rim are lost");
+    }
+
+    @Test
+    public void test_bounding_box_covers_a_point_the_rounded_constant_excluded() {
+        final var center = new GeoPoint(0.0, 0.0);
+        final var point = new GeoPoint(0.899, 0.0);
+        final var bbox = GeoUtils.boundingBoxForRadius(center, 100_000);
+
+        assertTrue(GeoUtils.haversineMeters(center, point) < 100_000);
+        assertTrue(bbox.contains(point));
+    }
+
+    private static GeoPoint destination(GeoPoint origin, double distanceMeters, double bearingDegrees) {
+        final var angular = distanceMeters / 6371000.0;
+        final var bearing = Math.toRadians(bearingDegrees);
+        final var lat1 = Math.toRadians(origin.lat());
+        final var lng1 = Math.toRadians(origin.lng());
+        final var lat2 = Math
+                .asin(Math.sin(lat1) * Math.cos(angular) + Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing));
+        final var lng2 = lng1 + Math.atan2(Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
+                Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2));
+        return new GeoPoint(Math.toDegrees(lat2), Math.toDegrees(lng2));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({"east of the antimeridian, 0, 179.99, 50000, 0, 179.95, 0, -179.95",
+            "west of the antimeridian, 0, -179.99, 50000, 0, 179.95, 0, -179.95",
+            "centred on the antimeridian, 0, 180.0, 1000000, 0, 179.95, 0, -179.95",
+            "near the pole, 89.95, 0, 50000, 89.97, 170, 89.97, -170"})
+    public void test_a_radius_near_a_wrap_covers_every_point_within(String label, double lat, double lng,
+            double radiusMeters, double lat1, double lng1, double lat2, double lng2) {
+        final var centre = new GeoPoint(lat, lng);
+        final var box = GeoUtils.boundingBoxForRadius(centre, radiusMeters);
+        for (final var candidate : List.of(new GeoPoint(lat1, lng1), new GeoPoint(lat2, lng2))) {
+            if (GeoUtils.haversineMeters(centre, candidate) <= radiusMeters) {
+                assertTrue(box.contains(candidate),
+                        "the box must be a superset of the true circle: FILTER re-tests exactly but can never"
+                                + " recover a point the pre-filter excluded");
+            }
+        }
+    }
+
+    @Test
+    public void test_an_ordinary_radius_keeps_a_selective_box() {
+        final var box = GeoUtils.boundingBoxForRadius(new GeoPoint(0, 0), 50000);
+        assertTrue(box.minLng() > -1 && box.maxLng() < 1,
+                "widening to the whole longitude band away from the wrap would forfeit the index everywhere");
     }
 }

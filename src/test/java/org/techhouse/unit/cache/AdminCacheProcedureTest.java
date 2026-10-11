@@ -2,13 +2,18 @@ package org.techhouse.unit.cache;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
@@ -32,7 +37,7 @@ public class AdminCacheProcedureTest {
     }
 
     @BeforeEach
-    void clear() {
+    void clear() throws Exception {
         for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
             fs.deleteProcedure(TestGlobals.DB, name);
         }
@@ -92,8 +97,41 @@ public class AdminCacheProcedureTest {
     }
 
     @Test
-    public void test_malformed_procedure_file_reads_as_absent() throws Exception {
+    public void test_a_malformed_procedure_file_refuses_rather_than_reading_as_absent() throws Exception {
         fs.writeProcedure(TestGlobals.DB, "broken", "not json at all");
-        assertNull(cache.getProcedure(TestGlobals.DB, "broken"));
+
+        assertThrows(MetadataReadException.class, () -> cache.getProcedure(TestGlobals.DB, "broken"),
+                "conflating a read failure with absence makes an existing procedure answer PROCEDURE_NOT_FOUND");
+    }
+
+    @Test
+    public void test_a_read_failure_is_not_cached_as_absence() throws Exception {
+        fs.writeProcedure(TestGlobals.DB, "flaky", "not json at all");
+        assertThrows(MetadataReadException.class, () -> cache.getProcedure(TestGlobals.DB, "flaky"));
+
+        write("flaky");
+
+        assertNotNull(cache.getProcedure(TestGlobals.DB, "flaky"),
+                "a failed read cached as a miss leaves the procedure invisible until eviction or restart");
+    }
+
+    @Test
+    public void test_a_procedures_folder_that_cannot_be_listed_is_not_cached_as_absence() throws Exception {
+        final var folder = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + Globals.PROCEDURES_FOLDER);
+        if (folder.exists()) {
+            TestUtils.deleteFolder(folder);
+        }
+        Files.writeString(folder.toPath(), "x", StandardCharsets.UTF_8);
+        try {
+            assertThrows(MetadataReadException.class, () -> cache.getProcedure(TestGlobals.DB, "listed"),
+                    "a listing failure read as absence made the trigger dispatcher consume every pending run");
+        } finally {
+            Files.delete(folder.toPath());
+        }
+
+        write("listed");
+
+        assertNotNull(cache.getProcedure(TestGlobals.DB, "listed"));
     }
 }

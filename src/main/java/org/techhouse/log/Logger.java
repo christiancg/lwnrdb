@@ -64,7 +64,7 @@ public class Logger {
         internalWriteLog(LogSeverity.ERROR, message, null);
     }
 
-    public void error(String message, Exception exception) {
+    public void error(String message, Throwable exception) {
         internalWriteLog(LogSeverity.ERROR, message, exception);
     }
 
@@ -72,7 +72,7 @@ public class Logger {
         internalWriteLog(LogSeverity.WARNING, message, null);
     }
 
-    public void warning(String message, Exception exception) {
+    public void warning(String message, Throwable exception) {
         internalWriteLog(LogSeverity.WARNING, message, exception);
     }
 
@@ -80,7 +80,7 @@ public class Logger {
         internalWriteLog(LogSeverity.INFO, message, null);
     }
 
-    private void internalWriteLog(LogSeverity severity, String message, Exception exception) {
+    private void internalWriteLog(LogSeverity severity, String message, Throwable exception) {
         if (!isEnabled(severity)) {
             return;
         }

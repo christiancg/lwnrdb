@@ -1,11 +1,16 @@
 package org.techhouse.data;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonNull;
 
 public enum IndexKind {
     NUMBER(Globals.INDEX_TYPE_NUMBER), STRING(Globals.INDEX_TYPE_STRING), BOOLEAN(Globals.INDEX_TYPE_BOOLEAN), NULL(
             Globals.INDEX_TYPE_NULL), OBJECT(Globals.INDEX_TYPE_OBJECT), ARRAY(Globals.INDEX_TYPE_ARRAY);
+
+    public static final List<IndexKind> HASH_KINDS = List.of(OBJECT, ARRAY);
 
     private final String label;
 
@@ -15,6 +20,12 @@ public enum IndexKind {
 
     public String label() {
         return label;
+    }
+
+    public static List<Class<?>> scalarIndexClasses() {
+        final var classes = new ArrayList<Class<?>>(List.of(Number.class, Boolean.class, String.class));
+        classes.addAll(CustomTypeFactory.getCustomTypes().values());
+        return classes;
     }
 
     public static String fileLabel(Class<?> valueClass) {

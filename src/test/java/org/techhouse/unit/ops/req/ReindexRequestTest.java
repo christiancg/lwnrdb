@@ -1,6 +1,7 @@
 package org.techhouse.unit.ops.req;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -48,5 +49,14 @@ public class ReindexRequestTest {
         ReindexRequest request = new ReindexRequest("myDb", "myColl", List.of());
         assertEquals("myDb", request.getDatabaseName());
         assertEquals("myColl", request.getCollectionName());
+    }
+
+    @Test
+    public void test_primary_key_defaults_to_false_and_can_be_set() {
+        assertFalse(new ReindexRequest("myDb", "myColl", null).isPrimaryKey());
+        assertTrue(new ReindexRequest("myDb", "myColl", null, true).isPrimaryKey());
+        final var request = new ReindexRequest();
+        request.setPrimaryKey(true);
+        assertTrue(request.isPrimaryKey());
     }
 }

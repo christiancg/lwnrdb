@@ -2,14 +2,17 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
@@ -27,17 +30,22 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.filter.FieldPredicateFactory;
 import org.techhouse.ops.index.PendingWriteReconciler;
+import org.techhouse.ops.index.PrimaryKeyIndexResolver;
 import org.techhouse.ops.req.agg.BaseOperator;
+import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.operators.ScriptOperator;
+import org.techhouse.simplejs.ScriptCallable;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.utils.JsonUtils;
 
 public class FilterOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final Comparator<ScoredDocument> WORST_FIRST = Comparator.comparingDouble(ScoredDocument::score)
+            .thenComparing(ScoredDocument::id, Comparator.reverseOrder());
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName) throws IOException {
@@ -59,65 +67,100 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
             Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
             throws IOException {
-        final var buffered = resultStream == null ? null : resultStream.toList();
+        final List<JsonObject> buffered;
+        if (resultStream == null) {
+            buffered = null;
+        } else {
+            try (var documents = resultStream) {
+                buffered = documents.toList();
+            }
+        }
+        if (buffered != null) {
+            return combineBuffered(operator, buffered, dbName, collName, context);
+        }
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
-            final var stepStream = buffered == null ? null : buffered.stream();
-            final var partialResults = switch (step.getType()) {
-                case CONJUNCTION ->
-                    processConjunctionOperator((ConjunctionOperator) step, stepStream, dbName, collName, context);
-                case FIELD -> processFieldOperator((FieldOperator) step, stepStream, dbName, collName);
-                case CUSTOM -> processCustomOperator((CustomOperator) step, stepStream, dbName, collName);
-                case SCRIPT -> processScriptOperator((ScriptOperator) step, stepStream, dbName, collName, context);
-            };
-            combinationResult.add(partialResults);
+            combinationResult.add(processConjunctionStep(step, null, dbName, collName, context));
         }
         return switch (operator.getConjunctionType()) {
             case AND -> andXorConjunction(combinationResult, operator.getOperators().size());
             case OR -> orConjunction(combinationResult);
             case XOR -> andXorConjunction(combinationResult, 1);
-            case NOR -> {
-                final var combined = orConjunction(combinationResult);
-                yield norNandAllStreamAggregation(combined, buffered == null ? null : buffered.stream(), dbName,
-                        collName);
+            case NOR -> norNandAllStreamAggregation(orConjunction(combinationResult), dbName, collName);
+            case NAND -> norNandAllStreamAggregation(
+                    andXorConjunction(combinationResult, operator.getOperators().size()), dbName, collName);
+        };
+    }
+
+    private static Stream<JsonObject> processConjunctionStep(BaseOperator step, Stream<JsonObject> stepStream,
+            String dbName, String collName, PipelineScriptContext context) throws IOException {
+        return switch (step.getType()) {
+            case CONJUNCTION ->
+                processConjunctionOperator((ConjunctionOperator) step, stepStream, dbName, collName, context);
+            case FIELD -> processFieldOperator((FieldOperator) step, stepStream, dbName, collName);
+            case CUSTOM -> processCustomOperator((CustomOperator) step, stepStream, dbName, collName);
+            case SCRIPT -> processScriptOperator((ScriptOperator) step, stepStream, dbName, collName, context);
+        };
+    }
+
+    private static Stream<JsonObject> combineBuffered(ConjunctionOperator operator, List<JsonObject> buffered,
+            String dbName, String collName, PipelineScriptContext context) throws IOException {
+        final var matches = new ArrayList<Set<JsonObject>>();
+        for (var step : operator.getOperators()) {
+            final Set<JsonObject> matched = Collections.newSetFromMap(new IdentityHashMap<>());
+            try (var stepResults = processConjunctionStep(step, buffered.stream(), dbName, collName, context)) {
+                stepResults.forEach(matched::add);
             }
-            case NAND -> {
-                final var combined = andXorConjunction(combinationResult, operator.getOperators().size());
-                yield norNandAllStreamAggregation(combined, buffered == null ? null : buffered.stream(), dbName,
-                        collName);
+            matches.add(matched);
+        }
+        final var type = operator.getConjunctionType();
+        return buffered.stream().filter(row -> accepts(type, countMatches(matches, row), matches.size()));
+    }
+
+    private static int countMatches(List<Set<JsonObject>> matches, JsonObject row) {
+        var count = 0;
+        for (final var matched : matches) {
+            if (matched.contains(row)) {
+                count++;
             }
+        }
+        return count;
+    }
+
+    private static boolean accepts(ConjunctionOperatorType type, int matched, int operands) {
+        return switch (type) {
+            case AND -> matched == operands;
+            case OR -> matched > 0;
+            case XOR -> matched == 1;
+            case NOR -> matched == 0;
+            case NAND -> matched < operands;
         };
     }
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
+        return combinationResult.stream().flatMap(FilterOperatorHelper::distinctByConjunctionKey)
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == matches).map(List::getFirst);
     }
 
-    private static JsonBaseElement conjunctionKey(JsonObject jsonObject) {
+    private static Stream<JsonObject> distinctByConjunctionKey(Stream<JsonObject> rows) {
+        final var seen = new HashSet<>();
+        return rows.filter(jsonObject -> seen.add(conjunctionKey(jsonObject)));
+    }
+
+    private static Object conjunctionKey(JsonObject jsonObject) {
         final var id = jsonObject.get(Globals.PK_FIELD);
-        if (id == null) {
-            throw new IllegalStateException("Document missing _id in conjunction grouping");
-        }
-        return id;
+        return id != null ? id : jsonObject;
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
-        final var seen = new HashSet<>();
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).filter(jsonObject -> {
-            final var id = jsonObject.get(Globals.PK_FIELD);
-            return seen.add(id != null ? id : jsonObject);
-        });
+        return distinctByConjunctionKey(combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream));
     }
 
-    private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
-            Stream<JsonObject> resultStream, String dbName, String collName) {
-        if (resultStream == null) {
-            // Blocking step (documented exception): NOR/NAND must diff against the full collection.
-            resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
-        }
-        return Stream.concat(resultStream, combined)
+    private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined, String dbName,
+            String collName) {
+        final var wholeCollection = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
+        return Stream.concat(distinctByConjunctionKey(wholeCollection), combined)
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == 1).map(List::getFirst);
     }
@@ -137,33 +180,25 @@ public class FilterOperatorHelper {
 
     // JS truthiness, not a strict boolean: 0/""/null/undefined exclude a document.
     static boolean testScript(ScriptOperator operator, JsonObject document, PipelineScriptContext context) {
-        return isTruthy(callScript(operator.getSource(), document, context));
-    }
-
-    private static boolean isTruthy(JsonBaseElement value) {
-        if (value == null || value.isJsonNull()) {
-            return false;
-        }
-        if (value.isJsonBoolean()) {
-            return value.asJsonBoolean().getValue();
-        }
-        if (value.isJsonNumber()) {
-            final var number = value.asJsonNumber().getValue().doubleValue();
-            return number != 0 && !Double.isNaN(number);
-        }
-        if (value.isJsonString()) {
-            return !value.asJsonString().getValue().isEmpty();
-        }
-        return true;
+        return callPredicate(operator.getSource(), document, context);
     }
 
     static JsonBaseElement callScript(String source, JsonObject document, PipelineScriptContext context) {
+        return invokeScript(source, context, callable -> callable.apply(document));
+    }
+
+    private static boolean callPredicate(String source, JsonObject document, PipelineScriptContext context) {
+        return invokeScript(source, context, callable -> callable.test(document));
+    }
+
+    private static <T> T invokeScript(String source, PipelineScriptContext context,
+            Function<ScriptCallable, T> invocation) {
         if (context == null) {
             throw new ScriptCallableException("InternalError", "No script context available for this pipeline");
         }
         final var analyze = AnalyzeContext.current();
         final var start = analyze == null ? 0 : System.nanoTime();
-        final var value = context.callableFor(source).apply(document);
+        final var value = invocation.apply(context.callableFor(source));
         if (analyze != null) {
             analyze.recordScriptInvocation(System.nanoTime() - start);
         }
@@ -237,21 +272,23 @@ public class FilterOperatorHelper {
         for (var entry : operator.getArgs().entrySet()) {
             args.put(entry.getKey(), entry.getValue());
         }
-        final var heap = new PriorityQueue<>(Comparator.comparingDouble(ScoredDocument::score));
-        candidates.forEach(document -> {
-            final var score = scoreDocument(document, fieldName, operatorName, args);
-            if (score == null) {
-                return;
-            }
-            if (heap.size() < k) {
-                heap.offer(new ScoredDocument(document, score));
-            } else if (heap.peek().score() < score) {
-                heap.poll();
-                heap.offer(new ScoredDocument(document, score));
-            }
-        });
-        return heap.stream().sorted(Comparator.comparingDouble(ScoredDocument::score).reversed())
-                .map(ScoredDocument::document);
+        final var heap = new PriorityQueue<>(WORST_FIRST);
+        try (var scored = candidates) {
+            scored.forEach(document -> {
+                final var score = scoreDocument(document, fieldName, operatorName, args);
+                if (score == null) {
+                    return;
+                }
+                final var candidate = new ScoredDocument(document, score);
+                if (heap.size() < k) {
+                    heap.offer(candidate);
+                } else if (WORST_FIRST.compare(heap.peek(), candidate) < 0) {
+                    heap.poll();
+                    heap.offer(candidate);
+                }
+            });
+        }
+        return heap.stream().sorted(WORST_FIRST.reversed()).map(ScoredDocument::document);
     }
 
     private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
@@ -270,6 +307,9 @@ public class FilterOperatorHelper {
     }
 
     private record ScoredDocument(JsonObject document, double score) {
+        String id() {
+            return document.get(Globals.PK_FIELD) instanceof JsonString pk ? pk.getValue() : "";
+        }
     }
 
     public static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
@@ -299,9 +339,7 @@ public class FilterOperatorHelper {
         return switch (operator.getType()) {
             case FIELD -> {
                 final var fieldOperator = (FieldOperator) operator;
-                // A hash index hit is only a candidate and the index-only COUNT cannot confirm it, so
-                // disqualify it and let the caller fall back to the document-reading COUNT.
-                if (usesHashIndex(fieldOperator)) {
+                if (hitsAreUnconfirmedCandidates(fieldOperator)) {
                     yield null;
                 }
                 yield indexMatchingIds(fieldOperator, dbName, collName);
@@ -311,6 +349,10 @@ public class FilterOperatorHelper {
             case CUSTOM -> null;
             case SCRIPT -> null;
         };
+    }
+
+    private static boolean hitsAreUnconfirmedCandidates(FieldOperator operator) {
+        return !JsonUtils.isPrimaryKeyPath(operator.getField()) && usesHashIndex(operator);
     }
 
     // Mirrors the dispatch in UserCache.doGetIdsFromIndex / getIdsFromInList: object operands and array
@@ -336,6 +378,9 @@ public class FilterOperatorHelper {
     // re-added by re-testing the operator against the current document, keeping the result exact.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
+        if (JsonUtils.isPrimaryKeyPath(operator.getField())) {
+            return PrimaryKeyIndexResolver.resolve(operator, dbName, collName);
+        }
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
@@ -357,6 +402,9 @@ public class FilterOperatorHelper {
     private static Set<String> rawIndexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
+        if (cache.hasNoIndex(dbName, collName, fieldName)) {
+            return null;
+        }
         final var value = operator.getValue();
         return switch (value) {
             case JsonObject jsonObject -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonObject);

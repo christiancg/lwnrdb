@@ -1,44 +1,3 @@
-"""End-to-end tests for stored procedures and triggers.
-
-Like the RUN_SCRIPT suite this script is **self-contained**: it starts its own LWNRDB
-instance on a dedicated port and working directory, because the feature needs both
-`scriptsEnabled=true` and `triggersEnabled=true`, which the shared CI server does not have.
-It runs in two phases:
-
-  phase 1 — scripts and triggers enabled, with a deliberately tight sandbox so every limit
-            is reachable in a test rather than only in theory;
-  phase 2 — the same data directory restarted with `scriptsEnabled=false` and
-            `triggersEnabled=false`, proving each master switch refuses independently.
-
-What is covered:
-
-  * procedure lifecycle: save, call, list (with and without source), re-save bumps the
-    version and the *new* body runs, delete, call-after-delete;
-  * gating and delegation: the scriptsEnabled switch, unauthenticated, unknown database,
-    invalid names, oversized source, unparseable source, and the full permission matrix -
-    a RUN user may call but not install, a MANAGE user may do both, a grant on one database
-    confers nothing on another, and a legacy boolean grant still calls;
-  * storage placement: a procedure lands in {db}/.procedures/{name}.json and a trigger in
-    {db}/{coll}/{coll}-triggers.json, with nothing new under admin/;
-  * triggers: CREATED/UPDATED/DELETED, document and batch mode, disabled, the triggersEnabled
-    switch, and definer rights end to end - a writer with no access to the audit collection
-    still produces the audit row;
-  * cascade: allowCascade=false fires exactly once, and a cascading chain terminates at
-    triggerMaxDepth;
-  * cascade deletes: DROP_COLLECTION removes the trigger file, DROP_DATABASE the whole lot;
-  * before hooks: a synchronous BEFORE trigger that computes a field, vetoes a write, chains in
-    name order, is fail-closed on a timeout, has no `db` binding, and applies on the
-    transactional path too - asserted on the SAVE response itself, since unlike an after
-    trigger nothing here is asynchronous;
-  * dry run: TEST_TRIGGER reports accept/replace/reject, captures console output the live
-    path discards, and writes nothing;
-  * stats: GET_DATABASE_STATS reports the trigger counters.
-
-The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping it
-never touches an unrelated LWNRDB process.
-"""
-
-import json
 import os
 import sys
 import tempfile
@@ -49,6 +8,7 @@ from base_utils import check, check_code, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PROC_TEST_PORT", "8996"))
+CLUSTER_PORT = int(os.environ.get("PROC_TEST_CLUSTER_PORT", "9996"))
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 
@@ -56,6 +16,14 @@ DB = "proc_test_db"
 OTHER_DB = "proc_other_db"
 COLL = "orders"
 AUDIT = "audit"
+UNREADABLE_COLL = "broken_triggers"
+CORRUPT_COLL = "corrupt_triggers"
+RECOVERED_COLL = "tx_recovered"
+FENCED_COLL = "tx_fenced"
+RETRY_COLL = "retry_shutdown"
+BATCH_DELETE_COLL = "batch_deletes"
+TWIN_FAILING_COLL = "twin_failing"
+TWIN_AUDITED_COLL = "twin_audited"
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -63,9 +31,7 @@ WRITER = "proc_writer"
 LEGACY = "proc_legacy"
 USER_PASSWORD = "password123"
 
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
-
 
 INSTRUCTION_BUDGET = 2_000_000
 TIMEOUT_MS = 5_000
@@ -78,8 +44,10 @@ TRIGGER_TIMEOUT_MS = 4_000
 BEFORE_HOOK_BUDGET = 200_000
 BEFORE_HOOK_TIMEOUT_MS = 500
 
+SHUTDOWN_BUDGET_MS = 15_000
+LONG_RETRY_BACKOFF_MS = 60_000
+SHUTDOWN_CEILING_SECONDS = 7.0
 
-# ── connection / protocol ────────────────────────────────────────────────────
 
 class Conn(bu.Conn):
     def save_procedure(self, name, script, db=DB, **extra) -> dict:
@@ -109,81 +77,76 @@ class Conn(bu.Conn):
     def find(self, doc_id, coll=COLL, db=DB) -> dict:
         return self.send({"type": "FIND_BY_ID", "databaseName": db, "collectionName": coll, "_id": doc_id})
 
-def admin_conn() -> Conn:
-    conn = Conn()
-    conn.authenticate()
-    return conn
+
+admin_conn = Conn.authenticated
 
 
 def user_conn(username: str) -> Conn:
-    conn = Conn()
-    conn.authenticate(username, USER_PASSWORD)
-    return conn
+    return Conn.authenticated(username, USER_PASSWORD)
+
+
+def await_latest(fetch, settled, timeout_s: float, interval_s: float):
+    latest = [fetch()]
+
+    def _refetched():
+        latest[0] = fetch()
+        return settled(latest[0])
+
+    if not settled(latest[0]):
+        bu.wait_until(_refetched, timeout_s, interval_s)
+    return latest[0]
 
 
 def await_doc(conn: Conn, doc_id: str, coll=AUDIT, timeout=15.0):
-    """Triggers are asynchronous by design, so poll rather than sleep a fixed interval."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        response = conn.find(doc_id, coll=coll)
-        if response.get("status") == "OK":
-            return response
-        time.sleep(0.1)
-    return conn.find(doc_id, coll=coll)
+    return await_latest(lambda: conn.find(doc_id, coll=coll), lambda r: r.get("status") == "OK", timeout, 0.1)
 
 
 def await_absent(conn: Conn, doc_id: str, coll=AUDIT, settle=2.0):
-    """Gives a trigger every chance to fire before concluding that it did not."""
     time.sleep(settle)
     return conn.find(doc_id, coll=coll)
 
 
-# ── server lifecycle ─────────────────────────────────────────────────────────
-
 def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                  history_enabled: bool = True, history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE",
-                 history_retention_ms: int = 604800000, max_attempts: int = 1, retry_backoff_ms: int = 0):
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-        f"scriptsEnabled={'true' if scripts_enabled else 'false'}\n"
-        f"scriptInstructionBudget={INSTRUCTION_BUDGET}\n"
-        f"scriptTimeoutMs={TIMEOUT_MS}\n"
-        f"scriptMaxDepth={MAX_DEPTH}\n"
-        f"scriptMaxSourceBytes={MAX_SOURCE_BYTES}\n"
-        "scriptMaxLogLines=50\n"
-        "scriptMaxLogLineChars=500\n"
-        f"scriptMaxMemoryBytes={MAX_MEMORY_BYTES}\n"
-        f"scriptMaxResultBytes={MAX_RESULT_BYTES}\n"
-        "scriptTextImportEnabled=false\n"
-        "scriptTimeZone=UTC\n"
-        "scriptLocale=en-US\n"
-        "procedureCacheSize=16\n"
-        f"triggersEnabled={'true' if triggers_enabled else 'false'}\n"
-        "triggerThreads=2\n"
-        "triggerQueueSize=1000\n"
-        f"triggerMaxDepth={TRIGGER_MAX_DEPTH}\n"
-        f"triggerTimeoutMs={TRIGGER_TIMEOUT_MS}\n"
-        f"beforeHookInstructionBudget={BEFORE_HOOK_BUDGET}\n"
-        f"beforeHookTimeoutMs={BEFORE_HOOK_TIMEOUT_MS}\n"
-        f"scriptRunHistoryEnabled={'true' if history_enabled else 'false'}\n"
-        f"scriptRunHistoryKinds={history_kinds}\n"
-        f"scriptRunHistoryRetentionMs={history_retention_ms}\n"
-        "scriptRunHistoryIncludeLogs=false\n"
-        "scriptRunHistoryMaxErrorChars=2000\n"
-        f"triggerMaxAttempts={max_attempts}\n"
-        f"triggerRetryBackoffMs={retry_backoff_ms}\n"
-        "triggerRetryMaxBackoffMs=2000\n"
-        "triggerDeadLetterRetentionMs=604800000\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+                 history_retention_ms: int = 604800000, max_attempts: int = 1, retry_backoff_ms: int = 0,
+                 retry_max_backoff_ms: int = 2000, shutdown_timeout_ms: int = SHUTDOWN_BUDGET_MS,
+                 clustered: bool = False):
+    cluster = {"clusterEnabled": True, "clusterPort": CLUSTER_PORT, "clusterBindAddress": "127.0.0.1",
+               "clusterAdvertisedAddress": "127.0.0.1", "clusterSeeds": "", "clusterExpectedSize": 2,
+               "clusterSecret": "proc-test-cluster-secret"} if clustered else {}
+    bu.write_config(work_dir, PORT,
+                    scriptsEnabled=scripts_enabled,
+                    scriptInstructionBudget=INSTRUCTION_BUDGET,
+                    scriptTimeoutMs=TIMEOUT_MS,
+                    scriptMaxDepth=MAX_DEPTH,
+                    scriptMaxSourceBytes=MAX_SOURCE_BYTES,
+                    scriptMaxLogLines=50,
+                    scriptMaxLogLineChars=500,
+                    scriptMaxMemoryBytes=MAX_MEMORY_BYTES,
+                    scriptMaxResultBytes=MAX_RESULT_BYTES,
+                    scriptTextImportEnabled=False,
+                    scriptTimeZone="UTC",
+                    scriptLocale="en-US",
+                    procedureCacheSize=16,
+                    triggersEnabled=triggers_enabled,
+                    triggerThreads=2,
+                    triggerQueueSize=1000,
+                    triggerMaxDepth=TRIGGER_MAX_DEPTH,
+                    triggerTimeoutMs=TRIGGER_TIMEOUT_MS,
+                    beforeHookInstructionBudget=BEFORE_HOOK_BUDGET,
+                    beforeHookTimeoutMs=BEFORE_HOOK_TIMEOUT_MS,
+                    scriptRunHistoryEnabled=history_enabled,
+                    scriptRunHistoryKinds=history_kinds,
+                    scriptRunHistoryRetentionMs=history_retention_ms,
+                    scriptRunHistoryIncludeLogs=False,
+                    scriptRunHistoryMaxErrorChars=2000,
+                    triggerMaxAttempts=max_attempts,
+                    triggerRetryBackoffMs=retry_backoff_ms,
+                    triggerRetryMaxBackoffMs=retry_max_backoff_ms,
+                    triggerDeadLetterRetentionMs=604800000,
+                    shutdownTimeoutMs=shutdown_timeout_ms,
+                    **cluster)
 
-
-# ── fixtures ─────────────────────────────────────────────────────────────────
 
 def setup_data(conn: Conn):
     section("Setup")
@@ -196,8 +159,6 @@ def setup_data(conn: Conn):
     check_status("create collection in the other database",
                  conn.send({"type": "CREATE_COLLECTION", "databaseName": OTHER_DB, "collectionName": COLL}), "OK")
 
-    # A RUN user may call, a MANAGE user may install, and the writer can only write orders -
-    # deliberately no access to the audit collection, which is what definer rights must overcome.
     check_status("create the RUN-level user", conn.send({
         "type": "CREATE_USER", "username": RUNNER, "password": USER_PASSWORD, "admin": False,
         "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "RUN"}}), "OK")
@@ -207,15 +168,10 @@ def setup_data(conn: Conn):
     check_status("create the writer with no audit access", conn.send({
         "type": "CREATE_USER", "username": WRITER, "password": USER_PASSWORD, "admin": False,
         "collectionPermissions": {f"{DB}|{COLL}": "READ_WRITE"}}), "OK")
-    # The boolean form is what a client written before the level existed sends.
     check_status("create a user with a legacy boolean grant", conn.send({
         "type": "CREATE_USER", "username": LEGACY, "password": USER_PASSWORD, "admin": False,
         "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: True}}), "OK")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 1 — procedures
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_procedure_lifecycle(conn: Conn):
     section("Procedure lifecycle")
@@ -235,7 +191,6 @@ def test_procedure_lifecycle(conn: Conn):
     sources = {p.get("name"): p.get("source") for p in with_source.get("procedures", [])}
     check("includeSource returns the body", sources.get("answer") == "return 42;", f"got {sources}")
 
-    # A re-save bumps the version, and the version-keyed compiled cache must serve the new body
     bumped = conn.save_procedure("versioned", "return 2;")
     check("re-save bumps the version", bumped.get("version") == 2, f"got {bumped.get('version')}")
     check_result("the new body runs", conn.call("versioned"), 2)
@@ -268,6 +223,27 @@ def test_procedure_lifecycle(conn: Conn):
                  conn.save_procedure("guarded", "return 2;", ifVersion=first.get("version")), "OK")
 
 
+def test_procedure_name_case_collision(conn: Conn):
+    section("Procedure name case collisions")
+    check_status("save MyProc", conn.save_procedure("MyProc", "return 1;"), "OK")
+    check_code("saving myproc beside it -> 409-11", conn.save_procedure("myproc", "return 2;"), "ERROR", "409-11")
+    resaved = conn.save_procedure("MyProc", "return 3;")
+    check_status("re-saving MyProc still updates it", resaved, "OK")
+    check("re-saving MyProc bumped its version", (resaved.get("version") or 0) > 1,
+          detail=str(resaved)[:160])
+    check_status("a trigger references MyProc", conn.save_trigger("case_guard", ["CREATED"], "MyProc"), "OK")
+    conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "myproc"})
+    listed = conn.send({"type": "LIST_PROCEDURES", "databaseName": DB})
+    names = [p.get("name") for p in listed.get("procedures", [])]
+    check("deleting myproc leaves the referenced MyProc in place", "MyProc" in names, f"got {names}")
+    check_result("MyProc is still callable", conn.call("MyProc"), 3)
+    check_code("myproc is not a name for MyProc", conn.call("myproc"), "NOT_FOUND", "404-8")
+    refused = conn.save_trigger("case_alias", ["CREATED"], "myproc")
+    check("a trigger cannot name myproc", refused.get("status") != "OK", detail=str(refused)[:160])
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "case_guard"})
+    conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "MyProc"})
+
+
 def test_procedure_validation(conn: Conn):
     section("Procedure validation")
     check_code("unknown database", conn.save_procedure("valid_name", "return 1;", db="no_such_db"), "NOT_FOUND", "404-4")
@@ -279,7 +255,6 @@ def test_procedure_validation(conn: Conn):
     check_code("oversized source",
                conn.save_procedure("huge", "// " + ("x" * (MAX_SOURCE_BYTES + 10))), "ERROR", "400-10")
 
-    # The point of a stored procedure over a client-side string: refused now, not on first call
     broken = conn.save_procedure("broken", "return (;")
     check_code("unparseable source is refused at save time", broken, "ERROR", "400-13")
     check("the parse error names a position", "line" in (broken.get("message") or ""),
@@ -301,7 +276,6 @@ def test_permissions():
         check_result("and call", manager.call("by_manager"), "ok")
         check_status("a MANAGE user may delete what it installed",
                      manager.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "by_manager"}), "OK")
-        # The grant is per database
         check_code("MANAGE on one database confers nothing on another",
                    manager.save_procedure("elsewhere", "return 1;", db=OTHER_DB), "FORBIDDEN", "403-1")
 
@@ -317,7 +291,6 @@ def test_permissions():
         check_code("unauthenticated call", anon.call("greet"), "UNAUTHENTICATED", "401-1")
         check_code("unauthenticated save", anon.save_procedure("valid_name", "return 1;"), "UNAUTHENTICATED", "401-1")
 
-    # Promotion and demotion take effect within the session
     with admin_conn() as admin:
         check_status("promote the RUN user to MANAGE", admin.send({
             "type": "CHANGE_PERMISSIONS", "username": RUNNER, "admin": False,
@@ -352,10 +325,6 @@ def test_storage_placement(work_dir: str):
           f"admin/ contains {admin_children}")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 1 — triggers
-# ══════════════════════════════════════════════════════════════════════════
-
 AUDIT_PROCEDURE = (
     "import db from 'db'; import args from 'args';"
     "db.save(db.name, '" + AUDIT + "', { _id: args.event + '-' + args.id,"
@@ -372,11 +341,15 @@ def test_triggers(conn: Conn):
     check("the definer is recorded", installed.get("definer") == ADMIN_USERNAME, f"got {installed}")
 
     check_status("write a document", conn.save_doc({"_id": "t1", "n": 1}), "OK")
-    row = await_doc(conn, "UPDATED-t1")
-    check("the trigger produced an audit row", row.get("status") == "OK", f"got {row}")
+    row = await_doc(conn, "CREATED-t1")
+    check("a first write with an explicit _id audits as CREATED", row.get("status") == "OK", f"got {row}")
     if row.get("status") == "OK":
         check("the row names the writer", row["object"].get("by") == ADMIN_USERNAME, f"got {row['object']}")
         check("and the definer", row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
+
+    check_status("overwrite the same document", conn.save_doc({"_id": "t1", "n": 2}), "OK")
+    updated = await_doc(conn, "UPDATED-t1")
+    check("overwriting the same _id audits as UPDATED", updated.get("status") == "OK", f"got {updated}")
 
     check_status("delete a document",
                  conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "t1"}), "OK")
@@ -387,7 +360,6 @@ def test_triggers(conn: Conn):
     check("list reports the trigger",
           any(t.get("name") == "audit_writes" for t in listed.get("triggers", [])), f"got {listed}")
 
-    # A trigger that only watches one event must ignore the others
     check_status("narrow the trigger to CREATED only",
                  conn.save_trigger("audit_writes", ["CREATED"], "auditor"), "OK")
     check_status("write again", conn.save_doc({"_id": "t2", "n": 2}), "OK")
@@ -400,6 +372,54 @@ def test_triggers(conn: Conn):
     disabled = await_absent(conn, "UPDATED-t3")
     check("a disabled trigger fires nothing", disabled.get("status") != "OK", f"got {disabled}")
     check_status("re-enable it", conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
+
+
+def test_a_transaction_reports_only_its_net_effect(conn: Conn):
+    section("A transaction that creates and deletes the same id")
+    check_status("install a trigger watching creates and deletes",
+                 conn.save_trigger("audit_tx_net", ["CREATED", "DELETED"], "auditor"), "OK")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("create a new document in it", conn.save_doc({"_id": "txnet1", "n": 1}), "OK")
+    check_status("delete it in the same transaction",
+                 conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "txnet1"}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("no DELETED fires for a document nobody outside the transaction saw",
+          await_absent(conn, "DELETED-txnet1").get("status") != "OK")
+    check("and no CREATED either", conn.find("CREATED-txnet1", coll=AUDIT).get("status") != "OK")
+
+    check_status("write a document outside any transaction", conn.save_doc({"_id": "txnet2", "n": 1}), "OK")
+    check("its creation is audited", await_doc(conn, "CREATED-txnet2").get("status") == "OK")
+    check_status("start another transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("update the existing document", conn.save_doc({"_id": "txnet2", "n": 2}), "OK")
+    check_status("then delete it",
+                 conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "txnet2"}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("deleting a document that existed before the transaction still fires DELETED",
+          await_doc(conn, "DELETED-txnet2").get("status") == "OK")
+
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "audit_tx_net"})
+
+
+def install_the_trigger_whose_file_will_break(conn: Conn):
+    section("The collection whose trigger file phase 2 makes unreadable")
+    check_status("create the collection", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": UNREADABLE_COLL}), "OK")
+    check_status("install a trigger on it",
+                 conn.save_trigger("audit_unreadable", ["CREATED", "UPDATED"], "auditor", coll=UNREADABLE_COLL), "OK")
+    check_status("write a document", conn.save_doc({"_id": "ur-seed", "n": 1}, coll=UNREADABLE_COLL), "OK")
+    check("the trigger really fires while its file is intact",
+          await_doc(conn, "CREATED-ur-seed").get("status") == "OK",
+          "the fixture never fired, so what phase 2 asserts about it would prove nothing")
+
+    check_status("create the collection whose trigger file phase 2 corrupts", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CORRUPT_COLL}), "OK")
+    check_status("install a trigger on it",
+                 conn.save_trigger("audit_corrupt", ["CREATED", "UPDATED"], "auditor", coll=CORRUPT_COLL), "OK")
+    check_status("write a document", conn.save_doc({"_id": "co-seed", "n": 1}, coll=CORRUPT_COLL), "OK")
+    check("the trigger really fires while its file is intact",
+          await_doc(conn, "CREATED-co-seed").get("status") == "OK",
+          "the fixture never fired, so what phase 2 asserts about it would prove nothing")
 
 
 BIG_RESULT_PROCEDURE = (
@@ -417,7 +437,6 @@ def test_result_cap(conn: Conn):
     check_code("calling it reports the shared 400-15", conn.call("bigresult", {"id": "call"}), "ERROR", "400-15")
     check("the write it made still committed", conn.find("big-call", coll=AUDIT).get("status") == "OK")
 
-    # A trigger's result is discarded, so the cap must not fail a run for a value nobody reads
     check_status("point a trigger at the same procedure",
                  conn.save_trigger("big_result_trigger", ["CREATED", "UPDATED"], "bigresult"), "OK")
     check_status("write a document", conn.save_doc({"_id": "cap1", "n": 1}), "OK")
@@ -444,19 +463,39 @@ def test_trigger_validation(conn: Conn):
 
 def test_definer_rights():
     section("Definer rights")
-    # The scenario invoker rights got wrong: the writer has no access to the audit collection at all
     with user_conn(WRITER) as writer:
         check_code("the writer indeed cannot write the audit collection directly",
                    writer.save_doc({"_id": "direct", "x": 1}, coll=AUDIT), "FORBIDDEN", "403-1")
         check_status("but may write the source collection", writer.save_doc({"_id": "by-writer", "n": 1}), "OK")
     with admin_conn() as conn:
-        row = await_doc(conn, "UPDATED-by-writer")
+        row = await_doc(conn, "CREATED-by-writer")
         check("the audit row still appears", row.get("status") == "OK",
               f"definer rights must let the trigger write where the writer cannot: {row}")
         if row.get("status") == "OK":
             check("it records the writer as the actor", row["object"].get("by") == WRITER, f"got {row['object']}")
             check("and the installer as the definer",
                   row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
+
+
+def test_a_client_cannot_forge_a_definer():
+    section("A client cannot forge the coordinator's stamp")
+    forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
+              "stampedUpdatedAt": 1, "stampedCreatedAt": 1}
+    with user_conn(MANAGER) as manager:
+        check_status("a MANAGE user installs a trigger carrying a forged stamp",
+                     manager.save_trigger("forged_stamp", ["CREATED"], "greet", **forged), "OK")
+        with admin_conn() as admin:
+            listed = admin.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": COLL})
+            stored = next((t for t in (listed.get("triggers") or []) if t.get("name") == "forged_stamp"), {})
+            check("the definer is the caller, not the forged admin", stored.get("definer") == MANAGER,
+                  f"got {stored}")
+            check("so is updatedBy", stored.get("updatedBy") == MANAGER, f"got {stored}")
+            check("and the version was assigned by the server", stored.get("version") == 1, f"got {stored}")
+        check_status("clean up the trigger", manager.send(
+            {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "forged_stamp"}), "OK")
+        check_code("a forged stamp does not skip the import check",
+                   manager.save_procedure("forged_import", "import { x } from 'procedures/not_there'; return x;",
+                                          stampedVersion=5), "ERROR", "400-18")
 
 
 def test_procedure_imports(conn: Conn):
@@ -467,7 +506,6 @@ def test_procedure_imports(conn: Conn):
                                      "export function label(id) { return 'order:' + id; }\n"
                                      "export const VERSION = 2;"), "OK")
 
-    # The point of the feature: a procedure composes a library rather than copying it.
     check_status("install a procedure that imports the library",
                  conn.save_procedure("labeller",
                                      "import { label, VERSION } from 'procedures/lib_fmt';\n"
@@ -490,7 +528,6 @@ def test_procedure_imports(conn: Conn):
     check("a library may import a library", conn.call("shouter", {"id": "o1"}).get("result") == "ORDER:O1",
           f"got {conn.call('shouter', {'id': 'o1'}).get('result')!r}")
 
-    # A library is an ordinary procedure, so the existing DDL surface manages it.
     listed = conn.send({"type": "LIST_PROCEDURES", "databaseName": DB})
     names = [p.get("name") for p in (listed.get("procedures") or [])]
     check("a library is listed like any other procedure", "lib_fmt" in names, f"got {names}")
@@ -529,14 +566,13 @@ def test_trigger_imports(conn: Conn):
     check_status("point the trigger at it",
                  conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "audit_via_lib"), "OK")
 
-    # Definer rights must survive the import: the writer cannot touch the audit collection itself.
     with user_conn(WRITER) as writer:
         check_status("the writer saves a document", writer.save_doc({"_id": "imp1", "n": 1}), "OK")
     row = await_doc(conn, "lib-imp1")
     check("the trigger's import resolved and it wrote the audit row", row.get("status") == "OK", f"got {row}")
     if row.get("status") == "OK":
         check("the library computed the note",
-              row["object"].get("note") == f"UPDATED on imp1 by {WRITER}", f"got {row['object']}")
+              row["object"].get("note") == f"CREATED on imp1 by {WRITER}", f"got {row['object']}")
         check("definer rights survive the import",
               row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
 
@@ -546,8 +582,6 @@ def test_trigger_imports(conn: Conn):
 
 def test_trigger_import_failure(conn: Conn):
     section("A trigger whose import cannot be resolved")
-    # The save-time check passes while the library exists, so this is how a trigger ends up with an
-    # unresolvable import: the library is deleted from under it afterwards.
     check_status("install a library",
                  conn.save_procedure("lib_gone", "export function tag(id) { return 'tagged-' + id; }"), "OK")
     check_status("install a trigger procedure that imports it",
@@ -566,8 +600,6 @@ def test_trigger_import_failure(conn: Conn):
     check_status("delete the library the trigger's procedure imports",
                  conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "lib_gone"}), "OK")
     before = trigger_failures(conn)
-    # The write itself must still succeed: a trigger is fired after the commit, so a broken trigger
-    # cannot fail the operation that triggered it.
     check_status("a write still succeeds with the trigger broken", conn.save_doc({"_id": "ok2", "n": 2}), "OK")
     missing = await_doc(conn, "gone-ok2", timeout=5.0)
     check("the trigger produced nothing", missing.get("status") != "OK",
@@ -595,12 +627,9 @@ def test_trigger_failure_logs_a_stack(conn: Conn, log_path: str):
     before = trigger_failures(conn)
     check_status("a write still succeeds with the trigger throwing",
                  conn.save_doc({"_id": "stacked1", "n": 1}), "OK")
-    deadline = time.time() + 15.0
-    while trigger_failures(conn) <= before and time.time() < deadline:
-        time.sleep(0.2)
+    bu.wait_until(lambda: trigger_failures(conn) > before, 15.0, 0.2)
     check("the failure is counted", trigger_failures(conn) > before, f"failures did not increase from {before}")
 
-    # Nobody is waiting on a response, so the server log is where the trace has to appear
     log = bu.read_log(log_path)
     line = next((entry for entry in log.splitlines()
                  if "TRIGGER name=audit_writes" in entry and "trigger blew up" in entry), "")
@@ -631,9 +660,35 @@ def test_batch_mode(conn: Conn):
     check("batch mode fired once with the whole batch", row.get("status") == "OK", f"got {row}")
 
 
+def test_batch_deleted_trigger_fires_once_per_transaction(conn: Conn):
+    section("A batch DELETED trigger fires once for a transaction's deletes")
+    check_status("create a collection for it", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": BATCH_DELETE_COLL}), "OK")
+    check_status("install a batch delete counter", conn.save_procedure("batch_delete_counter",
+                 "import db from 'db'; import args from 'args';"
+                 "db.save(db.name, '" + AUDIT + "', { _id: 'batchdel-' + args.documents.length,"
+                 " count: args.documents.length }); return 'ok';"), "OK")
+    check_status("watch its deletes in batch mode",
+                 conn.save_trigger("batch_deletes_watch", ["DELETED"], "batch_delete_counter",
+                                   coll=BATCH_DELETE_COLL, mode="batch"), "OK")
+    for doc_id in ("bd1", "bd2", "bd3"):
+        check_status(f"write {doc_id}", conn.save_doc({"_id": doc_id, "n": 1}, coll=BATCH_DELETE_COLL), "OK")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    for doc_id in ("bd1", "bd2", "bd3"):
+        check_status(f"delete {doc_id} in it", conn.send(
+            {"type": "DELETE", "databaseName": DB, "collectionName": BATCH_DELETE_COLL, "_id": doc_id}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    row = await_doc(conn, "batchdel-3")
+    check("the batch run received all three deleted documents", row.get("status") == "OK", f"got {row}")
+    check("and no single-document run fired", await_absent(conn, "batchdel-1").get("status") != "OK")
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": BATCH_DELETE_COLL,
+               "name": "batch_deletes_watch"})
+
+
 def test_cascade(conn: Conn):
     section("Cascade control")
-    # The procedure writes back into the collection that fired it, so a cascade is possible
     check_status("install a self-writing procedure", conn.save_procedure("cascader",
                  "import db from 'db'; import args from 'args';"
                  "db.save(db.name, '" + COLL + "', { _id: 'gen-' + args.depth, depth: args.depth });"
@@ -653,20 +708,12 @@ def test_cascade(conn: Conn):
     check_status("seed another write", conn.save_doc({"_id": "cascade-seed-2", "n": 1}), "OK")
     depth_one = await_doc(conn, "cascade-1")
     check("it cascaded one level", depth_one.get("status") == "OK", f"got {depth_one}")
-    # triggerMaxDepth is 2, so depth 2 must be the last that runs and depth 3 must never appear
     beyond = await_absent(conn, f"cascade-{TRIGGER_MAX_DEPTH + 1}", settle=4.0)
     check(f"and terminated at triggerMaxDepth={TRIGGER_MAX_DEPTH}", beyond.get("status") != "OK", f"got {beyond}")
     check_status("remove the cascading trigger",
                  conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
                             "name": "cascade_test"}), "OK")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 1 — before hooks (synchronous)
-# ══════════════════════════════════════════════════════════════════════════
-
-# A before hook is synchronous, so every assertion below is on the SAVE response itself and on an
-# immediate FIND_BY_ID. Anything here that needed await_doc would be testing the wrong thing.
 
 def install_hook(conn: Conn, name, procedure, source, events, coll=COLL):
     check_status(f"install the {procedure} procedure", conn.save_procedure(procedure, source), "OK")
@@ -689,7 +736,6 @@ def test_before_hooks(conn: Conn):
 
     saved = conn.save_doc({"_id": "h1", "qty": 2, "price": 10})
     check_status("the write succeeds", saved, "OK")
-    # No polling: the hook already ran on the writing thread before the write committed
     stored = conn.find("h1")
     check("the stored document carries the computed field",
           (stored.get("object") or {}).get("total") == 20, f"got {stored}")
@@ -704,6 +750,50 @@ def test_before_hooks(conn: Conn):
     drop_hook(conn, "noop_hook")
 
 
+CUSTOM_SPELLINGS = {"loc": "#geo(45,-122)", "at": "#datetime(2024-01-01T10:00:00)",
+                    "time": "#time(10:00:00)", "vec": "#vector(1,2)"}
+
+
+def test_before_hook_preserves_custom_spelling(conn: Conn):
+    section("Before hooks - a custom value the hook never touched keeps its spelling")
+    check_status("install a hook that rebuilds the document",
+                 install_hook(conn, "spread_hook", "spreader", "export default (doc) => ({ ...doc, touched: true });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("write custom values through the hook", conn.save_doc({"_id": "spell1", **CUSTOM_SPELLINGS}), "OK")
+    stored = conn.find("spell1").get("object") or {}
+    check("the hook ran", stored.get("touched") is True, f"got {stored}")
+    for field, spelling in CUSTOM_SPELLINGS.items():
+        check(f"the {field} value is stored exactly as written", stored.get(field) == spelling,
+              f"expected {spelling!r}, got {stored.get(field)!r}")
+    distinct = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL, "aggregationSteps": [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "_id", "value": "spell1"}},
+        {"type": "DISTINCT", "fieldName": "loc"}]})
+    check("DISTINCT yields the written spelling",
+          [row.get("loc") for row in distinct.get("results") or []] == [CUSTOM_SPELLINGS["loc"]], f"got {distinct}")
+    drop_hook(conn, "spread_hook")
+
+
+def test_a_before_hook_getter_is_stored_like_db_save_stores_it(conn: Conn):
+    section("Before hooks - a getter on the replacement is read, as db.save reads it")
+    check_status("install a hook whose replacement computes a field through a getter",
+                 install_hook(conn, "getter_hook", "gettered",
+                              "export default (doc) => ({ ...doc, get total() { return doc.qty * doc.price; } });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("write through the hook", conn.save_doc({"_id": "getter1", "qty": 2, "price": 10}), "OK")
+    hooked = conn.find("getter1").get("object") or {}
+    check("the hook's getter value is stored", hooked.get("total") == 20, f"got {hooked}")
+    drop_hook(conn, "getter_hook")
+    check_status("install a procedure that saves the same shape with db.save",
+                 conn.save_procedure("getter_saver", "import db from 'db';"
+                                     "const doc = { _id: 'getter2', qty: 2, price: 10 };"
+                                     "db.save(db.name, '" + AUDIT + "', { ...doc, get total() { return doc.qty * doc.price; } });"
+                                     "return 'saved';"), "OK")
+    check_status("run it", conn.call("getter_saver"), "OK")
+    saved = conn.find("getter2", coll=AUDIT).get("object") or {}
+    check("db.save stores the same getter value", saved.get("total") == hooked.get("total"),
+          f"hook stored {hooked.get('total')!r}, db.save stored {saved.get('total')!r}")
+
+
 def test_before_hook_veto(conn: Conn):
     section("Before hooks - veto")
     check_status("install a vetoing hook",
@@ -716,7 +806,6 @@ def test_before_hook_veto(conn: Conn):
     check("the message carries the thrown text", "customerId is required" in (rejected.get("message") or ""),
           f"got {rejected}")
     check("and nothing was written", conn.find("v1").get("status") != "OK")
-    # The hook is not wedged by having said no once
     check_status("a compliant write still succeeds",
                  conn.save_doc({"_id": "v2", "qty": 1, "customerId": "c1"}), "OK")
     check("it is stored", conn.find("v2").get("status") == "OK")
@@ -740,7 +829,6 @@ def test_before_hook_contract(conn: Conn):
         check(f"and nothing was written for {label}", conn.find(f"c{index}").get("status") != "OK")
     drop_hook(conn, "contract")
 
-    # A DELETED hook replaces nothing, so returning a document is an error rather than a silent no-op
     check_status("seed a document to delete", conn.save_doc({"_id": "cd1", "qty": 1}), "OK")
     check_status("install a DELETED hook that returns a document",
                  install_hook(conn, "del_returns", "delreturns", "export default (doc) => ({ ...doc });",
@@ -749,6 +837,32 @@ def test_before_hook_contract(conn: Conn):
     check_code("returning a document on DELETED is refused", refused, "ERROR", "400-21")
     check("the document survives", conn.find("cd1").get("status") == "OK")
     drop_hook(conn, "del_returns")
+
+
+def test_before_hook_sees_the_same_id_in_and_out_of_a_transaction(conn: Conn):
+    section("Before hooks - an id-less write hands the hook its generated _id either way")
+    check_status("install a hook that records the _id it saw",
+                 install_hook(conn, "id_seer", "idseer", "export default (doc) => ({ ...doc, seenId: doc._id });",
+                              ["CREATED"]), "OK")
+    saved = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"qty": 1}})
+    check_status("an id-less save outside a transaction succeeds", saved, "OK")
+    stored = conn.find(saved.get("_id")).get("object") or {}
+    check("the hook saw the _id the document is stored under", stored.get("seenId") == saved.get("_id"),
+          f"saved={saved.get('_id')!r} seen={stored.get('seenId')!r}")
+    drop_hook(conn, "id_seer")
+
+    check_status("install a hook that returns a fresh document with no _id",
+                 install_hook(conn, "id_dropper", "iddropper", "export default () => ({ fresh: true });",
+                              ["CREATED"]), "OK")
+    check_code("outside a transaction the hook's dropped _id is refused",
+               conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"qty": 1}}),
+               "ERROR", "400-21")
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("inside a transaction the same hook is refused the same way",
+               conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"qty": 1}}),
+               "ERROR", "400-21")
+    check_status("roll back", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+    drop_hook(conn, "id_dropper")
 
 
 def test_before_hook_schema_recheck(conn: Conn):
@@ -764,18 +878,40 @@ def test_before_hook_schema_recheck(conn: Conn):
     check_status("install a hook that adds a forbidden field",
                  install_hook(conn, "sneak", "sneaky", "export default (doc) => ({ ...doc, extra: 1 });",
                               ["CREATED", "UPDATED"], coll="guarded"), "OK")
-    # The edge validated the caller's own document; the replacement has to be checked too
     rejected = conn.save_doc({"_id": "g1", "qty": 1}, coll="guarded")
     check_code("a replacement failing the schema is refused", rejected, "ERROR", "400-21")
     check("and nothing was written", conn.find("g1", coll="guarded").get("status") != "OK")
     drop_hook(conn, "sneak", coll="guarded")
 
 
+DEEP_REPLACEMENT_HOOK = ("export default (doc) => { let o = {}; for (let i = 0; i < 200; i++) { o = { a: o }; }"
+                         " return { ...doc, deep: o }; };")
+
+
+def test_before_hook_replacement_depth(conn: Conn):
+    section("Before hooks - a replacement is held to the request nesting cap")
+    check_status("install a hook that nests its replacement 200 levels deep",
+                 install_hook(conn, "nester", "nesting", DEEP_REPLACEMENT_HOOK, ["CREATED", "UPDATED"]), "OK")
+    check_code("a plain save is refused", conn.save_doc({"_id": "deep1", "qty": 1}), "ERROR", "400-21")
+    check("and nothing was written", conn.find("deep1").get("status") != "OK")
+    check_code("a bulk save is refused", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+         "objects": [{"_id": "deep2", "qty": 1}, {"_id": "deep3", "qty": 2}]}), "ERROR", "400-21")
+    check("and neither document was written",
+          conn.find("deep2").get("status") != "OK" and conn.find("deep3").get("status") != "OK")
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("inside a transaction the save is refused the same way", conn.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"_id": "deep4", "qty": 1}}),
+               "ERROR", "400-21")
+    check_status("roll back", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+    check("and nothing was written", conn.find("deep4").get("status") != "OK")
+    drop_hook(conn, "nester")
+
+
 def test_before_hook_on_delete(conn: Conn):
     section("Before hooks - delete")
     check_status("seed a locked document", conn.save_doc({"_id": "d1", "qty": 1, "locked": True}), "OK")
     check_status("seed an unlocked one", conn.save_doc({"_id": "d2", "qty": 1, "locked": False}), "OK")
-    # The hook vetoes on a field only the *stored* document has - the request carries just the _id
     check_status("install a delete guard",
                  install_hook(conn, "guard_delete", "guarddelete",
                               "export default (doc) => { if (doc.locked) { throw new Error('locked'); } };",
@@ -791,7 +927,6 @@ def test_before_hook_on_delete(conn: Conn):
 
 def test_before_hook_bulk_save(conn: Conn):
     section("Before hooks - bulk save")
-    # A module-level counter written into every document: proof the body evaluated once for the batch
     check_status("install a counting hook",
                  install_hook(conn, "bulk_calc", "bulkcalc",
                               "let opened = 0; opened++;"
@@ -819,6 +954,71 @@ def test_before_hook_bulk_save(conn: Conn):
     check("not one document from the batch was stored", stored == [], f"stored {stored}")
     drop_hook(conn, "bulk_veto")
 
+    check_status("seed the document a colliding _id would redirect onto",
+                 conn.save_doc({"_id": "BB", "qty": 1, "owner": "untouched"}), "OK")
+    check_status("seed the document the client is updating", conn.save_doc({"_id": "Aa", "qty": 1}), "OK")
+    check_status("install a hook that swaps _id for one sharing its hash code",
+                 install_hook(conn, "bulk_collide", "bulkcollide",
+                              "export default (doc) => ({ ...doc, _id: doc._id === 'Aa' ? 'BB' : doc._id,"
+                              " owner: 'hook' });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_code("a bulk entry whose _id the hook changed is refused", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL, "objects": [{"_id": "Aa", "qty": 2}]}),
+        "ERROR", "400-21")
+    check_code("the same swap is refused on a single save", conn.save_doc({"_id": "Aa", "qty": 3}), "ERROR",
+               "400-21")
+    victim = conn.find("BB").get("object") or {}
+    check("the unrelated document is unchanged", victim.get("owner") == "untouched", f"got {victim}")
+    drop_hook(conn, "bulk_collide")
+
+
+COUNTED_COLL = "bulk_counted"
+COUNTING_HOOK = "let calls = 0; export default (doc) => ({ ...doc, call: ++calls });"
+
+
+def calls_of(conn: Conn, ids, coll=COLL):
+    return [(conn.find(doc_id, coll=coll).get("object") or {}).get("call") for doc_id in ids]
+
+
+def test_before_hook_bulk_save_in_a_transaction(conn: Conn):
+    section("Before hooks - a bulk save shares one context inside a transaction and a trigger too")
+    check_status("install a hook counting its calls",
+                 install_hook(conn, "bulk_count", "bulkcount", COUNTING_HOOK, ["CREATED", "UPDATED"]), "OK")
+    check_status("bulk save three documents outside a transaction", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+         "objects": [{"_id": f"bo{i}", "qty": i} for i in range(3)]}), "OK")
+    check("outside a transaction the calls are numbered 1..3",
+          calls_of(conn, ["bo0", "bo1", "bo2"]) == [1, 2, 3], f"got {calls_of(conn, ['bo0', 'bo1', 'bo2'])}")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("bulk save three documents inside it", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+         "objects": [{"_id": f"bt{i}", "qty": i} for i in range(3)]}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("inside a transaction the calls are numbered 1..3 as well",
+          calls_of(conn, ["bt0", "bt1", "bt2"]) == [1, 2, 3], f"got {calls_of(conn, ['bt0', 'bt1', 'bt2'])}")
+    drop_hook(conn, "bulk_count")
+
+    check_status("create the collection a trigger bulk-saves into",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COUNTED_COLL}), "OK")
+    check_status("install the counting hook on it",
+                 install_hook(conn, "bulk_count_target", "bulkcounttarget", COUNTING_HOOK, ["CREATED", "UPDATED"],
+                              coll=COUNTED_COLL), "OK")
+    fan_out = ("import db from 'db'; import args from 'args';"
+               " if (args.id === 'fanout') { db.bulkSave(db.name, '" + COUNTED_COLL + "',"
+               " [{ _id: 'tg0' }, { _id: 'tg1' }, { _id: 'tg2' }]); }"
+               " return 'ok';")
+    check_status("install the fan-out procedure", conn.save_procedure("fanout", fan_out), "OK")
+    check_status("install a trigger running it", conn.save_trigger("fan_out", ["CREATED"], "fanout"), "OK")
+    check_status("write the document that fires it", conn.save_doc({"_id": "fanout", "qty": 1}), "OK")
+    landed = await_doc(conn, "tg2", coll=COUNTED_COLL)
+    check("the trigger's bulk save landed", landed.get("status") == "OK", f"got {landed}")
+    check("a bulk save from a trigger numbers its calls 1..3 too",
+          calls_of(conn, ["tg0", "tg1", "tg2"], coll=COUNTED_COLL) == [1, 2, 3],
+          f"got {calls_of(conn, ['tg0', 'tg1', 'tg2'], coll=COUNTED_COLL)}")
+    drop_hook(conn, "fan_out")
+    drop_hook(conn, "bulk_count_target", coll=COUNTED_COLL)
+
 
 def test_before_hook_chaining(conn: Conn):
     section("Before hooks - chaining in name order")
@@ -835,7 +1035,6 @@ def test_before_hook_chaining(conn: Conn):
     drop_hook(conn, "a_stamp")
     drop_hook(conn, "b_double")
 
-    # Ascending name order, not install order: reversing the names reverses the result
     check_status("install them again with the order flipped",
                  install_hook(conn, "a_double", "adouble",
                               "export default (doc) => ({ ...doc, trail: (doc.trail || '') + 'b' });",
@@ -858,10 +1057,6 @@ def test_before_hook_sandbox(conn: Conn):
     started = time.time()
     timed_out = conn.save_doc({"_id": "to1", "qty": 1})
     elapsed = time.time() - started
-    # The single most important case: a hook that could not run must never let the write through.
-    # Which limit bites first (the wall clock, 408-1, or the instruction budget, 400-11) depends on how
-    # the two are configured relative to each other, so the invariant asserted here is fail-closed
-    # itself; BeforeHookContextTest pins each code precisely with a config tuned per case.
     check("a hook that never finishes refuses the write",
           timed_out.get("status") == "ERROR" and timed_out.get("errorCode") in ("408-1", "400-11"),
           f"got {timed_out}")
@@ -881,7 +1076,6 @@ def test_before_hook_no_db(conn: Conn):
           "Database access is not available" in (refused.get("message") or ""), f"got {refused}")
     drop_hook(conn, "needs_db")
 
-    # The one module a hook deliberately keeps
     check_status("install a shared library procedure",
                  conn.save_procedure("hooklib", "export function tag(d) { return { ...d, via: 'lib' }; }"), "OK")
     check_status("install a hook that imports it",
@@ -918,6 +1112,30 @@ def test_before_hook_in_transaction(conn: Conn):
     drop_hook(conn, "tx_veto")
 
 
+def test_before_hook_that_shrinks_an_oversized_document(conn: Conn):
+    section("Before hooks - a hook that shrinks an oversized document is accepted in and out of a transaction")
+    check_status("install a blob-stripping hook",
+                 install_hook(conn, "strip_blob", "stripblob",
+                              "export default (doc) => { const { blob, ...rest } = doc; return rest; };",
+                              ["CREATED", "UPDATED"]), "OK")
+    blob = "x" * (1024 * 1024 + 100)
+    check_status("an oversized standalone save is accepted once the hook shrinks it",
+                 conn.save_doc({"_id": "shrunk_standalone", "blob": blob}), "OK")
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("the same save is accepted at buffer time inside a transaction",
+                 conn.save_doc({"_id": "shrunk_buffered", "blob": blob}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    for doc_id in ("shrunk_standalone", "shrunk_buffered"):
+        stored = conn.find(doc_id).get("object") or {}
+        check(f"{doc_id} was stored without the blob", stored.get("_id") == doc_id and "blob" not in stored,
+              f"got keys {sorted(stored)}")
+    drop_hook(conn, "strip_blob")
+    check_status("start a transaction without the hook", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("with no hook the oversized document is still refused", conn.save_doc({"_id": "too_big", "blob": blob}),
+               "ERROR", "400-2")
+    check_status("roll back", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+
+
 def test_before_hook_validation(conn: Conn):
     section("Before hooks - validation")
     check_status("install a procedure to point at", conn.save_procedure("hookproc", "export default (d) => d;"), "OK")
@@ -935,8 +1153,6 @@ def test_before_hook_validation(conn: Conn):
 
 def test_before_hook_definer_is_not_enforced(conn: Conn):
     section("Before hooks - the definer divergence")
-    # An after trigger stops when its definer is deleted (test_definer_rights covers that). A before hook
-    # exercises no authority at all, so it must keep working - the difference is deliberate.
     check_status("create a throwaway installer", conn.send({
         "type": "CREATE_USER", "username": "hook_installer", "password": USER_PASSWORD, "admin": False,
         "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}), "OK")
@@ -952,18 +1168,12 @@ def test_before_hook_definer_is_not_enforced(conn: Conn):
           (conn.find("df1").get("object") or {}).get("stamped") is True, f"got {conn.find('df1')}")
     drop_hook(conn, "by_installer")
 
-    # Deliberately left installed: phase 2 restarts this same data directory with the switches off and
-    # asserts that a vetoing before hook stops running rather than refusing every write forever.
     check_status("leave a vetoing hook installed for phase 2",
                  install_hook(conn, "off_hook", "offhook",
                               "export default (doc) => { throw new Error('always refuses'); };",
                               ["CREATED", "UPDATED"]), "OK")
     check_code("it refuses while the switches are on", conn.save_doc({"_id": "off0", "qty": 1}), "ERROR", "400-21")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 1 — the dry run
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_dry_run(conn: Conn):
     section("TEST_TRIGGER - the dry run")
@@ -980,7 +1190,6 @@ def test_dry_run(conn: Conn):
     check("it reports replace", replaced.get("decision") == "replace", f"got {replaced}")
     check("and returns the resulting document", (replaced.get("document") or {}).get("total") == 14,
           f"got {replaced}")
-    # The asymmetry the feature rests on: the dry run keeps console output, the live path discards it
     check("it captures the console output", replaced.get("logs") == ["checking dr1"], f"got {replaced}")
 
     accepted = conn.test_trigger("dry", "CREATED", {"_id": "dr2", "qty": 0})
@@ -997,7 +1206,6 @@ def test_dry_run(conn: Conn):
 
     check("nothing was written", conn.find("dr1").get("status") != "OK")
 
-    # The same hook on the live path produces no logs at all
     live = conn.save_doc({"_id": "dr4", "qty": 1})
     check_status("the live write succeeds", live, "OK")
     check("the live path returns no logs", "logs" not in live, f"got {live}")
@@ -1023,7 +1231,6 @@ def test_dry_run(conn: Conn):
 
 
 def history_rows(conn: Conn, **filters) -> list:
-    """Every history row, newest first, optionally narrowed by exact field match."""
     response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
                           "aggregationSteps": [{"type": "SORT", "fieldName": "startedAt", "ascending": False}]})
     rows = response.get("results") or []
@@ -1033,13 +1240,12 @@ def history_rows(conn: Conn, **filters) -> list:
 
 
 def await_history(conn: Conn, timeout: float = 15.0, **filters) -> list:
-    """The write is asynchronous, so a row is waited for rather than expected to be there already."""
-    deadline = time.time() + timeout
-    rows = history_rows(conn, **filters)
-    while not rows and time.time() < deadline:
-        time.sleep(0.2)
-        rows = history_rows(conn, **filters)
-    return rows
+    return await_latest(lambda: history_rows(conn, **filters), bool, timeout, 0.2)
+
+
+def await_history_rows(conn: Conn, name: str, at_least: int) -> list:
+    return await_latest(lambda: history_rows(conn, kind="TRIGGER", name=name),
+                        lambda rows: len(rows) >= at_least, 30.0, 0.3)
 
 
 def test_run_history(conn: Conn):
@@ -1064,7 +1270,6 @@ def test_run_history(conn: Conn):
         check("the row records a duration", row.get("durationMs") is not None, f"row={row!r}")
         check("logs are omitted by default", row.get("logs") == [], f"row={row!r}")
 
-    # A trigger row carries what a procedure row cannot: the collection, the event and the definer.
     check_status("install an auditing trigger",
                  conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
     check_status("write a document so it fires", conn.save_doc({"_id": "histdoc1", "n": 1}), "OK")
@@ -1076,8 +1281,6 @@ def test_run_history(conn: Conn):
         check("the trigger row names the event", row.get("event") in ("CREATED", "UPDATED"), f"row={row!r}")
         check("the trigger row names the definer", row.get("username") == ADMIN_USERNAME, f"row={row!r}")
 
-    # The cascade this design exists to prevent: the history write must not fire the trigger watching the
-    # collection it is written into.
     history_before = len(history_rows(conn))
     check_status("install a trigger on the history collection itself",
                  conn.save_trigger("history_watcher", ["CREATED"], "auditor", coll="script_runs"), "ERROR")
@@ -1104,7 +1307,15 @@ def test_run_history_failures(conn: Conn):
         check("the row carries the message", "history boom" in (row.get("errorMessage") or ""), f"row={row!r}")
         check("the row carries a stack", bool(row.get("stack")), f"row={row!r}")
 
-    # A trigger whose definer is gone never runs at all, which no other surface reports.
+    check_status("install a procedure whose message is shaped like a custom type",
+                 conn.save_procedure("history_shaped", "throw new Error('#tag(fix)');"), "OK")
+    conn.send({"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "history_shaped"})
+    shaped = await_history(conn, kind="CALL_PROCEDURE", name="history_shaped")
+    check("the custom-shaped failure is recorded", len(shaped) == 1, f"rows={shaped!r}")
+    if shaped:
+        check("its message is stored escaped", shaped[0].get("errorMessage") == "\\#tag(fix)",
+              f"row={shaped[0]!r}")
+
     check_status("install a trigger owned by a user about to be deleted",
                  conn.send({"type": "CREATE_USER", "username": "ghostdefiner", "password": "password123",
                             "admin": True, "globalPermissions": [], "databasePermissions": {},
@@ -1126,6 +1337,220 @@ def test_run_history_failures(conn: Conn):
                             "name": "ghost_trigger"}), "OK")
 
 
+def test_a_custom_shaped_history_row_survives_the_restart(conn: Conn):
+    section("A custom-shaped run history row is still readable after a restart")
+    rows = history_rows(conn, kind="CALL_PROCEDURE", name="history_shaped")
+    check("the row is still listed after the restart", len(rows) == 1, f"rows={rows!r}")
+    if rows:
+        check("and reads back as the same plain string", rows[0].get("errorMessage") == "\\#tag(fix)",
+              f"row={rows[0]!r}")
+
+
+def fenced_collection_folder(work_dir: str) -> str:
+    return os.path.join(work_dir, "db", DB, FENCED_COLL)
+
+
+def arrange_a_commit_interrupted_past_its_commit_point(conn: Conn, work_dir: str):
+    section("A commit that cannot finish applying, then a kill with no drain")
+    for coll in (RECOVERED_COLL, FENCED_COLL):
+        check_status(f"create {coll}", conn.send(
+            {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("install an after trigger on the recovered collection",
+                 conn.save_trigger("audit_recovered", ["CREATED", "UPDATED"], "auditor", coll=RECOVERED_COLL), "OK")
+
+    check_status("start a warm-up transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("buffer a save", conn.save_doc({"_id": "tx-warmup", "n": 1}, coll=RECOVERED_COLL), "OK")
+    check_status("commit it", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("an ordinary transactional commit fires the trigger",
+          await_doc(conn, "CREATED-tx-warmup").get("status") == "OK",
+          "the fixture never fired, so the recovered commit below would prove nothing")
+
+    check_status("start the transaction that will not finish", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("buffer the audited save", conn.save_doc({"_id": "tx-recovered", "n": 1}, coll=RECOVERED_COLL), "OK")
+    check_status("buffer a save into a second collection",
+                 conn.save_doc({"_id": "tx-blocker", "n": 1}, coll=FENCED_COLL), "OK")
+    os.chmod(fenced_collection_folder(work_dir), 0o000)
+    check_code("the commit fences past its commit point",
+               conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
+
+
+def test_a_recovered_commit_fires_its_triggers(conn: Conn):
+    section("A commit finished by startup recovery fires its after triggers")
+    check("recovery applied the interrupted commit",
+          conn.find("tx-recovered", coll=RECOVERED_COLL).get("status") == "OK",
+          f"got {conn.find('tx-recovered', coll=RECOVERED_COLL)}")
+    check("including the op that could not apply before the kill",
+          conn.find("tx-blocker", coll=FENCED_COLL).get("status") == "OK",
+          f"got {conn.find('tx-blocker', coll=FENCED_COLL)}")
+
+    row = await_doc(conn, "CREATED-tx-recovered", timeout=30.0)
+    check("the recovered commit fired the after trigger the online commit would have",
+          row.get("status") == "OK", f"got {row}")
+    check("and reported the insert the original commit decided on, not an update",
+          conn.find("UPDATED-tx-recovered", coll=AUDIT).get("status") != "OK",
+          "the recovered commit re-derived CREATED/UPDATED from disk, where the document already existed")
+    if row.get("status") == "OK":
+        check("the row names the user whose transaction it was",
+              row["object"].get("by") == ADMIN_USERNAME, f"got {row['object']}")
+
+
+def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
+    section("A trigger file that cannot be read is not 'no triggers'")
+    trigger_file = os.path.join(work_dir, "db", DB, UNREADABLE_COLL, f"{UNREADABLE_COLL}-triggers.json")
+    check("the trigger file survived the restart", os.path.isfile(trigger_file), trigger_file)
+    with open(trigger_file, "rb") as fp:
+        original = fp.read()
+    check("and still names the trigger installed before it", b"audit_unreadable" in original, f"got {original!r}")
+
+    os.chmod(trigger_file, 0o000)
+    try:
+        refused = conn.save_doc({"_id": "ur1", "n": 1}, coll=UNREADABLE_COLL)
+        check_code("a write is refused rather than quietly firing no triggers", refused, "ERROR", "500-7")
+        check("and nothing was written", conn.find("ur1", coll=UNREADABLE_COLL).get("status") != "OK")
+        check_code("saving a trigger is refused",
+                   conn.save_trigger("audit_second", ["CREATED"], "auditor", coll=UNREADABLE_COLL), "ERROR", "500-29")
+        check_code("deleting one is refused", conn.send(
+            {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": UNREADABLE_COLL,
+             "name": "audit_unreadable"}), "ERROR", "500-30")
+    finally:
+        os.chmod(trigger_file, 0o644)
+
+    with open(trigger_file, "rb") as fp:
+        after = fp.read()
+    check("neither DDL call erased the definitions it could not read", after == original,
+          f"the file changed while it was unreadable: {after!r}")
+    listed = conn.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": UNREADABLE_COLL})
+    check("the trigger is still installed once the file can be read again",
+          any(t.get("name") == "audit_unreadable" for t in (listed.get("triggers") or [])), f"got {listed}")
+    check_status("and a write fires it again", conn.save_doc({"_id": "ur2", "n": 2}, coll=UNREADABLE_COLL), "OK")
+    check("the audit row is back", await_doc(conn, "CREATED-ur2").get("status") == "OK")
+
+
+def test_a_corrupt_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
+    section("A trigger file that cannot be parsed is not 'no triggers' either")
+    trigger_file = os.path.join(work_dir, "db", DB, CORRUPT_COLL, f"{CORRUPT_COLL}-triggers.json")
+    check("the trigger file survived the restart", os.path.isfile(trigger_file), trigger_file)
+    with open(trigger_file, "rb") as fp:
+        original = fp.read()
+    check("and still names the trigger installed before it", b"audit_corrupt" in original, f"got {original!r}")
+
+    with open(trigger_file, "wb") as fp:
+        fp.write(b'{"triggers":[{"name":"audit_corrupt","events":["NOT_AN_EVENT"]}]}')
+    try:
+        refused = conn.save_doc({"_id": "co1", "n": 1}, coll=CORRUPT_COLL)
+        check_code("a write is refused rather than quietly firing no triggers", refused, "ERROR", "500-7")
+        check("and nothing was written", conn.find("co1", coll=CORRUPT_COLL).get("status") != "OK")
+        check_code("listing the triggers answers an error instead of dropping the connection", conn.send(
+            {"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": CORRUPT_COLL}), "ERROR", "500-8")
+        check_code("saving a trigger is refused",
+                   conn.save_trigger("audit_second", ["CREATED"], "auditor", coll=CORRUPT_COLL), "ERROR", "500-29")
+        check_code("deleting one is refused", conn.send(
+            {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": CORRUPT_COLL,
+             "name": "audit_corrupt"}), "ERROR", "500-30")
+        with open(trigger_file, "rb") as fp:
+            while_corrupt = fp.read()
+        check("neither DDL call erased the definitions it could not parse",
+              b"NOT_AN_EVENT" in while_corrupt,
+              f"the file was rewritten from a list that could not be read: {while_corrupt!r}")
+    finally:
+        with open(trigger_file, "wb") as fp:
+            fp.write(original)
+
+    listed = conn.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": CORRUPT_COLL})
+    check("the trigger is still installed once the file parses again",
+          any(t.get("name") == "audit_corrupt" for t in (listed.get("triggers") or [])), f"got {listed}")
+    check_status("and a write fires it again", conn.save_doc({"_id": "co2", "n": 2}, coll=CORRUPT_COLL), "OK")
+    check("the audit row is back", await_doc(conn, "CREATED-co2").get("status") == "OK")
+
+
+def test_an_unparseable_definition_is_answered_not_dropped(conn: Conn, work_dir: str):
+    section("An unparseable definition is answered with an error, and the connection survives")
+    procedures = os.path.join(work_dir, "db", DB, ".procedures")
+    torn = os.path.join(procedures, "torn_definition.json")
+    with open(torn, "wb") as fp:
+        fp.write(b'{"name":"torn_definition","source"')
+    try:
+        check_code("LIST_PROCEDURES answers", conn.send({"type": "LIST_PROCEDURES", "databaseName": DB}),
+                   "ERROR", "500-8")
+        check_code("CALL_PROCEDURE answers", conn.call("torn_definition"), "ERROR", "500-8")
+        check_status("and the same connection still serves the next request", conn.send(
+            {"type": "LIST_DATABASES"}), "OK")
+    finally:
+        os.remove(torn)
+    check_status("LIST_PROCEDURES works again once the file is gone", conn.send(
+        {"type": "LIST_PROCEDURES", "databaseName": DB}), "OK")
+
+
+def test_a_deleted_definition_stops_being_served(conn: Conn):
+    section("A deleted procedure or schema stops applying immediately")
+    coll = "definition_cache_coll"
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+
+    check_status("save a procedure", conn.save_procedure("ghost_proc", "export default () => 1;"), "OK")
+    check_status("the procedure runs", conn.call("ghost_proc"), "OK")
+    check_status("delete the procedure",
+                 conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "ghost_proc"}), "OK")
+    after = conn.call("ghost_proc")
+    check("a deleted procedure stops being callable at once", after.get("status") != "OK",
+          f"got {after.get('status')}/{after.get('errorCode')}")
+
+    schema = {"type": "object", "properties": {"n": {"type": "string"}}, "required": ["n"]}
+    check_status("save a schema", conn.send({"type": "SAVE_SCHEMA", "databaseName": DB,
+                                             "collectionName": coll, "schema": schema}), "OK")
+    rejected = conn.save_doc({"_id": "s1", "n": 7}, coll=coll)
+    check("the schema rejects a non-conforming write", rejected.get("status") != "OK",
+          f"got {rejected.get('status')}/{rejected.get('errorCode')}")
+
+    check_status("delete the schema", conn.send({"type": "DELETE_SCHEMA", "databaseName": DB,
+                                                 "collectionName": coll}), "OK")
+    check_status("a deleted schema stops rejecting writes at once",
+                 conn.save_doc({"_id": "s2", "n": 7}, coll=coll), "OK")
+
+
+def retries_scheduled(conn: Conn) -> int:
+    return conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("triggers", {}).get("retried", 0)
+
+
+def arrange_a_pending_trigger_retry(conn: Conn):
+    section("A trigger retry still waiting out its backoff")
+    check_status("create a collection for it", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": RETRY_COLL}), "OK")
+    check_status("install a procedure that always throws",
+                 conn.save_procedure("shutdown_boom", "throw new Error('shutdown boom');"), "OK")
+    check_status("point a trigger at it",
+                 conn.save_trigger("shutdown_retry", ["CREATED", "UPDATED"], "shutdown_boom", coll=RETRY_COLL), "OK")
+
+    before = retries_scheduled(conn)
+    check_status("write a document so it fires", conn.save_doc({"_id": "sr1", "n": 1}, coll=RETRY_COLL), "OK")
+    bu.wait_until(lambda: retries_scheduled(conn) > before, 30.0, 0.2)
+    check("the failed run scheduled a retry", retries_scheduled(conn) > before,
+          f"retried stayed at {before}, so nothing is pending and the timing below would prove nothing")
+    pending = [run for run in trigger_runs(conn, "PENDING") if run.get("trigger") == "shutdown_retry"]
+    check(f"and the run is still pending, {LONG_RETRY_BACKOFF_MS}ms from its next attempt",
+          len(pending) == 1, f"runs={pending!r}")
+
+
+def test_shutdown_does_not_wait_out_its_budget(proc):
+    section("Shutdown with a retry still pending")
+    started = time.time()
+    bu.stop_server(proc)
+    elapsed = time.time() - started
+    check("the server stopped well inside its shutdown budget", elapsed < SHUTDOWN_CEILING_SECONDS,
+          f"took {elapsed:.1f}s of a {SHUTDOWN_BUDGET_MS}ms budget with a retry pending; a drain that waits"
+          " for a retry that cannot come back takes the whole budget and abandons the background queue")
+
+
+def test_a_run_left_pending_standalone_is_replayed_once_clustered(conn: Conn):
+    section("A run left pending before clusterEnabled was switched on")
+    dead = await_dead_letters(conn, "shutdown_retry")
+    check("startup recovery replayed it until it was dead-lettered", len(dead) == 1,
+          f"runs={trigger_runs(conn)!r} - a run stamped with the standalone node id that the clustered node"
+          " skips stays pending at its first attempt forever, and its write never gets its trigger")
+    if dead:
+        check("every configured attempt was spent", dead[0].get("attempts") == 3, f"entry={dead[0]!r}")
+
+
 def trigger_runs(conn: Conn, status: str = None) -> list:
     payload = {"type": "LIST_TRIGGER_RUNS"}
     if status:
@@ -1134,28 +1559,36 @@ def trigger_runs(conn: Conn, status: str = None) -> list:
 
 
 def dead_letters_for(conn: Conn, trigger_name: str) -> list:
-    # Filtered by name: earlier phases leave their own dead letters behind, which is itself the point -
-    # a dead letter outlives the run that produced it.
     return [run for run in trigger_runs(conn, "DEAD") if run.get("trigger") == trigger_name]
+
+
+def await_dead_letters(conn: Conn, trigger_name: str) -> list:
+    return await_latest(lambda: dead_letters_for(conn, trigger_name), bool, 30.0, 0.3)
+
+
+def arrange_failing_trigger(conn: Conn, trigger: str, procedure: str, procedure_label: str, source: str,
+                            events: list, doc_id: str, coll=COLL):
+    drop_hook(conn, "off_hook")
+    check_status(procedure_label, conn.save_procedure(procedure, source), "OK")
+    check_status("point a trigger at it", conn.save_trigger(trigger, events, procedure, coll=coll), "OK")
+    check_status("write a document so it fires", conn.save_doc({"_id": doc_id, "n": 1}, coll=coll), "OK")
+
+
+def remove_failing_trigger(conn: Conn, trigger: str, label: str, coll=COLL):
+    check_status(label, conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": coll,
+                                   "name": trigger}), "OK")
+    check_status("restore the vetoing hook for the next phase",
+                 install_hook(conn, "off_hook", "offhook",
+                              "export default (doc) => { throw new Error('always refuses'); };",
+                              ["CREATED", "UPDATED"]), "OK")
 
 
 def test_retry_and_dead_letters(conn: Conn):
     section("Retry and dead letters")
-    # Phase 1 deliberately leaves a vetoing before hook installed for the switches-off phase. It would
-    # refuse every write here, so it is lifted for the length of this phase and put back at the end.
-    drop_hook(conn, "off_hook")
-    check_status("install a trigger whose procedure always throws",
-                 conn.save_procedure("retry_boom", "throw new Error('retry boom');"), "OK")
-    check_status("point a trigger at it",
-                 conn.save_trigger("retrying", ["CREATED", "UPDATED"], "retry_boom"), "OK")
-    check_status("write a document so it fires", conn.save_doc({"_id": "retrydoc", "n": 1}), "OK")
+    arrange_failing_trigger(conn, "retrying", "retry_boom", "install a trigger whose procedure always throws",
+                            "throw new Error('retry boom');", ["CREATED", "UPDATED"], "retrydoc")
 
-    # Two attempts are configured for this phase, so the run is tried twice and then dead-lettered.
-    deadline = time.time() + 30.0
-    dead = dead_letters_for(conn, "retrying")
-    while not dead and time.time() < deadline:
-        time.sleep(0.3)
-        dead = dead_letters_for(conn, "retrying")
+    dead = await_dead_letters(conn, "retrying")
     check("the exhausted run is dead-lettered", len(dead) == 1, f"runs={dead!r}")
 
     attempts = await_history(conn, kind="TRIGGER", name="retrying")
@@ -1172,8 +1605,6 @@ def test_retry_and_dead_letters(conn: Conn):
         check("it counts its attempts", entry.get("attempts") == 2, f"entry={entry!r}")
         check("it names the node holding it", bool(entry.get("node")), f"entry={entry!r}")
 
-        # Replay after fixing the cause: the attempt count starts over, so the corrected run gets a full
-        # budget rather than dead-lettering again on its first failure.
         check_status("fix the procedure",
                      conn.save_procedure("retry_boom",
                                          "import db from 'db';\n"
@@ -1187,15 +1618,145 @@ def test_retry_and_dead_letters(conn: Conn):
         check("and its dead letter is gone", not dead_letters_for(conn, "retrying"),
               f"runs={dead_letters_for(conn, 'retrying')!r}")
 
-    check_status("remove the retrying trigger",
-                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
-                            "name": "retrying"}), "OK")
+    remove_failing_trigger(conn, "retrying", "remove the retrying trigger")
 
-    # Put the vetoing hook back so the switches-off phase still has the precondition it asserts on.
-    check_status("restore the vetoing hook for the next phase",
-                 install_hook(conn, "off_hook", "offhook",
-                              "export default (doc) => { throw new Error('always refuses'); };",
-                              ["CREATED", "UPDATED"]), "OK")
+
+def test_same_named_triggers_in_one_transaction_dead_letter_their_own_run(conn: Conn):
+    section("Same-named triggers on two collections keep their own run in one transaction")
+    for coll in (TWIN_FAILING_COLL, TWIN_AUDITED_COLL):
+        check_status(f"create {coll}", conn.send(
+            {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("install a procedure that always throws",
+                 conn.save_procedure("twin_boom", "throw new Error('twin boom');"), "OK")
+    check_status("install a procedure that audits",
+                 conn.save_procedure("twin_ok", "import db from 'db';"
+                                     "db.save(db.name, '" + AUDIT + "', { _id: 'twin-ok' }); return 'ok';"), "OK")
+    check_status("name the failing collection's trigger twin",
+                 conn.save_trigger("twin", ["CREATED"], "twin_boom", coll=TWIN_FAILING_COLL), "OK")
+    check_status("and the audited collection's trigger twin too",
+                 conn.save_trigger("twin", ["CREATED"], "twin_ok", coll=TWIN_AUDITED_COLL), "OK")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    for coll in (TWIN_FAILING_COLL, TWIN_AUDITED_COLL):
+        check_status(f"write the same id into {coll}", conn.save_doc({"_id": "tw1", "n": 1}, coll=coll), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    check("the audited collection's trigger ran", await_doc(conn, "twin-ok").get("status") == "OK")
+    dead = await_dead_letters(conn, "twin")
+    check("exactly one twin run is dead-lettered", len(dead) == 1, f"runs={dead!r}")
+    check("and it is the failing collection's run",
+          [run.get("collection") for run in dead] == [TWIN_FAILING_COLL], f"runs={dead!r}")
+    for coll in (TWIN_FAILING_COLL, TWIN_AUDITED_COLL):
+        conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": coll, "name": "twin"})
+
+
+def test_a_host_call_with_too_few_arguments_dead_letters(conn: Conn):
+    section("A trigger whose script calls db with too few arguments is dead-lettered")
+    arrange_failing_trigger(conn, "arity", "arity_boom",
+                            "install a trigger whose procedure omits db.save's database argument",
+                            "import db from 'db';\n"
+                            "db.save('" + AUDIT + "', { _id: 'never' });", ["CREATED", "UPDATED"], "aritydoc")
+
+    dead = await_dead_letters(conn, "arity")
+    check("the run is dead-lettered rather than left pending", len(dead) == 1, f"runs={dead!r}")
+    if dead:
+        entry = dead[0]
+        check("it carries the TypeError that killed it", "TypeError" in (entry.get("lastError") or ""),
+              f"entry={entry!r}")
+        check("it counts its attempts", (entry.get("attempts") or 0) >= 1, f"entry={entry!r}")
+        check_status("and it can be discarded like any other dead letter",
+                     conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": entry.get("runId"),
+                                "decision": "discard"}), "OK")
+    check("no pending run is left behind",
+          not [run for run in trigger_runs(conn, "PENDING") if run.get("trigger") == "arity"],
+          f"runs={trigger_runs(conn, 'PENDING')!r}")
+
+    remove_failing_trigger(conn, "arity", "remove the arity trigger")
+
+
+def test_a_retried_trigger_sees_its_original_fired_at(conn: Conn):
+    section("A retried trigger sees the firedAt of its first attempt")
+    arrange_failing_trigger(conn, "fired_at", "fired_boom",
+                            "install a procedure that reports its firedAt in the error it throws",
+                            "import args from 'args';\n"
+                            "throw new Error('fired at ' + args.firedAt);", ["CREATED", "UPDATED"], "fireddoc")
+
+    rows = await_history_rows(conn, "fired_at", 2)
+    check("both attempts are recorded", len(rows) >= 2, f"rows={rows!r}")
+    messages = {row.get("errorMessage") for row in rows}
+    check("every attempt saw the same firedAt", len(messages) == 1 and None not in messages,
+          f"messages={messages!r}; a retry used to be stamped with the time it was retried")
+
+    for entry in dead_letters_for(conn, "fired_at"):
+        conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": entry.get("runId"), "decision": "discard"})
+    remove_failing_trigger(conn, "fired_at", "remove the fired_at trigger")
+
+
+def test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn: Conn):
+    section("A dead letter whose error looks like a custom type stays readable")
+    arrange_failing_trigger(conn, "shaped", "shaped_boom",
+                            "install a trigger whose procedure throws an error named like a custom type",
+                            "throw Object.assign(new Error('x)'), { name: '#abc(' });", ["CREATED", "UPDATED"],
+                            "shapeddoc")
+
+    dead = await_dead_letters(conn, "shaped")
+    check("the run is dead-lettered and still listed", len(dead) == 1, f"runs={dead!r}")
+    if dead:
+        entry = dead[0]
+        check("its error is stored as plain text", entry.get("lastError") == "\\#abc(: x)", f"entry={entry!r}")
+        check_status("listing every run still works",
+                     conn.send({"type": "LIST_TRIGGER_RUNS"}), "OK")
+        check_status("listing pending runs still works",
+                     conn.send({"type": "LIST_TRIGGER_RUNS", "status": "PENDING"}), "OK")
+        check_status("and it can be discarded like any other dead letter",
+                     conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": entry.get("runId"),
+                                "decision": "discard"}), "OK")
+    check("its dead letter is gone", not dead_letters_for(conn, "shaped"),
+          f"runs={dead_letters_for(conn, 'shaped')!r}")
+
+    remove_failing_trigger(conn, "shaped", "remove the shaped trigger")
+
+
+def test_a_post_commit_error_applies_its_effects_once(conn: Conn):
+    section("An error raised after the commit is not retried")
+    arrange_failing_trigger(conn, "postcommitting", "post_commit",
+                            "install a trigger that commits and then overruns its budget",
+                            "import db from 'db';\n"
+                            "const current = db.findById(db.name, '" + AUDIT + "', 'postcommit');\n"
+                            "const runs = current === null ? 0 : current.runs;\n"
+                            "db.save(db.name, '" + AUDIT + "', { _id: 'postcommit', runs: runs + 1 });\n"
+                            "setInterval(() => { for (let i = 0; i < 20000; i++) { } }, 0);\n",
+                            ["CREATED"], "postcommitdoc")
+    applied = await_doc(conn, "postcommit")
+    check("the committed effects landed", applied.get("status") == "OK", f"got {applied!r}")
+
+    time.sleep(5.0)
+    final = conn.find("postcommit", coll=AUDIT)
+    runs = (final.get("object") or {}).get("runs")
+    check("the effects were applied exactly once", runs == 1, f"runs={runs!r}")
+
+    remove_failing_trigger(conn, "postcommitting", "remove the trigger")
+
+
+def test_a_replayed_dead_letter_gets_a_full_budget(conn: Conn):
+    section("A replayed dead letter starts its attempts over")
+    arrange_failing_trigger(conn, "replaying", "replay_boom", "install a trigger whose procedure always throws",
+                            "throw new Error('replay boom');", ["CREATED"], "replaydoc")
+
+    dead = await_dead_letters(conn, "replaying")
+    check("the run is dead-lettered after its two attempts", len(dead) == 1, f"runs={dead!r}")
+
+    if dead:
+        before = len(history_rows(conn, kind="TRIGGER", name="replaying"))
+        check_status("replay it without repairing the procedure",
+                     conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": dead[0].get("runId"),
+                                "decision": "replay"}), "OK")
+
+        rows = await_history_rows(conn, "replaying", before + 2)
+        check("the replay is tried twice, not dead-lettered on its first failure",
+              len(rows) >= before + 2, f"rows={len(rows)} before={before}")
+
+    remove_failing_trigger(conn, "replaying", "remove the replaying trigger")
 
 
 def test_trigger_run_operations(conn: Conn):
@@ -1206,8 +1767,6 @@ def test_trigger_run_operations(conn: Conn):
     check_code("an unknown status is rejected",
                conn.send({"type": "LIST_TRIGGER_RUNS", "status": "sideways"}), "ERROR", "400-1")
 
-    # Not an error: the operator asked every node and none of them holds the run - the answer
-    # CANCEL_SCRIPT gives for a run that has already finished.
     unknown = conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": "no-such-run", "decision": "discard"})
     check_status("an unknown runId answers OK", unknown, "OK")
     check("… and reports it was not resolved", unknown.get("resolved") is False, f"got {unknown}")
@@ -1261,7 +1820,6 @@ def test_cascade_deletes(conn: Conn, work_dir: str):
     check_status("drop the database",
                  conn.send({"type": "DROP_DATABASE", "databaseName": "proc_drop_db"}), "OK")
     check("dropping the database took the procedures folder", not os.path.exists(procedures), procedures)
-    # Re-creating it must not resurrect the old procedure, nor serve its compiled program
     check_status("re-create the database",
                  conn.send({"type": "CREATE_DATABASE", "databaseName": "proc_drop_db"}), "OK")
     check_code("the old procedure is gone", conn.call("doomed", db="proc_drop_db"), "NOT_FOUND", "404-8")
@@ -1270,22 +1828,15 @@ def test_cascade_deletes(conn: Conn, work_dir: str):
     check_result("runs the new body", conn.call("doomed", db="proc_drop_db"), 99)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 2 — both switches off
-# ══════════════════════════════════════════════════════════════════════════
-
 def test_switches_off(conn: Conn):
     section("Master switches off")
     check_code("scriptsEnabled=false refuses a call", conn.call("greet"), "FORBIDDEN", "403-2")
     check_code("and a save", conn.save_procedure("valid_name", "return 1;"), "FORBIDDEN", "403-2")
-    # Trigger DDL still works with triggers off; nothing fires.
     check_status("trigger DDL still works", conn.send(
         {"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": COLL}), "OK")
     check_status("a write still succeeds", conn.save_doc({"_id": "quiet", "n": 1}), "OK")
     quiet = await_absent(conn, "UPDATED-quiet")
     check("triggersEnabled=false fires nothing", quiet.get("status") != "OK", f"got {quiet}")
-    # A before hook is on the write path, so triggersEnabled=false has to stop it running at all -
-    # otherwise a vetoing hook would keep refusing writes after the switch was turned off.
     check_status("a write guarded by a vetoing before hook still succeeds",
                  conn.save_doc({"_id": "off1", "qty": 1}), "OK")
     check("the write landed", conn.find("off1").get("status") == "OK")
@@ -1298,13 +1849,10 @@ def test_switches_off(conn: Conn):
           "beforeApplied" in triggers and "beforeRejected" in triggers, f"got {triggers}")
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
-
 def main():
     bu.banner("Stored procedures & triggers test suite")
 
-    if not bu.server_binary_ready():
-        sys.exit(1)
+    bu.require_jar()
     if bu.port_open():
         print(f"port {PORT} is already in use", file=sys.stderr)
         sys.exit(1)
@@ -1321,24 +1869,34 @@ def main():
             setup_data(conn)
             test_procedure_lifecycle(conn)
             test_procedure_validation(conn)
+            test_procedure_name_case_collision(conn)
         test_permissions()
         with admin_conn() as conn:
             test_triggers(conn)
+            test_a_transaction_reports_only_its_net_effect(conn)
+            install_the_trigger_whose_file_will_break(conn)
             test_trigger_validation(conn)
             test_before_hooks(conn)
+            test_before_hook_preserves_custom_spelling(conn)
+            test_a_before_hook_getter_is_stored_like_db_save_stores_it(conn)
             test_before_hook_veto(conn)
             test_before_hook_contract(conn)
+            test_before_hook_sees_the_same_id_in_and_out_of_a_transaction(conn)
             test_before_hook_schema_recheck(conn)
+            test_before_hook_replacement_depth(conn)
             test_before_hook_on_delete(conn)
             test_before_hook_bulk_save(conn)
+            test_before_hook_bulk_save_in_a_transaction(conn)
             test_before_hook_chaining(conn)
             test_before_hook_sandbox(conn)
             test_before_hook_no_db(conn)
             test_before_hook_in_transaction(conn)
+            test_before_hook_that_shrinks_an_oversized_document(conn)
             test_before_hook_validation(conn)
             test_dry_run(conn)
             test_result_cap(conn)
         test_definer_rights()
+        test_a_client_cannot_forge_a_definer()
         with admin_conn() as conn:
             test_procedure_imports(conn)
             test_trigger_imports(conn)
@@ -1348,26 +1906,62 @@ def main():
             test_run_history_failures(conn)
             test_trigger_run_operations(conn)
             test_batch_mode(conn)
+            test_batch_deleted_trigger_fires_once_per_transaction(conn)
             test_cascade(conn)
             test_stats(conn)
             test_storage_placement(work_dir)
             test_cascade_deletes(conn, work_dir)
-            # Last of phase 1: it deliberately leaves a vetoing before hook installed for phase 2, so
-            # nothing that writes may run after it.
             test_before_hook_definer_is_not_enforced(conn)
 
-        # Phase 2: the same data directory with retries on, so a deterministically failing trigger is
-        # attempted twice and then dead-lettered rather than lost.
         bu.stop_server(proc)
         proc = None
         write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=2, retry_backoff_ms=200)
         proc = bu.start_server(work_dir, log_path)
-        with admin_conn() as conn:
-            test_retry_and_dead_letters(conn)
 
-        # Phase 3: same data directory, both switches off
+        interrupted = admin_conn()
+        arrange_a_commit_interrupted_past_its_commit_point(interrupted, work_dir)
+        print("\n  Killing the server without a drain ...")
+        proc.kill()
+        proc.wait(timeout=30)
+        proc = None
+        interrupted.close()
+        os.chmod(fenced_collection_folder(work_dir), 0o755)
+        check("the durable commit marker outlived the kill", bu.local_commit_markers(work_dir) == 1,
+              "with no marker there is nothing for the restart to finish, so what follows would be vacuous")
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_a_recovered_commit_fires_its_triggers(conn)
+            test_a_custom_shaped_history_row_survives_the_restart(conn)
+            test_an_unreadable_trigger_file_is_not_an_empty_one(conn, work_dir)
+            test_a_corrupt_trigger_file_is_not_an_empty_one(conn, work_dir)
+            test_an_unparseable_definition_is_answered_not_dropped(conn, work_dir)
+            test_a_deleted_definition_stops_being_served(conn)
+            test_retry_and_dead_letters(conn)
+            test_a_replayed_dead_letter_gets_a_full_budget(conn)
+            test_same_named_triggers_in_one_transaction_dead_letter_their_own_run(conn)
+            test_a_host_call_with_too_few_arguments_dead_letters(conn)
+            test_a_retried_trigger_sees_its_original_fired_at(conn)
+            test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn)
+            test_a_post_commit_error_applies_its_effects_once(conn)
+
         bu.stop_server(proc)
         proc = None
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=3,
+                     retry_backoff_ms=LONG_RETRY_BACKOFF_MS, retry_max_backoff_ms=LONG_RETRY_BACKOFF_MS)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            arrange_a_pending_trigger_retry(conn)
+        test_shutdown_does_not_wait_out_its_budget(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=3,
+                     retry_backoff_ms=200, clustered=True)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_a_run_left_pending_standalone_is_replayed_once_clustered(conn)
+        bu.stop_server(proc)
+        proc = None
+
         write_config(work_dir, scripts_enabled=False, triggers_enabled=False)
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:

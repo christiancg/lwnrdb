@@ -298,7 +298,7 @@ public class ScriptCancellationIntegrationTest {
         triggerExecutor.stop();
         triggerExecutor.start(captured::add);
         try {
-            TriggerRunRecovery.recoverLocal();
+            TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
             Thread.sleep(200);
             assertTrue(captured.isEmpty(), "the cancelled trigger run was re-queued at startup");
         } finally {

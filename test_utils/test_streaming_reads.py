@@ -13,10 +13,6 @@ PORT = 8989
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 
-# Knobs — tune these (and maxMemory in lwnrdb.cfg) to exercise paging. With the
-# default 2MB page size, a few thousand ~512B docs span many .dat pages so both
-# the targeted-fetch and page-streaming paths cross page boundaries. CI runners are
-# slower, so the workload is overridable via env vars to keep the run quick.
 DB = "stream_db"
 COLL = "stream_coll"
 JOIN_COLL = "stream_join"
@@ -27,13 +23,10 @@ BULK_BATCH_SIZE = int(os.environ.get("STREAM_TEST_BATCH_SIZE", "500"))
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-
 def stats(c) -> dict:
     return c.send({"type": "GET_DATABASE_STATS"})
 
 
-# See test_memory_limits.py: the sweep runs on a timer, so an admission may briefly
-# push the cache over cap until the next sweep catches up. 20% headroom is conservative.
 CACHE_CAP_TOLERANCE = 1.20
 
 
@@ -85,8 +78,6 @@ def rand_str(size: int) -> str:
     return ''.join(random.choices(string.ascii_letters + string.digits, k=size))
 
 
-# ── fixtures ───────────────────────────────────────────────────────────────
-
 def email_for(v: int) -> str:
     return f"user{v}@example.com"
 
@@ -96,7 +87,6 @@ def setup_fixtures(c):
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": JOIN_COLL})
 
-    # Load the main collection. status is low-cardinality; v is sequential; email unique.
     batch = []
     for v in range(NUM_DOCS):
         doc = {
@@ -116,26 +106,19 @@ def setup_fixtures(c):
     if batch:
         c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL, "objects": batch})
 
-    # Small join collection keyed by status.
     c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": JOIN_COLL, "objects": [
         {"_id": "active", "status": "active", "label": "Active users"},
         {"_id": "inactive", "status": "inactive", "label": "Inactive users"},
     ]})
 
-    # Index status and email; leave v unindexed to force a full scan.
     c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "status"})
     c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "email"})
-    # Indexes are built in the background; give them a moment to settle.
     time.sleep(3)
 
 
 def teardown_fixtures(c):
     c.send({"type": "DROP_DATABASE", "databaseName": DB})
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Tests
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_indexed_filter_correctness(c):
     section("Indexed FILTER (targeted fetch) — status EQUALS 'active'")
@@ -212,7 +195,6 @@ def test_targeted_fetch_does_not_bloat_cache(c):
         print("  [skip] caching disabled/unlimited — cache-growth assertion not applicable")
         return
     before_cache = mem.get("userCacheBytes", 0)
-    # A single indexed point lookup should pull at most a tiny subset into cache.
     agg(c, COLL, [field_filter("email", "EQUALS", email_for(NUM_DOCS // 3))])
     after = print_memory_snapshot("after point query", c)
     after_cache = after.get("memory", {}).get("userCacheBytes", 0)
@@ -226,8 +208,6 @@ def test_targeted_fetch_does_not_bloat_cache(c):
 
 def test_large_collection_under_tight_memory(c):
     section("Full scan over a multi-page collection completes (no OOM)")
-    # Run with a deliberately tight maxMemory (and small -Xmx) in lwnrdb.cfg to truly
-    # exercise the streaming guard; otherwise this just confirms functional correctness.
     snap = print_memory_snapshot("before tight-memory scan", c)
     on_disk = snap.get("totals", {}).get("sizeBytes", 0)
     cap = snap.get("memory", {}).get("maxMemoryBytes", 0)
@@ -280,10 +260,6 @@ def test_server_still_alive(c):
     check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
     check_status("AUTHENTICATE still works", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════
 
 def main():
     bu.banner("Streaming / targeted-fetch read path test suite", HOST, PORT)

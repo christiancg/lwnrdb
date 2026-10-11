@@ -9,9 +9,11 @@ public class AntiEntropyPayload {
     private List<DigestEntry> digest;
     private List<String> ids;
     private List<JsonObject> documents;
-    private List<Long> versions;
+    private List<String> versions;
     private String summary;
     private boolean summaryMatch;
+    private String incarnation;
+    private boolean staleIncarnation;
 
     public AntiEntropyPayload() {
     }
@@ -61,11 +63,11 @@ public class AntiEntropyPayload {
         this.documents = documents;
     }
 
-    public List<Long> getVersions() {
+    public List<String> getVersions() {
         return versions;
     }
 
-    public void setVersions(List<Long> versions) {
+    public void setVersions(List<String> versions) {
         this.versions = versions;
     }
 
@@ -83,5 +85,29 @@ public class AntiEntropyPayload {
 
     public void setSummaryMatch(boolean summaryMatch) {
         this.summaryMatch = summaryMatch;
+    }
+
+    public String getIncarnation() {
+        return incarnation;
+    }
+
+    public void setIncarnation(String incarnation) {
+        this.incarnation = incarnation;
+    }
+
+    public long incarnationValue() {
+        return incarnation == null ? 0L : Long.parseLong(incarnation);
+    }
+
+    public void setIncarnationValue(long value) {
+        this.incarnation = Long.toString(value);
+    }
+
+    public boolean isStaleIncarnation() {
+        return staleIncarnation;
+    }
+
+    public void setStaleIncarnation(boolean staleIncarnation) {
+        this.staleIncarnation = staleIncarnation;
     }
 }

@@ -3,14 +3,21 @@ package org.techhouse.unit.ops.req.validations;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
+import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
@@ -24,6 +31,7 @@ import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.ops.req.validations.AggregationStepValidator;
+import org.techhouse.ops.req.validations.ValidationResult;
 
 public class AggregationStepValidatorTest {
     @Test
@@ -234,5 +242,97 @@ public class AggregationStepValidatorTest {
         final var step = new SortAggregationStep("score", true);
         step.setAscending(null);
         assertFalse(AggregationStepValidator.validate(step).isValid());
+    }
+
+    @Test
+    public void test_a_membership_operator_requires_an_array_value() {
+        final var scalarOperand = new FieldOperator(FieldOperatorType.IN, "score", new JsonNumber(2));
+
+        final var result = AggregationStepValidator.validateOperator(scalarOperand);
+
+        assertFalse(result.isValid(),
+                "a scalar IN reached SearchUtils and threw, so the same query answered 500 with an index and"
+                        + " NO_RESULTS without one");
+    }
+
+    @Test
+    public void test_not_in_requires_an_array_value_too() {
+        final var scalarOperand = new FieldOperator(FieldOperatorType.NOT_IN, "score", new JsonString("x"));
+
+        assertFalse(AggregationStepValidator.validateOperator(scalarOperand).isValid(), "NOT_IN shares the same throw");
+    }
+
+    @Test
+    public void test_an_ordinary_equals_operator_is_still_accepted() {
+        final var operator = new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(2));
+
+        assertTrue(AggregationStepValidator.validateOperator(operator).isValid(),
+                "only the membership operators take an array");
+    }
+
+    @Test
+    public void test_a_filter_step_rejects_a_scalar_membership_operand() {
+        final var step = new FilterAggregationStep(new FieldOperator(FieldOperatorType.IN, "score", new JsonNumber(2)));
+
+        assertFalse(AggregationStepValidator.validate(step).isValid(),
+                "the refusal must reach the request validator, not only the operator helper");
+    }
+
+    @BeforeAll
+    static void registerCustomTypes() {
+        new EJson();
+    }
+
+    private static CustomOperator within(String... vertices) {
+        final var polygon = new JsonArray();
+        for (final var vertex : vertices) {
+            polygon.add(new JsonGeo(vertex));
+        }
+        final var args = new JsonObject();
+        args.add("polygon", polygon);
+        return new CustomOperator("within", "location", null, args);
+    }
+
+    private static CustomOperator distanceFrom(String target) {
+        final var value = new JsonGeo(target);
+        final var args = new JsonObject();
+        args.add("value", value);
+        args.add("comparator", new JsonString("SMALLER_THAN"));
+        args.add("distance", new JsonNumber((double) 1000));
+        return new CustomOperator("distance", "location", value, args);
+    }
+
+    private static ValidationResult filter(CustomOperator operator) {
+        return AggregationStepValidator.validate(new FilterAggregationStep(operator));
+    }
+
+    @Test
+    public void test_within_refuses_a_nan_vertex() {
+        final var result = filter(within("#geo(0,0)", "#geo(10,0)", "#geo(NaN,NaN)"));
+
+        assertFalse(result.isValid(), "a NaN vertex empties the index pre-filter while the scan still matches rows");
+        assertTrue(result.getErrorMessage().contains("finite"));
+    }
+
+    @Test
+    public void test_within_refuses_a_nan_vertex_inside_a_map_condition() {
+        final var mapOp = new AddFieldMapOperator("inside", within("#geo(0,0)", "#geo(10,0)", "#geo(5,NaN)"),
+                new OneParamMidOperator(MidOperationType.ABS, "score"));
+
+        assertFalse(AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp))).isValid());
+    }
+
+    @Test
+    public void test_distance_refuses_a_nan_target() {
+        final var result = filter(distanceFrom("#geo(NaN,0)"));
+
+        assertFalse(result.isValid());
+        assertTrue(result.getErrorMessage().contains("finite"));
+    }
+
+    @Test
+    public void test_finite_geo_operands_are_still_accepted() {
+        assertTrue(filter(within("#geo(0,0)", "#geo(10,0)", "#geo(5,5)")).isValid());
+        assertTrue(filter(distanceFrom("#geo(40.71,-74.0)")).isValid());
     }
 }

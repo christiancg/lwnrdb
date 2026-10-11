@@ -2,13 +2,18 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.net.InetAddress;
+import java.net.Socket;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
@@ -215,5 +220,40 @@ public class UserOperationHelperTest {
                 .registerForwardedClient("scriptpwd");
         UserOperationHelper.processSetPassword(setPassword, callerId);
         assertTrue(cache.getAdminUserEntry("scriptpwd").canRunScripts("mydb"));
+    }
+
+    private static UUID connectSocketClient() throws Exception {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        final var socket = Mockito.mock(Socket.class);
+        final var address = Mockito.mock(InetAddress.class);
+        Mockito.when(socket.getInetAddress()).thenReturn(address);
+        Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        return clientTracker.addClient(socket);
+    }
+
+    @Test
+    public void test_deleting_a_user_deauthenticates_its_connections() throws Exception {
+        final var createReq = new CreateUserRequest();
+        createReq.setUsername("sessionUser");
+        createReq.setPassword("password123");
+        createReq.setGlobalPermissions(new HashSet<>());
+        createReq.setDatabasePermissions(new HashMap<>());
+        createReq.setCollectionPermissions(new HashMap<>());
+        UserOperationHelper.processCreateUser(createReq);
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var clientId = connectSocketClient();
+        clientTracker.setAuthenticatedUser(clientId, "sessionUser");
+        try {
+            final var deleteReq = new DeleteUserRequest();
+            deleteReq.setUsername("sessionUser");
+            assertEquals(OperationStatus.OK, UserOperationHelper.processDeleteUser(deleteReq).getStatus());
+            UserOperationHelper.processCreateUser(createReq);
+
+            assertNull(clientTracker.getAuthenticatedUsername(clientId),
+                    "a connection must not be served as a different user created later under the same name");
+        } finally {
+            clientTracker.removeById(clientId);
+        }
     }
 }

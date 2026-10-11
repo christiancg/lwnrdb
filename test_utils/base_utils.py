@@ -1,26 +1,3 @@
-"""Shared plumbing for the LWNRDB integration suites.
-
-Every `test_*.py` suite in this folder speaks the same wire protocol, prints the same
-report format and gates CI on the same exit code, so all of that lives here rather than
-being copy-pasted eighteen times.
-
-A suite typically looks like:
-
-    import base_utils as bu
-    from base_utils import Conn, check, check_status, section
-
-    bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
-
-    def main():
-        bu.banner("My feature test suite", HOST, PORT)
-        section("Setup")
-        with Conn() as c:
-            check_status("create database", c.send({...}), "OK")
-        bu.summary()
-
-Stdlib only: CI has no `pip install` step for these suites.
-"""
-
 import json
 import os
 import select
@@ -30,7 +7,9 @@ import sys
 import time
 from typing import Callable, Optional
 
-# ── report format ────────────────────────────────────────────────────────────
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
 WIDTH = 70
 
@@ -43,26 +22,19 @@ PASS = f"{GREEN}PASS{RESET}"
 FAIL = f"{RED}FAIL{RESET}"
 WARN = f"{YELLOW}WARN{RESET}"
 
-# ── defaults, set once per suite via configure() ─────────────────────────────
 
 HOST = "127.0.0.1"
 PORT = 8989
 USERNAME = "admin"
 PASSWORD = "administrator"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JAR = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
-
-# Server launch is configurable: by default the suites run against the jar, but
-# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
-# them launch that binary instead. SERVER_PROC_PATTERN is what a pgrep/pkill-based
-# suite matches on.
+JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
 SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
-SERVER_PROC_PATTERN = SERVER_BIN or JAR
+SERVER_PROC_PATTERN = SERVER_BIN or JAR_PATH
 
 
 def configure(host: Optional[str] = None, port: Optional[int] = None,
               username: Optional[str] = None, password: Optional[str] = None) -> None:
-    """Point the shared Conn/port helpers at this suite's server and credentials."""
     global HOST, PORT, USERNAME, PASSWORD
     if host is not None:
         HOST = host
@@ -73,8 +45,6 @@ def configure(host: Optional[str] = None, port: Optional[int] = None,
     if password is not None:
         PASSWORD = password
 
-
-# ── result tracking ──────────────────────────────────────────────────────────
 
 _failures = 0
 _warnings = 0
@@ -89,13 +59,11 @@ def warning_count() -> int:
 
 
 def record_failure() -> None:
-    """Count a failure that has already been reported some other way."""
     global _failures
     _failures += 1
 
 
 def check(label: str, ok: bool, detail: str = "") -> bool:
-    """The one assertion primitive: every other check_* helper funnels into this."""
     global _failures
     icon = PASS if ok else FAIL
     print(f"  [{icon}] {label}")
@@ -122,7 +90,6 @@ def check_status(label: str, response: dict, expected_status: str) -> bool:
 
 
 def check_code(label: str, response: dict, expected_status: str, expected_code: str) -> bool:
-    """Assert both the status and the errorCode of an error response."""
     actual_status = response.get("status")
     actual_code = response.get("errorCode")
     ok = actual_status == expected_status and actual_code == expected_code
@@ -139,7 +106,6 @@ def check_result(label: str, response: dict, expected) -> bool:
 
 
 def dig(response: dict, path: str):
-    """Walk a dotted path through the response, indexing into lists by number."""
     cur = response
     for part in path.split("."):
         if cur is None:
@@ -157,16 +123,12 @@ def dig(response: dict, path: str):
 
 
 def check_field(label: str, response: dict, path: str, expected) -> bool:
-    """Assert a value inside the response payload (status is not enough)."""
     actual = dig(response, path)
     return check(label, actual == expected,
                  f"path={path}  expected={expected!r}  got={actual!r}")
 
 
-# ── report chrome ────────────────────────────────────────────────────────────
-
 def banner(title: str, host: Optional[str] = None, port: Optional[int] = None) -> None:
-    """Opening block. Pass host/port for suites that attach to an already-running server."""
     print("\n" + "═" * WIDTH)
     print(f"  LWNRDB — {title}")
     print("═" * WIDTH)
@@ -181,7 +143,6 @@ def section(title: str) -> None:
 
 
 def summary(on_failure: Optional[Callable[[], None]] = None, suffix: str = "") -> None:
-    """Print the closing block and exit 0/1. Never returns."""
     print("\n" + "═" * WIDTH)
     if _failures == 0:
         print(f"  {GREEN}All checks passed.{RESET}{suffix}")
@@ -194,14 +155,14 @@ def summary(on_failure: Optional[Callable[[], None]] = None, suffix: str = "") -
     sys.exit(0 if _failures == 0 else 1)
 
 
-# ── the wire ─────────────────────────────────────────────────────────────────
+UNPARSED = "unparsed"
+
+
+def _refuse_non_rfc_constant(token: str):
+    raise ValueError(f"the server answered with the non-RFC JSON constant {token}")
+
 
 class Conn:
-    """One client connection. Use as a context manager; `with Conn() as c` yields self.
-
-    `sock` lets a suite supply an already-connected socket (the TLS suite hands over an
-    SSL-wrapped one); otherwise a plain TCP connection to host/port is opened.
-    """
 
     def __init__(self, host: Optional[str] = None, port: Optional[int] = None,
                  timeout: float = 60.0, sock=None):
@@ -212,14 +173,19 @@ class Conn:
         self.s = sock
         self.f = self.s.makefile("rb")
 
-    def send(self, payload: dict, timeout: Optional[float] = None) -> dict:
-        """Send one request, read one response line. Never raises on a dead connection."""
+    def send(self, payload: dict, timeout: Optional[float] = None, strict: bool = False) -> dict:
+        return self.send_raw(json.dumps(payload), timeout, strict)
+
+    def send_raw(self, line: str, timeout: Optional[float] = None, strict: bool = False) -> dict:
         if timeout is not None:
             self.s.settimeout(timeout)
         try:
-            self.s.sendall((json.dumps(payload) + "\n").encode())
+            self.s.sendall((line + "\n").encode())
         except (BrokenPipeError, OSError):
             return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
+        return self._read_response(strict)
+
+    def _read_response(self, strict: bool = False) -> dict:
         try:
             raw = self.f.readline().decode().strip()
         except (OSError, ConnectionError):
@@ -227,19 +193,16 @@ class Conn:
         if not raw:
             return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
         try:
+            if strict:
+                return json.loads(raw, parse_constant=_refuse_non_rfc_constant)
             return json.loads(raw)
         except json.JSONDecodeError:
-            # The server emits a plaintext line (e.g. "The command is not valid") when a
-            # request fails to parse. Surface it instead of crashing the suite.
-            return {"status": "ERROR", "message": raw}
+            unparsed = {"status": "ERROR", "message": raw}
+            if strict:
+                unparsed[UNPARSED] = True
+            return unparsed
 
     def recv(self, timeout: float = 2.0) -> Optional[dict]:
-        """Read one unsolicited push, or None if nothing arrives within `timeout`.
-
-        select() rather than a socket timeout: a timed-out read would leave the
-        underlying SocketIO in its _timeout_occurred state and poison every
-        subsequent read on the same BufferedReader.
-        """
         ready, _, _ = select.select([self.f.raw._sock], [], [], timeout)
         if not ready:
             return None
@@ -253,6 +216,13 @@ class Conn:
             return json.loads(raw)
         except json.JSONDecodeError:
             return None
+
+    @classmethod
+    def authenticated(cls, username: Optional[str] = None, password: Optional[str] = None,
+                      **conn_kwargs) -> "Conn":
+        conn = cls(**conn_kwargs)
+        conn.authenticate(username, password)
+        return conn
 
     def authenticate(self, username: Optional[str] = None,
                      password: Optional[str] = None) -> dict:
@@ -274,14 +244,128 @@ class Conn:
         self.close()
 
 
-# ── server lifecycle ─────────────────────────────────────────────────────────
-
 def port_open(host: Optional[str] = None, port: Optional[int] = None) -> bool:
     try:
         with socket.create_connection((host or HOST, port or PORT), timeout=0.5):
             return True
     except OSError:
         return False
+
+
+def ids_of(response: dict) -> list:
+    return sorted(d.get("_id") for d in (response.get("results") or []))
+
+
+def count_of(response: dict):
+    return ((response.get("results") or [{}])[0]).get("count")
+
+
+def filter_step(field: str, operator: str, value) -> dict:
+    return {"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": field, "value": value}}
+
+
+def _attempt(predicate: Callable[[], object]):
+    try:
+        return predicate()
+    except (OSError, RuntimeError):
+        return False
+
+
+def wait_until(predicate: Callable[[], object], timeout_s: float, interval_s: float = 0.4):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        result = _attempt(predicate)
+        if result:
+            return result
+        time.sleep(interval_s)
+    return _attempt(predicate)
+
+
+def holds_throughout(predicate: Callable[[], object], seconds: float, interval_s: float = 0.5) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if not _attempt(predicate):
+            return False
+        time.sleep(interval_s)
+    return True
+
+
+def require_jar(jar: str = JAR_PATH) -> None:
+    if SERVER_BIN:
+        if not os.path.isfile(SERVER_BIN):
+            print(f"\n[ERROR] Native binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN). "
+                  f"Build it first: mvn -Pnative package -DskipTests\n")
+            sys.exit(1)
+        return
+    if not os.path.isfile(jar):
+        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+        sys.exit(1)
+
+
+def _config_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def write_config(work_dir: str, port: int, **settings) -> None:
+    lines = [f"port={port}", "filePath=db", "logPath=logs",
+             f"defaultAdminUsername={USERNAME}", f"defaultAdminPassword={PASSWORD}"]
+    lines += [f"{key}={_config_value(value)}" for key, value in settings.items()]
+    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
+        fp.write("\n".join(lines) + "\n")
+
+
+PK_FIELD_SEPARATOR = "\x1f"
+INDEX_ESCAPES = {"\\": "\\", "n": "\n", "r": "\r", "s": "\x1f"}
+
+
+def unescape_index_token(token: str) -> str:
+    if "\\" not in token:
+        return token
+    out = []
+    i = 0
+    while i < len(token):
+        if token[i] != "\\" or i + 1 >= len(token):
+            out.append(token[i])
+            i += 1
+            continue
+        out.append(INDEX_ESCAPES.get(token[i + 1], "\\" + token[i + 1]))
+        i += 2
+    return "".join(out)
+
+
+def local_commit_markers(work_dir: str) -> int:
+    folder = os.path.join(work_dir, "db", "admin", "transactions")
+    if not os.path.isdir(folder):
+        return 0
+    total = 0
+    for name in sorted(os.listdir(folder)):
+        if name.endswith(".dat"):
+            with open(os.path.join(folder, name), "r", encoding="utf-8", errors="replace") as fp:
+                total += sum(1 for line in fp if "|localcommit" in line)
+    return total
+
+
+def read_pk_rows(pk_path: str) -> list:
+    with open(pk_path, "r", encoding="utf-8") as fp:
+        return [[fields[0]] + [int(value) for value in fields[1:]]
+                for fields in (line.rstrip("\r\n").split(PK_FIELD_SEPARATOR) for line in fp) if len(fields) == 5]
+
+
+def write_pk_rows(pk_path: str, rows: list) -> None:
+    with open(pk_path, "w", encoding="utf-8", newline="") as fp:
+        for row in sorted(rows, key=lambda r: r[0]):
+            fp.write(PK_FIELD_SEPARATOR.join(str(value) for value in row) + "\n")
+
+
+def write_compaction_marker(collection_folder: str, kind: str, db: str, coll: str, row: list, page_bytes: bytes,
+                            target_page: int = -1, target_length_before: int = 0) -> None:
+    doc_id, position, length, page, version = row
+    header = PK_FIELD_SEPARATOR.join(str(value) for value in (
+        kind, db, coll, page, position, len(page_bytes), length, doc_id, version, target_page, target_length_before))
+    with open(os.path.join(collection_folder, f"{coll}-{page}.compacting"), "wb") as fp:
+        fp.write(header.encode("utf-8") + b"\n" + page_bytes[position:])
 
 
 def read_log(log_path: str) -> str:
@@ -302,38 +386,19 @@ def dump_log(log_path: str, tail_bytes: int = 4000) -> None:
 
 
 def server_argv(xmx: str = "512m", jar: Optional[str] = None) -> list:
-    """The command line that launches a server: the native binary when
-    LWNRDB_SERVER_BIN points at one, the shaded jar otherwise. Native images
-    honor -Xmx as a runtime arg."""
     if SERVER_BIN:
         return [SERVER_BIN, f"-Xmx{xmx}"]
-    return ["java", f"-Xmx{xmx}", "-jar", jar or JAR]
-
-
-def server_binary_ready() -> bool:
-    """Preflight: whatever `server_argv` would launch actually exists."""
-    if SERVER_BIN:
-        if os.path.isfile(SERVER_BIN):
-            return True
-        print(f"server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN); "
-              f"run `mvn -Pnative package -DskipTests` first", file=sys.stderr)
-        return False
-    if os.path.isfile(JAR):
-        return True
-    print(f"jar not found at {JAR}; run `mvn clean package -DskipTests` first", file=sys.stderr)
-    return False
+    return ["java", f"-Xmx{xmx}", "-jar", jar or JAR_PATH]
 
 
 def start_server(work_dir: str, log_path: str, jar: Optional[str] = None,
                  xmx: str = "512m", host: Optional[str] = None,
                  port: Optional[int] = None, settle: float = 0.5):
-    """Launch a server in `work_dir` and wait for its client port to accept."""
     log = open(log_path, "ab")
     proc = subprocess.Popen(server_argv(xmx, jar), stdout=log, stderr=log, cwd=work_dir)
     deadline = time.time() + 60.0
     while time.time() < deadline:
         if port_open(host, port):
-            # Give the accept loop a beat to be fully ready.
             time.sleep(settle)
             return proc
         if proc.poll() is not None:

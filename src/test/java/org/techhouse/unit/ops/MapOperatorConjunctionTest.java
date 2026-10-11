@@ -119,4 +119,61 @@ public class MapOperatorConjunctionTest {
         JsonObject result = MapOperatorHelper.processOperator(op, input);
         assertTrue(result.has("result"));
     }
+
+    private static JsonObject documentWith(boolean field1, boolean field2, boolean field3) {
+        final var document = new JsonObject();
+        document.addProperty("field1", field1);
+        document.addProperty("field2", field2);
+        document.addProperty("field3", field3);
+        document.addProperty("marker", "present");
+        return document;
+    }
+
+    private static ConjunctionOperator conjunctionOf(ConjunctionOperatorType type) {
+        final List<BaseOperator> leaves = List.of(
+                new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonBoolean(true)),
+                new FieldOperator(FieldOperatorType.EQUALS, "field2", new JsonBoolean(true)));
+        return new ConjunctionOperator(type, leaves);
+    }
+
+    private static boolean conditionApplied(ConjunctionOperator condition, JsonObject document) {
+        return !MapOperatorHelper.processOperator(new RemoveFieldMapOperator("marker", condition), document)
+                .has("marker");
+    }
+
+    @Test
+    public void test_nor_condition_applies_when_no_child_matches() {
+        assertTrue(conditionApplied(conjunctionOf(ConjunctionOperatorType.NOR), documentWith(false, false, false)),
+                "NOR must select a document matching none of its children");
+    }
+
+    @Test
+    public void test_nor_condition_does_not_apply_when_one_child_matches() {
+        assertFalse(conditionApplied(conjunctionOf(ConjunctionOperatorType.NOR), documentWith(true, false, false)),
+                "NOR must reject a document matching any of its children");
+    }
+
+    @Test
+    public void test_nand_condition_applies_when_not_every_child_matches() {
+        assertTrue(conditionApplied(conjunctionOf(ConjunctionOperatorType.NAND), documentWith(true, false, false)),
+                "NAND must select a document that does not match every child");
+    }
+
+    @Test
+    public void test_nand_condition_does_not_apply_when_every_child_matches() {
+        assertFalse(conditionApplied(conjunctionOf(ConjunctionOperatorType.NAND), documentWith(true, true, false)),
+                "NAND must reject a document matching every child");
+    }
+
+    @Test
+    public void test_nested_nor_inside_an_and_condition_is_evaluated() {
+        final List<BaseOperator> nested = List.of(conjunctionOf(ConjunctionOperatorType.NOR),
+                new FieldOperator(FieldOperatorType.EQUALS, "field3", new JsonBoolean(true)));
+        final var outer = new ConjunctionOperator(ConjunctionOperatorType.AND, nested);
+
+        assertTrue(conditionApplied(outer, documentWith(false, false, true)),
+                "a nested NOR must contribute its real answer to the enclosing AND");
+        assertFalse(conditionApplied(outer, documentWith(true, false, true)),
+                "a nested NOR that rejects must make the enclosing AND reject too");
+    }
 }

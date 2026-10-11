@@ -145,6 +145,29 @@ public class JsonGeoTest {
         assertThrows(UnsupportedOperationException.class, () -> geo.applyCustomRankingOperator("nearest", Map.of()));
     }
 
+    @Test
+    public void test_a_non_finite_point_still_parses_but_is_not_finite() {
+        final var geo = new JsonGeo("#geo(NaN,1)");
+
+        assertTrue(Double.isNaN(geo.point().lat()));
+        assertFalse(geo.isFinitePoint());
+        assertTrue(new JsonGeo("#geo(1,2)").isFinitePoint());
+    }
+
+    @Test
+    public void test_a_non_finite_point_is_found_inside_nested_containers() {
+        final var nested = new org.techhouse.ejson.elements.JsonObject();
+        final var array = new JsonArray();
+        array.add(new JsonGeo("#geo(1,NaN)"));
+        nested.add("places", array);
+        final var document = new org.techhouse.ejson.elements.JsonObject();
+        document.add("nested", nested);
+
+        assertTrue(JsonGeo.containsNonFinitePoint(document));
+        assertFalse(JsonGeo.containsNonFinitePoint(new JsonGeo("#geo(1,2)")));
+        assertFalse(JsonGeo.containsNonFinitePoint(new JsonString("#geo(NaN,1) as text")));
+    }
+
     private static Map<String, JsonBaseElement> distanceArgs(JsonBaseElement target, String comparator, double dist) {
         return Map.of("value", target, "comparator", new JsonString(comparator), "distance", new JsonNumber(dist));
     }

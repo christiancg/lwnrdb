@@ -10,6 +10,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestUtils;
 
 // Lives in org.techhouse.cluster rather than unit/cluster because PeerRequest is package-private.
@@ -32,7 +33,7 @@ public class PeerRequestTest {
 
     @Test
     public void test_every_outbound_request_carries_the_secret_and_this_node() throws Exception {
-        final var self = new NodeInfo("self", "127.0.0.1", 9990, NodeState.ALIVE, 1L, 1L);
+        final var self = ClusterTestHarness.node("self", 9990);
         TestUtils.setPrivateField(membershipService, "self", self);
 
         final var message = PeerRequest.message(ClusterMessageType.GOSSIP);

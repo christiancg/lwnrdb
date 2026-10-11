@@ -40,6 +40,51 @@ public class ListenOperationTest {
         TestUtils.standardTearDown();
     }
 
+    private String registerListener(UUID clientId) {
+        final var request = new ListenRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of());
+        return ((ListenResponse) processor.processMessage(request, clientId)).getListenId();
+    }
+
+    private org.techhouse.ops.resp.OperationResponse stopListen(String listenId, UUID clientId) {
+        final var request = new StopListenRequest();
+        request.setListenId(listenId);
+        return processor.processMessage(request, clientId);
+    }
+
+    @Test
+    public void processStopListen_fromAnotherClient_isRefused() {
+        final var victim = UUID.randomUUID();
+        final var attacker = UUID.randomUUID();
+        final var listenId = registerListener(victim);
+
+        final var stolen = stopListen(listenId, attacker);
+
+        assertEquals(OperationStatus.NOT_FOUND, stolen.getStatus(),
+                "any authenticated client could otherwise cancel a listener it does not own");
+        assertEquals(org.techhouse.ops.ErrorCode.LISTEN_NOT_FOUND.getCode(), stolen.getErrorCode(),
+                "the refusal must be indistinguishable from an unknown id, or it is a membership oracle");
+    }
+
+    @Test
+    public void processStopListen_leavesTheVictimRegistered() {
+        final var victim = UUID.randomUUID();
+        final var listenId = registerListener(victim);
+        stopListen(listenId, UUID.randomUUID());
+
+        assertInstanceOf(StopListenResponse.class, stopListen(listenId, victim),
+                "the owner's registration must survive another client's attempt to cancel it");
+    }
+
+    @Test
+    public void processStopListen_fromTheOwningClient_succeeds() {
+        final var owner = UUID.randomUUID();
+        final var listenId = registerListener(owner);
+
+        assertInstanceOf(StopListenResponse.class, stopListen(listenId, owner));
+        assertEquals(OperationStatus.NOT_FOUND, stopListen(listenId, owner).getStatus());
+    }
+
     @Test
     public void processListen_existingCollection_returnsListenResponse() {
         final var req = new ListenRequest(TestGlobals.DB, TestGlobals.COLL);

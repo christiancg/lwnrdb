@@ -281,10 +281,10 @@ public final class GlobalFunctionsBuiltins {
                 yield copy;
             }
             case JsDate date -> new JsDate(date.getTime());
-            case JsGeo geo -> new JsGeo(geo.getPoint());
-            case JsVector vector -> new JsVector(vector.getComponents());
-            case JsDbDateTime dateTime -> new JsDbDateTime(dateTime.getValue());
-            case JsDbTime time -> new JsDbTime(time.getValue());
+            case JsGeo geo -> geo.copy();
+            case JsVector vector -> vector.copy();
+            case JsDbDateTime dateTime -> dateTime.copy();
+            case JsDbTime time -> time.copy();
             case JsArrayBuffer buffer -> {
                 InterpreterOps.charge(ops, buffer.getBytes().length);
                 yield new JsArrayBuffer(buffer.getBytes().clone());

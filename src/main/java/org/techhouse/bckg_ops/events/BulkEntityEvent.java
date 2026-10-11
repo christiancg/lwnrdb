@@ -10,7 +10,17 @@ public class BulkEntityEvent extends CollectionScopedEvent {
 
     public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries,
             List<DbEntry> updatedEntries) {
-        super(EventType.CREATED, dbName, collName);
+        this(dbName, collName, insertedEntries, updatedEntries, 0L);
+    }
+
+    public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries, List<DbEntry> updatedEntries,
+            long incarnation) {
+        this(dbName, collName, insertedEntries, updatedEntries, incarnation, 0L);
+    }
+
+    public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries, List<DbEntry> updatedEntries,
+            long incarnation, long pendingGeneration) {
+        super(EventType.CREATED, dbName, collName, incarnation, pendingGeneration);
         this.insertedEntries = insertedEntries;
         this.updatedEntries = updatedEntries;
     }
@@ -43,6 +53,7 @@ public class BulkEntityEvent extends CollectionScopedEvent {
     @Override
     public String toString() {
         return "BulkEntityEvent(super=" + super.toString() + ", dbName=" + getDbName() + ", collName=" + getCollName()
+                + ", incarnation=" + getIncarnation() + ", pendingGeneration=" + getPendingGeneration()
                 + ", insertedEntries=" + insertedEntries + ", updatedEntries=" + updatedEntries + ")";
     }
 }

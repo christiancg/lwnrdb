@@ -1,14 +1,9 @@
 package org.techhouse.unit.conn;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -16,7 +11,6 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.data.auth.PermissionLevel;
@@ -73,20 +67,11 @@ public class MessageProcessorRunScriptTest {
         UserOperationHelper.processCreateUser(request);
     }
 
-    private Socket mockSocket(InputStream in, OutputStream out) throws Exception {
-        final var socket = Mockito.mock(Socket.class);
-        final var address = Mockito.mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(address);
-        when(address.getHostAddress()).thenReturn("127.0.0.1");
-        when(socket.getInputStream()).thenReturn(in);
-        when(socket.getOutputStream()).thenReturn(out);
-        return socket;
-    }
-
     private List<String> exchange(String... requests) throws Exception {
         final var out = new ByteArrayOutputStream();
         final var message = String.join("\n", requests) + "\n";
-        final var socket = mockSocket(new ByteArrayInputStream(message.getBytes(StandardCharsets.UTF_8)), out);
+        final var socket = TestUtils.clientSocket(new ByteArrayInputStream(message.getBytes(StandardCharsets.UTF_8)),
+                out);
         final var thread = new Thread(new MessageProcessor(socket));
         thread.start();
         thread.join(10000);

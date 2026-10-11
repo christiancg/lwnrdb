@@ -102,11 +102,11 @@ public class ResponseParserTest {
 
     @Test
     public void test_parses_error_response_preserving_error_code() {
-        final var source = new OperationResponse(OperationType.SAVE, "nope", ErrorCode.CROSS_OWNER_TRANSACTION);
+        final var source = new OperationResponse(OperationType.SAVE, "nope", ErrorCode.NOT_COLLECTION_OWNER);
         final var parsed = roundTrip(source);
         assertEquals(OperationStatus.ERROR, parsed.getStatus());
         assertEquals("nope", parsed.getMessage());
-        assertEquals("421-2", parsed.getErrorCode());
+        assertEquals("421-1", parsed.getErrorCode());
     }
 
     @Test

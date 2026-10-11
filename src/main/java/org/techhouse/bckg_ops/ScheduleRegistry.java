@@ -1,5 +1,6 @@
 package org.techhouse.bckg_ops;
 
+import java.io.IOException;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.ex.InvalidCronException;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -73,28 +75,45 @@ public class ScheduleRegistry {
         }
     }
 
-    public void reload(String dbName) {
+    public synchronized void reload(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        final var listingKey = prefix + Globals.SCHEDULES_FOLDER;
+        final List<String> names;
+        try {
+            names = fs.listScheduleNames(dbName);
+        } catch (IOException e) {
+            warnOnce(listingKey, "the schedules folder could not be listed, so the registered schedules are kept: "
+                    + e.getMessage());
+            return;
+        }
+        warned.remove(listingKey);
         final var seen = new ArrayList<String>();
-        for (final var name : fs.listScheduleNames(dbName)) {
-            final var definition = cache.getSchedule(dbName, name);
+        for (final var name : names) {
+            final var key = Cache.getCollectionIdentifier(dbName, name);
+            final ScheduleDefinition definition;
+            try {
+                definition = cache.getSchedule(dbName, name);
+            } catch (MetadataReadException e) {
+                seen.add(key);
+                warnOnce(key, "the definition could not be read and was skipped: " + e.getMessage());
+                continue;
+            }
             if (definition == null) {
                 continue;
             }
-            final var key = Cache.getCollectionIdentifier(dbName, name);
             seen.add(key);
             put(key, dbName, definition);
         }
         entries.keySet().removeIf(key -> key.startsWith(prefix) && !seen.contains(key));
     }
 
-    public void removeDatabase(String dbName) {
+    public synchronized void removeDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
         entries.keySet().removeIf(key -> key.startsWith(prefix));
         warned.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
-    public void clear() {
+    public synchronized void clear() {
         entries.clear();
         warned.clear();
     }
@@ -113,7 +132,7 @@ public class ScheduleRegistry {
 
     public long nextRunAfter(Entry entry, long from) {
         if (entry.getCron() == null) {
-            return from + Math.max(1L, entry.getDefinition().getIntervalMs());
+            return nextIntervalRun(entry, from);
         }
         final var next = entry.getCron()
                 .nextAfter(ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(from), zone()));
@@ -123,6 +142,15 @@ public class ScheduleRegistry {
             return 0L;
         }
         return next.toInstant().toEpochMilli();
+    }
+
+    private static long nextIntervalRun(Entry entry, long from) {
+        final var interval = Math.max(1L, entry.getDefinition().getIntervalMs());
+        final var scheduled = entry.getNextRunAt();
+        if (scheduled <= 0 || scheduled > from) {
+            return from + interval;
+        }
+        return scheduled + ((from - scheduled) / interval + 1) * interval;
     }
 
     public void warnOnce(String key, String message) {

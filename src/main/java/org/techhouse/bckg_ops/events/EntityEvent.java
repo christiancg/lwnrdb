@@ -7,7 +7,16 @@ public class EntityEvent extends CollectionScopedEvent {
     private final DbEntry dbEntry;
 
     public EntityEvent(EventType type, String dbName, String collName, DbEntry dbEntry) {
-        super(type, dbName, collName);
+        this(type, dbName, collName, dbEntry, 0L);
+    }
+
+    public EntityEvent(EventType type, String dbName, String collName, DbEntry dbEntry, long incarnation) {
+        this(type, dbName, collName, dbEntry, incarnation, 0L);
+    }
+
+    public EntityEvent(EventType type, String dbName, String collName, DbEntry dbEntry, long incarnation,
+            long pendingGeneration) {
+        super(type, dbName, collName, incarnation, pendingGeneration);
         this.dbEntry = dbEntry;
     }
 
@@ -34,6 +43,7 @@ public class EntityEvent extends CollectionScopedEvent {
     @Override
     public String toString() {
         return "EntityEvent(super=" + super.toString() + ", dbName=" + getDbName() + ", collName=" + getCollName()
-                + ", dbEntry=" + dbEntry + ")";
+                + ", incarnation=" + getIncarnation() + ", pendingGeneration=" + getPendingGeneration() + ", dbEntry="
+                + dbEntry + ")";
     }
 }

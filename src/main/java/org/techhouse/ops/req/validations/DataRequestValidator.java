@@ -2,6 +2,9 @@ package org.techhouse.ops.req.validations;
 
 import java.util.List;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.custom_types.JsonGeo;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CreateIndexRequest;
@@ -13,8 +16,14 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.utils.JsonUtils;
 
 public final class DataRequestValidator {
+    private static final String NON_FINITE_GEO_MESSAGE = "a #geo value must have finite latitude and longitude";
+    public static final String NESTING_MESSAGE = "a document must not nest deeper than "
+            + Globals.MAX_REQUEST_NESTING_DEPTH + " levels";
+    private static final String ID_PATTERN_MESSAGE = "_id must be 1-64 alphanumeric characters, underscores, or hyphens";
+
     private DataRequestValidator() {
     }
 
@@ -27,7 +36,31 @@ public final class DataRequestValidator {
             return ValidationResult.fail("SAVE request requires an object");
         }
         if (request.get_id() != null && !request.get_id().matches(NameValidations.ID_PATTERN)) {
-            return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
+        }
+        return validateDocument(request.getObject());
+    }
+
+    private static ValidationResult validateDocument(JsonObject object) {
+        if (JsonUtils.nestingExceeds(object, Globals.MAX_REQUEST_NESTING_DEPTH)) {
+            return ValidationResult.fail(NESTING_MESSAGE);
+        }
+        if (JsonGeo.containsNonFinitePoint(object)) {
+            return ValidationResult.fail(NON_FINITE_GEO_MESSAGE);
+        }
+        return validateEmbeddedId(object);
+    }
+
+    private static ValidationResult validateEmbeddedId(JsonObject object) {
+        if (!object.has(Globals.PK_FIELD)) {
+            return ValidationResult.ok();
+        }
+        final var element = object.get(Globals.PK_FIELD);
+        if (!(element instanceof JsonString jsonString)) {
+            return ValidationResult.fail("_id must be a string");
+        }
+        if (!jsonString.getValue().matches(NameValidations.ID_PATTERN)) {
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
     }
@@ -41,11 +74,9 @@ public final class DataRequestValidator {
             return ValidationResult.fail("BULK_SAVE request requires at least one object");
         }
         for (var obj : request.getObjects()) {
-            if (obj.has(Globals.PK_FIELD)) {
-                final var id = obj.get(Globals.PK_FIELD).asJsonString().getValue();
-                if (!id.matches(NameValidations.ID_PATTERN)) {
-                    return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
-                }
+            final var embedded = validateDocument(obj);
+            if (!embedded.isValid()) {
+                return embedded;
             }
         }
         return ValidationResult.ok();
@@ -60,7 +91,7 @@ public final class DataRequestValidator {
             return ValidationResult.fail("FIND_BY_ID request requires an _id");
         }
         if (!request.get_id().matches(NameValidations.ID_PATTERN)) {
-            return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
     }
@@ -74,7 +105,7 @@ public final class DataRequestValidator {
             return ValidationResult.fail("DELETE request requires an _id");
         }
         if (!request.get_id().matches(NameValidations.ID_PATTERN)) {
-            return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
     }
@@ -112,6 +143,17 @@ public final class DataRequestValidator {
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName");
         }
+        final var charset = NameValidations.validateIndexFieldName(request.getFieldName());
+        if (!charset.isValid()) {
+            return charset;
+        }
+        return validateIndexFieldNotReserved("CREATE_INDEX", request.getFieldName());
+    }
+
+    private static ValidationResult validateIndexFieldNotReserved(String operation, String fieldName) {
+        if (JsonUtils.isPrimaryKeyPath(fieldName) || Globals.TOMBSTONE_FILE_NAME.equals(fieldName)) {
+            return ValidationResult.fail(operation + " cannot target the reserved field name " + fieldName);
+        }
         return ValidationResult.ok();
     }
 
@@ -134,7 +176,11 @@ public final class DataRequestValidator {
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("DROP_INDEX request requires a non-blank fieldName");
         }
-        return ValidationResult.ok();
+        final var charset = NameValidations.validateIndexFieldName(request.getFieldName());
+        if (!charset.isValid()) {
+            return charset;
+        }
+        return validateIndexFieldNotReserved("DROP_INDEX", request.getFieldName());
     }
 
     static ValidationResult validateReindex(ReindexRequest request) {
@@ -145,6 +191,10 @@ public final class DataRequestValidator {
         for (var fieldName : request.getFieldNames()) {
             if (fieldName == null || fieldName.isBlank()) {
                 return ValidationResult.fail("REINDEX fieldNames must not contain blank entries");
+            }
+            final var charset = NameValidations.validateIndexFieldName(fieldName);
+            if (!charset.isValid()) {
+                return charset;
             }
         }
         return ValidationResult.ok();

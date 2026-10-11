@@ -10,11 +10,13 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.MapOperatorHelper;
+import org.techhouse.ops.PipelineScriptContext;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -22,6 +24,7 @@ import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.test.TestUtils;
@@ -119,6 +122,38 @@ public class MapOperatorHelperTest {
 
         assertEquals("literal1value1literal2", result.get("concatenated").asJsonString().getValue(),
                 "Concatenation should handle string literals correctly.");
+    }
+
+    @Test
+    public void test_a_null_inside_an_array_operand_spells_null_like_a_top_level_one() {
+        final var nested = new JsonArray();
+        nested.add(new JsonString("x"));
+        nested.add(JsonNull.INSTANCE);
+        nested.add(new JsonString("y"));
+
+        assertEquals(concatOf(new JsonObject(), new JsonString("-x"), JsonNull.INSTANCE, new JsonString("-y")),
+                concatOf(new JsonObject(), nested),
+                "a null spelled inside an array operand must read the same as one spelled beside it");
+    }
+
+    @Test
+    public void test_an_array_operand_of_only_nulls_spells_them_all() {
+        final var nested = new JsonArray();
+        nested.add(JsonNull.INSTANCE);
+        nested.add(JsonNull.INSTANCE);
+
+        assertEquals("nullnull", concatOf(new JsonObject(), nested));
+    }
+
+    @Test
+    public void test_a_string_inside_an_array_stays_a_literal() {
+        final var document = new JsonObject();
+        document.addProperty("field1", "resolved");
+        final var nested = new JsonArray();
+        nested.add(new JsonString("field1"));
+
+        assertEquals("field1", concatOf(document, nested),
+                "only a top-level string operand is a field path; an array operand is a list of literals");
     }
 
     @Test
@@ -222,7 +257,7 @@ public class MapOperatorHelperTest {
     }
 
     @Test
-    public void test_nor_condition_returns_false_skips_field() {
+    public void test_nor_condition_adds_the_field_when_no_child_matches() {
         JsonObject input = new JsonObject();
         input.addProperty("x", 5);
 
@@ -234,7 +269,7 @@ public class MapOperatorHelperTest {
                 new ArrayParamMidOperator(MidOperationType.SUM, operands));
 
         JsonObject result = MapOperatorHelper.processOperator(op, input);
-        assertFalse(result.has("result"));
+        assertTrue(result.has("result"));
     }
 
     @Test
@@ -304,6 +339,39 @@ public class MapOperatorHelperTest {
         assertEquals("10:30", result.get("out").asJsonString().getValue());
     }
 
+    private static String concatOf(JsonObject document, JsonBaseElement... operands) {
+        final var operandArray = new JsonArray();
+        for (final var operand : operands) {
+            operandArray.add(operand);
+        }
+        final var operator = new AddFieldMapOperator("joined", null,
+                new ArrayParamMidOperator(MidOperationType.CONCAT, operandArray));
+        return MapOperatorHelper.processOperator(operator, document).get("joined").asJsonString().getValue();
+    }
+
+    @Test
+    public void test_concat_spells_a_literal_null_the_same_as_a_null_field() {
+        final var input = new JsonObject();
+        input.add("nullField", JsonNull.INSTANCE);
+        final var fromLiteral = concatOf(input, new JsonString("-x"), JsonNull.INSTANCE, new JsonString("-y"));
+        final var fromField = concatOf(input, new JsonString("-x"), new JsonString("nullField"), new JsonString("-y"));
+        assertEquals(fromField, fromLiteral);
+        assertEquals("xnully", fromLiteral);
+    }
+
+    @Test
+    public void test_concat_output_is_stable_across_instances() {
+        final var joined = concatOf(new JsonObject(), new JsonString("-x"), JsonNull.INSTANCE);
+        assertFalse(joined.contains("@"), "a Java identity string changes on every JVM start: " + joined);
+        assertFalse(joined.contains("org.techhouse"), "a Java identity string leaks the package name: " + joined);
+    }
+
+    @Test
+    public void test_concat_of_no_operands_and_of_only_nulls() {
+        assertEquals("", concatOf(new JsonObject()));
+        assertEquals("nullnull", concatOf(new JsonObject(), JsonNull.INSTANCE, JsonNull.INSTANCE));
+    }
+
     @Test
     public void test_remove_non_existent_field() {
         JsonObject jsonObject = new JsonObject();
@@ -314,5 +382,35 @@ public class MapOperatorHelperTest {
 
         assertTrue(result.has("existingField"));
         assertEquals("value", result.get("existingField").asJsonString().getValue());
+    }
+    @Test
+    public void test_a_map_condition_returning_infinity_applies_the_field_change() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("existingField", 5);
+
+        try (var context = new PipelineScriptContext()) {
+            ScriptOperator condition = new ScriptOperator("export default (doc) => 1 / 0;");
+            RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
+
+            JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject, context);
+
+            assertFalse(result.has("existingField"),
+                    "Infinity is truthy in JavaScript, so the condition holds and the field is removed");
+        }
+    }
+
+    @Test
+    public void test_a_map_condition_returning_nan_leaves_the_document_alone() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("existingField", 5);
+
+        try (var context = new PipelineScriptContext()) {
+            ScriptOperator condition = new ScriptOperator("export default (doc) => 0 / 0;");
+            RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
+
+            JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject, context);
+
+            assertTrue(result.has("existingField"), "NaN is falsy in JavaScript");
+        }
     }
 }

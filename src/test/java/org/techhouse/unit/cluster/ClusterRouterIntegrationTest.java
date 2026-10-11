@@ -98,9 +98,11 @@ public class ClusterRouterIntegrationTest {
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         ReplicatedApplyHelper.apply(
-                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s1", 5)), null));
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s1", 5)), null),
+                TestGlobals.APPLY_BUDGET_MS);
         ReplicatedApplyHelper.apply(
-                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s2", 50)), null));
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s2", 50)), null),
+                TestGlobals.APPLY_BUDGET_MS);
 
         final var request = new AggregateRequest(TestGlobals.DB, coll);
         request.setAggregationSteps(
@@ -126,8 +128,9 @@ public class ClusterRouterIntegrationTest {
         cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
-        ReplicatedApplyHelper
-                .apply(new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(doc("f1")), null));
+        ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(doc("f1")), null),
+                TestGlobals.APPLY_BUDGET_MS);
 
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("f1");
@@ -163,6 +166,21 @@ public class ClusterRouterIntegrationTest {
         final var relayed = router.forward(request, rawSave(coll, "y"), false, null, null);
         assertNotNull(relayed);
         assertTrue(relayed.contains("503-4"), "expected OWNER_UNREACHABLE, got: " + relayed);
+    }
+
+    @Test
+    public void test_an_error_reply_to_a_write_is_outcome_unknown() throws Exception {
+        cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
+        final var coll = collectionOwnedByOther();
+        final var request = new SaveRequest(TestGlobals.DB, coll);
+        request.setObject(doc("z"));
+
+        final var relayed = router.forward(request, "{not json", false, null, null);
+
+        assertNotNull(relayed);
+        assertTrue(relayed.contains("503-8"),
+                "the owner answered after processMessage ran, so the write may have committed and replicated;"
+                        + " reporting it as unreachable reads as nothing happened: " + relayed);
     }
 
     @Test

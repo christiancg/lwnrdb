@@ -17,7 +17,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.ScriptPlacement;
@@ -28,11 +27,9 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 
 public class ScriptPlacementLocalityTest {
-    private static final long EPOCH = 42L;
     private static final String DB = "locality_db";
     private static final String UNKNOWN_DB = "no_such_db";
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Configuration config = Configuration.getInstance();
     private ScriptedRandom scriptedRandom;
     private ScriptPlacement placement;
@@ -41,12 +38,9 @@ public class ScriptPlacementLocalityTest {
     private volatile boolean origEnabled;
     private volatile boolean origRouting;
     private volatile int origWeight;
-    private volatile long origEpoch;
 
     private static NodeInfo node(String id, int port, int scriptLoad, int scriptCapacity) {
-        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, scriptCapacity);
-        node.setAdminEpoch(EPOCH);
-        return node;
+        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, scriptCapacity);
     }
 
     private void membership(NodeInfo self, NodeInfo... others) throws Exception {
@@ -87,8 +81,6 @@ public class ScriptPlacementLocalityTest {
         origEnabled = config.isClusterEnabled();
         origRouting = config.isScriptRoutingEnabled();
         origWeight = config.getScriptLocalityWeight();
-        origEpoch = adminEpoch.current();
-        TestUtils.setPrivateField(adminEpoch, "epoch", EPOCH);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
         weight(50);
@@ -101,7 +93,6 @@ public class ScriptPlacementLocalityTest {
         TestUtils.setPrivateField(config, "scriptLocalityWeight", origWeight);
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(membershipService, "self", null);
-        TestUtils.setPrivateField(adminEpoch, "epoch", origEpoch);
     }
 
     // The equivalence claim the whole feature rests on: the fixture and expected winner of

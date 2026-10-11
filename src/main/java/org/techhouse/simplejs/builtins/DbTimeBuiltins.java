@@ -45,11 +45,19 @@ public final class DbTimeBuiltins {
     }
 
     private static LocalTime of(int hour, int minute, int second) {
+        return of(hour, minute, second, 0);
+    }
+
+    private static LocalTime of(int hour, int minute, int second, int nano) {
         try {
-            return LocalTime.of(hour, minute, second);
+            return LocalTime.of(hour, minute, second, nano);
         } catch (DateTimeException e) {
             throw new RangeErrorException("Invalid DbTime: " + e.getMessage());
         }
+    }
+
+    static int nanoOf(IsoTimeFields fields) {
+        return fields.millisecond() * 1_000_000 + fields.microsecond() * 1_000 + fields.nanosecond();
     }
 
     private static int intArg(List<JsValue> args, int index, InterpreterOps ops) {
@@ -73,7 +81,7 @@ public final class DbTimeBuiltins {
         }
         if (value instanceof JsTemporalPlainTime temporal) {
             final var fields = temporal.getFields();
-            return of(fields.hour(), fields.minute(), fields.second());
+            return of(fields.hour(), fields.minute(), fields.second(), nanoOf(fields));
         }
         if (value instanceof JsString text) {
             return parse(text.getValue());

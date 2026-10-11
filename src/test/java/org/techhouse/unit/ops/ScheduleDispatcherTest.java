@@ -239,4 +239,42 @@ public class ScheduleDispatcherTest {
         ScheduleDispatcher.dispatch(register("job", OWNER, true, 0L, idArgs("big-result")));
         assertNotNull(outputRow("big-result"), "the run must complete despite its oversized result");
     }
+
+    @Test
+    public void test_a_run_queued_before_its_schedule_was_deleted_does_not_fire() throws Exception {
+        storeWritingProcedure();
+        final var queued = register("job", OWNER, true, 0L, idArgs("deleted-while-queued"));
+        fs.deleteSchedule(TestGlobals.DB, "s");
+        cache.removeSchedule(TestGlobals.DB, "s");
+        registry.reload(TestGlobals.DB);
+
+        final var before = scheduleExecutor.getSkipped();
+        ScheduleDispatcher.dispatch(queued);
+        assertNull(outputRow("deleted-while-queued"));
+        assertEquals(before + 1, scheduleExecutor.getSkipped());
+    }
+
+    @Test
+    public void test_a_run_queued_before_its_schedule_was_replaced_does_not_fire() throws Exception {
+        storeWritingProcedure();
+        final var queued = register("job", OWNER, true, 0L, idArgs("stale-args"));
+        final var current = register("job", OWNER, true, 0L, idArgs("current-args"));
+
+        ScheduleDispatcher.dispatch(queued);
+        assertNull(outputRow("stale-args"));
+        ScheduleDispatcher.dispatch(current);
+        assertNotNull(outputRow("current-args"));
+    }
+
+    @Test
+    public void test_an_unchanged_reload_keeps_a_queued_run_valid() throws Exception {
+        storeWritingProcedure();
+        final var queued = register("job", OWNER, true, 0L, idArgs("unchanged-reload"));
+        cache.removeSchedule(TestGlobals.DB, "s");
+        registry.reload(TestGlobals.DB);
+
+        assertSame(queued, registry.get(TestGlobals.DB, "s"));
+        ScheduleDispatcher.dispatch(queued);
+        assertNotNull(outputRow("unchanged-reload"));
+    }
 }

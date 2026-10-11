@@ -31,10 +31,6 @@ interface AdminCacheDelegate {
         return adminCache().getPkIndexAdminDbEntry(dbName);
     }
 
-    default void putPkIndexAdminDbEntry(PkIndexEntry adminPkIndexAdminDbEntry) {
-        adminCache().putPkIndexAdminDbEntry(adminPkIndexAdminDbEntry);
-    }
-
     default AdminDbEntry getAdminDbEntry(String dbName) {
         return adminCache().getAdminDbEntry(dbName);
     }
@@ -53,10 +49,6 @@ interface AdminCacheDelegate {
 
     default PkIndexEntry getPkIndexAdminCollEntry(String collIdentifier) {
         return adminCache().getPkIndexAdminCollEntry(collIdentifier);
-    }
-
-    default void putPkIndexAdminCollEntry(PkIndexEntry adminPkIndexAdminCollEntry) {
-        adminCache().putPkIndexAdminCollEntry(adminPkIndexAdminCollEntry);
     }
 
     default AdminCollEntry getAdminCollectionEntry(String dbName, String collName) {
@@ -81,6 +73,10 @@ interface AdminCacheDelegate {
 
     default void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
         adminCache().updatePageSizeInMemory(dbName, collName, page, bytesDelta);
+    }
+
+    default void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
+        adminCache().updatePageSizeForUpdateInMemory(dbName, collName, page, bytesDelta);
     }
 
     default List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
@@ -127,10 +123,6 @@ interface AdminCacheDelegate {
         adminCache().removeCollectionSchemasForDatabase(dbName);
     }
 
-    default JsonObject loadSchemaUncached(String dbName, String collName) {
-        return adminCache().loadSchemaUncached(dbName, collName);
-    }
-
     default ProcedureDefinition getProcedure(String dbName, String name) {
         return adminCache().getProcedure(dbName, name);
     }
@@ -145,10 +137,6 @@ interface AdminCacheDelegate {
 
     default void removeProceduresForDatabase(String dbName) {
         adminCache().removeProceduresForDatabase(dbName);
-    }
-
-    default ProcedureDefinition loadProcedureUncached(String dbName, String name) {
-        return adminCache().loadProcedureUncached(dbName, name);
     }
 
     default List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
@@ -167,16 +155,8 @@ interface AdminCacheDelegate {
         adminCache().removeTriggersMatching(keyMatches);
     }
 
-    default List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
-        return adminCache().loadTriggersUncached(dbName, collName);
-    }
-
     default ScheduleDefinition getSchedule(String dbName, String name) {
         return adminCache().getSchedule(dbName, name);
-    }
-
-    default ScheduleDefinition loadScheduleUncached(String dbName, String name) {
-        return adminCache().loadScheduleUncached(dbName, name);
     }
 
     default void putSchedule(String dbName, ScheduleDefinition definition) {

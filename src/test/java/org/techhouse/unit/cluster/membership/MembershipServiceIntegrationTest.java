@@ -20,6 +20,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestUtils;
 
 public class MembershipServiceIntegrationTest {
@@ -119,7 +120,7 @@ public class MembershipServiceIntegrationTest {
         client = new MembershipService();
         client.start();
         client.handleGossip(new ClusterMessage(null, ClusterMessageType.GOSSIP, SECRET,
-                new NodeInfo("ghost", "127.0.0.1", 2, NodeState.ALIVE, 1L, 1L), List.of()));
+                ClusterTestHarness.node("ghost", 2), List.of()));
         client.gossipTickSafely();
         assertNotNull(client.membershipView().find("ghost"));
     }

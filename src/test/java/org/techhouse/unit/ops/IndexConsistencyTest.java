@@ -58,16 +58,16 @@ public class IndexConsistencyTest {
         TestUtils.standardTearDown();
     }
 
-    private void addDoc(String id, JsonBaseElement value) {
+    private void addDoc(String id, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add(STATUS, value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex() {
+    private void enableIndex() throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, STATUS);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(STATUS));
     }
@@ -87,7 +87,7 @@ public class IndexConsistencyTest {
         obj.addProperty("status", "active");
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id("2");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "2");
 
         runEntityEvent(entry);
@@ -128,7 +128,7 @@ public class IndexConsistencyTest {
     public void test_update_indexes_removes_when_doc_absent() throws IOException, InterruptedException {
         addDoc("1", new JsonString("active"));
         enableIndex();
-        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "1");
+        TestUtils.uncacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, "1");
 
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
 
@@ -153,12 +153,53 @@ public class IndexConsistencyTest {
         addDoc("p", new JsonString("present"));
         addDoc("g", new JsonString("gone"));
         enableIndex();
-        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "g");
+        TestUtils.uncacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, "g");
 
         IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("p", "g"));
 
         assertEquals(Set.of("p"), filterIds(new JsonString("present")));
         assertTrue(filterIds(new JsonString("gone")).isEmpty());
+    }
+
+    @Test
+    public void test_bulk_update_indexes_keeps_both_docs_sharing_a_new_value()
+            throws IOException, InterruptedException {
+        addDoc("1", new JsonString("old"));
+        enableIndex();
+        addDoc("2", new JsonString("shared"));
+        addDoc("3", new JsonString("shared"));
+
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("2", "3"));
+
+        assertEquals(Set.of("2", "3"), filterIds(new JsonString("shared")));
+        assertEquals(Set.of("1"), filterIds(new JsonString("old")));
+    }
+
+    @Test
+    public void test_bulk_update_indexes_keeps_three_docs_sharing_a_new_value()
+            throws IOException, InterruptedException {
+        addDoc("1", new JsonString("old"));
+        enableIndex();
+        addDoc("2", new JsonString("shared"));
+        addDoc("3", new JsonString("shared"));
+        addDoc("4", new JsonString("shared"));
+
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("2", "3", "4"));
+
+        assertEquals(Set.of("2", "3", "4"), filterIds(new JsonString("shared")));
+    }
+
+    @Test
+    public void test_bulk_update_indexes_merges_into_an_existing_value_bucket()
+            throws IOException, InterruptedException {
+        addDoc("1", new JsonString("shared"));
+        enableIndex();
+        addDoc("2", new JsonString("shared"));
+        addDoc("3", new JsonString("shared"));
+
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("2", "3"));
+
+        assertEquals(Set.of("1", "2", "3"), filterIds(new JsonString("shared")));
     }
 
     // A collection dropped while its index event is still queued must not crash background maintenance:
@@ -292,7 +333,7 @@ public class IndexConsistencyTest {
     }
 
     @Test
-    public void test_get_ids_from_index_returns_detached_snapshot() throws IOException {
+    public void test_get_ids_from_index_returns_detached_snapshot() throws IOException, InterruptedException {
         addDoc("1", new JsonString("active"));
         enableIndex();
         final var operator = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));

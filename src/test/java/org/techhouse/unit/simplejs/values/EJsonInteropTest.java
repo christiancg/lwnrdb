@@ -209,23 +209,44 @@ public class EJsonInteropTest {
         }
 
         @Override
-        public java.util.Set<String> customOperatorNames() {
-            return java.util.Set.of();
-        }
-
-        @Override
         public boolean applyCustomOperator(String operatorName, java.util.Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException("no custom operators");
-        }
-
-        @Override
-        public java.util.Set<String> customRankingOperatorNames() {
-            return java.util.Set.of();
         }
 
         @Override
         public double applyCustomRankingOperator(String operatorName, java.util.Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException("no ranking operators");
         }
+    }
+
+    private static org.techhouse.simplejs.values.JsObject objectWithKey(String key) {
+        final var object = new org.techhouse.simplejs.values.JsObject();
+        object.set(key, new JsNumber(1));
+        return object;
+    }
+
+    @Test
+    public void test_host_mode_refuses_an_unregistered_custom_shaped_key() {
+        assertThrows(TypeErrorException.class, () -> EJsonInterop.toHostEjson(objectWithKey("#note(1)")),
+                "the page reader would reject this key, so a script must not be able to store it");
+    }
+
+    @Test
+    public void test_host_mode_refuses_a_custom_shaped_key_with_a_bad_payload() {
+        assertThrows(TypeErrorException.class, () -> EJsonInterop.toHostEjson(objectWithKey("#geo(abc)")));
+    }
+
+    @Test
+    public void test_host_mode_accepts_a_readable_custom_shaped_key() {
+        final var converted = (JsonObject) EJsonInterop.toHostEjson(objectWithKey("#geo(1,2)"));
+
+        assertTrue(converted.has("#geo(1,2)"));
+    }
+
+    @Test
+    public void test_non_host_mode_keeps_a_custom_shaped_key_verbatim() {
+        final var converted = (JsonObject) EJsonInterop.toEjson(objectWithKey("#note(1)"));
+
+        assertTrue(converted.has("#note(1)"));
     }
 }

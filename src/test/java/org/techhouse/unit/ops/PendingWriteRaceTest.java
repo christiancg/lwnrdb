@@ -25,7 +25,7 @@ public class PendingWriteRaceTest {
     @AfterEach
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         for (final var id : pending.idsFor(TestGlobals.DB, TestGlobals.COLL)) {
-            pending.clear(TestGlobals.DB, TestGlobals.COLL, id);
+            pending.clear(TestGlobals.DB, TestGlobals.COLL, id, 0L);
         }
         TestUtils.standardTearDown();
     }
@@ -36,7 +36,7 @@ public class PendingWriteRaceTest {
         final var before = PendingWriteReconciler.pendingIds(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(before.contains("racer"));
 
-        pending.clear(TestGlobals.DB, TestGlobals.COLL, "racer");
+        pending.clear(TestGlobals.DB, TestGlobals.COLL, "racer", 0L);
 
         final var around = PendingWriteReconciler.pendingIdsAround(before, TestGlobals.DB, TestGlobals.COLL);
         assertTrue(around.contains("racer"),
@@ -59,7 +59,7 @@ public class PendingWriteRaceTest {
     public void test_both_directions_are_covered_at_once() {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "early");
         final var before = PendingWriteReconciler.pendingIds(TestGlobals.DB, TestGlobals.COLL);
-        pending.clear(TestGlobals.DB, TestGlobals.COLL, "early");
+        pending.clear(TestGlobals.DB, TestGlobals.COLL, "early", 0L);
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "late");
 
         final var around = PendingWriteReconciler.pendingIdsAround(before, TestGlobals.DB, TestGlobals.COLL);

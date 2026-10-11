@@ -44,6 +44,10 @@ public class OperationResponse {
     public static OperationResponse respondOrError(OperationType type, ErrorCode errorCode, Attempt attempt) {
         try {
             return attempt.run();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
+            return new OperationResponse(type, errorCode);
         } catch (Exception e) {
             ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
             return new OperationResponse(type, errorCode);

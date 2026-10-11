@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -47,7 +48,7 @@ public class AdminCacheBoundsTest {
     }
 
     @BeforeEach
-    void clear() {
+    void clear() throws IOException {
         for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
             fs.deleteProcedure(TestGlobals.DB, name);
         }

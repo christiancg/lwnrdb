@@ -24,7 +24,7 @@ public class JsonPrimitiveTypeAdapter implements TypeAdapter<JsonPrimitive<?>> {
     @Override
     public JsonPrimitive<?> fromJson(JsonBaseElement value) {
         return value == null ? null : switch (value.getJsonType()) {
-            case BOOLEAN, NUMBER, STRING ->
+            case BOOLEAN, NUMBER, STRING, CUSTOM ->
                 (JsonPrimitive<?>) TypeAdapterFactory.getAdapter(JsonBaseElement.class).fromJson(value);
             default -> null;
         };

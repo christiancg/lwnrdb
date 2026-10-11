@@ -20,6 +20,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
@@ -213,16 +214,15 @@ public class ScriptRunHistory {
     }
 
     private static boolean ensureCollection(String dbName) {
-        if (knownDatabases.contains(dbName)) {
-            return true;
-        }
         if (cache.getAdminDbEntry(dbName) == null) {
+            knownDatabases.remove(dbName);
             return false;
         }
         if (cache.getAdminCollectionEntry(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME) != null) {
             knownDatabases.add(dbName);
             return true;
         }
+        knownDatabases.remove(dbName);
         final var response = dispatch(new CreateCollectionRequest(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME), null);
         if (response.getStatus() != OperationStatus.OK) {
             logger.warning(
@@ -264,8 +264,8 @@ public class ScriptRunHistory {
         document.addProperty("durationMs", runRecord.durationMs());
         document.addProperty("attempt", runRecord.attempt());
         document.addProperty("outcome", runRecord.outcome());
-        document.addProperty("errorName", runRecord.errorName());
-        document.addProperty("errorMessage", clip(runRecord.errorMessage()));
+        document.addProperty("errorName", JsonCustom.asPlainText(runRecord.errorName()));
+        document.addProperty("errorMessage", JsonCustom.asPlainText(clip(runRecord.errorMessage())));
         document.add("stack", strings(runRecord.stack()));
         document.add("metrics", runRecord.metrics().toJson());
         document.add("logs",
@@ -277,7 +277,7 @@ public class ScriptRunHistory {
     private static JsonArray strings(Iterable<String> values) {
         final var array = new JsonArray();
         for (final var value : values) {
-            array.add(new JsonString(value));
+            array.add(new JsonString(JsonCustom.asPlainText(value)));
         }
         return array;
     }

@@ -367,4 +367,61 @@ public class EnforcingDatabaseAccessIntegrationTest {
         final var db = new EnforcingDatabaseAccess(NOBODY, null);
         assertThrows(JsThrowException.class, () -> db.listCollections(TestGlobals.DB));
     }
+
+    private static JsonObject docWithId(org.techhouse.ejson.elements.JsonBaseElement id) {
+        final var object = new JsonObject();
+        object.add("_id", id);
+        object.add("value", new JsonString("hello"));
+        return object;
+    }
+
+    @Test
+    public void test_a_non_string_id_is_a_validation_error_not_an_internal_error() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        final var error = assertThrows(JsThrowException.class,
+                () -> db.save(TestGlobals.DB, TestGlobals.COLL,
+                        docWithId(new org.techhouse.ejson.elements.JsonNumber(123))),
+                "the wire path answers a plain validation error for this document, so the script path must not"
+                        + " die on an unchecked cast before the validator ever runs");
+        assertInstanceOf(JsObject.class, error.getValue());
+    }
+
+    @Test
+    public void test_a_boolean_or_object_id_is_refused_the_same_way() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL,
+                docWithId(new org.techhouse.ejson.elements.JsonBoolean(true))));
+        assertThrows(JsThrowException.class,
+                () -> db.save(TestGlobals.DB, TestGlobals.COLL, docWithId(new JsonObject())));
+    }
+
+    @Test
+    public void test_an_explicitly_null_id_is_refused_rather_than_crashing() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL,
+                docWithId(org.techhouse.ejson.elements.JsonNull.INSTANCE)));
+    }
+
+    @Test
+    public void test_a_string_id_is_still_extracted() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        final var saved = db.save(TestGlobals.DB, TestGlobals.COLL, doc("id-kept"));
+        assertEquals("id-kept", saved.get("_id").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_a_document_with_no_id_still_saves() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        final var object = new JsonObject();
+        object.add("value", new JsonString("hello"));
+        final var saved = db.save(TestGlobals.DB, TestGlobals.COLL, object);
+        assertNotNull(saved.get("_id"), "an absent _id is generated, exactly as it was before the guard");
+    }
+
+    @Test
+    public void test_a_string_id_breaking_the_charset_is_still_refused() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL, doc("not a valid id!")),
+                "leaving _id unset for a non-string must not also relax the pattern check for a real string");
+    }
 }

@@ -1,5 +1,4 @@
 import os
-import socket
 import time
 
 import base_utils as bu
@@ -14,22 +13,17 @@ ADMIN_PASSWORD = "administrator"
 DB = "listen_test_db"
 COLL = "listen_coll"
 
-# Geo (JsonGeo) fixtures — a target point, a nearby point (~140 m away), a far-away
-# point (Los Angeles), and a small polygon enclosing the target/near cluster.
 GEO_TARGET = "#geo(40.0,-74.0)"
 GEO_NEAR = "#geo(40.001,-74.001)"
 GEO_FAR = "#geo(34.05,-118.24)"
 GEO_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
-# Vector (JsonVector) fixtures — a query vector, a very similar one, a moderately similar one, and an
-# orthogonal (cosine 0) one, used for the "nearest" top-K semantic-search operator.
 VEC_QUERY = "#vector(1.0,0.0,0.0)"
 VEC_CLOSE = "#vector(0.9,0.1,0.0)"
 VEC_MID = "#vector(0.5,0.5,0.0)"
 VEC_FAR = "#vector(0.0,0.0,1.0)"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
-
 
 
 def save_doc(conn: Conn, doc: dict) -> dict:
@@ -40,13 +34,8 @@ def delete_doc(conn: Conn, id_: str) -> dict:
     return conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": id_})
 
 
-def listen(conn: Conn, steps: list) -> dict:
-    return conn.send({
-        "type": "LISTEN",
-        "databaseName": DB,
-        "collectionName": COLL,
-        "aggregationSteps": steps,
-    })
+def listen(conn: Conn, steps: list, coll: str = COLL) -> dict:
+    return conn.send({"type": "LISTEN", "databaseName": DB, "collectionName": coll, "aggregationSteps": steps})
 
 
 def stop_listen(conn: Conn, listen_id: str) -> dict:
@@ -78,8 +67,6 @@ def vector_nearest_steps(query: str, k: int, exact: bool = False, field: str = "
     return [{"type": "FILTER", "operator": operator}]
 
 
-# ── setup helpers ────────────────────────────────────────────────────────────
-
 def setup(admin: Conn):
     admin.send({"type": "CREATE_DATABASE", "databaseName": DB})
     admin.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
@@ -89,28 +76,21 @@ def teardown(admin: Conn):
     admin.send({"type": "DROP_DATABASE", "databaseName": DB})
 
 
-# ── test suites ──────────────────────────────────────────────────────────────
-
 def test_validation(admin: Conn):
     section("Validation: LISTEN and STOP_LISTEN")
 
-    # Missing aggregationSteps
     r = admin.send({"type": "LISTEN", "databaseName": DB, "collectionName": COLL})
     check_code("LISTEN without aggregationSteps → VALIDATION_ERROR", r, "ERROR", "400-1")
 
-    # Missing databaseName
     r = admin.send({"type": "LISTEN", "collectionName": COLL, "aggregationSteps": []})
     check_code("LISTEN without databaseName → VALIDATION_ERROR", r, "ERROR", "400-1")
 
-    # STOP_LISTEN without listenId
     r = admin.send({"type": "STOP_LISTEN"})
     check_code("STOP_LISTEN without listenId → VALIDATION_ERROR", r, "ERROR", "400-1")
 
-    # STOP_LISTEN with invalid UUID
     r = admin.send({"type": "STOP_LISTEN", "listenId": "not-a-uuid"})
     check_code("STOP_LISTEN with invalid UUID → VALIDATION_ERROR", r, "ERROR", "400-1")
 
-    # STOP_LISTEN with unknown UUID
     r = admin.send({"type": "STOP_LISTEN", "listenId": "00000000-0000-0000-0000-000000000000"})
     check_code("STOP_LISTEN with unknown UUID → NOT_FOUND", r, "NOT_FOUND", "404-7")
 
@@ -118,7 +98,6 @@ def test_validation(admin: Conn):
 def test_initial_response(admin: Conn):
     section("LISTEN: initial response and result hash")
 
-    # Seed one document
     save_doc(admin, {"_id": "init-1", "score": 10})
 
     steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "score", "value": 10}}]
@@ -136,7 +115,6 @@ def test_initial_response(admin: Conn):
                any(d.get("_id") == "init-1" for d in (r.get("results") or [])),
                "missing init-1 from initial results")
 
-    # Clean up listen registration and document
     stop_listen(admin, listen_id)
     delete_doc(admin, "init-1")
 
@@ -149,10 +127,8 @@ def test_no_push_on_unrelated_write(admin: Conn):
     check_status("LISTEN registered for no-push test", r, "OK")
     listen_id = r.get("listenId")
 
-    # Write to a different collection (admin) — not related to COLL
     admin.send({"type": "LIST_DATABASES"})
 
-    # Give the background worker time to (not) fire
     pushed = admin.recv(timeout=1.5)
     check("no push received on unrelated activity", pushed is None,
                f"unexpected push: {pushed!r}")
@@ -169,10 +145,8 @@ def test_push_on_matching_insert(writer: Conn, listener: Conn):
     listen_id = r.get("listenId")
     initial_hash = r.get("resultHash")
 
-    # Insert a document matching the filter via the writer connection
     save_doc(writer, {"_id": "watched-1", "kind": "watched"})
 
-    # Wait for the push with generous timeout (background worker + index lag)
     pushed = listener.recv(timeout=5.0)
     check("push received after matching insert", pushed is not None,
                "no push message within 5 s")
@@ -200,11 +174,9 @@ def test_no_push_on_non_matching_insert(writer: Conn, listener: Conn):
     check_status("LISTEN registered for non-match test", r, "OK")
     listen_id = r.get("listenId")
 
-    # Insert a document that does NOT match the filter
     save_doc(writer, {"_id": "irrelevant-1", "kind": "unimportant"})
     time.sleep(0.5)
 
-    # No push should arrive
     pushed = listener.recv(timeout=2.0)
     check("no push for non-matching insert", pushed is None,
                f"unexpected push: {pushed!r}")
@@ -216,7 +188,6 @@ def test_no_push_on_non_matching_insert(writer: Conn, listener: Conn):
 def test_push_on_delete(writer: Conn, listener: Conn):
     section("LISTEN: push received when matching document is deleted")
 
-    # Start with one matching document
     save_doc(writer, {"_id": "del-target", "kind": "deletable"})
     time.sleep(0.3)
 
@@ -226,7 +197,6 @@ def test_push_on_delete(writer: Conn, listener: Conn):
     listen_id = r.get("listenId")
     initial_hash = r.get("resultHash")
 
-    # Delete the matching document
     delete_doc(writer, "del-target")
 
     pushed = listener.recv(timeout=5.0)
@@ -253,7 +223,6 @@ def test_push_on_geo_distance_match(writer: Conn, listener: Conn):
     listen_id = r.get("listenId")
     initial_hash = r.get("resultHash")
 
-    # Insert a document within 5 km of the target -> should push
     save_doc(writer, {"_id": "geo-near-1", "location": GEO_NEAR})
 
     pushed = listener.recv(timeout=5.0)
@@ -282,7 +251,6 @@ def test_no_push_on_geo_distance_non_match(writer: Conn, listener: Conn):
     check_status("LISTEN registered for geo distance non-match", r, "OK")
     listen_id = r.get("listenId")
 
-    # Insert a far-away document (Los Angeles) -> outside the 5 km radius, no push
     save_doc(writer, {"_id": "geo-far-1", "location": GEO_FAR})
     time.sleep(0.5)
 
@@ -303,7 +271,6 @@ def test_push_on_geo_within_match(writer: Conn, listener: Conn):
     listen_id = r.get("listenId")
     initial_hash = r.get("resultHash")
 
-    # Insert a document inside the polygon -> should push
     save_doc(writer, {"_id": "geo-in-1", "location": GEO_NEAR})
 
     pushed = listener.recv(timeout=5.0)
@@ -318,7 +285,6 @@ def test_push_on_geo_within_match(writer: Conn, listener: Conn):
                    any(d.get("_id") == "geo-in-1" for d in (pushed.get("results") or [])),
                    "geo-in-1 missing from pushed results")
 
-    # Insert a document outside the polygon -> result set unchanged, no push
     save_doc(writer, {"_id": "geo-out-1", "location": GEO_FAR})
     time.sleep(0.5)
 
@@ -357,7 +323,6 @@ def test_aggregate_vector_nearest(conn: Conn):
 def test_push_on_vector_nearest_closer(writer: Conn, listener: Conn):
     section("LISTEN: push when a closer vector enters the top-K (JsonVector)")
 
-    # Seed a far vector so the initial top-1 is that document.
     save_doc(writer, {"_id": "vec-seed-far", "embedding": VEC_FAR})
     time.sleep(0.5)
 
@@ -366,7 +331,6 @@ def test_push_on_vector_nearest_closer(writer: Conn, listener: Conn):
     listen_id = r.get("listenId")
     initial_hash = r.get("resultHash")
 
-    # Insert a much closer vector -> the top-1 changes -> push.
     save_doc(writer, {"_id": "vec-closer", "embedding": VEC_CLOSE})
 
     pushed = listener.recv(timeout=5.0)
@@ -394,7 +358,6 @@ def test_no_push_on_vector_farther(writer: Conn, listener: Conn):
     check_status("LISTEN registered for vector nearest non-match", r, "OK")
     listen_id = r.get("listenId")
 
-    # Insert a farther vector that does not displace the current top-1 -> result set unchanged, no push.
     save_doc(writer, {"_id": "vec-farther", "embedding": VEC_FAR})
     time.sleep(0.5)
 
@@ -406,6 +369,125 @@ def test_no_push_on_vector_farther(writer: Conn, listener: Conn):
     delete_doc(writer, "vec-farther")
 
 
+def check_reorder_pushes(writer: Conn, listener: Conn, seeds: list, steps: list, key: str, labels: dict,
+                         initial: list, reorder: dict, reordered: list,
+                         no_push_detail: str = "no push message within 5 s"):
+    for doc in seeds:
+        save_doc(writer, doc)
+    time.sleep(0.5)
+
+    r = listen(listener, steps)
+    check_status(labels["registered"], r, "OK")
+    listen_id = r.get("listenId")
+    initial_hash = r.get("resultHash")
+    got = [d.get(key) for d in (r.get("results") or [])]
+    check(labels["initial"], got == initial, f"got {got!r}")
+
+    save_doc(writer, reorder)
+
+    pushed = listener.recv(timeout=5.0)
+    check(labels["push"], pushed is not None, no_push_detail)
+
+    if pushed is not None:
+        check("push resultHash differs from initial",
+              pushed.get("resultHash") != initial_hash,
+              f"hash unchanged: {pushed.get('resultHash')!r}")
+        got = [d.get(key) for d in (pushed.get("results") or [])]
+        check(labels["pushed"], got == reordered, f"got {got!r}")
+
+    stop_listen(listener, listen_id)
+    for doc in seeds:
+        delete_doc(writer, doc["_id"])
+
+
+def test_push_on_reorder_inside_a_sorted_top_k(writer: Conn, listener: Conn):
+    section("LISTEN: push when a SORT + LIMIT top-K is reordered without changing its members")
+    check_reorder_pushes(
+        writer, listener,
+        seeds=[{"_id": "topk-a", "kind": "topk", "score": 5},
+               {"_id": "topk-b", "kind": "topk", "score": 3},
+               {"_id": "topk-c", "kind": "topk", "score": 1}],
+        steps=[{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "topk"}},
+               {"type": "SORT", "fieldName": "score", "ascending": False},
+               {"type": "LIMIT", "limit": 2}],
+        key="_id",
+        labels={"registered": "LISTEN registered for the sorted top-K",
+                "initial": "initial top-K is [topk-a, topk-b]",
+                "push": "push received after the top-K was reordered",
+                "pushed": "pushed top-K is [topk-b, topk-a]"},
+        initial=["topk-a", "topk-b"],
+        reorder={"_id": "topk-b", "kind": "topk", "score": 9},
+        reordered=["topk-b", "topk-a"])
+
+
+def test_push_on_reorder_inside_an_unsorted_nearest_top_k(writer: Conn, listener: Conn):
+    section("LISTEN: push when a nearest top-K with no trailing SORT is reordered without changing its members")
+    check_reorder_pushes(
+        writer, listener,
+        seeds=[{"_id": "nearest-topk-a", "embedding": "#vector(0.9,0.1,0.0)"},
+               {"_id": "nearest-topk-b", "embedding": "#vector(0.8,0.2,0.0)"},
+               {"_id": "nearest-topk-c", "embedding": VEC_FAR}],
+        steps=vector_nearest_steps(VEC_QUERY, 2),
+        key="_id",
+        labels={"registered": "LISTEN registered for the unsorted nearest top-K",
+                "initial": "initial nearest top-2 is [nearest-topk-a, nearest-topk-b]",
+                "push": "push received after the nearest top-K was reordered",
+                "pushed": "pushed nearest top-2 is [nearest-topk-b, nearest-topk-a]"},
+        initial=["nearest-topk-a", "nearest-topk-b"],
+        reorder={"_id": "nearest-topk-b", "embedding": "#vector(0.95,0.05,0.0)"},
+        reordered=["nearest-topk-b", "nearest-topk-a"])
+
+
+def test_push_on_reorder_after_a_sort_then_distinct(writer: Conn, listener: Conn):
+    section("LISTEN: push when a SORT followed by DISTINCT is reordered without changing its members")
+    check_reorder_pushes(
+        writer, listener,
+        seeds=[{"_id": "dist-a", "kind": "distinct", "category": "alpha", "score": 1},
+               {"_id": "dist-b", "kind": "distinct", "category": "beta", "score": 2}],
+        steps=[{"type": "FILTER",
+                "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "distinct"}},
+               {"type": "SORT", "fieldName": "score", "ascending": True},
+               {"type": "DISTINCT", "fieldName": "category"}],
+        key="category",
+        labels={"registered": "LISTEN registered for the sorted distinct query",
+                "initial": "initial result is [alpha, beta]",
+                "push": "push received after the distinct values were reordered",
+                "pushed": "pushed result is [beta, alpha]"},
+        initial=["alpha", "beta"],
+        reorder={"_id": "dist-b", "kind": "distinct", "category": "beta", "score": 0},
+        reordered=["beta", "alpha"],
+        no_push_detail="no push message within 5 s: a DISTINCT after a SORT keeps the sorted order, "
+                       "so a reorder is a change")
+
+
+def test_no_push_when_an_unordered_group_by_result_is_unchanged(writer: Conn, listener: Conn):
+    section("LISTEN: no push when a GROUP_BY result set is unchanged")
+
+    save_doc(writer, {"_id": "grp-a", "kind": "grouped", "category": "books"})
+    save_doc(writer, {"_id": "grp-b", "kind": "grouped", "category": "books"})
+    time.sleep(0.5)
+
+    steps = [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "grouped"}},
+        {"type": "SORT", "fieldName": "category", "ascending": True},
+        {"type": "GROUP_BY", "fieldName": "category"},
+    ]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the grouped query", r, "OK")
+    listen_id = r.get("listenId")
+
+    save_doc(writer, {"_id": "grp-c", "kind": "other", "category": "music"})
+    time.sleep(0.5)
+
+    pushed = listener.recv(timeout=2.0)
+    check("no push for a write outside the grouped result", pushed is None,
+          f"unexpected push: {pushed!r}")
+
+    stop_listen(listener, listen_id)
+    for id_ in ("grp-a", "grp-b", "grp-c"):
+        delete_doc(writer, id_)
+
+
 def test_stop_listen(writer: Conn, listener: Conn):
     section("LISTEN: STOP_LISTEN cancels subscription")
 
@@ -414,11 +496,9 @@ def test_stop_listen(writer: Conn, listener: Conn):
     check_status("LISTEN registered for stop test", r, "OK")
     listen_id = r.get("listenId")
 
-    # Stop the listener
     r_stop = stop_listen(listener, listen_id)
     check_status("STOP_LISTEN returns OK", r_stop, "OK")
 
-    # Now insert a matching document — no push should arrive
     save_doc(writer, {"_id": "stoppable-1", "kind": "stoppable"})
     time.sleep(0.5)
 
@@ -427,6 +507,27 @@ def test_stop_listen(writer: Conn, listener: Conn):
                f"unexpected push: {pushed!r}")
 
     delete_doc(writer, "stoppable-1")
+
+
+def test_stop_listen_from_another_client_is_refused(writer: Conn, listener: Conn):
+    section("LISTEN: STOP_LISTEN only cancels the caller's own listener")
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "owned"}}]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the ownership test", r, "OK")
+    listen_id = r.get("listenId")
+
+    with Conn() as attacker:
+        attacker.authenticate()
+        r_stolen = attacker.send({"type": "STOP_LISTEN", "listenId": listen_id})
+        check_code("another client cannot stop this listener", r_stolen, "NOT_FOUND", "404-7")
+
+    save_doc(writer, {"_id": "owned-1", "kind": "owned"})
+    pushed = listener.recv(timeout=5.0)
+    check("the owner keeps receiving pushes", pushed is not None, "the listener was cancelled by another client")
+
+    check_status("the owner can still stop its own listener", stop_listen(listener, listen_id), "OK")
+    delete_doc(writer, "owned-1")
 
 
 def test_multiple_listeners(writer: Conn, listener: Conn):
@@ -439,7 +540,6 @@ def test_multiple_listeners(writer: Conn, listener: Conn):
     check_status("LISTEN A registered", r_a, "OK")
     listen_id_a = r_a.get("listenId")
 
-    # Use a second listener connection
     with Conn() as l2:
         auth_r = l2.send({"type": "AUTHENTICATE", "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
         check_status("Listener-2 authenticated", auth_r, "OK")
@@ -453,7 +553,6 @@ def test_multiple_listeners(writer: Conn, listener: Conn):
         check_status("LISTEN B registered", r_b, "OK")
         listen_id_b = r_b.get("listenId")
 
-        # Insert a document matching only LISTEN A
         save_doc(writer, {"_id": "alpha-doc", "tag": "alpha"})
 
         pushed_a = listener.recv(timeout=5.0)
@@ -464,29 +563,51 @@ def test_multiple_listeners(writer: Conn, listener: Conn):
         check("Listener B did NOT receive push for alpha doc", pushed_b is None,
                    f"unexpected push to B: {pushed_b!r}")
 
-        # Clean up
         stop_listen(listener, listen_id_a)
         l2.send({"type": "STOP_LISTEN", "listenId": listen_id_b})
         delete_doc(writer, "alpha-doc")
 
 
+def test_transactional_commit_pushes_once_with_the_final_state(writer: Conn, listener: Conn):
+    section("LISTEN: a transactional commit notifies once, with every op applied")
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "txn"}}]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the transaction test", r, "OK")
+    listen_id = r.get("listenId")
+
+    expected = {f"txn-{i}" for i in range(1, 6)}
+    check_status("START_TRANSACTION", writer.send({"type": "START_TRANSACTION"}), "OK")
+    for id_ in sorted(expected):
+        save_doc(writer, {"_id": id_, "kind": "txn"})
+    check_status("COMMIT_TRANSACTION", writer.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the commit", pushed is not None, "no push message within 5 s")
+    if pushed is not None:
+        ids = {d.get("_id") for d in (pushed.get("results") or [])}
+        check("the pushed frame holds every document the transaction wrote", ids == expected,
+              f"partially applied frame pushed: {sorted(ids)}")
+
+    extra = listener.recv(timeout=1.5)
+    check("no second frame for the same commit", extra is None, f"unexpected extra push: {extra!r}")
+
+    stop_listen(listener, listen_id)
+    for id_ in sorted(expected):
+        delete_doc(writer, id_)
+
 def test_disconnect_cleanup(writer: Conn):
     section("LISTEN: listener cleanup on client disconnect")
 
-    # Open a temporary listener connection, register, then disconnect
     with Conn() as tmp:
         tmp.authenticate()
         steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "cleanup"}}]
         r = listen(tmp, steps)
         check_status("Temporary LISTEN registered", r, "OK")
         listen_id = r.get("listenId")
-        # tmp disconnects (socket closed by context manager __exit__)
 
-    # Wait for the server to detect the disconnect and clean up the registration.
     time.sleep(0.5)
 
-    # STOP_LISTEN for the now-cleaned-up ID should return NOT_FOUND
-    # (we use the writer connection which is still alive)
     r_stop = stop_listen(writer, listen_id)
     check_code("STOP_LISTEN after disconnect → NOT_FOUND", r_stop, "NOT_FOUND", "404-7")
 
@@ -500,7 +621,120 @@ def test_unauthenticated_listen():
         check_code("LISTEN without auth → MUST_AUTHENTICATE_FIRST", r, "UNAUTHENTICATED", "401-1")
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
+def check_listen_ended(label: str, pushed, listen_id: str) -> bool:
+    if pushed is None:
+        return check(label, False, "no frame within the timeout")
+    return check(label, pushed.get("errorCode") == "410-1" and pushed.get("status") == "NOT_FOUND"
+                 and pushed.get("listenId") == listen_id, f"got: {pushed!r}")
+
+
+def test_a_revoked_reader_is_told_its_listen_ended(writer: Conn):
+    section("LISTEN: a reader whose permission was revoked is told its listen ended")
+    reader_name = "listen_revoked_reader"
+    writer.send({"type": "DELETE_USER", "username": reader_name})
+    check_status("create a reader on the listen database", writer.send({
+        "type": "CREATE_USER", "username": reader_name, "password": "listen_reader1234", "admin": False,
+        "globalPermissions": [], "databasePermissions": {DB: "READ"}, "collectionPermissions": {}}), "OK")
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "revoked"}}]
+    try:
+        with Conn() as reader:
+            check_status("AUTHENTICATE as the reader", reader.authenticate(reader_name, "listen_reader1234"), "OK")
+            r = listen(reader, steps)
+            check_status("the reader may LISTEN while it holds READ", r, "OK")
+            listen_id = r.get("listenId")
+
+            save_doc(writer, {"_id": "revoked-1", "kind": "revoked"})
+            pushed = reader.recv(timeout=5.0)
+            check("the reader is pushed a matching write while authorized", pushed is not None,
+                  "no push within 5 s")
+
+            check_status("revoke the reader's database permission", writer.send({
+                "type": "CHANGE_PERMISSIONS", "username": reader_name, "admin": False, "globalPermissions": [],
+                "databasePermissions": {}, "collectionPermissions": {}}), "OK")
+            save_doc(writer, {"_id": "revoked-2", "kind": "revoked"})
+            check_listen_ended("the revoked reader is told its listen ended", reader.recv(timeout=5.0), listen_id)
+            pushed = reader.recv(timeout=2.0)
+            check("no data reaches a reader after its permission was revoked", pushed is None,
+                  f"unexpected push: {pushed!r}")
+            check_status("the revoked reader's own query is refused too", aggregate(reader, steps), "FORBIDDEN")
+    finally:
+        delete_doc(writer, "revoked-1")
+        delete_doc(writer, "revoked-2")
+        writer.send({"type": "DELETE_USER", "username": reader_name})
+
+
+def test_dropping_the_collection_ends_the_listen(writer: Conn, listener: Conn):
+    section("LISTEN: dropping the listened collection ends the listen with one terminal frame")
+    coll = "listen_dropped_coll"
+    writer.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    r = listen(listener, [], coll)
+    check_status("LISTEN registered on the collection about to be dropped", r, "OK")
+    listen_id = r.get("listenId")
+    try:
+        check_status("DROP_COLLECTION", writer.send(
+            {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+        check_listen_ended("the listener is told its listen ended", listener.recv(timeout=5.0), listen_id)
+        check_code("the ended listen is no longer registered", stop_listen(listener, listen_id), "NOT_FOUND",
+                   "404-7")
+
+        writer.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+        writer.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "after"}})
+        pushed = listener.recv(timeout=2.0)
+        check("a re-created collection does not revive the ended listen", pushed is None,
+              f"unexpected push: {pushed!r}")
+    finally:
+        writer.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
+def test_dropping_a_joined_collection_ends_the_listen(writer: Conn, listener: Conn):
+    section("LISTEN: dropping a JOIN target ends the listen on the primary collection")
+    joined = "listen_joined_coll"
+    writer.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": joined})
+    steps = [{"type": "JOIN", "joinCollection": joined, "localField": "ref", "remoteField": "_id",
+              "asField": "joined"}]
+    r = listen(listener, steps)
+    check_status("LISTEN with a JOIN registered", r, "OK")
+    listen_id = r.get("listenId")
+    try:
+        check_status("DROP_COLLECTION of the joined collection", writer.send(
+            {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": joined}), "OK")
+        check_listen_ended("the JOIN listener is told its listen ended", listener.recv(timeout=5.0), listen_id)
+        pushed = listener.recv(timeout=2.0)
+        check("exactly one terminal frame arrives", pushed is None, f"unexpected push: {pushed!r}")
+    finally:
+        writer.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": joined})
+
+
+def test_listener_survives_a_concurrent_bulk_save(writer_conn: Conn, listener_conn: Conn):
+    section("A re-run during a bulk save still answers correctly")
+    started = listen(listener_conn, [{"type": "FILTER",
+                                      "operator": {"fieldOperatorType": "EQUALS",
+                                                   "field": "kind", "value": "bulk"}}])
+    listen_id = started.get("listenId")
+    check("listener registered for the bulk case", listen_id is not None, detail=str(started))
+
+    expected = 40
+    objects = [{"_id": f"bulk_{i:03d}", "kind": "bulk"} for i in range(expected)]
+    writer_conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+                      "objects": objects})
+
+    seen = [-1]
+
+    def _converged_or_quiet():
+        pushed = listener_conn.recv(timeout=5.0)
+        if not pushed:
+            return True
+        seen[0] = len(pushed.get("results") or [])
+        return seen[0] == expected
+
+    bu.wait_until(_converged_or_quiet, 15.0, 0)
+    check("a listener converges on the full bulk result rather than a torn read",
+          seen[0] == expected, detail=f"last pushed count={seen[0]} expected={expected}")
+
+    stop_listen(listener_conn, listen_id)
+    for i in range(expected):
+        delete_doc(writer_conn, f"bulk_{i:03d}")
+
 
 def main():
     bu.banner("Listenable queries (LISTEN / STOP_LISTEN) test suite", HOST, PORT)
@@ -527,8 +761,18 @@ def main():
                 test_push_on_geo_within_match(writer_conn, listener_conn)
                 test_push_on_vector_nearest_closer(writer_conn, listener_conn)
                 test_no_push_on_vector_farther(writer_conn, listener_conn)
+                test_push_on_reorder_inside_a_sorted_top_k(writer_conn, listener_conn)
+                test_push_on_reorder_inside_an_unsorted_nearest_top_k(writer_conn, listener_conn)
+                test_push_on_reorder_after_a_sort_then_distinct(writer_conn, listener_conn)
+                test_no_push_when_an_unordered_group_by_result_is_unchanged(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
+                test_stop_listen_from_another_client_is_refused(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)
+                test_transactional_commit_pushes_once_with_the_final_state(writer_conn, listener_conn)
+                test_listener_survives_a_concurrent_bulk_save(writer_conn, listener_conn)
+                test_a_revoked_reader_is_told_its_listen_ended(writer_conn)
+                test_dropping_the_collection_ends_the_listen(writer_conn, listener_conn)
+                test_dropping_a_joined_collection_ends_the_listen(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)
 
             test_unauthenticated_listen()

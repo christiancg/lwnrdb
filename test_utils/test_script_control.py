@@ -1,48 +1,4 @@
-"""End-to-end tests for script run visibility and cancellation (LIST_SCRIPTS / CANCEL_SCRIPT).
-
-Like the RUN_SCRIPT and schedules suites this script is **self-contained**: it starts its
-own LWNRDB instance on a dedicated port and working directory, because the feature needs
-scripts, triggers and schedules all enabled plus a deliberately *generous* script timeout
-— the opposite of the run-script suite's tight sandbox. A short deadline would make every
-cancellation indistinguishable from a timeout, so `scriptTimeoutMs` here is far longer
-than any test's patience and a run only ever ends because something stopped it.
-
-It runs in two phases:
-
-  phase 1 — everything enabled, exercising the whole feature;
-  phase 2 — the same data directory restarted, proving a trigger run cancelled in phase 1
-            is *not* replayed by startup recovery. That is the one place the exactly-once
-            trigger guarantee is deliberately waived, so it is pinned across a real
-            restart rather than by a unit test alone.
-
-What is covered:
-
-  * LIST_SCRIPTS: empty at rest, one row per live run, and the shape of a row
-    (runId/node/kind/database/name/username/ageMs) for each of the four run kinds —
-    RUN_SCRIPT, CALL_PROCEDURE, TRIGGER and SCHEDULE;
-  * CANCEL_SCRIPT: the run stops, the cancelled caller receives 408-2 with the same runId
-    the listing showed, and the listing empties again;
-  * the answers that are deliberately not errors: an unknown runId and an already-finished
-    run both report cancelled:false with status OK;
-  * cancellation semantics through the wire: it is not catchable by the script's own
-    try/catch, its finally does not run, a run parked on a long timer is stopped promptly
-    (the bounded event-loop park), and an open db.transaction is rolled back;
-  * validation and authorization: a missing/blank/non-UUID runId is 400-1, and both
-    operations are admin-only — a database owner holding a script grant is still refused;
-  * the runId on the RUN_SCRIPT and CALL_PROCEDURE responses, so a caller can name its own
-    run without listing first;
-  * GET_DATABASE_STATS: scripts.running tracks live concurrency and scripts.cancelled
-    counts cancellations.
-
-The cluster-wide half of the feature — a run being listed and cancelled from a node that
-is not executing it — lives in test_clustering.py, which owns the multi-node topology.
-
-The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping
-it never touches an unrelated LWNRDB process.
-"""
-
 import os
-import sys
 import tempfile
 import threading
 import time
@@ -61,26 +17,16 @@ DB = "script_control_db"
 COLL = "docs"
 OUT_COLL = "sideeffects"
 
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
-
-# Long enough that no test's own patience can be mistaken for the sandbox giving up: every
-# run in this suite ends because it was cancelled, finished, or the test failed.
 TIMEOUT_MS = 600_000
-# How long a "slow" script asks to sleep for. Well past the point any assertion waits.
 SLOW_MS = 300_000
 SLOW_SCRIPT = f"export default new Promise(r => setTimeout(() => r(1), {SLOW_MS}));"
-# A busy loop instead of a parked timer, for the cases that must not depend on the event loop.
 BUSY_SCRIPT = "while (true) { }"
 
-# Far past what any run here can spend before it is cancelled: like the deadline, the budget
-# must never be the reason a run ended. (The key rejects -1, so this is the "unlimited" form.)
 INSTRUCTION_BUDGET = 1_000_000_000_000
 TICK_MS = 200
 
-
-# ── connection / protocol ────────────────────────────────────────────────────
 
 class Conn(bu.Conn):
     def run(self, script: str, args=None, db=DB) -> dict:
@@ -126,11 +72,7 @@ def admin_conn(timeout=60) -> Conn:
     return conn
 
 
-# ── run-in-the-background helper ─────────────────────────────────────────────
-
 class BackgroundRun:
-    """Starts a script on its own connection and thread, so the test can look it up and
-    cancel it while it is still executing. The response is captured for assertions."""
 
     def __init__(self, start: Callable[[Conn], dict]):
         self.response: Optional[dict] = None
@@ -149,30 +91,18 @@ class BackgroundRun:
         return not self._thread.is_alive()
 
 
-def wait_until(predicate: Callable[[], object], timeout_s: float = 30.0, interval_s: float = 0.1):
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        value = predicate()
-        if value:
-            return value
-        time.sleep(interval_s)
-    return predicate()
-
-
 def await_one_run(conn: Conn, timeout_s: float = 30.0) -> Optional[dict]:
-    """The single row LIST_SCRIPTS reports, once it appears. Polling rather than sleeping,
-    because how long a run takes to register is a scheduling detail, not a contract."""
     def _one():
         response = conn.list_scripts()
         if response.get("status") != "OK":
             return None
         rows = response.get("scripts") or []
         return rows[0] if len(rows) == 1 else None
-    return wait_until(_one, timeout_s)
+    return bu.wait_until(_one, timeout_s, 0.1) or None
 
 
 def await_empty_listing(conn: Conn, timeout_s: float = 60.0) -> bool:
-    return bool(wait_until(lambda: not (conn.list_scripts().get("scripts") or []), timeout_s))
+    return bool(bu.wait_until(lambda: not (conn.list_scripts().get("scripts") or []), timeout_s, 0.1))
 
 
 def check_row_shape(label: str, row: Optional[dict], kind: str, name: Optional[str],
@@ -187,49 +117,17 @@ def check_row_shape(label: str, row: Optional[dict], kind: str, name: Optional[s
     check(label, ok, f"got {row!r}")
 
 
-# ── server lifecycle ─────────────────────────────────────────────────────────
-
 def write_config(work_dir: str):
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        "maxMemory=256mb\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-        "scriptsEnabled=true\n"
-        f"scriptInstructionBudget={INSTRUCTION_BUDGET}\n"
-        f"scriptTimeoutMs={TIMEOUT_MS}\n"
-        "scriptMaxDepth=64\n"
-        "scriptMaxSourceBytes=8192\n"
-        "scriptMaxLogLines=50\n"
-        "scriptMaxLogLineChars=500\n"
-        "scriptMaxMemoryBytes=16777216\n"
-        "scriptMaxResultBytes=65536\n"
-        "scriptTextImportEnabled=false\n"
-        "scriptTimeZone=UTC\n"
-        "scriptLocale=en-US\n"
-        "procedureCacheSize=16\n"
-        "triggersEnabled=true\n"
-        "triggerThreads=2\n"
-        "triggerQueueSize=1000\n"
-        "triggerMaxDepth=3\n"
-        # A trigger must be stoppable rather than time out, for the same reason the script
-        # deadline is long.
-        f"triggerTimeoutMs={TIMEOUT_MS}\n"
-        "triggerRunLogEnabled=true\n"
-        "schedulesEnabled=true\n"
-        f"scheduleTickMs={TICK_MS}\n"
-        "scheduleRefreshMs=2000\n"
-        f"scheduleTimeoutMs={TIMEOUT_MS}\n"
-        # Room for several overlapping runs: some cases hold two at once.
-        "maxConcurrentScripts=8\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+    bu.write_config(work_dir, PORT, maxMemory="256mb", scriptsEnabled=True,
+                    scriptInstructionBudget=INSTRUCTION_BUDGET, scriptTimeoutMs=TIMEOUT_MS,
+                    scriptMaxDepth=64, scriptMaxSourceBytes=8192, scriptMaxLogLines=50,
+                    scriptMaxLogLineChars=500, scriptMaxMemoryBytes=16777216,
+                    scriptMaxResultBytes=65536, scriptTextImportEnabled=False, scriptTimeZone="UTC",
+                    scriptLocale="en-US", procedureCacheSize=16, triggersEnabled=True, triggerThreads=2,
+                    triggerQueueSize=1000, triggerMaxDepth=3, triggerTimeoutMs=TIMEOUT_MS,
+                    triggerRunLogEnabled=True, schedulesEnabled=True, scheduleTickMs=TICK_MS,
+                    scheduleRefreshMs=2000, scheduleTimeoutMs=TIMEOUT_MS, maxConcurrentScripts=8)
 
-
-# ── setup ────────────────────────────────────────────────────────────────────
 
 def setup_data(conn: Conn):
     section("Setup")
@@ -239,8 +137,6 @@ def setup_data(conn: Conn):
                      conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
     check_status("SAVE_PROCEDURE for a slow procedure", conn.save_procedure("slow", SLOW_SCRIPT), "OK")
 
-
-# ── tests ────────────────────────────────────────────────────────────────────
 
 def test_listing_is_empty_at_rest(conn: Conn):
     section("LIST_SCRIPTS — nothing running")
@@ -295,11 +191,7 @@ def test_cancels_a_procedure_call(conn: Conn):
 
 
 def test_cancels_a_trigger_run(conn: Conn):
-    """The trigger case is also the exactly-once waiver: phase 2 asserts this run is not
-    replayed after a restart, so the document that fired it is written here on purpose."""
     section("CANCEL_SCRIPT — a trigger run")
-    # Both events: a wire SAVE of a fresh _id is classified UPDATED, so watching CREATED alone
-    # would install a trigger that never fires.
     check_status("SAVE_TRIGGER on the slow procedure",
                  conn.send({"type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": COLL,
                             "name": "slowTrigger", "events": ["CREATED", "UPDATED"],
@@ -309,14 +201,11 @@ def test_cancels_a_trigger_run(conn: Conn):
                             "object": {"_id": "fires-trigger", "v": 1}}), "OK")
 
     row = await_one_run(conn)
-    # A trigger runs with its definer's authority, so that — not the writer — is the user reported.
     check_row_shape("the trigger run is listed with its trigger name", row, "TRIGGER", "slowTrigger")
     check("CANCEL_SCRIPT reports the trigger run as cancelled",
           conn.cancel(row["runId"]).get("cancelled") is True if row else False)
     check("the trigger run leaves the listing", await_empty_listing(conn))
-    # The record that would replay this run must be gone, not merely unused: that is what makes
-    # phase 2's "nothing was re-queued" an assertion about consumption rather than about timing.
-    consumed = wait_until(lambda: conn.trigger_stats().get("pendingRuns") == 0, 30.0)
+    consumed = bu.wait_until(lambda: conn.trigger_stats().get("pendingRuns") == 0, 30.0, 0.1)
     check("the cancelled run's pending record was consumed", bool(consumed),
           f"triggers={conn.trigger_stats()!r}")
 
@@ -333,8 +222,6 @@ def test_cancels_a_scheduled_run(conn: Conn):
     row = await_one_run(conn)
     check_row_shape("the scheduled run is listed with its schedule name", row, "SCHEDULE", "slowJob")
 
-    # Deleted before the cancel: the schedule fires every 500ms, so leaving it installed would
-    # start a fresh run and make "the listing empties" a race rather than an assertion.
     check_status("DELETE_SCHEDULE stops it recurring",
                  conn.send({"type": "DELETE_SCHEDULE", "databaseName": DB, "name": "slowJob"}), "OK")
     check("CANCEL_SCRIPT reports the scheduled run as cancelled",
@@ -367,14 +254,11 @@ def test_cancellation_is_not_catchable(conn: Conn):
                        "collectionName": OUT_COLL, "_id": "finally-ran"})
     check("the finally block did not run", found.get("status") != "OK",
           f"the finalizer's write is present: {found!r}")
-    # A cancellation is not a program error, so it carries no frames
     check("a cancelled run carries no stack", not response.get("stack"),
           f"stack={response.get('stack')!r}")
 
 
 def test_a_parked_run_is_cancelled_promptly(conn: Conn):
-    """The bounded event-loop park: before it, a run parked on a long timer would not notice
-    its cancellation until the timer came due."""
     section("A run parked on a long timer is cancelled promptly")
     background = BackgroundRun(lambda c: c.run(SLOW_SCRIPT))
     row = await_one_run(conn)
@@ -386,7 +270,6 @@ def test_a_parked_run_is_cancelled_promptly(conn: Conn):
     returned = background.join(30.0)
     elapsed = time.time() - started
     check("the parked run returned", returned)
-    # Generous against a loaded runner while still far below the SLOW_MS the timer asked for.
     check("it returned promptly rather than waiting out its timer", returned and elapsed < 20.0,
           f"took {elapsed:.1f}s for a timer of {SLOW_MS / 1000:.0f}s")
     check_code("the caller receives 408-2", background.response or {}, "ERROR", "408-2")
@@ -410,8 +293,6 @@ def test_cancelling_a_transactional_script(conn: Conn):
     found = conn.send({"type": "FIND_BY_ID", "databaseName": DB,
                        "collectionName": OUT_COLL, "_id": "tx-cancelled"})
     check("the buffered write was rolled back", found.get("status") != "OK", f"got {found!r}")
-    # A stranded collection lock would make the next write on that collection hang or fail;
-    # this is what proves the rollback released it.
     check_status("the collection is writable again",
                  conn.send({"type": "SAVE", "databaseName": DB, "collectionName": OUT_COLL,
                             "object": {"_id": "after-rollback", "ok": True}}), "OK")
@@ -426,7 +307,7 @@ def test_reports_several_concurrent_runs(conn: Conn):
         rows = conn.list_scripts().get("scripts") or []
         return rows if len(rows) == 2 else None
 
-    rows = wait_until(_two, 30.0)
+    rows = bu.wait_until(_two, 30.0, 0.1)
     check("both runs are listed", bool(rows), f"got {conn.list_scripts().get('scripts')!r}")
     check("running counts both", conn.stats().get("running") == 2,
           f"running={conn.stats().get('running')!r}")
@@ -435,7 +316,6 @@ def test_reports_several_concurrent_runs(conn: Conn):
         check("the two kinds are distinguished",
               {r["kind"] for r in rows} == {"RUN_SCRIPT", "CALL_PROCEDURE"},
               f"kinds={[r['kind'] for r in rows]!r}")
-        # Cancelling one must not touch the other: the id is the unit of cancellation.
         target = next(r for r in rows if r["kind"] == "RUN_SCRIPT")
         other = next(r for r in rows if r["kind"] == "CALL_PROCEDURE")
         check("cancelling one of them succeeds", conn.cancel(target["runId"]).get("cancelled") is True)
@@ -476,7 +356,6 @@ def test_request_validation(conn: Conn):
 
 def test_permissions(conn: Conn):
     section("Both operations are admin-only")
-    # The widest non-admin authority there is for scripts: owns the database and may run them.
     check_status("CREATE_USER for a database owner with a script grant",
                  conn.send({"type": "CREATE_USER", "username": "script_owner",
                             "password": "script_owner1234", "admin": False,
@@ -508,14 +387,11 @@ def test_the_run_id_is_logged(conn: Conn, log_path: str):
     response = conn.run("return 1;")
     check_status("a run for the log line", response, "OK")
     run_id = response.get("runId")
-    found = wait_until(lambda: f"runId={run_id}" in bu.read_log(log_path), 15.0)
+    found = bu.wait_until(lambda: f"runId={run_id}" in bu.read_log(log_path), 15.0, 0.1)
     check("the run's log line names it", bool(found), f"runId={run_id!r} not found in the log")
 
 
 def test_cancelled_trigger_run_is_not_replayed(conn: Conn):
-    """Phase 2. Trigger execution is otherwise exactly-once: a run whose pending record
-    survives is re-queued at startup. A cancellation consumes that record instead, so the
-    restart must fire nothing — the documented waiver."""
     section("Phase 2 — a cancelled trigger run is not replayed after a restart")
     check("nothing is running after the restart", (conn.list_scripts().get("scripts") or []) == [],
           f"got {conn.list_scripts().get('scripts')!r}")
@@ -524,9 +400,7 @@ def test_cancelled_trigger_run_is_not_replayed(conn: Conn):
           f"cancelled={stats.get('cancelled')!r}")
     check("no pending trigger run survived the restart",
           conn.trigger_stats().get("pendingRuns") == 0, f"triggers={conn.trigger_stats()!r}")
-    # If the cancelled run had been left pending, recovery would have re-queued it and the slow
-    # procedure would be executing again by now.
-    still_quiet = wait_until(lambda: (conn.list_scripts().get("scripts") or []) != [], 5.0)
+    still_quiet = bu.wait_until(lambda: (conn.list_scripts().get("scripts") or []) != [], 5.0, 0.1)
     check("startup recovery did not re-queue the cancelled trigger run", not still_quiet,
           f"a run appeared after the restart: {conn.list_scripts().get('scripts')!r}")
 
@@ -537,13 +411,10 @@ def cleanup(conn: Conn):
     check_status("DELETE_USER", conn.send({"type": "DELETE_USER", "username": "script_owner"}), "OK")
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
-
 def main():
     bu.banner("script run visibility and cancellation e2e tests")
 
-    if not bu.server_binary_ready():
-        sys.exit(1)
+    bu.require_jar()
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-scriptcontrol-")
     log_path = os.path.join(work_dir, "server.log")

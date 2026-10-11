@@ -122,6 +122,15 @@ public class BeforeHookContextTest {
     }
 
     @Test
+    public void aHookReplacementWithAGetterStoresTheGetterValue() throws Exception {
+        installHook("v", "getter", "export default (doc) => ({ ...doc, get total() { return doc.qty * doc.price; } });",
+                EventType.CREATED);
+        final var outcome = run(document("a"), EventType.CREATED);
+        assertFalse(outcome.isRejected());
+        assertEquals(20.0, outcome.document().get("total").asJsonNumber().getValue().doubleValue());
+    }
+
+    @Test
     public void test_rejects_when_the_hook_throws() throws Exception {
         installHook("v", "boom", "export default function (doc) { throw new Error('customerId is required'); };",
                 EventType.CREATED);
@@ -137,6 +146,21 @@ public class BeforeHookContextTest {
         final var outcome = run(document("a"), EventType.CREATED);
         assertTrue(outcome.isRejected());
         assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(), outcome.rejection().getErrorCode());
+    }
+
+    @Test
+    public void test_rejects_a_replacement_holding_a_non_finite_number() throws Exception {
+        installHook("v", "inf", "export default function (doc) { return { ...doc, total: 1/0 }; };", EventType.CREATED);
+        final var outcome = run(document("a"), EventType.CREATED);
+        assertTrue(outcome.isRejected(), "a document the engine's own reader cannot parse must not be written");
+        assertTrue(outcome.rejection().getMessage().contains("is not a JSON number"), outcome.rejection().getMessage());
+    }
+
+    @Test
+    public void test_rejects_when_the_hook_returns_a_non_finite_number() throws Exception {
+        installHook("v", "nan", "export default function (doc) { return 0/0; };", EventType.CREATED);
+        assertTrue(run(document("a"), EventType.CREATED).isRejected(),
+                "a bare number is not a document, so a hook returning one is refused rather than nulled");
     }
 
     @Test
@@ -166,6 +190,29 @@ public class BeforeHookContextTest {
         final var outcome = run(document("a"), EventType.CREATED);
         assertTrue(outcome.isRejected());
         assertTrue(outcome.rejection().getMessage().contains("_id"));
+    }
+
+    @Test
+    public void test_rejects_an_id_sharing_the_original_hash_code() throws Exception {
+        assertEquals("Aa".hashCode(), "BB".hashCode());
+        installHook("v", "collide", "export default function (doc) { return { ...doc, _id: 'BB' }; };",
+                EventType.CREATED);
+        assertTrue(run(document("Aa"), EventType.CREATED).isRejected());
+    }
+
+    @Test
+    public void test_rejects_when_the_replacement_turns_the_id_into_a_number() throws Exception {
+        installHook("v", "numeric", "export default function (doc) { return { ...doc, _id: 5 }; };", EventType.CREATED);
+        assertTrue(run(document("a"), EventType.CREATED).isRejected());
+    }
+
+    @Test
+    public void test_rejects_an_id_added_to_a_document_that_had_none() throws Exception {
+        installHook("v", "addid", "export default function (doc) { return { ...doc, _id: 'new' }; };",
+                EventType.CREATED);
+        final var document = new JsonObject();
+        document.add("qty", new JsonNumber(1));
+        assertTrue(run(document, EventType.CREATED).isRejected());
     }
 
     @Test

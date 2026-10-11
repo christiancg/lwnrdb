@@ -180,14 +180,11 @@ public class JsonObjectTest {
     @Test
     public void test_add_property_with_null_number() {
         JsonObject jsonObject = new JsonObject();
-        Number nullValue = null;
         String propertyName = "testProp";
 
-        jsonObject.addProperty(propertyName, nullValue);
+        jsonObject.addProperty(propertyName, (Number) null);
 
-        JsonNumber storedValue = (JsonNumber) jsonObject.get(propertyName);
-        assertNull(storedValue.getValue());
-        assertNull(storedValue.asInteger());
+        assertSame(JsonNull.INSTANCE, jsonObject.get(propertyName));
     }
 
     @Test
@@ -206,9 +203,8 @@ public class JsonObjectTest {
     public void test_add_long_property_with_null_key() {
         JsonObject jsonObject = new JsonObject();
         Long value = 100L;
-        String property = null;
 
-        assertThrows(NullPointerException.class, () -> jsonObject.addProperty(property, value));
+        assertThrows(NullPointerException.class, () -> jsonObject.addProperty(null, value));
     }
 
     @Test
@@ -329,6 +325,7 @@ public class JsonObjectTest {
     }
 
     @Test
+    @SuppressWarnings({"ConstantValue", "EqualsWithItself"})
     public void test_equals_same_object_returns_true() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("key", "value");
@@ -339,6 +336,7 @@ public class JsonObjectTest {
     }
 
     @Test
+    @SuppressWarnings("ConstantValue")
     public void test_equals_null_returns_false() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("key", "value");

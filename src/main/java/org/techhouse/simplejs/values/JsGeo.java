@@ -8,21 +8,36 @@ public final class JsGeo extends JsValue {
 
     private final GeoPoint point;
 
+    private final JsonGeo source;
+
     public JsGeo(GeoPoint point) {
+        this(point, null);
+    }
+
+    public JsGeo(JsonGeo source) {
+        this(source.point(), source);
+    }
+
+    private JsGeo(GeoPoint point, JsonGeo source) {
         this.point = point;
+        this.source = source;
     }
 
     public GeoPoint getPoint() {
         return point;
     }
 
+    public JsGeo copy() {
+        return new JsGeo(point, source);
+    }
+
     public JsonGeo toJsonGeo() {
-        return new JsonGeo(point);
+        return source != null ? source : new JsonGeo(point);
     }
 
     @Override
     public String toString() {
-        return toJsonGeo().getValue();
+        return new JsonGeo(point).getValue();
     }
 
     @Override

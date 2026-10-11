@@ -34,14 +34,28 @@ public class SchemaValidator {
         }
         final var obj = schemaNode.asJsonObject();
         if (obj.has(SchemaKeywords.REF)) {
-            final var resolved = schema.resolveRef(obj.get(SchemaKeywords.REF).asJsonString().getValue());
-            validateNode(instance, resolved, schema, path, errors);
+            validateRef(instance, obj, schema, path, errors);
         }
         validateType(instance, obj, path, errors);
         validateCustomType(instance, obj, path, errors);
         validateEnumAndConst(instance, obj, path, errors);
         applicatorValidator.validateApplicators(instance, obj, schema, path, errors);
         dispatchByType(instance, obj, schema, path, errors);
+    }
+
+    private void validateRef(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path,
+            List<String> errors) {
+        final var resolved = schema.resolveRef(obj.get(SchemaKeywords.REF).asJsonString().getValue());
+        if (!schema.beginRefExpansion(instance, resolved)) {
+            errors.add(at(path) + ": the schema's '" + SchemaKeywords.REF
+                    + "' forms a reference cycle and cannot be evaluated");
+            return;
+        }
+        try {
+            validateNode(instance, resolved, schema, path, errors);
+        } finally {
+            schema.endRefExpansion(instance, resolved);
+        }
     }
 
     private void dispatchByType(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path,

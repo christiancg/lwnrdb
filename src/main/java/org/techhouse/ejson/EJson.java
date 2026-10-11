@@ -102,6 +102,10 @@ public class EJson {
         return reader.fromJson(jsonString, tClass);
     }
 
+    public <T> T fromJson(String jsonString, Class<T> tClass, int maxDepth) {
+        return reader.fromJson(jsonString, tClass, maxDepth);
+    }
+
     public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass) {
         final var adapter = TypeAdapterFactory.getAdapter(tClass);
         return adapter.fromJson(jsonObject);

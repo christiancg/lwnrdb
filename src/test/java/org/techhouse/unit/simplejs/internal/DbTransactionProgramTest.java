@@ -6,8 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -15,8 +13,6 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
 import org.techhouse.simplejs.host.ResourceLimits;
@@ -32,14 +28,7 @@ public class DbTransactionProgramTest {
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        final var request = new CreateUserRequest();
-        request.setUsername(ADMIN);
-        request.setPassword("password123");
-        request.setAdmin(true);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TestUtils.createAdmin(ADMIN);
     }
 
     @AfterAll

@@ -13,12 +13,19 @@ import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.ArmFaultRequest;
+import org.techhouse.ops.req.AwaitFaultRequest;
 import org.techhouse.ops.req.CloseConnectionRequest;
+import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReleaseFaultRequest;
+import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
@@ -47,10 +54,40 @@ public class AuthorizationCheckerTest {
     }
 
     @Test
+    public void test_transaction_control_is_allowed_for_a_user_with_no_grants() {
+        final var user = createNonAdminUser();
+
+        assertTrue(AuthorizationChecker.check(new StartTransactionRequest(), user).isAllowed());
+        assertTrue(AuthorizationChecker.check(new CommitTransactionRequest(), user).isAllowed());
+        assertTrue(AuthorizationChecker.check(new RollbackTransactionRequest(), user).isAllowed());
+    }
+
+    @Test
+    public void test_a_write_inside_a_transaction_is_still_authorized_on_its_own() {
+        final var dbPerms = new HashMap<String, PermissionLevel>();
+        dbPerms.put("testDb", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), dbPerms, new HashMap<>());
+
+        assertTrue(AuthorizationChecker.check(new StartTransactionRequest(), user).isAllowed());
+        assertFalse(AuthorizationChecker.check(new SaveRequest("testDb", "testColl"), user).isAllowed(),
+                "opening a transaction must not widen what the user may write");
+    }
+
+    @Test
     public void test_list_transactions_admin_only() {
         final var request = new org.techhouse.ops.req.ListTransactionsRequest();
         assertTrue(AuthorizationChecker.check(request, createAdminUser()).isAllowed());
         assertFalse(AuthorizationChecker.check(request, createNonAdminUser()).isAllowed());
+    }
+
+    @Test
+    public void test_fault_operations_are_admin_only() {
+        final List<OperationRequest> requests = List.of(new ArmFaultRequest(), new AwaitFaultRequest(),
+                new ReleaseFaultRequest());
+        for (final var request : requests) {
+            assertTrue(AuthorizationChecker.check(request, createAdminUser()).isAllowed());
+            assertFalse(AuthorizationChecker.check(request, createNonAdminUser()).isAllowed());
+        }
     }
 
     @Test

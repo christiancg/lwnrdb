@@ -55,7 +55,7 @@ public class FilterStreamProcessingTest {
         testEntry.set_id("1");
 
         final var cache = IocContainer.get(Cache.class);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, testEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, testEntry);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
@@ -168,7 +168,7 @@ public class FilterStreamProcessingTest {
         entry.setDatabaseName(TestGlobals.DB);
         entry.setCollectionName(TestGlobals.COLL);
         final var cache = IocContainer.get(Cache.class);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "arr1", 0, 100, 0));

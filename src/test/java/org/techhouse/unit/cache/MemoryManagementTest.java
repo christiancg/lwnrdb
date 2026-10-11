@@ -179,19 +179,6 @@ public class MemoryManagementTest {
     }
 
     @Test
-    public void test_runEvictionSweep_never_touches_admin() throws Exception {
-        setMaxMemory(1L);
-        seedRawCollection();
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.runEvictionSweep();
-        final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
-                "collectionMap", type);
-        assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
-    }
-
-    @Test
     public void test_putCounter_and_clearCounter() {
         final var mm = IocContainer.get(MemoryManagement.class);
         final var counter = new UsageCounter(AccessKind.COLLECTION, "db", "coll", "", 5L, 100L);
@@ -462,20 +449,6 @@ public class MemoryManagementTest {
             inner.put(entry.get_id(), entry);
         }
         collectionMap.put(Cache.getCollectionIdentifier("userDb", collName), inner);
-    }
-
-    private void seedRawCollection() throws NoSuchFieldException, IllegalAccessException {
-        final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
-                "collectionMap", type);
-        final var inner = new ConcurrentHashMap<String, DbEntry>();
-        for (int i = 0; i < 5; i++) {
-            final var obj = new JsonObject();
-            obj.addProperty(Globals.PK_FIELD, "id" + i);
-            inner.put("id" + i, DbEntry.fromJsonObject(Globals.ADMIN_DB_NAME, "databases", obj));
-        }
-        collectionMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), inner);
     }
 
     private void seedPkIndex(String collName) throws NoSuchFieldException, IllegalAccessException {

@@ -38,7 +38,6 @@ public class CompiledProcedureCacheTest {
         assertEquals(1, cache.size());
     }
 
-    // A save bumps the version, so a stale entry can never be served - no invalidation hook needed
     @Test
     public void test_version_bump_misses_the_cache() {
         final var cache = new CompiledProcedureCache();
@@ -69,6 +68,27 @@ public class CompiledProcedureCacheTest {
         final var cache = new CompiledProcedureCache();
         assertNotSame(cache.get("db", "p", 1L, "return 1;"), cache.get("db", "p", 1L, "return 1;"));
         assertEquals(0, cache.size());
+    }
+
+    @Test
+    public void test_a_reused_version_with_different_source_recompiles() {
+        final var cache = new CompiledProcedureCache();
+        final var first = cache.get("db", "p", 2L, "return 1;");
+
+        final var second = cache.get("db", "p", 2L, "return 2;");
+
+        assertNotSame(first, second, "a version can be re-stamped onto a different source, so it is not the identity");
+        assertEquals("return 2;", second.source());
+        assertEquals(1, cache.size());
+    }
+
+    @Test
+    public void test_the_recompiled_entry_replaces_the_stale_one() {
+        final var cache = new CompiledProcedureCache();
+        cache.get("db", "p", 2L, "return 1;");
+        final var recompiled = cache.get("db", "p", 2L, "return 2;");
+
+        assertSame(recompiled, cache.get("db", "p", 2L, "return 2;"));
     }
 
     @Test

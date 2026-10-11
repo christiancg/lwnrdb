@@ -1,0 +1,66 @@
+name: Fuzz Soak
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Soak minutes per shard
+        default: '45'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install native-image build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libz-dev
+      - name: Build native image
+        run: mvn -B --no-transfer-progress -Pnative package -DskipTests
+      - name: Upload native binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwnrdb-native
+          path: target/lwnrdb
+          retention-days: 1
+
+  soak:
+    name: soak ${{ matrix.shard }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      LWNRDB_SERVER_BIN: ${{ github.workspace }}/target/lwnrdb
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download native binary
+        uses: actions/download-artifact@v4
+        with:
+          name: lwnrdb-native
+          path: target
+      - name: Restore executable bit
+        run: chmod +x "$LWNRDB_SERVER_BIN"
+      - name: Soak on random seeds
+        env:
+          MINUTES: ${{ inputs.minutes || '45' }}
+        run: |
+          set -o pipefail
+          python3 -u test_utils/test_fuzz.py --seed random --minutes "${MINUTES}" --shrink 600 --report "$GITHUB_STEP_SUMMARY" | tee fuzz-soak.log
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-soak-${{ matrix.shard }}
+          path: fuzz-soak.log
+          retention-days: 14

@@ -5,10 +5,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.internal.JsonReader;
 
 public class JsonReaderTest {
+    private static final int LIMIT = 8;
+    private final EJson eJson = new EJson();
+
+    @SuppressWarnings("unused")
     static class TestClass {
         private String name;
         private int value;
@@ -22,6 +27,7 @@ public class JsonReaderTest {
         }
     }
 
+    @SuppressWarnings("unused")
     static class TestPerson {
         private String name;
         private int age;
@@ -46,6 +52,25 @@ public class JsonReaderTest {
         assertNotNull(result);
         assertEquals("John", result.getName());
         assertEquals(30, result.getAge());
+    }
+
+    @Test
+    public void test_a_second_root_value_is_refused() {
+        new EJson();
+        final var reader = new JsonReader();
+
+        assertThrows(MalformedJsonException.class,
+                () -> reader.fromJson("{\"a\":1}{\"b\":2}", org.techhouse.ejson.elements.JsonObject.class));
+        assertThrows(MalformedJsonException.class,
+                () -> reader.fromJson("{\"a\":1} 5", org.techhouse.ejson.elements.JsonObject.class));
+    }
+
+    @Test
+    public void test_trailing_whitespace_after_the_root_value_is_accepted() {
+        new EJson();
+        final var parsed = new JsonReader().fromJson("{\"a\":1}  \n", org.techhouse.ejson.elements.JsonObject.class);
+
+        assertEquals(1, parsed.get("a").asJsonNumber().getValue().intValue());
     }
 
     @Test
@@ -75,6 +100,7 @@ public class JsonReaderTest {
     @Test
     public void test_parse_json_with_nested_properties() {
         new EJson();
+        @SuppressWarnings("unused")
         class InnerClass {
             private String key;
 
@@ -82,6 +108,7 @@ public class JsonReaderTest {
                 return key;
             }
         }
+        @SuppressWarnings("unused")
         class OuterClass {
             private InnerClass inner;
 
@@ -89,6 +116,7 @@ public class JsonReaderTest {
                 return inner;
             }
         }
+        @SuppressWarnings("unused")
         class MyClass {
             private OuterClass outer;
 
@@ -110,6 +138,7 @@ public class JsonReaderTest {
 
     @Test
     public void test_parse_json_with_primitive_types() {
+        @SuppressWarnings("unused")
         class PrimitiveClass {
             private String stringKey;
             private int numberKey;
@@ -155,6 +184,7 @@ public class JsonReaderTest {
     @Test
     public void test_parse_json_with_array() {
         new EJson();
+        @SuppressWarnings("unused")
         class ClassWithArray {
             private List<String> stringArray;
 
@@ -200,5 +230,66 @@ public class JsonReaderTest {
     public void test_array_missing_comma_throws_malformed_json() {
         EJson eJson = new EJson();
         assertThrows(Exception.class, () -> eJson.fromJson("[1 2 3]", Object.class));
+    }
+
+    private static org.techhouse.ejson.elements.JsonObject parseObject(String json) {
+        return new JsonReader().fromJson(json, org.techhouse.ejson.elements.JsonObject.class);
+    }
+
+    @Test
+    public void test_a_doubled_comma_in_an_array_is_rejected() {
+        assertThrows(MalformedJsonException.class, () -> parseObject("{\"a\":[1,,2]}"));
+    }
+
+    @Test
+    public void test_a_missing_object_value_is_rejected() {
+        assertThrows(MalformedJsonException.class, () -> parseObject("{\"a\":,\"b\":1}"));
+    }
+
+    @Test
+    public void test_a_leading_comma_in_an_array_is_rejected() {
+        assertThrows(MalformedJsonException.class, () -> parseObject("{\"a\":[,1]}"));
+    }
+
+    @Test
+    public void test_an_empty_array_and_object_still_parse() {
+        final var parsed = parseObject("{\"a\":[],\"b\":{},\"c\":[[]]}");
+
+        assertTrue(parsed.get("a").asJsonArray().isEmpty());
+        assertEquals(0, parsed.get("b").asJsonObject().size());
+        assertEquals(1, parsed.get("c").asJsonArray().size());
+    }
+
+    private static String nestedObjects(int depth) {
+        return "{\"a\":".repeat(depth - 1) + "{}" + "}".repeat(depth - 1);
+    }
+
+    private static String objectsAroundArrays(int depth) {
+        final var prefix = new StringBuilder("{\"a\":");
+        final var suffix = new StringBuilder("}");
+        for (var level = 2; level < depth; level++) {
+            prefix.append(level % 2 == 0 ? "[" : "{\"a\":");
+            suffix.insert(0, level % 2 == 0 ? "]" : "}");
+        }
+        return prefix + "[]" + suffix;
+    }
+
+    @Test
+    public void depth_at_the_limit_parses() {
+        assertDoesNotThrow(() -> eJson.fromJson(nestedObjects(LIMIT), JsonObject.class, LIMIT));
+        assertDoesNotThrow(() -> eJson.fromJson(objectsAroundArrays(LIMIT), JsonObject.class, LIMIT));
+    }
+
+    @Test
+    public void depth_past_the_limit_throws_malformed() {
+        assertThrows(MalformedJsonException.class,
+                () -> eJson.fromJson(nestedObjects(LIMIT + 1), JsonObject.class, LIMIT));
+        assertThrows(MalformedJsonException.class,
+                () -> eJson.fromJson(objectsAroundArrays(LIMIT + 1), JsonObject.class, LIMIT));
+    }
+
+    @Test
+    public void unlimited_overload_parses_beyond_the_limit() {
+        assertDoesNotThrow(() -> eJson.fromJson(nestedObjects(LIMIT * 4), JsonObject.class));
     }
 }

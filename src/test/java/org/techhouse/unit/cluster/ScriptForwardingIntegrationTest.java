@@ -52,8 +52,9 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
     // Seeded through the replica-apply path: a direct save would be refused by the ownership guard,
     // since in a single JVM the "owner" node shares this node's OwnershipManager.
     private void seed(String coll, String id) {
-        ReplicatedApplyHelper
-                .apply(new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(doc(id)), null));
+        ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(doc(id)), null),
+                TestGlobals.APPLY_BUDGET_MS);
     }
 
     @Test
@@ -149,8 +150,9 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         final var located = new JsonObject();
         located.add("_id", new JsonString("geo-1"));
         located.add("location", new JsonGeo("#geo(40.0,-74.0)"));
-        ReplicatedApplyHelper
-                .apply(new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(located), null));
+        ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(located), null),
+                TestGlobals.APPLY_BUDGET_MS);
 
         final var operator = new JsonObject();
         operator.add("customOperatorName", new JsonString("distance"));

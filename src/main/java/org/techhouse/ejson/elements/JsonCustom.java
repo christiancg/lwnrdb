@@ -35,6 +35,10 @@ public abstract class JsonCustom<T> extends JsonString {
         return value.substring(value.indexOf('(') + 1, value.length() - 1);
     }
 
+    public String canonicalSpelling() {
+        return "#" + getCustomTypeName() + "(" + customValue + ")";
+    }
+
     public abstract String getCustomTypeName();
     protected abstract T parse() throws WrongFormatCustomTypeException;
     public abstract Integer compare(T another);
@@ -61,6 +65,10 @@ public abstract class JsonCustom<T> extends JsonString {
 
     public static Boolean isJsonCustom(JsonString str) {
         return matchesCustomFormat(str.get());
+    }
+
+    public static String asPlainText(String value) {
+        return matchesCustomFormat(value) ? "\\" + value : value;
     }
 
     private static boolean matchesCustomFormat(String value) {

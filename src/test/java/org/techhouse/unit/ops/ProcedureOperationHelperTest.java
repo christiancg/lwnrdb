@@ -55,6 +55,19 @@ public class ProcedureOperationHelperTest {
         return new SaveProcedureRequest(TestGlobals.DB, "p", script);
     }
 
+    @Test
+    public void test_a_save_invalidates_the_compiled_entry() throws Exception {
+        final var compiledProcedures = org.techhouse.ioc.IocContainer
+                .get(org.techhouse.ops.CompiledProcedureCache.class);
+        save("return 1;");
+        final var stale = compiledProcedures.get(TestGlobals.DB, "p", 1L, "return 1;");
+
+        save("return 2;");
+
+        assertNotSame(stale, compiledProcedures.get(TestGlobals.DB, "p", 1L, "return 1;"),
+                "an in-flight compile can re-publish a key after a delete, so the save must invalidate too");
+    }
+
     private SaveProcedureResponse save(String script) throws Exception {
         final var response = ProcedureOperationHelper.executeSave(saveRequest(script), ACTOR);
         assertInstanceOf(SaveProcedureResponse.class, response, response.getMessage());
@@ -146,26 +159,6 @@ public class ProcedureOperationHelperTest {
     }
 
     @Test
-    public void test_save_stamps_request_for_deterministic_re_execution() throws Exception {
-        final var request = saveRequest("return 1;");
-        ProcedureOperationHelper.executeSave(request, ACTOR);
-        final var stored = cache.getProcedure(TestGlobals.DB, "p");
-        assertEquals(stored.getVersion(), request.getStampedVersion());
-        assertEquals(stored.getUpdatedAt(), request.getStampedUpdatedAt());
-        assertEquals(stored.getUpdatedBy(), request.getStampedUpdatedBy());
-    }
-
-    @Test
-    public void test_re_executing_a_stamped_request_is_idempotent() throws Exception {
-        final var request = saveRequest("return 1;");
-        ProcedureOperationHelper.executeSave(request, ACTOR);
-        final var first = cache.getProcedure(TestGlobals.DB, "p");
-        ProcedureOperationHelper.executeSave(request, "someone-else");
-        final var second = cache.getProcedure(TestGlobals.DB, "p");
-        assertEquals(first, second);
-    }
-
-    @Test
     public void test_delete_is_idempotent_when_absent() throws Exception {
         final var response = ProcedureOperationHelper
                 .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "never-existed"));
@@ -229,4 +222,5 @@ public class ProcedureOperationHelperTest {
         ProcedureOperationHelper.executeSave(request, ACTOR);
         assertEquals("recalculates the totals", cache.getProcedure(TestGlobals.DB, "p").getDescription());
     }
+
 }

@@ -3,6 +3,7 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.techhouse.test.ClusterTestHarness.SECRET;
 import static org.techhouse.test.ClusterTestHarness.node;
+import static org.techhouse.test.Tx2pcFixtures.findStatus;
 
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -18,9 +19,7 @@ import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -29,7 +28,6 @@ public class ReplicationIntegrationTest {
     private final ClusterTestHarness cluster = new ClusterTestHarness();
     private final Replicator replicator = IocContainer.get(Replicator.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
-    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
 
     private static JsonObject doc(String id) {
         final var object = new JsonObject();
@@ -49,12 +47,6 @@ public class ReplicationIntegrationTest {
         cluster.stop();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
-    }
-
-    private OperationStatus findStatus(String id) {
-        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.set_id(id);
-        return processor.processMessage(request).getStatus();
     }
 
     @Test

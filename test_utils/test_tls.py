@@ -1,28 +1,6 @@
-"""End-to-end tests for TLS (secure connections).
-
-Unlike the other suites, this script is **self-contained**: it starts its own
-LWNRDB instance configured with TLS enabled, on a dedicated port and working
-directory, so it never collides with a plaintext server CI may already be
-running on 8989. It then verifies:
-
-  * a self-signed keystore is generated on first start (no keystore configured),
-    and the SECURITY WARNING is logged;
-  * the server presents an untrusted (self-signed) certificate — strict
-    verification fails, proving the dev fallback is in effect;
-  * a TLS client completes the handshake and a full request/response round-trip
-    works over the encrypted channel (proving requests are decrypted and
-    responses encrypted end to end);
-  * a plaintext client connecting to the TLS port is rejected (never receives a
-    valid JSON response).
-
-The server lifecycle is managed via a tracked subprocess handle (not pgrep), so
-stopping it never touches an unrelated LWNRDB process.
-"""
-
 import os
 import socket
 import ssl
-import sys
 import tempfile
 
 import base_utils as bu
@@ -34,19 +12,13 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 KEYSTORE_PASSWORD = "changeit"
 
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-# ── TLS client helpers ──────────────────────────────────────────────────────
-
 def tls_socket(verify: bool):
-    """Open a TLS connection. When verify=True, the self-signed server cert is
-    validated against the system trust store (expected to fail)."""
     raw = socket.create_connection((HOST, PORT), timeout=10)
     if verify:
         ctx = ssl.create_default_context()
-        # SAN contains DNS:localhost, so use it as the verification hostname.
         return ctx.wrap_socket(raw, server_hostname="localhost")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
@@ -54,29 +26,10 @@ def tls_socket(verify: bool):
     return ctx.wrap_socket(raw, server_hostname="localhost")
 
 
-# ── server lifecycle ────────────────────────────────────────────────────────
-
 def write_config(work_dir: str):
-    """Minimal lwnrdb.cfg enabling TLS. Missing keys fall back to bundled defaults."""
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        "tlsEnabled=true\n"
-        "tlsKeystorePath=certs/lwnrdb.p12\n"
-        f"tlsKeystorePassword={KEYSTORE_PASSWORD}\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+    bu.write_config(work_dir, PORT, tlsEnabled=True, tlsKeystorePath="certs/lwnrdb.p12",
+                    tlsKeystorePassword=KEYSTORE_PASSWORD)
 
-
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Tests
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_keystore_generated(work_dir: str, log_path: str):
     section("Self-signed keystore generation on first start")
@@ -167,14 +120,12 @@ def test_plaintext_rejected():
             raw = plain.makefile("rb").readline()
             line = raw.decode("utf-8", errors="replace").strip() if raw else None
     except OSError:
-        # Connection reset during the failed handshake is also an acceptable rejection.
         line = None
 
     check("Plaintext client never receives a valid JSON response",
           line is None or "status" not in line,
           f"got={line!r}")
 
-    # The server must survive the rejected plaintext client and still serve TLS.
     survived = False
     try:
         with tls_socket(verify=False) as s:
@@ -185,15 +136,10 @@ def test_plaintext_rejected():
     check("Server still accepts a TLS client after rejecting plaintext", survived)
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════
-
 def main():
     bu.banner("TLS / secure connections test suite")
 
-    if not bu.server_binary_ready():
-        sys.exit(1)
+    bu.require_jar()
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-tls-")
     log_path = os.path.join(work_dir, "server.log")

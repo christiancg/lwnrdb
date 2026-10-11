@@ -15,24 +15,18 @@ public final class IocContainer {
     }
 
     public static <T> T get(Class<T> clazz) {
-        T targetedDependency;
-        Object found = IocContainer.instance.dependencies.get(clazz.getName());
-        if (found == null) {
-            try {
-                final var constructor = clazz.getConstructor();
-                targetedDependency = constructor.newInstance();
-                if (!IocContainer.instance.dependencies.containsKey(clazz.getName())) {
-                    IocContainer.instance.dependencies.put(clazz.getName(), targetedDependency);
-                } else {
-                    targetedDependency = clazz.cast(IocContainer.instance.dependencies.get(clazz.getName()));
-                }
-            } catch (NoSuchMethodException | InvocationTargetException | InstantiationException
-                    | IllegalAccessException exception) {
-                throw new DependencyInjectionFailed(exception);
-            }
-        } else {
-            targetedDependency = clazz.cast(found);
+        final var name = clazz.getName();
+        final var found = IocContainer.instance.dependencies.get(name);
+        if (found != null) {
+            return clazz.cast(found);
         }
-        return targetedDependency;
+        try {
+            final var created = clazz.getConstructor().newInstance();
+            final var winner = IocContainer.instance.dependencies.putIfAbsent(name, created);
+            return clazz.cast(winner != null ? winner : created);
+        } catch (NoSuchMethodException | InvocationTargetException | InstantiationException
+                | IllegalAccessException exception) {
+            throw new DependencyInjectionFailed(exception);
+        }
     }
 }

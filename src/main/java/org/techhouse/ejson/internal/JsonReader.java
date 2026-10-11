@@ -14,13 +14,20 @@ public class JsonReader {
     }
 
     public <T> T fromJson(String input, Class<T> tClass) {
+        return fromJson(input, tClass, Integer.MAX_VALUE);
+    }
+
+    public <T> T fromJson(String input, Class<T> tClass, int maxDepth) {
         final var tokens = Lexer.lex(input);
-        final var parsed = internalParse(tokens, true);
+        final var parsed = internalParse(tokens, true, maxDepth);
+        if (parsed.tokensToSkip() < tokens.size()) {
+            throw new MalformedJsonException("Unexpected content after the root value");
+        }
         final var newInstance = Assigner.assign(parsed.element().asJsonObject(), tClass);
         return tClass.cast(newInstance);
     }
 
-    private ParseTokenResult internalParse(List<JsonBaseElement> tokens, boolean isRoot) {
+    private ParseTokenResult internalParse(List<JsonBaseElement> tokens, boolean isRoot, int remainingDepth) {
         if (tokens.isEmpty()) {
             throw new MalformedJsonException("Empty JSON array");
         }
@@ -30,15 +37,24 @@ public class JsonReader {
             throw new MalformedJsonException("Json must start with either a left bracket or a left brace");
         }
         if (firstToken.equals(JsonSyntaxToken.LEFT_BRACKET)) {
-            return parseArray(skipOneToken(tokens));
+            return parseArray(skipOneToken(tokens), nestedDepth(remainingDepth));
         } else if (firstToken.equals(JsonSyntaxToken.LEFT_BRACE)) {
-            return parseObject(skipOneToken(tokens));
+            return parseObject(skipOneToken(tokens), nestedDepth(remainingDepth));
+        } else if (firstToken instanceof JsonSyntaxToken) {
+            throw new MalformedJsonException("Expected a value, got " + firstToken.getJsonType());
         } else {
             return new ParseTokenResult(firstToken, 1);
         }
     }
 
-    private ParseTokenResult parseObject(List<JsonBaseElement> tokens) {
+    private static int nestedDepth(int remainingDepth) {
+        if (remainingDepth <= 0) {
+            throw new MalformedJsonException("JSON nesting is deeper than the allowed limit");
+        }
+        return remainingDepth - 1;
+    }
+
+    private ParseTokenResult parseObject(List<JsonBaseElement> tokens, int remainingDepth) {
         int tokensToSkip = 1;
         final var obj = new JsonObject();
         var firstToken = tokens.getFirst();
@@ -49,7 +65,7 @@ public class JsonReader {
         for (;;) {
             firstToken = tokens.getFirst();
             String propertyName;
-            if (firstToken.getJsonType() == JsonBaseElement.JsonType.STRING) {
+            if (firstToken.isJsonString()) {
                 propertyName = ((JsonString) firstToken).getValue();
                 tokens = skipOneToken(tokens);
                 tokensToSkip++;
@@ -63,7 +79,7 @@ public class JsonReader {
             }
             tokens = skipOneToken(tokens);
             tokensToSkip++;
-            final var parsedValue = internalParse(tokens, false);
+            final var parsedValue = internalParse(tokens, false, remainingDepth);
             tokensToSkip += parsedValue.tokensToSkip();
             obj.add(propertyName, parsedValue.element());
             tokens = skipTokens(tokens, parsedValue);
@@ -80,7 +96,7 @@ public class JsonReader {
         }
     }
 
-    private ParseTokenResult parseArray(List<JsonBaseElement> tokens) {
+    private ParseTokenResult parseArray(List<JsonBaseElement> tokens, int remainingDepth) {
         int tokensToSkip = 1;
         final var arr = new JsonArray();
         var firstToken = tokens.getFirst();
@@ -89,7 +105,7 @@ public class JsonReader {
             return new ParseTokenResult(arr, tokensToSkip);
         }
         while (true) {
-            final var parsed = internalParse(tokens, false);
+            final var parsed = internalParse(tokens, false, remainingDepth);
             arr.add(parsed.element());
             tokensToSkip += parsed.tokensToSkip();
             tokens = skipTokens(tokens, parsed);

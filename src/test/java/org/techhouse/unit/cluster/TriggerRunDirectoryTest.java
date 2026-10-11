@@ -20,7 +20,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.TriggerRunDirectory;
 import org.techhouse.cluster.membership.MembershipService;
@@ -36,6 +35,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -47,11 +47,11 @@ public class TriggerRunDirectoryTest {
     private PeerConnectionPool origPool;
 
     private static NodeInfo self() {
-        return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node("self", 5000);
     }
 
     private static NodeInfo other() {
-        return new NodeInfo("other", "127.0.0.1", 5001, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node("other", 5001);
     }
 
     @BeforeAll

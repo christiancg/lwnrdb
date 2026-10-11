@@ -42,7 +42,7 @@ public final class IndexValueCodec {
     // an index-derived number hashes equal to the same value read from a document (JOIN keys rely on it).
     private static JsonBaseElement numberToElement(Number number) {
         final var asDouble = number.doubleValue();
-        if (asDouble % 1.0 == 0 && asDouble >= Integer.MIN_VALUE && asDouble <= Integer.MAX_VALUE) {
+        if (asDouble % 1.0 == 0 && Math.abs(asDouble) <= Integer.MAX_VALUE) {
             return new JsonNumber((int) asDouble);
         }
         return new JsonNumber(asDouble);

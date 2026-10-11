@@ -15,6 +15,7 @@ public class ClusterMessage {
     private AntiEntropyPayload antiEntropy;
     private String txSessionId;
     private String txId;
+    private boolean txContinuation;
     private List<String> txParticipants;
     private String txStatus;
     private TxReplicationPayload txReplication;
@@ -27,7 +28,6 @@ public class ClusterMessage {
     private boolean triggerRunResolved;
     private boolean cancelledRun;
     private AdminSnapshotPayload adminSnapshot;
-    private long adminEpoch;
     private String errorMessage;
 
     public List<TriggerRunRow> getTriggerRuns() {
@@ -162,6 +162,14 @@ public class ClusterMessage {
         this.txId = txId;
     }
 
+    public boolean isTxContinuation() {
+        return txContinuation;
+    }
+
+    public void setTxContinuation(boolean txContinuation) {
+        this.txContinuation = txContinuation;
+    }
+
     public List<String> getTxParticipants() {
         return txParticipants;
     }
@@ -224,14 +232,6 @@ public class ClusterMessage {
 
     public void setAdminSnapshot(AdminSnapshotPayload adminSnapshot) {
         this.adminSnapshot = adminSnapshot;
-    }
-
-    public long getAdminEpoch() {
-        return adminEpoch;
-    }
-
-    public void setAdminEpoch(long adminEpoch) {
-        this.adminEpoch = adminEpoch;
     }
 
     public String getErrorMessage() {

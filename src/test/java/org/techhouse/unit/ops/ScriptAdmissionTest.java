@@ -6,13 +6,54 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.ScriptAdmission;
+import org.techhouse.test.TestUtils;
 
 public class ScriptAdmissionTest {
+
+    @Test
+    public void test_the_cap_holds_when_one_script_finishes_while_others_run() throws Exception {
+        final var admission = new ScriptAdmission(10, 0L);
+        TestUtils.setPrivateField(admission, "perUserCapacity", 2);
+        final var first = admission.acquire("alice", null);
+        final var second = admission.acquire("alice", null);
+        assertNotNull(first);
+        assertNotNull(second);
+        assertNull(admission.acquire("alice", null), "the per-user cap is two");
+
+        first.close();
+
+        assertNotNull(admission.acquire("alice", null), "the freed permit is available again");
+        assertNull(admission.acquire("alice", null),
+                "a script finishing must not reset the per-user cap for the ones still running");
+    }
+
+    @Test
+    public void test_permits_never_exceed_capacity() throws Exception {
+        final var admission = new ScriptAdmission(10, 0L);
+        TestUtils.setPrivateField(admission, "perUserCapacity", 2);
+        admission.acquire("alice", null).close();
+        admission.acquire("alice", null).close();
+
+        final var held = new ArrayList<ScriptAdmission.Permit>();
+        try {
+            for (var attempt = 0; attempt < 10; attempt++) {
+                final var permit = admission.acquire("alice", null);
+                if (permit == null) {
+                    break;
+                }
+                held.add(permit);
+            }
+            assertEquals(2, held.size(), "releasing must not inflate the per-user pool above its capacity");
+        } finally {
+            held.forEach(ScriptAdmission.Permit::close);
+        }
+    }
 
     @Test
     public void test_unlimited_when_capacity_zero() {

@@ -30,7 +30,7 @@ public class FileSystemSchemaTest {
     }
 
     @BeforeEach
-    void resetSchema() {
+    void resetSchema() throws Exception {
         fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 

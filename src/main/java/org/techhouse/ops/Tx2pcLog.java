@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -13,17 +14,23 @@ import org.techhouse.ioc.IocContainer;
 // The coordinator marker's presence is the commit point: present means committed, absent means presumed-abort.
 public final class Tx2pcLog {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final String COORDINATOR_ADDRESS_FIELD = "coordinatorAddress";
     private static final String COLLECTIONS_FIELD = "collections";
     private static final String PARTICIPANTS_FIELD = "participants";
+    private static final String SESSION_ID_FIELD = "sessionId";
     private static final String PREPARED_AT_FIELD = "preparedAt";
     private static final String OUTCOME_FIELD = "outcome";
     private static final String RESOLVED_AT_FIELD = "resolvedAt";
     private static final String OUTCOME_COMMITTED = "committed";
     private static final String OUTCOME_ABORTED = "aborted";
+    private static final String REPLY_CODE_FIELD = "replyCode";
+
+    public record Outcome(boolean committed, String replyCode) {
+    }
 
     public enum Status {
-        COMMITTED, ABORTED, PREPARED, UNKNOWN
+        COMMITTED, ABORTED, PREPARED, UNKNOWN, NO_RECORD
     }
 
     private Tx2pcLog() {
@@ -44,9 +51,10 @@ public final class Tx2pcLog {
                 AdminTransactionEntry.MARKER_PARTICIPANT, AdminTransactionEntry.OP_TYPE_PARTICIPANT_PREPARED, payload));
     }
 
-    public static void recordOutcome(String dtxId, boolean committed) throws Exception {
+    public static void recordOutcome(String dtxId, boolean committed, String replyCode) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(OUTCOME_FIELD, committed ? OUTCOME_COMMITTED : OUTCOME_ABORTED);
+        payload.addProperty(REPLY_CODE_FIELD, replyCode == null ? "" : replyCode);
         payload.addProperty(RESOLVED_AT_FIELD, Long.toString(System.currentTimeMillis()));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_OUTCOME,
                 AdminTransactionEntry.OP_TYPE_TRANSACTION_OUTCOME, payload));
@@ -56,21 +64,49 @@ public final class Tx2pcLog {
         AdminOperationHelper.deleteTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
     }
 
-    public static Status status(String dtxId) throws Exception {
-        if (isCommitted(dtxId)) {
+    public static Status status(String dtxId, String selfAddress) throws Exception {
+        final var prepared = isPrepared(dtxId);
+        final var restartedUndecided = prepared && coordinatorRestartedUndecided(dtxId, selfAddress);
+        final var active = clientTracker.hasActiveTransaction(dtxId);
+        if (isCommitted(dtxId) || TxCommitLog.isLocallyCommitted(dtxId)) {
             return Status.COMMITTED;
         }
         final var outcome = readOutcome(dtxId);
         if (outcome != null) {
-            return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
+            return outcome.committed() ? Status.COMMITTED : Status.ABORTED;
         }
-        return isPrepared(dtxId) ? Status.PREPARED : Status.UNKNOWN;
+        if (prepared) {
+            return restartedUndecided ? Status.NO_RECORD : Status.PREPARED;
+        }
+        return active ? Status.UNKNOWN : Status.NO_RECORD;
     }
 
-    private static String readOutcome(String dtxId) throws Exception {
+    private static boolean coordinatorRestartedUndecided(String dtxId, String selfAddress) throws Exception {
+        if (selfAddress == null || clientTracker.hasActiveTransaction(dtxId)) {
+            return false;
+        }
+        final var marker = readParticipantMarker(dtxId);
+        return marker != null && selfAddress.equals(marker.coordinatorAddress());
+    }
+
+    public static boolean hasOutcome(String dtxId) {
+        return cache.getPkIndexTransaction(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)) != null;
+    }
+
+    public static Outcome readOutcome(String dtxId) throws Exception {
+        if (!hasOutcome(dtxId)) {
+            return null;
+        }
         final var entries = AdminOperationHelper
                 .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
-        return entries.isEmpty() ? null : entries.getFirst().getPayload().get(OUTCOME_FIELD).asJsonString().getValue();
+        if (entries.isEmpty()) {
+            return null;
+        }
+        final var payload = entries.getFirst().getPayload();
+        final var replyCode = payload.has(REPLY_CODE_FIELD)
+                ? payload.get(REPLY_CODE_FIELD).asJsonString().getValue()
+                : "";
+        return new Outcome(OUTCOME_COMMITTED.equals(payload.get(OUTCOME_FIELD).asJsonString().getValue()), replyCode);
     }
 
     public static void garbageCollectOutcomes(long retentionMs) throws Exception {
@@ -89,8 +125,10 @@ public final class Tx2pcLog {
         }
     }
 
-    public static void recordCoordinatorCommit(String dtxId, List<String> participants) throws Exception {
+    public static void recordCoordinatorCommit(String dtxId, String sessionId, List<String> participants)
+            throws Exception {
         final var payload = new JsonObject();
+        payload.addProperty(SESSION_ID_FIELD, sessionId);
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
                 AdminTransactionEntry.MARKER_COORDINATOR, AdminTransactionEntry.OP_TYPE_COORDINATOR_COMMIT, payload));
@@ -145,6 +183,19 @@ public final class Tx2pcLog {
             return List.of();
         }
         return readStringArray(entries.getFirst().getPayload(), PARTICIPANTS_FIELD);
+    }
+
+    public static String readCoordinatorSessionId(String dtxId) throws Exception {
+        final var entries = AdminOperationHelper
+                .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_COORDINATOR)));
+        if (entries.isEmpty()) {
+            return null;
+        }
+        final var payload = entries.getFirst().getPayload();
+        if (!payload.has(SESSION_ID_FIELD) || payload.get(SESSION_ID_FIELD).isJsonNull()) {
+            return null;
+        }
+        return payload.get(SESSION_ID_FIELD).asJsonString().getValue();
     }
 
     // Slice op ids are {dtxId}|{seq}; the numeric-suffix test is what excludes the marker records.
