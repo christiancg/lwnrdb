@@ -27,6 +27,7 @@ import org.techhouse.ops.req.CallProcedureRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -41,7 +42,7 @@ public class ClusterRouterTest {
     private boolean origRouting;
 
     private static NodeInfo node() {
-        return new NodeInfo("self", "127.0.0.1", 9990, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node("self", 9990);
     }
 
     @BeforeEach

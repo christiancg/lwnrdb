@@ -16,21 +16,6 @@ ADMIN_PASSWORD = "administrator"
 ACCEPTED = ("OK", "CREATED", "UPDATED", "DELETED")
 
 
-def write_config(work_dir: str, port: int) -> None:
-    cfg = (
-        f"port={port}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        f"maxMemory={MAX_MEMORY}\n"
-        f"maxPageSize={MAX_PAGE_SIZE}\n"
-        f"maxEntrySize={MAX_ENTRY_SIZE}\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
-
-
 def accepted(response: dict) -> bool:
     return response.get("status") in ACCEPTED
 
@@ -70,7 +55,8 @@ class Executor:
         self._conn = None
 
     def start(self) -> None:
-        write_config(self.work_dir, self.port)
+        bu.write_config(self.work_dir, self.port, maxMemory=MAX_MEMORY, maxPageSize=MAX_PAGE_SIZE,
+                        maxEntrySize=MAX_ENTRY_SIZE)
         self.proc = bu.start_server(self.work_dir, self.log_path, port=self.port,
                                     jar=os.environ.get("FUZZ_JAR"))
 

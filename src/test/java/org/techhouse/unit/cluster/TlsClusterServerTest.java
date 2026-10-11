@@ -20,6 +20,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestUtils;
 
 public class TlsClusterServerTest {
@@ -69,10 +70,8 @@ public class TlsClusterServerTest {
 
         final var pool = new PeerConnectionPool();
         try {
-            pool.request(new NodeAddress("127.0.0.1", server.getPort()),
-                    new ClusterMessage(null, ClusterMessageType.JOIN_REQUEST, "s",
-                            new NodeInfo("client", "127.0.0.1", 2, NodeState.ALIVE, 1L, 1L), null),
-                    3000);
+            pool.request(new NodeAddress("127.0.0.1", server.getPort()), new ClusterMessage(null,
+                    ClusterMessageType.JOIN_REQUEST, "s", ClusterTestHarness.node("client", 2), null), 3000);
         } catch (Exception ignored) {
         } finally {
             pool.closeAll();

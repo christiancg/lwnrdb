@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.test.TriggerTestSupport.entry;
+import static org.techhouse.test.TriggerTestSupport.statusOf;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -21,7 +23,6 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.data.auth.PermissionLevel;
@@ -46,6 +47,7 @@ import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerDispatcherTest {
     private static final String OWNER = "trigowner";
@@ -109,12 +111,7 @@ public class TriggerDispatcherTest {
         TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes", 262_144L);
         TestUtils.setPrivateField(configuration, "scriptMaxMemoryBytes", 67_108_864L);
         TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
-        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
-        }
-        cache.removeProceduresForDatabase(TestGlobals.DB);
-        IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
+        TriggerTestSupport.clearTriggersAndProcedures();
     }
 
     private void storeAuditProcedure() throws Exception {
@@ -137,17 +134,6 @@ public class TriggerDispatcherTest {
         cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
                 List.of(new TriggerDefinition("audit", new LinkedHashSet<>(Set.of(EventType.CREATED)), "audit",
                         TriggerDefinition.MODE_DOCUMENT, allowCascade, enabled, definer, 1L, 1L, 1L, definer)));
-    }
-
-    private static DbEntry entry(String id) {
-        final var data = new JsonObject();
-        data.add("_id", new JsonString(id));
-        final var dbEntry = new DbEntry();
-        dbEntry.setDatabaseName(TestGlobals.DB);
-        dbEntry.setCollectionName(TestGlobals.COLL);
-        dbEntry.set_id(id);
-        dbEntry.setData(data);
-        return dbEntry;
     }
 
     private static TriggerEvent event(String id, String actingUser, int depth) {
@@ -367,15 +353,6 @@ public class TriggerDispatcherTest {
                 "audit", EventType.CREATED, false, OWNER, 0, System.currentTimeMillis(), List.of(entry(id))));
     }
 
-    private static TriggerRunStatus statusOf(String runId) throws Exception {
-        for (final var run : TriggerRunLog.pending()) {
-            if (runId.equals(run.getRunId())) {
-                return run.getStatus();
-            }
-        }
-        return null;
-    }
-
     private static TriggerEvent lastAttemptEvent(String id, String runId) {
         return new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit", false,
                 List.of(entry(id)), OWNER, 0, runId, 1);
@@ -406,9 +383,7 @@ public class TriggerDispatcherTest {
             TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 3);
             TestUtils.setPrivateField(configuration, "triggerRetryBackoffMs", 1_000L);
             TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
-            for (final var run : TriggerRunLog.pending()) {
-                TriggerDispatcher.consumeQuietly(run.getRunId(), run.getTriggerName());
-            }
+            TriggerTestSupport.consumeAllPendingRuns();
         }
     }
 

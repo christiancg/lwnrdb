@@ -256,4 +256,78 @@ public class DbModuleTest {
         assertTrue(result.isError());
         assertEquals(List.of("beginTransaction", "beginTransaction", "rollbackTransaction"), fake.calls);
     }
+
+    private static void assertRefused(String expectedMessage, String method, JsValue... args) {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        final var refusal = assertThrows(TypeErrorException.class, () -> call(db, method, args));
+        assertTrue(refusal.getMessage().contains(expectedMessage), refusal.getMessage());
+        assertTrue(fake.calls.isEmpty(), fake.calls.toString());
+    }
+
+    @Test
+    public void test_delete_without_an_id_is_a_type_error_and_reaches_no_database_call() {
+        assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"));
+    }
+
+    @Test
+    public void test_delete_with_a_number_id_is_a_type_error() {
+        assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"), new JsNumber(5));
+    }
+
+    @Test
+    public void test_delete_with_a_null_id_is_a_type_error() {
+        assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"),
+                JsNull.getInstance());
+    }
+
+    @Test
+    public void test_find_by_id_with_an_object_id_is_a_type_error() {
+        assertRefused("db.findById expects a string id", "findById", new JsString("d"), new JsString("c"),
+                new JsObject());
+    }
+
+    @Test
+    public void test_find_by_id_with_a_non_string_database_is_a_type_error() {
+        assertRefused("db.findById expects a string database name", "findById", new JsNumber(1), new JsString("c"),
+                new JsString("x"));
+    }
+
+    @Test
+    public void test_save_with_a_non_string_collection_is_refused_before_the_payload_is_converted() {
+        assertRefused("db.save expects a string collection name", "save", new JsString("d"), new JsNumber(7),
+                new JsNumber(5));
+    }
+
+    @Test
+    public void test_aggregate_with_a_missing_collection_is_a_type_error() {
+        assertRefused("db.aggregate expects a string collection name", "aggregate", new JsString("d"));
+    }
+
+    @Test
+    public void test_bulk_save_with_a_non_string_database_is_a_type_error() {
+        assertRefused("db.bulkSave expects a string database name", "bulkSave", JsUndefined.getInstance(),
+                new JsString("c"), new JsArray());
+    }
+
+    @Test
+    public void test_list_collections_without_a_database_is_a_type_error() {
+        assertRefused("db.listCollections expects a string database name", "listCollections");
+    }
+
+    @Test
+    public void test_cursor_with_a_non_string_database_is_a_type_error() {
+        assertRefused("db.cursor expects a string database name", "cursor", new JsObject(), new JsString("c"),
+                new JsArray());
+    }
+
+    @Test
+    public void test_string_arguments_still_reach_the_database_unchanged() {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        call(db, "delete", new JsString("d"), new JsString("c"), new JsString("undefined"));
+        call(db, "findById", new JsString("d"), new JsString("c"), new JsString("5"));
+        call(db, "listCollections", new JsString("d"));
+        assertEquals(List.of("delete:d/c/undefined", "findById:d/c/5", "listCollections:d"), fake.calls);
+    }
 }

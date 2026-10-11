@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,11 +14,14 @@ import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
@@ -25,14 +29,24 @@ import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.admin.AdminPageHelper;
+import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -40,6 +54,8 @@ public class AdminEntryLandedTest {
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -51,6 +67,11 @@ public class AdminEntryLandedTest {
     static void tearDown() throws Exception {
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
+    }
+
+    @BeforeEach
+    void resetClients() throws Exception {
+        TestUtils.resetClients();
     }
 
     private static MockedStatic<AdminPageHelper> pageRowFailingWith(String collName, Exception failure) {
@@ -206,5 +227,59 @@ public class AdminEntryLandedTest {
 
         assertTrue(Thread.interrupted(), "the interrupt must survive the swallowed bookkeeping failure");
         assertNotNull(cache.getPkIndexCollectionUsage(usageId("interruptedUsage")));
+    }
+
+    private UUID transactionSaving(String clientName, String id) {
+        final var clientId = clientTracker.registerForwardedClient(clientName);
+        TransactionOperationHelper.start(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add(Globals.PK_FIELD, new JsonString(id));
+        request.setObject(object);
+        request.set_id(id);
+        TransactionOperationHelper.bufferSave(request, clientTracker.getActiveTransaction(clientId));
+        return clientId;
+    }
+
+    private boolean isVisible(String id) {
+        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id(id);
+        return processor.processMessage(request) instanceof FindByIdResponse found && found.getObject() != null;
+    }
+
+    @Test
+    public void test_a_commit_whose_marker_page_row_fails_still_commits() {
+        final var clientId = transactionSaving("marker-page-row", "page-row-failed");
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var txId = transaction.getTransactionId().toString();
+        final var opIds = new ArrayList<>(transaction.getBufferedOpIds());
+
+        final OperationStatus status;
+        try (var ignored = transactionPageRowFailing()) {
+            status = TransactionOperationHelper.commit(clientId).getStatus();
+        }
+
+        assertEquals(OperationStatus.OK, status, "a marker that landed must not be reported as a failed commit");
+        assertFalse(TxCommitLog.localCommitTxIds().contains(txId), "a finished commit leaves nothing to replay");
+        opIds.forEach(opId -> assertNull(cache.getPkIndexTransaction(opId)));
+        assertTrue(isVisible("page-row-failed"));
+    }
+
+    @Test
+    public void test_a_commit_whose_marker_never_landed_leaves_nothing_to_replay() {
+        final var clientId = transactionSaving("marker-not-landed", "marker-not-landed");
+        final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+
+        final String errorCode;
+        try (var mocked = mockStatic(TxCommitLog.class, CALLS_REAL_METHODS)) {
+            mocked.when(() -> TxCommitLog.recordLocalCommit(any(), any(), any()))
+                    .thenThrow(new IOException("disk full"));
+            errorCode = TransactionOperationHelper.commit(clientId).getErrorCode();
+        }
+
+        assertEquals(ErrorCode.ERROR_TRANSACTION.getCode(), errorCode);
+        assertFalse(TxCommitLog.localCommitTxIds().contains(txId));
+        assertNull(clientTracker.getActiveTransaction(clientId), "a commit that never reached its marker deregisters");
+        assertFalse(isVisible("marker-not-landed"));
     }
 }

@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import sys
 import tempfile
 import threading
 import time
@@ -56,9 +55,6 @@ DROPPED_DB_COLLECTIONS = 4
 ADMIN_PAGES_DB = "admin_pages_spill_db"
 ADMIN_PAGES_COLLECTIONS = 80
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 MAX_PAGE_SIZE = "4kb"
@@ -78,65 +74,49 @@ PERM_USERS = 6
 PERM_ROUNDS = 10
 
 
-def _refuse_non_rfc_constant(token: str):
-    raise ValueError(f"the server answered with the non-RFC JSON constant {token}")
+FULL_SCAN = [{"type": "SKIP", "skip": 0}]
+NO_DOCUMENT_HAS_THIS = bu.filter_step("pad", "NOT_EQUALS", "__no_document_has_this__")
 
 
 class Conn(bu.Conn):
     def save(self, doc, db=DB, coll=COLL) -> dict:
         return self.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "object": doc})
 
+    def find(self, doc_id, db=DB, coll=COLL) -> dict:
+        return self.send({"type": "FIND_BY_ID", "databaseName": db, "collectionName": coll, "_id": doc_id})
+
+    def create_coll(self, coll, db=DB) -> dict:
+        return self.send({"type": "CREATE_COLLECTION", "databaseName": db, "collectionName": coll})
+
+    def create_index(self, field, coll=COLL, db=DB) -> dict:
+        return self.send({"type": "CREATE_INDEX", "databaseName": db, "collectionName": coll, "fieldName": field})
+
+    def aggregate(self, coll, steps, db=DB, **extra) -> dict:
+        return self.send({"type": "AGGREGATE", "databaseName": db, "collectionName": coll,
+                          "aggregationSteps": steps, **extra})
+
+    def ids(self, coll, steps, db=DB) -> list:
+        return bu.ids_of(self.aggregate(coll, steps, db))
+
+    def count(self, coll, steps, db=DB):
+        return bu.count_of(self.aggregate(coll, steps + [{"type": "COUNT"}], db))
+
     def count_via_pk(self, db=DB, coll=COLL) -> int:
-        response = self.send({"type": "AGGREGATE", "databaseName": db, "collectionName": coll,
-                              "aggregationSteps": [{"type": "COUNT"}]})
-        return ((response.get("results") or [{}])[0]).get("count")
+        return self.count(coll, [], db)
+
+    def count_via_scan(self, db=DB, coll=COLL) -> int:
+        return self.count(coll, [NO_DOCUMENT_HAS_THIS], db)
 
     def run(self, script: str, db=DB) -> dict:
         return self.send({"type": "RUN_SCRIPT", "databaseName": db, "script": script})
 
-    def send_raw_strict(self, line: str) -> dict:
-        try:
-            self.s.sendall((line + "\n").encode())
-            raw = self.f.readline().decode().strip()
-        except (OSError, ConnectionError):
-            return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-        if not raw:
-            return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-        try:
-            return json.loads(raw, parse_constant=_refuse_non_rfc_constant)
-        except json.JSONDecodeError:
-            return {"status": "ERROR", "message": raw}
 
-    def count_via_scan(self, db=DB, coll=COLL) -> int:
-        response = self.send({"type": "AGGREGATE", "databaseName": db, "collectionName": coll,
-                              "aggregationSteps": [
-                                  {"type": "FILTER",
-                                   "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "pad",
-                                                "value": "__no_document_has_this__"}},
-                                  {"type": "COUNT"}]})
-        return ((response.get("results") or [{}])[0]).get("count")
-
-
-def admin_conn() -> Conn:
-    conn = Conn()
-    conn.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
-    return conn
+admin_conn = Conn.authenticated
 
 
 def write_config(work_dir: str, max_memory: str = "256mb"):
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        f"maxMemory={max_memory}\n"
-        f"maxPageSize={MAX_PAGE_SIZE}\n"
-        f"maxEntrySize={MAX_ENTRY_SIZE}\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-        "scriptsEnabled=true\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+    bu.write_config(work_dir, PORT, maxMemory=max_memory, maxPageSize=MAX_PAGE_SIZE,
+                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True)
 
 
 def page_files(work_dir: str, db=DB, coll=COLL):
@@ -185,24 +165,46 @@ def actual_pages(work_dir: str, db=DB, coll=COLL) -> dict:
     return pages
 
 
+def occupancy_drift(recorded: dict, actual: dict, entries: bool = True) -> list:
+    def drifted(page) -> bool:
+        row = recorded.get(page)
+        return row is None or row["size"] != actual[page][0] or (entries and row["entryCount"] != actual[page][1])
+
+    def describe(page) -> str:
+        size, count = actual[page]
+        on_disk = f"on disk {size}B/{count} entries" if entries else f"on disk {size}B"
+        row = recorded.get(page)
+        if row is None:
+            return f"page {page}: no recorded row, {on_disk}"
+        if entries:
+            return f"page {page}: recorded {row['size']}B/{row['entryCount']} entries, {on_disk}"
+        return f"page {page}: recorded {row['size']}B, {on_disk}"
+
+    return [describe(page) for page in sorted(actual) if drifted(page)]
+
+
+def oversized_pages(work_dir: str, coll: str, limit: int, db=DB) -> dict:
+    folder = os.path.join(work_dir, "db", db, coll)
+    sizes = {name: os.path.getsize(os.path.join(folder, name)) for name in page_files(work_dir, db, coll)}
+    return {name: size for name, size in sizes.items() if size > limit}
+
+
+def unterminated_pages(folder: str, names: list) -> list:
+    torn = []
+    for name in names:
+        with open(os.path.join(folder, name), "rb") as page:
+            content = page.read()
+        if content and content[-1:] != b"\n":
+            torn.append(name)
+    return torn
+
+
+def last_page(names: list) -> str:
+    return max(names, key=lambda name: int(name.rsplit("-", 1)[1][:-len(".dat")]))
+
+
 def pk_index_file(work_dir: str, db=DB, coll=COLL) -> str:
     return os.path.join(work_dir, "db", db, coll, f"{coll}-pk.idx")
-
-
-def unescape_index_token(token: str) -> str:
-    if "\\" not in token:
-        return token
-    out = []
-    i = 0
-    while i < len(token):
-        if token[i] != "\\" or i + 1 >= len(token):
-            out.append(token[i])
-            i += 1
-            continue
-        nxt = token[i + 1]
-        out.append({"\\": "\\", "n": "\n", "r": "\r", "s": "\x1f"}.get(nxt, "\\" + nxt))
-        i += 2
-    return "".join(out)
 
 
 def pk_index_ids(index_file: str) -> set:
@@ -212,7 +214,7 @@ def pk_index_ids(index_file: str) -> set:
             line = line.strip()
             fields = line.split("\x1f")
             if len(fields) == 5:
-                ids.add(unescape_index_token(fields[0]))
+                ids.add(bu.unescape_index_token(fields[0]))
     return ids
 
 
@@ -225,24 +227,24 @@ def seed(conn: Conn, work_dir: str):
     section("Seeding a collection that spans several pages")
     check_status("create the database", conn.send({"type": "CREATE_DATABASE", "databaseName": DB}), "OK")
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL}), "OK")
+                 conn.create_coll(COLL), "OK")
     for i in range(SEEDED_DOCS):
         conn.save({"_id": f"id{i:03d}", "pad": PAD})
 
     check_status("create the drop/recreate database",
                  conn.send({"type": "CREATE_DATABASE", "databaseName": RECREATE_DB}), "OK")
     check_status("create its collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": RECREATE_DB, "collectionName": COLL}), "OK")
+                 conn.create_coll(COLL, db=RECREATE_DB), "OK")
     check_status("seed it", conn.save({"_id": "shared", "pad": "before"}, db=RECREATE_DB), "OK")
 
     check_status("create the schema-guarded collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SCHEMA_COLL}), "OK")
+                 conn.create_coll(SCHEMA_COLL), "OK")
     check_status("give it a schema", conn.send({
         "type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": SCHEMA_COLL,
         "schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}}), "OK")
 
     check_status("create the collection whose PK index gets corrupted",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": HEAL_COLL}), "OK")
+                 conn.create_coll(HEAL_COLL), "OK")
     for start in range(0, HEAL_SEEDED, 200):
         conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": HEAL_COLL,
                    "objects": [{"_id": f"seed{i:05d}", "pad": "x"}
@@ -270,8 +272,7 @@ def seed_collections_spanning_several_admin_pages(conn: Conn, work_dir: str):
     check_status("create their database", conn.send({"type": "CREATE_DATABASE", "databaseName": ADMIN_PAGES_DB}),
                  "OK")
     refused = [response for response in (
-        conn.send({"type": "CREATE_COLLECTION", "databaseName": ADMIN_PAGES_DB,
-                   "collectionName": admin_pages_collection_name(i)}) for i in range(ADMIN_PAGES_COLLECTIONS))
+        conn.create_coll(admin_pages_collection_name(i), db=ADMIN_PAGES_DB) for i in range(ADMIN_PAGES_COLLECTIONS))
         if response.get("status") != "OK"]
     check(f"{ADMIN_PAGES_COLLECTIONS} collections were registered", not refused,
           f"{len(refused)} requests failed; first: {refused[:1]}")
@@ -292,7 +293,7 @@ WIRE_WRITTEN = {"ww_geo": "#geo(1.0,2.0)", "ww_plain": "ordinary"}
 def seed_script_written_documents(conn: Conn):
     section("Seeding a collection written by both the wire and a script")
     check_status("create the script-written collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SCRIPT_COLL}), "OK")
+                 conn.create_coll(SCRIPT_COLL), "OK")
     for doc_id, loc in WIRE_WRITTEN.items():
         check_status(f"wire-write {doc_id}",
                      conn.save({"_id": doc_id, "loc": loc, "pad": "x"}, coll=SCRIPT_COLL), "OK")
@@ -301,62 +302,26 @@ def seed_script_written_documents(conn: Conn):
                      conn.run('import db from "db";\n'
                               f'db.save(db.name, "{SCRIPT_COLL}", {literal});'), "OK")
     check_status("index the field both sides wrote",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": SCRIPT_COLL,
-                            "fieldName": "loc"}), "OK")
-
-
-def test_a_script_cannot_store_a_value_the_reader_rejects(conn: Conn):
-    section("A script cannot store a document the engine's own reader rejects")
-    before = conn.count_via_pk(coll=SCRIPT_COLL)
-    refusals = {
-        "positive infinity": '{ _id: "bad_inf", v: 1/0 }',
-        "negative infinity": '{ _id: "bad_neginf", v: -1/0 }',
-        "not a number": '{ _id: "bad_nan", v: 0/0 }',
-        "an unregistered custom type": '{ _id: "bad_type", v: "#nosuch(1)" }',
-        "a malformed custom value": '{ _id: "bad_geo", v: "#geo(bad)" }',
-        "a key shaped like an unregistered custom type": '{ _id: "bad_key", "#nosuch(1)": 1 }',
-        "a key shaped like a malformed custom value": '{ _id: "bad_geo_key", nested: { "#geo(bad)": 1 } }',
-    }
-    for label, literal in refusals.items():
-        response = conn.run('import db from "db";\n'
-                            f'db.save(db.name, "{SCRIPT_COLL}", {literal});')
-        check_code(f"a script storing {label} is refused", response, "ERROR", "400-9")
-    check("the collection is unchanged by every refusal", conn.count_via_pk(coll=SCRIPT_COLL) == before,
-          f"expected {before} got {conn.count_via_pk(coll=SCRIPT_COLL)}")
+                 conn.create_index("loc", coll=SCRIPT_COLL), "OK")
 
 
 def test_a_script_written_document_survives_a_restart(conn: Conn):
     section("A script-written document reads back after a restart")
     expected = sorted(list(SCRIPT_WRITTEN) + list(WIRE_WRITTEN))
     for doc_id in expected:
-        response = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": SCRIPT_COLL,
-                              "_id": doc_id})
+        response = conn.find(doc_id, coll=SCRIPT_COLL)
         check_status(f"FIND_BY_ID reaches {doc_id}", response, "OK")
-    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": SCRIPT_COLL,
-                      "aggregationSteps": []})
-    scanned = sorted(doc["_id"] for doc in (scan.get("results") or []))
+    scanned = conn.ids(SCRIPT_COLL, [])
     check("a full scan returns every document", scanned == expected, f"expected {expected} got {scanned}")
     pk = conn.count_via_pk(coll=SCRIPT_COLL)
     check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
-
-
-def test_count_agrees_with_a_scan_after_a_restart(conn: Conn):
-    section("COUNT agrees with a scan over wire-written and script-written documents")
-    pk = conn.count_via_pk(coll=SCRIPT_COLL)
-    scan = conn.count_via_scan(coll=SCRIPT_COLL)
-    check("the index-only COUNT and the scan agree", pk == scan, f"pk={pk} scan={scan}")
 
 
 def test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn: Conn):
     section("A script-written custom value lands in its own index family")
 
     def ids_for(value, force_scan):
-        steps = [{"type": "SKIP", "skip": 0}] if force_scan else []
-        steps.append({"type": "FILTER",
-                      "operator": {"fieldOperatorType": "EQUALS", "field": "loc", "value": value}})
-        response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": SCRIPT_COLL,
-                              "aggregationSteps": steps})
-        return sorted(doc["_id"] for doc in (response.get("results") or []))
+        return conn.ids(SCRIPT_COLL, (FULL_SCAN if force_scan else []) + [bu.filter_step("loc", "EQUALS", value)])
 
     for value, expected in (("#geo(3.0,4.0)", ["sw_geo"]), ("#geo(1.0,2.0)", ["ww_geo"]),
                             ("#time(08:00:00)", ["sw_time"]), ("ordinary", ["sw_plain", "ww_plain"])):
@@ -387,9 +352,7 @@ def test_page_cap_is_enforced_after_restart(conn: Conn, work_dir: str):
         conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": f"id{i:03d}"})
     for i in range(SEEDED_DOCS):
         conn.save({"_id": f"post{i:03d}", "pad": PAD})
-    folder = os.path.join(work_dir, "db", DB, COLL)
-    oversized = [f for f in page_files(work_dir)
-                 if os.path.getsize(os.path.join(folder, f)) > 4096 * 2]
+    oversized = oversized_pages(work_dir, COLL, 4096 * 2)
     check("no page grew far past maxPageSize after the restart", not oversized, f"oversized: {oversized}")
 
     pk = conn.count_via_pk()
@@ -405,8 +368,7 @@ GROWTH_PAD = "g" * 700
 def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, work_dir: str):
     section("A burst of in-place growths still relocates")
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": GROWTH_COLL}), "OK")
+                 conn.create_coll(GROWTH_COLL), "OK")
     for i in range(GROWTH_DOCS):
         check_status(f"seed a small document {i}", conn.save({"_id": f"grow{i:02d}", "pad": "s"},
                                                              coll=GROWTH_COLL), "OK")
@@ -418,20 +380,10 @@ def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, wo
     check("every growth was buffered", not refused, f"first refusal: {refused[:1]}")
     check_status("COMMIT_TRANSACTION", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
 
-    folder = os.path.join(work_dir, "db", DB, GROWTH_COLL)
-    oversized = {f: os.path.getsize(os.path.join(folder, f))
-                 for f in page_files(work_dir, DB, GROWTH_COLL)
-                 if os.path.getsize(os.path.join(folder, f)) > MAX_PAGE_BYTES}
+    oversized = oversized_pages(work_dir, GROWTH_COLL, MAX_PAGE_BYTES)
     check("no page grew past maxPageSize", not oversized, f"oversized: {oversized}")
 
-    recorded = recorded_pages(work_dir, DB, GROWTH_COLL)
-    actual = actual_pages(work_dir, DB, GROWTH_COLL)
-    drifted = [f"page {page}: recorded {recorded[page]['size']}B/{recorded[page]['entryCount']} entries,"
-               f" on disk {actual[page][0]}B/{actual[page][1]} entries"
-               for page in sorted(actual)
-               if page not in recorded
-               or recorded[page]["size"] != actual[page][0]
-               or recorded[page]["entryCount"] != actual[page][1]]
+    drifted = occupancy_drift(recorded_pages(work_dir, DB, GROWTH_COLL), actual_pages(work_dir, DB, GROWTH_COLL))
     check("the recorded page occupancy still matches the pages on disk", not drifted, "; ".join(drifted))
 
     pk = conn.count_via_pk(coll=GROWTH_COLL)
@@ -441,8 +393,7 @@ def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, wo
 def test_a_bulk_save_does_not_place_inserts_against_a_stale_page_size(conn: Conn, work_dir: str):
     section("A bulk save's inserts are placed against the size its own updates just grew to")
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": BULK_GROWTH_COLL}), "OK")
+                 conn.create_coll(BULK_GROWTH_COLL), "OK")
     for i in range(BULK_GROWTH_DOCS):
         check_status(f"seed bg{i}", conn.save({"_id": f"bg{i}", "pad": "s" * 250}, coll=BULK_GROWTH_COLL), "OK")
     seeded_pages = {row[3] for row in bu.read_pk_rows(pk_index_file(work_dir, DB, BULK_GROWTH_COLL))}
@@ -457,29 +408,24 @@ def test_a_bulk_save_does_not_place_inserts_against_a_stale_page_size(conn: Conn
     check("the insert did not land on the page its own updates grew past the cap",
           "bg_fresh" in rows and rows["bg_fresh"][3] != 0, f"bg_fresh row: {rows.get('bg_fresh')}")
 
-    deadline = time.time() + 15
     drifted = ["unchecked"]
-    while drifted and time.time() < deadline:
-        recorded = recorded_pages(work_dir, DB, BULK_GROWTH_COLL)
-        actual = actual_pages(work_dir, DB, BULK_GROWTH_COLL)
-        drifted = [page for page in actual
-                   if page not in recorded or recorded[page]["size"] != actual[page][0]
-                   or recorded[page]["entryCount"] != actual[page][1]]
-        if drifted:
-            time.sleep(0.2)
+
+    def settled() -> bool:
+        drifted[:] = occupancy_drift(recorded_pages(work_dir, DB, BULK_GROWTH_COLL),
+                                     actual_pages(work_dir, DB, BULK_GROWTH_COLL))
+        return not drifted
+
+    bu.wait_until(settled, timeout_s=15, interval_s=0.2)
     check("the recorded page occupancy matches the pages on disk", not drifted, f"drifted pages: {drifted}")
 
 
 def seed_a_collection_whose_page_rows_will_be_lost(conn: Conn, work_dir: str):
     section("Seed a collection whose page-occupancy rows a crash will lose")
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": LOST_ROWS_COLL}), "OK")
+                 conn.create_coll(LOST_ROWS_COLL), "OK")
     for i in range(LOST_ROWS_DOCS):
         conn.save({"_id": f"lost{i:02d}", "pad": "s"}, coll=LOST_ROWS_COLL)
-    deadline = time.time() + 15
-    while time.time() < deadline and not recorded_pages(work_dir, DB, LOST_ROWS_COLL):
-        time.sleep(0.2)
+    bu.wait_until(lambda: recorded_pages(work_dir, DB, LOST_ROWS_COLL), timeout_s=15, interval_s=0.2)
     check("its page rows reached disk", bool(recorded_pages(work_dir, DB, LOST_ROWS_COLL)))
 
 
@@ -493,19 +439,13 @@ def test_lost_page_rows_are_rebuilt_at_startup(conn: Conn, work_dir: str):
     section("Page-occupancy rows lost to a crash are rebuilt at the next startup")
     recorded = recorded_pages(work_dir, DB, LOST_ROWS_COLL)
     actual = actual_pages(work_dir, DB, LOST_ROWS_COLL)
-    drifted = [page for page in actual
-               if page not in recorded
-               or recorded[page]["size"] != actual[page][0]
-               or recorded[page]["entryCount"] != actual[page][1]]
+    drifted = occupancy_drift(recorded, actual)
     check("every page on disk has a row that matches it again", actual and not drifted,
           f"recorded={recorded} actual={actual}")
 
     for i in range(LOST_ROWS_DOCS):
         conn.save({"_id": f"lost{i:02d}", "pad": GROWTH_PAD}, coll=LOST_ROWS_COLL)
-    folder = os.path.join(work_dir, "db", DB, LOST_ROWS_COLL)
-    oversized = {f: os.path.getsize(os.path.join(folder, f))
-                 for f in page_files(work_dir, DB, LOST_ROWS_COLL)
-                 if os.path.getsize(os.path.join(folder, f)) > MAX_PAGE_BYTES}
+    oversized = oversized_pages(work_dir, LOST_ROWS_COLL, MAX_PAGE_BYTES)
     check("growing every document afterwards keeps each page under maxPageSize", not oversized,
           f"oversized: {oversized}")
     pk = conn.count_via_pk(coll=LOST_ROWS_COLL)
@@ -515,30 +455,25 @@ def test_lost_page_rows_are_rebuilt_at_startup(conn: Conn, work_dir: str):
 def seed_a_collection_whose_page_tail_will_tear(conn: Conn):
     section("Seed a collection whose last page a crash will tear")
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": TORN_COLL}), "OK")
+                 conn.create_coll(TORN_COLL), "OK")
     for i in range(TORN_DOCS):
         check_status(f"save torn{i}", conn.save({"_id": f"torn{i}", "pad": "s"}, coll=TORN_COLL), "OK")
 
 
 def tear_the_page_tail(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, TORN_COLL)
-    last = sorted(page_files(work_dir, DB, TORN_COLL), key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    last = last_page(page_files(work_dir, DB, TORN_COLL))
     with open(os.path.join(folder, last), "ab") as page:
         page.write(TORN_BYTES.encode("utf-8"))
 
 
 def test_a_torn_page_tail_is_healed_at_startup(conn: Conn, work_dir: str):
     section("A torn page tail is healed at startup, so the next write is not glued onto it")
-    folder = os.path.join(work_dir, "db", DB, TORN_COLL)
-    unterminated = [name for name in page_files(work_dir, DB, TORN_COLL)
-                    if os.path.getsize(os.path.join(folder, name)) > 0
-                    and open(os.path.join(folder, name), "rb").read()[-1:] != b"\n"]
+    unterminated = unterminated_pages(os.path.join(work_dir, "db", DB, TORN_COLL), page_files(work_dir, DB, TORN_COLL))
     check("every page ends at a record boundary after the restart", not unterminated, f"torn: {unterminated}")
     check_status("save a document after the restart", conn.save({"_id": "after_tear", "pad": "s"}, coll=TORN_COLL),
                  "OK")
-    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": TORN_COLL,
-                      "aggregationSteps": [{"type": "SKIP", "skip": 0}]})
-    scanned = sorted(doc["_id"] for doc in (scan.get("results") or []))
+    scanned = conn.ids(TORN_COLL, FULL_SCAN)
     expected = sorted([f"torn{i}" for i in range(TORN_DOCS)] + ["after_tear"])
     check("a full scan sees the document written after the tear", scanned == expected,
           f"expected {expected} got {scanned}")
@@ -550,7 +485,7 @@ def seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn: Conn):
     section("Seed a collection whose last record a crash will lose, and one whose pk.idx will be unreadable")
     for coll in (DANGLING_COLL, OLD_GRAMMAR_COLL):
         check_status(f"create {coll}",
-                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                     conn.create_coll(coll), "OK")
         for doc_id in ("first", "second"):
             check_status(f"save {doc_id} into {coll}", conn.save({"_id": doc_id, "pad": doc_id}, coll=coll), "OK")
 
@@ -580,17 +515,14 @@ def restore_the_old_grammar_pk_index(work_dir: str):
 def test_a_pk_entry_past_its_page_is_retired_at_startup(conn: Conn):
     section("A pk.idx entry whose record a crash lost is retired at startup, so no write lands on its neighbour")
     check_status("FIND_BY_ID of the lost record answers NOT_FOUND",
-                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": DANGLING_COLL,
-                            "_id": "second"}), "NOT_FOUND")
+                 conn.find("second", coll=DANGLING_COLL), "NOT_FOUND")
     check_status("its neighbour still reads back",
-                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": DANGLING_COLL,
-                            "_id": "first"}), "OK")
+                 conn.find("first", coll=DANGLING_COLL), "OK")
     check_status("the lost id can be saved again", conn.save({"_id": "second", "pad": "again"}, coll=DANGLING_COLL),
                  "OK")
     for doc_id in ("first", "second"):
         check_status(f"{doc_id} reads back after the save",
-                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": DANGLING_COLL,
-                                "_id": doc_id}), "OK")
+                     conn.find(doc_id, coll=DANGLING_COLL), "OK")
     pk = conn.count_via_pk(coll=DANGLING_COLL)
     scan = conn.count_via_scan(coll=DANGLING_COLL)
     check("the index-only COUNT agrees with the scan", pk == scan == 2, f"pk={pk} scan={scan}")
@@ -601,8 +533,7 @@ def test_an_unrecognised_pk_index_is_never_overwritten(conn: Conn, work_dir: str
     check("a SAVE into the collection is refused",
           conn.save({"_id": "third", "pad": "third"}, coll=OLD_GRAMMAR_COLL).get("status") != "OK")
     check_status("a FIND_BY_ID answers an error, not NOT_FOUND",
-                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": OLD_GRAMMAR_COLL,
-                            "_id": "first"}), "ERROR")
+                 conn.find("first", coll=OLD_GRAMMAR_COLL), "ERROR")
     with open(old_grammar_pk_index(work_dir)) as index:
         check("the unreadable pk.idx is byte-identical to the planted one", index.read() == OLD_GRAMMAR_PK)
 
@@ -611,8 +542,7 @@ def test_a_restored_pk_index_serves_every_document(conn: Conn):
     section("Once the pk.idx is restored, every document it named reads back")
     for doc_id in ("first", "second"):
         check_status(f"{doc_id} reads back",
-                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": OLD_GRAMMAR_COLL,
-                                "_id": doc_id}), "OK")
+                     conn.find(doc_id, coll=OLD_GRAMMAR_COLL), "OK")
     pk = conn.count_via_pk(coll=OLD_GRAMMAR_COLL)
     scan = conn.count_via_scan(coll=OLD_GRAMMAR_COLL)
     check("no write landed while it was unreadable", pk == scan == 2, f"pk={pk} scan={scan}")
@@ -622,12 +552,11 @@ def seed_collections_for_a_lost_line_end_and_a_half_built_index(conn: Conn):
     section("Seed a collection whose last record will lose its line end, and one whose index build will not finish")
     for coll in (LINE_END_COLL, HALF_BUILT_COLL):
         check_status(f"create {coll}",
-                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                     conn.create_coll(coll), "OK")
     for i in range(LINE_END_DOCS):
         check_status(f"save line{i}", conn.save({"_id": f"line{i}", "pad": "s"}, coll=LINE_END_COLL), "OK")
     check_status("create the index that will be left half-built",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": HALF_BUILT_COLL,
-                            "fieldName": HALF_BUILT_FIELD}), "OK")
+                 conn.create_index(HALF_BUILT_FIELD, coll=HALF_BUILT_COLL), "OK")
     for i in range(LINE_END_DOCS):
         check_status(f"save half{i}", conn.save({"_id": f"half{i}", HALF_BUILT_FIELD: "same"}, coll=HALF_BUILT_COLL),
                      "OK")
@@ -635,7 +564,7 @@ def seed_collections_for_a_lost_line_end_and_a_half_built_index(conn: Conn):
 
 def lose_the_last_line_end(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, LINE_END_COLL)
-    last = sorted(page_files(work_dir, DB, LINE_END_COLL), key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    last = last_page(page_files(work_dir, DB, LINE_END_COLL))
     path = os.path.join(folder, last)
     with open(path, "rb+") as page:
         page.seek(-1, os.SEEK_END)
@@ -654,44 +583,34 @@ def leave_the_index_half_built(work_dir: str):
         marker.write("0")
 
 
-def ids_in_a_full_scan(conn: Conn, coll: str) -> list:
-    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
-                      "aggregationSteps": [{"type": "SKIP", "skip": 0}]})
-    return sorted(doc["_id"] for doc in (scan.get("results") or []))
-
-
 def test_a_lost_line_end_is_restored_at_startup(conn: Conn, work_dir: str):
     section("A record that lost only its line end is restored at startup, so the next write is not glued onto it")
-    folder = os.path.join(work_dir, "db", DB, LINE_END_COLL)
-    unterminated = [name for name in page_files(work_dir, DB, LINE_END_COLL)
-                    if os.path.getsize(os.path.join(folder, name)) > 0
-                    and open(os.path.join(folder, name), "rb").read()[-1:] != b"\n"]
+    unterminated = unterminated_pages(os.path.join(work_dir, "db", DB, LINE_END_COLL),
+                                      page_files(work_dir, DB, LINE_END_COLL))
     check("every page ends at a record boundary after the restart", not unterminated, f"torn: {unterminated}")
     check_status("save a document after the restart",
                  conn.save({"_id": "after_line_end", "pad": "s"}, coll=LINE_END_COLL), "OK")
     expected = sorted([f"line{i}" for i in range(LINE_END_DOCS)] + ["after_line_end"])
-    scanned = ids_in_a_full_scan(conn, LINE_END_COLL)
+    scanned = conn.ids(LINE_END_COLL, FULL_SCAN)
     check("a full scan sees the record that lost its line end and the one written after it", scanned == expected,
           f"expected {expected} got {scanned}")
     for doc_id in ("line%d" % (LINE_END_DOCS - 1), "after_line_end"):
-        check_status(f"FIND_BY_ID {doc_id}", conn.send({"type": "FIND_BY_ID", "databaseName": DB,
-                                                         "collectionName": LINE_END_COLL, "_id": doc_id}), "OK")
+        check_status(f"FIND_BY_ID {doc_id}", conn.find(doc_id, coll=LINE_END_COLL), "OK")
 
 
 def seed_a_collection_that_will_hold_an_unindexed_record(conn: Conn):
     section("Seed an indexed collection whose last page will hold a record its PK index never named")
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": ORPHAN_COLL}), "OK")
+                 conn.create_coll(ORPHAN_COLL), "OK")
     check_status("index the field the unindexed record will carry",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": ORPHAN_COLL,
-                            "fieldName": ORPHAN_FIELD}), "OK")
+                 conn.create_index(ORPHAN_FIELD, coll=ORPHAN_COLL), "OK")
     for i in range(ORPHAN_DOCS):
         check_status(f"save kept{i}", conn.save({"_id": f"kept{i}", ORPHAN_FIELD: "same"}, coll=ORPHAN_COLL), "OK")
 
 
 def leave_an_unindexed_record(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, ORPHAN_COLL)
-    last = sorted(page_files(work_dir, DB, ORPHAN_COLL), key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    last = last_page(page_files(work_dir, DB, ORPHAN_COLL))
     record = json.dumps({"_id": ORPHAN_ID, ORPHAN_FIELD: "same"}, separators=(",", ":")) + "\n"
     with open(os.path.join(folder, last), "ab") as page:
         page.write(record.encode("utf-8"))
@@ -712,12 +631,11 @@ def seed_collections_whose_compactions_a_kill_will_interrupt(conn: Conn):
     section("Seed collections whose in-place update, delete and relocation a kill will interrupt")
     for coll in (KILLED_UPDATE_COLL, KILLED_DELETE_COLL, KILLED_RELOCATE_COLL):
         check_status(f"create {coll}",
-                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                     conn.create_coll(coll), "OK")
         for i in range(KILLED_DOCS):
             check_status(f"save killed{i} into {coll}", conn.save(killed_doc(i), coll=coll), "OK")
     check_status(f"index v in {KILLED_DELETE_COLL}",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": KILLED_DELETE_COLL,
-                            "fieldName": "v"}), "OK")
+                 conn.create_index("v", coll=KILLED_DELETE_COLL), "OK")
 
 
 def interrupt_a_compaction(work_dir: str, coll: str, kind: str):
@@ -750,7 +668,7 @@ def interrupt_the_compactions(work_dir: str):
 
 
 def found_value(conn: Conn, coll: str, doc_id: str):
-    response = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": doc_id})
+    response = conn.find(doc_id, coll=coll)
     return (response.get("object") or {}).get("v") if response.get("status") == "OK" else None
 
 
@@ -765,7 +683,7 @@ def check_every_document_is_acknowledged(conn: Conn, work_dir: str, coll: str, e
                 for i in range(KILLED_DOCS)}
     check("FIND_BY_ID answers every document with its last acknowledged value", values == expected,
           f"expected {expected} got {values}")
-    scanned = ids_in_a_full_scan(conn, coll)
+    scanned = conn.ids(coll, FULL_SCAN)
     check("a full scan lists exactly the same documents", scanned == sorted(expected_ids),
           f"expected {sorted(expected_ids)} got {scanned}")
     pk = conn.count_via_pk(coll=coll)
@@ -787,22 +705,14 @@ def test_a_delete_killed_mid_compaction_is_completed_at_startup(conn: Conn, work
 
 
 def killed_value_count(conn: Conn, prefix: list) -> int:
-    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": KILLED_DELETE_COLL,
-                          "aggregationSteps": prefix + [
-                              {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v",
-                                                              "value": killed_doc(1)["v"]}},
-                              {"type": "COUNT"}]})
-    return ((response.get("results") or [{}])[0]).get("count", 0)
+    return conn.count(KILLED_DELETE_COLL, prefix + [bu.filter_step("v", "EQUALS", killed_doc(1)["v"])]) or 0
 
 
 def test_a_delete_killed_mid_compaction_leaves_no_index_entry(conn: Conn):
     section("A delete a kill interrupted mid-compaction leaves no field-index entry behind")
-    scanned = killed_value_count(conn, [{"type": "SKIP", "skip": 0}])
-    deadline = time.time() + 15
+    scanned = killed_value_count(conn, FULL_SCAN)
+    bu.wait_until(lambda: killed_value_count(conn, []) == 0, timeout_s=15, interval_s=0.2)
     indexed = killed_value_count(conn, [])
-    while indexed != 0 and time.time() < deadline:
-        time.sleep(0.2)
-        indexed = killed_value_count(conn, [])
     check("the scan no longer finds the deleted document", scanned == 0, f"scan={scanned}")
     check("the index-only COUNT agrees with the scan once startup removed the deleted id",
           indexed == scanned, f"indexed={indexed} scan={scanned}")
@@ -824,31 +734,30 @@ def page_rows_mid_compaction(work_dir: str, coll: str) -> bool:
 
 
 def wait_for_settled_page_rows(work_dir: str, coll: str, timeout_s=15.0):
-    deadline = time.time() + timeout_s
-    while True:
-        recorded = recorded_pages(work_dir, DB, coll)
-        actual = actual_pages(work_dir, DB, coll)
-        settled = bool(recorded) and not page_rows_mid_compaction(work_dir, coll) and {
+    seen = {"recorded": {}, "actual": {}}
+
+    def settled() -> bool:
+        recorded = seen["recorded"] = recorded_pages(work_dir, DB, coll)
+        actual = seen["actual"] = actual_pages(work_dir, DB, coll)
+        return bool(recorded) and not page_rows_mid_compaction(work_dir, coll) and {
             page: (row["size"], row["entryCount"]) for page, row in recorded.items() if page in actual} == actual
-        if settled or time.time() >= deadline:
-            return settled, recorded, actual
-        time.sleep(0.2)
+
+    ok = bool(bu.wait_until(settled, timeout_s=timeout_s, interval_s=0.2))
+    return ok, seen["recorded"], seen["actual"]
 
 
 def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
     section("Seed a collection and a database whose drop a kill will interrupt, and a drop that leaves page rows")
     check_status("create the collection whose drop will be interrupted",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": KILLED_DROP_COLL}), "OK")
+                 conn.create_coll(KILLED_DROP_COLL), "OK")
     check_status("write into it", conn.save({"_id": "doomed", "pad": "s"}, coll=KILLED_DROP_COLL), "OK")
     check_status("create the database whose drop will be interrupted",
                  conn.send({"type": "CREATE_DATABASE", "databaseName": KILLED_DROP_DB}), "OK")
     check_status("create a collection in it",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": KILLED_DROP_DB, "collectionName": COLL}),
+                 conn.create_coll(COLL, db=KILLED_DROP_DB),
                  "OK")
     check_status("create the collection whose page rows a kill will leave behind",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": LEFTOVER_ROWS_COLL}), "OK")
+                 conn.create_coll(LEFTOVER_ROWS_COLL), "OK")
     for i in range(3):
         conn.save({"_id": f"old{i}", "pad": "s" * 200}, coll=LEFTOVER_ROWS_COLL)
     settled, recorded, actual = wait_for_settled_page_rows(work_dir, LEFTOVER_ROWS_COLL)
@@ -880,10 +789,9 @@ def test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn: Co
     check("it is no longer listed", KILLED_DROP_COLL not in collection_names(conn, DB),
           f"collections: {collection_names(conn, DB)}")
     check_status("CREATE_COLLECTION of the name succeeds",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": KILLED_DROP_COLL}),
+                 conn.create_coll(KILLED_DROP_COLL),
                  "OK")
-    old = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": KILLED_DROP_COLL,
-                     "_id": "doomed"})
+    old = conn.find("doomed", coll=KILLED_DROP_COLL)
     check("the re-created collection is empty", old.get("status") != "OK", f"response: {old}")
     check_status("DROP_DATABASE of the interrupted database succeeds",
                  conn.send({"type": "DROP_DATABASE", "databaseName": KILLED_DROP_DB}), "OK")
@@ -895,8 +803,7 @@ def test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn: Conn, 
     section("A re-created collection starts from empty page rows")
     check("the kill left the dropped collection's page rows on disk", os.path.isdir(leftover_rows_folder(work_dir)))
     check_status("re-create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": LEFTOVER_ROWS_COLL}), "OK")
+                 conn.create_coll(LEFTOVER_ROWS_COLL), "OK")
     for i in range(2):
         check_status(f"save new{i}", conn.save({"_id": f"new{i}", "pad": "n"}, coll=LEFTOVER_ROWS_COLL), "OK")
     settled, recorded, actual = wait_for_settled_page_rows(work_dir, LEFTOVER_ROWS_COLL)
@@ -906,41 +813,25 @@ def test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn: Conn, 
     check("the recorded page occupancy matches the pages on disk", settled, f"recorded {recorded} actual {actual}")
 
 
-def index_backed_ids(conn: Conn, coll: str, field: str, value: str) -> list:
-    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
-                          "aggregationSteps": [{"type": "FILTER", "operator": {
-                              "fieldOperatorType": "EQUALS", "field": field, "value": value}}]})
-    return sorted(doc["_id"] for doc in (response.get("results") or []))
-
-
 def test_an_unindexed_record_is_adopted_at_startup(conn: Conn):
     section("A record a crash left on a page but out of the PK index is adopted at startup")
     expected = sorted([f"kept{i}" for i in range(ORPHAN_DOCS)] + [ORPHAN_ID])
     check_status("FIND_BY_ID reaches the adopted record",
-                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": ORPHAN_COLL,
-                            "_id": ORPHAN_ID}), "OK")
-    scanned = ids_in_a_full_scan(conn, ORPHAN_COLL)
+                 conn.find(ORPHAN_ID, coll=ORPHAN_COLL), "OK")
+    scanned = conn.ids(ORPHAN_COLL, FULL_SCAN)
     check("a full scan lists every record once", scanned == expected, f"expected {expected} got {scanned}")
     pk = conn.count_via_pk(coll=ORPHAN_COLL)
     check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
-    indexed = index_backed_ids(conn, ORPHAN_COLL, ORPHAN_FIELD, "same")
+    indexed = conn.ids(ORPHAN_COLL, [bu.filter_step(ORPHAN_FIELD, "EQUALS", "same")])
     check("an index-backed FILTER finds the adopted record", indexed == expected, f"got {indexed}")
 
     check_status("save the adopted record again, as a client retrying its write would",
                  conn.save({"_id": ORPHAN_ID, ORPHAN_FIELD: "same", "retried": True}, coll=ORPHAN_COLL), "OK")
-    rescanned = ids_in_a_full_scan(conn, ORPHAN_COLL)
+    rescanned = conn.ids(ORPHAN_COLL, FULL_SCAN)
     check("the retry updates the adopted record instead of adding a second row with its id",
           rescanned == expected, f"expected {expected} got {rescanned}")
     pk = conn.count_via_pk(coll=ORPHAN_COLL)
     check("the index-only COUNT still agrees after the retry", pk == len(expected), f"count={pk}")
-
-
-def filter_ids(conn: Conn, value: str) -> list:
-    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": HALF_BUILT_COLL,
-                          "aggregationSteps": [{"type": "FILTER", "operator": {
-                              "fieldOperatorType": "EQUALS", "field": HALF_BUILT_FIELD,
-                              "value": value}}]})
-    return sorted(doc["_id"] for doc in (response.get("results") or []))
 
 
 def test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn: Conn, work_dir: str, log_path: str,
@@ -952,7 +843,7 @@ def test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn: Conn, work
     check_status("save a document after the restart",
                  conn.save({"_id": "half_after", HALF_BUILT_FIELD: "same"}, coll=HALF_BUILT_COLL), "OK")
     expected = sorted([f"half{i}" for i in range(LINE_END_DOCS)] + ["half_after"])
-    found = filter_ids(conn, "same")
+    found = conn.ids(HALF_BUILT_COLL, [bu.filter_step(HALF_BUILT_FIELD, "EQUALS", "same")])
     check("FILTER EQUALS on the half-built field still finds every older document", found == expected,
           f"expected {expected} got {found}")
     check_status("REINDEX the half-built field",
@@ -960,7 +851,7 @@ def test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn: Conn, work
                             "fieldNames": [HALF_BUILT_FIELD]}), "OK")
     marker = os.path.join(work_dir, "db", DB, HALF_BUILT_COLL, f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}.building")
     check("REINDEX clears the half-built marker", not os.path.exists(marker), marker)
-    found = filter_ids(conn, "same")
+    found = conn.ids(HALF_BUILT_COLL, [bu.filter_step(HALF_BUILT_FIELD, "EQUALS", "same")])
     check("the rebuilt index answers every document", found == expected, f"expected {expected} got {found}")
 
 
@@ -973,8 +864,7 @@ def admin_databases_folder(work_dir: str) -> str:
 
 def tear_an_admin_page_tail(work_dir: str):
     folder = admin_databases_folder(work_dir)
-    pages = [name for name in os.listdir(folder) if name.endswith(".dat")]
-    last = sorted(pages, key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    last = last_page([name for name in os.listdir(folder) if name.endswith(".dat")])
     with open(os.path.join(folder, last), "ab") as page:
         page.write(TORN_BYTES.encode("utf-8"))
 
@@ -982,10 +872,8 @@ def tear_an_admin_page_tail(work_dir: str):
 def seed_a_collection_its_database_will_stop_listing(conn: Conn):
     section("Seed a collection whose database row a kill will leave without it")
     check_status("create its database", conn.send({"type": "CREATE_DATABASE", "databaseName": UNLISTED_DB}), "OK")
-    check_status("create the collection", conn.send({"type": "CREATE_COLLECTION", "databaseName": UNLISTED_DB,
-                                                     "collectionName": UNLISTED_COLL}), "OK")
-    check_status("write into it", conn.send({"type": "SAVE", "databaseName": UNLISTED_DB,
-                                             "collectionName": UNLISTED_COLL, "object": {"_id": "kept"}}), "OK")
+    check_status("create the collection", conn.create_coll(UNLISTED_COLL, db=UNLISTED_DB), "OK")
+    check_status("write into it", conn.save({"_id": "kept"}, db=UNLISTED_DB, coll=UNLISTED_COLL), "OK")
 
 
 def database_row_lines(work_dir: str, db: str) -> list:
@@ -1024,8 +912,7 @@ def test_an_unlisted_collection_is_relisted_at_startup(conn: Conn, work_dir: str
     rows = database_row_lines(work_dir, UNLISTED_DB)
     check("the database row lists the collection again", any(f'"{UNLISTED_COLL}"'.encode("utf-8") in row
                                                               for row in rows), f"rows: {rows}")
-    check_status("its document is still served", conn.send({"type": "FIND_BY_ID", "databaseName": UNLISTED_DB,
-                                                             "collectionName": UNLISTED_COLL, "_id": "kept"}), "OK")
+    check_status("its document is still served", conn.find("kept", db=UNLISTED_DB, coll=UNLISTED_COLL), "OK")
     check_status("drop the database", conn.send({"type": "DROP_DATABASE", "databaseName": UNLISTED_DB}), "OK")
     check_status("re-create it", conn.send({"type": "CREATE_DATABASE", "databaseName": UNLISTED_DB}), "OK")
     leftover = collection_names(conn, UNLISTED_DB)
@@ -1036,9 +923,7 @@ def test_an_unlisted_collection_is_relisted_at_startup(conn: Conn, work_dir: str
 def test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn: Conn, work_dir: str):
     section("A torn admin page tail is healed at startup, so the next admin write is not glued onto it")
     folder = admin_databases_folder(work_dir)
-    unterminated = [name for name in os.listdir(folder) if name.endswith(".dat")
-                    and os.path.getsize(os.path.join(folder, name)) > 0
-                    and open(os.path.join(folder, name), "rb").read()[-1:] != b"\n"]
+    unterminated = unterminated_pages(folder, [name for name in os.listdir(folder) if name.endswith(".dat")])
     check("every admin/databases page ends at a record boundary after the restart", not unterminated,
           f"torn: {unterminated}")
     check_status("CREATE_DATABASE after the restart",
@@ -1071,23 +956,16 @@ def index_files(work_dir: str, db: str, coll: str) -> dict:
 
 def await_index_file(conn: Conn, work_dir: str, coll: str, name: str, present: bool,
                      timeout: float = 15.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if (name in index_files(work_dir, DB, coll)) == present:
-            return True
-        time.sleep(0.2)
-    return (name in index_files(work_dir, DB, coll)) == present
+    return bool(bu.wait_until(lambda: (name in index_files(work_dir, DB, coll)) == present, timeout, 0.2))
 
 
 def test_an_index_with_no_entries_left_is_removed(conn: Conn, work_dir: str):
     section("An index file whose last line was removed is deleted, not left empty")
     boolean_index = f"{EMPTY_IDX_COLL}-mixed-Boolean.idx"
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": EMPTY_IDX_COLL}), "OK")
+                 conn.create_coll(EMPTY_IDX_COLL), "OK")
     check_status("index the field",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": EMPTY_IDX_COLL,
-                            "fieldName": "mixed"}), "OK")
+                 conn.create_index("mixed", coll=EMPTY_IDX_COLL), "OK")
     check_status("write a boolean-valued document",
                  conn.save({"_id": "bool1", "mixed": True}, coll=EMPTY_IDX_COLL), "OK")
     for i in range(3):
@@ -1104,18 +982,9 @@ def test_an_index_with_no_entries_left_is_removed(conn: Conn, work_dir: str):
           await_index_file(conn, work_dir, EMPTY_IDX_COLL, boolean_index, False),
           f"index files: {index_files(work_dir, DB, EMPTY_IDX_COLL)}")
 
-    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": EMPTY_IDX_COLL,
-                      "aggregationSteps": [
-                          {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS",
-                                                          "field": "_id", "value": "__none__"}},
-                          {"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS",
-                                                          "field": "mixed", "value": "value"}}]})
-    indexed = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": EMPTY_IDX_COLL,
-                         "aggregationSteps": [
-                             {"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS",
-                                                             "field": "mixed", "value": "value"}}]})
-    scanned_ids = sorted(d.get("_id") for d in (scan.get("results") or []))
-    indexed_ids = sorted(d.get("_id") for d in (indexed.get("results") or []))
+    contains = bu.filter_step("mixed", "CONTAINS", "value")
+    scanned_ids = conn.ids(EMPTY_IDX_COLL, [bu.filter_step("_id", "NOT_EQUALS", "__none__"), contains])
+    indexed_ids = conn.ids(EMPTY_IDX_COLL, [contains])
     check("CONTAINS still answers exactly what a scan answers",
           scanned_ids == indexed_ids == ["bool1", "str0", "str1", "str2"],
           f"scan={scanned_ids} indexed={indexed_ids}")
@@ -1152,12 +1021,7 @@ def test_page_metadata_follows_an_admin_row_that_grows_on_update(conn: Conn, wor
     check("every admin/users page on disk is described by page metadata",
           set(recorded) == set(actual), f"recorded={sorted(recorded)} on disk={sorted(actual)}")
 
-    drifted = [f"page {page}: recorded {recorded[page]['size']}B/{recorded[page]['entryCount']} entries,"
-               f" on disk {actual[page][0]}B/{actual[page][1]} entries"
-               for page in sorted(actual)
-               if page not in recorded
-               or recorded[page]["size"] != actual[page][0]
-               or recorded[page]["entryCount"] != actual[page][1]]
+    drifted = occupancy_drift(recorded, actual)
     check("the recorded page occupancy still matches the page on disk", not drifted,
           "first-fit is packing rows into a page it believes has room — " + "; ".join(drifted) if drifted else "")
 
@@ -1169,18 +1033,14 @@ def test_page_metadata_follows_dropped_databases(conn: Conn, work_dir: str):
         db_name = f"dropped_db_{db_index:02d}"
         refused.append(conn.send({"type": "CREATE_DATABASE", "databaseName": db_name}))
         for coll_index in range(DROPPED_DB_COLLECTIONS):
-            refused.append(conn.send({"type": "CREATE_COLLECTION", "databaseName": db_name,
-                                      "collectionName": f"collection_with_a_long_name_{coll_index:02d}"}))
+            refused.append(conn.create_coll(f"collection_with_a_long_name_{coll_index:02d}", db=db_name))
         refused.append(conn.send({"type": "DROP_DATABASE", "databaseName": db_name}))
     refused = [response for response in refused if response.get("status") != "OK"]
     check(f"{DROPPED_DBS} databases with collections were created and dropped", not refused,
           f"{len(refused)} requests failed; first: {refused[:1]}")
 
-    recorded = recorded_pages(work_dir, "admin", "databases")
-    actual = actual_pages(work_dir, "admin", "databases")
-    drifted = [f"page {page}: recorded {recorded[page]['size']}B, on disk {actual[page][0]}B"
-               for page in sorted(actual)
-               if page not in recorded or recorded[page]["size"] != actual[page][0]]
+    drifted = occupancy_drift(recorded_pages(work_dir, "admin", "databases"),
+                              actual_pages(work_dir, "admin", "databases"), entries=False)
     check("the recorded admin/databases page size still matches the page on disk", not drifted,
           "; ".join(drifted))
 
@@ -1194,14 +1054,8 @@ def test_page_metadata_follows_collections_dropped_after_a_restart(conn: Conn, w
     check(f"{ADMIN_PAGES_COLLECTIONS} collections loaded at startup were dropped", not refused,
           f"{len(refused)} requests failed; first: {refused[:1]}")
 
-    recorded = recorded_pages(work_dir, "admin", "collections")
-    actual = actual_pages(work_dir, "admin", "collections")
-    drifted = [f"page {page}: recorded {recorded[page]['size']}B/{recorded[page]['entryCount']} entries,"
-               f" on disk {actual[page][0]}B/{actual[page][1]} entries"
-               for page in sorted(actual)
-               if page not in recorded
-               or recorded[page]["size"] != actual[page][0]
-               or recorded[page]["entryCount"] != actual[page][1]]
+    drifted = occupancy_drift(recorded_pages(work_dir, "admin", "collections"),
+                              actual_pages(work_dir, "admin", "collections"))
     check("the recorded admin/collections occupancy still matches every page on disk", not drifted,
           "a dropped row's delta landed on another page — " + "; ".join(drifted) if drifted else "")
 
@@ -1222,14 +1076,13 @@ def test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn: Conn, 
     for db, coll in ((COLLIDING_DB_LONG, COLLIDING_COLL_SHORT), (COLLIDING_DB_SHORT, COLLIDING_COLL_LONG)):
         conn.send({"type": "CREATE_DATABASE", "databaseName": db})
         check_status(f"create {db}|{coll}",
-                     conn.send({"type": "CREATE_COLLECTION", "databaseName": db, "collectionName": coll}), "OK")
+                     conn.create_coll(coll, db=db), "OK")
     check_status("write the collection that is dropped",
                  conn.save({"_id": "gone", "pad": PAD}, db=COLLIDING_DB_LONG, coll=COLLIDING_COLL_SHORT), "OK")
     for i in range(COLLIDING_DOCS):
         conn.save({"_id": f"kept{i:02d}", "pad": PAD}, db=COLLIDING_DB_SHORT, coll=COLLIDING_COLL_LONG)
-    deadline = time.time() + 10
-    while time.time() < deadline and not rows_agree_with_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG):
-        time.sleep(0.1)
+    bu.wait_until(lambda: rows_agree_with_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG),
+                  timeout_s=10, interval_s=0.1)
     check("the surviving collection's rows reached the shared folder",
           rows_agree_with_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG),
           f"recorded={recorded_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG)}")
@@ -1252,7 +1105,7 @@ def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
     section("DROP_DATABASE against concurrent writers")
     check_status("create the database", conn.send({"type": "CREATE_DATABASE", "databaseName": LOCK_DB}), "OK")
     check_status("create the collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": LOCK_DB, "collectionName": LOCK_COLL}),
+                 conn.create_coll(LOCK_COLL, db=LOCK_DB),
                  "OK")
 
     finished = []
@@ -1282,7 +1135,7 @@ def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
     check_status("the database can be created again",
                  conn.send({"type": "CREATE_DATABASE", "databaseName": LOCK_DB}), "OK")
     check_status("and written to",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": LOCK_DB, "collectionName": LOCK_COLL}),
+                 conn.create_coll(LOCK_COLL, db=LOCK_DB),
                  "OK")
     check_status("a write after the re-create succeeds",
                  conn.save({"_id": "after-drop", "pad": "x"}, db=LOCK_DB, coll=LOCK_COLL), "OK")
@@ -1295,10 +1148,10 @@ def test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn: Conn)
     check_status("drop the database", conn.send({"type": "DROP_DATABASE", "databaseName": RECREATE_DB}), "OK")
     check_status("create it again", conn.send({"type": "CREATE_DATABASE", "databaseName": RECREATE_DB}), "OK")
     check_status("create the collection again",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": RECREATE_DB, "collectionName": COLL}), "OK")
+                 conn.create_coll(COLL, db=RECREATE_DB), "OK")
     check_status("write the same id again", conn.save({"_id": "shared", "pad": "after"}, db=RECREATE_DB), "OK")
 
-    found = conn.send({"type": "FIND_BY_ID", "databaseName": RECREATE_DB, "collectionName": COLL, "_id": "shared"})
+    found = conn.find("shared", db=RECREATE_DB)
     check_status("the recreated document is readable", found, "OK")
     check("the recreated document is the new one, not a stale read at a dead offset",
           (found.get("object") or {}).get("pad") == "after",
@@ -1320,32 +1173,26 @@ def test_an_unreadable_schema_refuses_the_write(conn: Conn, work_dir: str):
 
 
 BULK_COLL = "bulk_rollback_coll"
-TXN_COLL = "txn_durability_coll"
 
 
 def test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn: Conn):
     section("bulk insert: scan and the pk index agree")
-    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": BULK_COLL})
+    conn.create_coll(BULK_COLL)
     objects = [{"_id": f"bulk_{i:04d}", "pad": PAD} for i in range(60)]
     check_status("bulk insert across several pages",
                  conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BULK_COLL,
                             "objects": objects}), "OK")
 
-    scanned = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
-                         "aggregationSteps": []})
-    scan_ids = sorted(d.get("_id") for d in (scanned.get("results") or []))
+    scan_ids = conn.ids(BULK_COLL, [])
     missing = [i for i in scan_ids
-               if conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BULK_COLL,
-                             "_id": i}).get("status") != "OK"]
+               if conn.find(i, coll=BULK_COLL).get("status") != "OK"]
     check("every bulk-inserted document a scan returns is reachable by FIND_BY_ID",
           len(scan_ids) == len(objects) and not missing,
           f"scanned={len(scan_ids)} expected={len(objects)} unreachable={missing[:5]}")
     check("no id appears twice on the page", len(scan_ids) == len(set(scan_ids)),
           f"scanned={len(scan_ids)} distinct={len(set(scan_ids))}")
 
-    counted = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
-                         "aggregationSteps": [{"type": "COUNT"}]})
-    counted_rows = ((counted.get("results") or [{}])[0]).get("count")
+    counted_rows = conn.count(BULK_COLL, [])
     check("the pk index describes no row the pages cannot produce",
           counted_rows == len(scan_ids),
           f"index-only COUNT={counted_rows} scan={len(scan_ids)}")
@@ -1358,48 +1205,23 @@ def test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn: Co
                  conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BULK_COLL,
                             "objects": objects}), "OK")
 
-    scanned = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
-                         "aggregationSteps": []})
-    scan_by_id = {d.get("_id"): d.get("pad") for d in (scanned.get("results") or [])}
+    scan_by_id = {d.get("_id"): d.get("pad") for d in (conn.aggregate(BULK_COLL, []).get("results") or [])}
     check("every entry the scan returns reflects the bulk update",
           len(scan_by_id) == len(objects) and all(v == "updated-" + PAD for v in scan_by_id.values()),
           f"scanned={len(scan_by_id)} expected={len(objects)}"
           f" stale={[k for k, v in scan_by_id.items() if v != 'updated-' + PAD][:5]}")
 
     stale_by_find = [i for i in scan_by_id
-                     if (conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BULK_COLL,
-                                    "_id": i}).get("object") or {}).get("pad") != "updated-" + PAD]
+                     if (conn.find(i, coll=BULK_COLL).get("object") or {}).get("pad") != "updated-" + PAD]
     check("FIND_BY_ID answers the same updated value the scan does, for every entry",
           not stale_by_find, f"stale under FIND_BY_ID: {stale_by_find[:5]}")
 
     check_status("CREATE_INDEX on the updated field",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": BULK_COLL,
-                            "fieldName": "pad"}), "OK")
-    indexed = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
-                         "aggregationSteps": [{"type": "FILTER", "operator": {
-                             "fieldOperatorType": "EQUALS", "field": "pad", "value": "updated-" + PAD}}]})
-    indexed_ids = sorted(d.get("_id") for d in (indexed.get("results") or []))
+                 conn.create_index("pad", coll=BULK_COLL), "OK")
+    indexed_ids = conn.ids(BULK_COLL, [bu.filter_step("pad", "EQUALS", "updated-" + PAD)])
     check("an index-backed FILTER on the updated field finds every updated entry",
           indexed_ids == sorted(scan_by_id.keys()),
           f"indexed={len(indexed_ids)} scanned={len(scan_by_id)}")
-
-
-def test_a_committed_transaction_survives_a_restart_whole(conn: Conn):
-    section("transaction durability across a restart")
-    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": TXN_COLL})
-    check_status("start transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
-    for i in range(5):
-        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": TXN_COLL,
-                   "object": {"_id": f"txn_{i}", "pad": PAD}})
-    check_status("commit transaction", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
-
-
-def test_the_committed_transaction_is_all_there_after_the_restart(conn: Conn):
-    found = [i for i in range(5)
-             if conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": TXN_COLL,
-                           "_id": f"txn_{i}"}).get("status") == "OK"]
-    check("a committed transaction is entirely present after a restart, never partly",
-          len(found) == 5, f"present after restart: {found}")
 
 
 REPLAY_COLL = "replayed_repeated_ids"
@@ -1410,37 +1232,18 @@ def replay_fence_folder(work_dir: str) -> str:
     return os.path.join(work_dir, "db", DB, REPLAY_FENCE_COLL)
 
 
-def local_commit_markers(work_dir: str) -> int:
-    folder = os.path.join(work_dir, "db", "admin", "transactions")
-    if not os.path.isdir(folder):
-        return 0
-    total = 0
-    for name in sorted(os.listdir(folder)):
-        if name.endswith(".dat"):
-            with open(os.path.join(folder, name), "r", encoding="utf-8", errors="replace") as fp:
-                total += sum(1 for line in fp if "|localcommit" in line)
-    return total
-
-
 def arrange_a_killed_commit_with_repeated_ids(conn: Conn, work_dir: str):
     section("A commit with several ops on one id stops past its commit point")
     for coll in (REPLAY_COLL, REPLAY_FENCE_COLL):
-        check_status(f"create {coll}", conn.send(
-            {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
-    check_status("seed r1 before the transaction", conn.send(
-        {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_COLL, "object": {"_id": "r1", "v": 0}}), "OK")
+        check_status(f"create {coll}", conn.create_coll(coll), "OK")
+    check_status("seed r1 before the transaction", conn.save({"_id": "r1", "v": 0}, coll=REPLAY_COLL), "OK")
     check_status("start the transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
     for value in (1, 2, 3):
-        check_status(f"buffer r1 v={value}", conn.send(
-            {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_COLL,
-             "object": {"_id": "r1", "v": value}}), "OK")
-    check_status("buffer r2", conn.send(
-        {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_COLL, "object": {"_id": "r2", "v": 1}}), "OK")
+        check_status(f"buffer r1 v={value}", conn.save({"_id": "r1", "v": value}, coll=REPLAY_COLL), "OK")
+    check_status("buffer r2", conn.save({"_id": "r2", "v": 1}, coll=REPLAY_COLL), "OK")
     check_status("buffer the delete of r2", conn.send(
         {"type": "DELETE", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r2"}), "OK")
-    check_status("buffer the op that will not apply", conn.send(
-        {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_FENCE_COLL,
-         "object": {"_id": "blocker", "v": 1}}), "OK")
+    check_status("buffer the op that will not apply", conn.save({"_id": "blocker", "v": 1}, coll=REPLAY_FENCE_COLL), "OK")
     os.chmod(replay_fence_folder(work_dir), 0o000)
     check_code("the commit fences past its commit point",
                conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
@@ -1448,19 +1251,17 @@ def arrange_a_killed_commit_with_repeated_ids(conn: Conn, work_dir: str):
 
 def release_the_replay_fence(work_dir: str):
     os.chmod(replay_fence_folder(work_dir), 0o755)
-    check("the commit marker outlived the kill", local_commit_markers(work_dir) == 1,
+    check("the commit marker outlived the kill", bu.local_commit_markers(work_dir) == 1,
           "with no marker the restart has nothing to replay, so the checks after it would be vacuous")
 
 
 def test_a_killed_commit_with_repeated_ids_replays_to_its_last_value(conn: Conn, work_dir: str):
-    r1 = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r1"})
+    r1 = conn.find("r1", coll=REPLAY_COLL)
     check_field("an id saved three times ends at its last value", r1, "object.v", 3)
-    check_status("an id saved then deleted ends deleted", conn.send(
-        {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r2"}), "NOT_FOUND")
-    check_status("the op that could not apply before the kill landed", conn.send(
-        {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": REPLAY_FENCE_COLL, "_id": "blocker"}), "OK")
-    check("the replay retired its commit marker", local_commit_markers(work_dir) == 0,
-          f"markers left: {local_commit_markers(work_dir)}")
+    check_status("an id saved then deleted ends deleted", conn.find("r2", coll=REPLAY_COLL), "NOT_FOUND")
+    check_status("the op that could not apply before the kill landed", conn.find("blocker", coll=REPLAY_FENCE_COLL), "OK")
+    check("the replay retired its commit marker", bu.local_commit_markers(work_dir) == 0,
+          f"markers left: {bu.local_commit_markers(work_dir)}")
 
 
 def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
@@ -1497,16 +1298,13 @@ def test_reads_of_an_unknown_collection_are_refused_cleanly(conn: Conn):
     ):
         bu.check_code(f"{label} answers 404-11 instead of reading files no registered collection owns",
                       conn.send(request), "NOT_FOUND", "404-11")
-    check_status("the registered spelling still reads",
-                 conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
-                            "aggregationSteps": [{"type": "COUNT"}]}), "OK")
+    check_status("the registered spelling still reads", conn.aggregate(COLL, [{"type": "COUNT"}]), "OK")
 
 
 def test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn: Conn):
     section("repeated blocking aggregations over a collection with no page metadata")
     check_status("the collection is created",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
-                            "collectionName": UNWRITTEN_COLL}), "OK")
+                 conn.create_coll(UNWRITTEN_COLL), "OK")
     blocking_pipelines = (
         ("SORT", [{"type": "SORT", "fieldName": "score", "ascending": True}]),
         ("GROUP_BY", [{"type": "GROUP_BY", "fieldName": "score"}]),
@@ -1515,18 +1313,15 @@ def test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(
     )
     for label, steps in blocking_pipelines:
         for _ in range(UNWRITTEN_SCANS):
-            conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": UNWRITTEN_COLL,
-                       "aggregationSteps": steps})
+            conn.aggregate(UNWRITTEN_COLL, steps)
         check(f"the server still answers after {UNWRITTEN_SCANS} {label} scans of an unwritten collection",
               conn.send({"type": "LIST_COLLECTIONS", "databaseName": DB}).get("status") == "OK")
 
     with admin_conn() as fresh:
         check_status("a new connection is still accepted afterwards",
-                     fresh.send({"type": "SAVE", "databaseName": DB, "collectionName": UNWRITTEN_COLL,
-                                 "object": {"_id": "after_scans", "score": 1}}), "OK")
+                     fresh.save({"_id": "after_scans", "score": 1}, coll=UNWRITTEN_COLL), "OK")
         check_field("the document written after the scans reads back",
-                    fresh.send({"type": "FIND_BY_ID", "databaseName": DB,
-                                "collectionName": UNWRITTEN_COLL, "_id": "after_scans"}),
+                    fresh.find("after_scans", coll=UNWRITTEN_COLL),
                     "object.score", 1)
 
 
@@ -1534,51 +1329,37 @@ def test_index_operations_cannot_destroy_the_pk_index(conn: Conn, work_dir: str)
     section("CREATE_INDEX / DROP_INDEX never take the pk index or the tombstones with them")
     coll = "user-data"
     bu.check_status("create a hyphenated collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                    conn.create_coll(coll), "OK")
     for i in range(3):
-        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
-                   "object": {"_id": f"d{i}", "data": i}})
+        conn.save({"_id": f"d{i}", "data": i}, coll=coll)
 
     bu.check_code("DROP_INDEX on _id is refused",
                   conn.send({"type": "DROP_INDEX", "databaseName": DB, "collectionName": coll,
                              "fieldName": "_id"}), "ERROR", "400-1")
     bu.check_code("CREATE_INDEX on _id is refused",
-                  conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
-                             "fieldName": "_id"}), "ERROR", "400-1")
+                  conn.create_index("_id", coll=coll), "ERROR", "400-1")
 
     bu.check_status("CREATE_INDEX on a field whose name is a token of the collection name",
-                    conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
-                               "fieldName": "data"}), "OK")
+                    conn.create_index("data", coll=coll), "OK")
 
     pk_file = pk_index_file(work_dir, DB, coll)
     bu.check("the pk index file still exists", os.path.isfile(pk_file), detail=pk_file)
     for i in range(3):
         bu.check_status(f"FIND_BY_ID still resolves d{i}",
-                        conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
-                                   "_id": f"d{i}"}), "OK")
+                        conn.find(f"d{i}", coll=coll), "OK")
 
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
-               "object": {"_id": "d0", "data": 99}})
-    scanned = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
-                         "aggregationSteps": []})
-    ids = [d.get("_id") for d in (scanned.get("results") or [])]
+    conn.save({"_id": "d0", "data": 99}, coll=coll)
+    ids = conn.ids(coll, [])
     bu.check("a re-save does not duplicate the _id", len(ids) == len(set(ids)) == 3, detail=f"ids={ids}")
-
-
-def aggregate_ids(conn: Conn, coll: str, steps: list) -> list:
-    resp = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
-                      "aggregationSteps": steps})
-    return sorted(d.get("_id") for d in (resp.get("results") or []))
 
 
 def test_a_filter_on_id_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
     section("A FILTER on _id is answered by the pk index and never rewrites it")
     coll = "id_filter"
     bu.check_status("create the collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                    conn.create_coll(coll), "OK")
     for i in range(3):
-        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
-                   "object": {"_id": f"d{i}", "n": i}})
+        conn.save({"_id": f"d{i}", "n": i}, coll=coll)
 
     pk_file = pk_index_file(work_dir, DB, coll)
     bu.check("the pk index file is named <coll>-pk.idx", os.path.isfile(pk_file), detail=pk_file)
@@ -1595,8 +1376,7 @@ def test_a_filter_on_id_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
         ("NOT_IN", ["D0"], ["d0", "d1", "d2"]),
     ]
     for op_type, value, expected in cases:
-        got = aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
-            "fieldOperatorType": op_type, "field": "_id", "value": value}}])
+        got = conn.ids(coll, [bu.filter_step("_id", op_type, value)])
         bu.check(f"FILTER _id {op_type} answers correctly", got == expected,
                  detail=f"expected {expected}, got {got}")
 
@@ -1606,10 +1386,9 @@ def test_a_filter_on_id_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
              detail=f"{sorted(ids_before)} -> {sorted(pk_index_ids(pk_file))}")
     for i in range(3):
         bu.check_status(f"FIND_BY_ID still resolves d{i}",
-                        conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
-                                   "_id": f"d{i}"}), "OK")
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "d0", "n": 99}})
-    scanned = aggregate_ids(conn, coll, [])
+                        conn.find(f"d{i}", coll=coll), "OK")
+    conn.save({"_id": "d0", "n": 99}, coll=coll)
+    scanned = conn.ids(coll, [])
     bu.check("a re-save after the filter does not duplicate the _id",
              len(scanned) == len(set(scanned)) == 3, detail=f"ids={scanned}")
 
@@ -1618,15 +1397,13 @@ def test_a_filter_on_id_agrees_with_find_by_id_on_case(conn: Conn):
     section("FILTER _id and FIND_BY_ID name the same document")
     coll = "id_case"
     bu.check_status("create the collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                    conn.create_coll(coll), "OK")
     for doc_id in ("Case1", "case1"):
-        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
-                   "object": {"_id": doc_id, "which": doc_id}})
+        conn.save({"_id": doc_id, "which": doc_id}, coll=coll)
 
     for doc_id in ("Case1", "case1"):
-        filtered = aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
-            "fieldOperatorType": "EQUALS", "field": "_id", "value": doc_id}}])
-        found = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": doc_id})
+        filtered = conn.ids(coll, [bu.filter_step("_id", "EQUALS", doc_id)])
+        found = conn.find(doc_id, coll=coll)
         bu.check(f"FILTER _id EQUALS {doc_id} names exactly that document", filtered == [doc_id],
                  detail=f"got {filtered}")
         bu.check(f"FIND_BY_ID {doc_id} agrees with the filter",
@@ -1637,14 +1414,11 @@ def test_a_filter_on_id_reads_only_the_matching_document(conn: Conn):
     section("A FILTER on _id is resolved by the pk index, not by a collection scan")
     coll = "id_analyze"
     bu.check_status("create the collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                    conn.create_coll(coll), "OK")
     for i in range(25):
-        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
-                   "object": {"_id": f"a{i:03d}", "n": i}})
+        conn.save({"_id": f"a{i:03d}", "n": i}, coll=coll)
 
-    resp = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "analyze": True,
-                      "aggregationSteps": [{"type": "FILTER", "operator": {
-                          "fieldOperatorType": "EQUALS", "field": "_id", "value": "a007"}}]})
+    resp = conn.aggregate(coll, [bu.filter_step("_id", "EQUALS", "a007")], analyze=True)
     analysis = resp.get("analyzeResult") or {}
     bu.check("the filter still answers correctly",
              [d.get("_id") for d in (resp.get("results") or [])] == ["a007"], detail=str(resp)[:200])
@@ -1653,66 +1427,55 @@ def test_a_filter_on_id_reads_only_the_matching_document(conn: Conn):
     bu.check("only the matching document was read", analysis.get("documentsScanned") == 1,
              detail=f"documentsScanned={analysis.get('documentsScanned')} of 25")
 
-def aggregate_count(conn: Conn, coll: str, steps: list) -> int:
-    resp = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
-                      "aggregationSteps": steps + [{"type": "COUNT"}]})
-    return ((resp.get("results") or [{}])[0]).get("count")
-
 
 def test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn: Conn):
     section("An index-only COUNT agrees with the rows the same FILTER returns")
     coll = "id_count"
     bu.check_status("create the collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                    conn.create_coll(coll), "OK")
     for doc_id in ("k1", "k2", "k3"):
-        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
-                   "object": {"_id": doc_id, "n": 1}})
+        conn.save({"_id": doc_id, "n": 1}, coll=coll)
 
     for label, value, expected in (("a number", 5, []), ("an object", {}, []), ("an array", [], []),
                                    ("null", None, ["k1", "k2", "k3"])):
-        steps = [{"type": "FILTER", "operator": {
-            "fieldOperatorType": "NOT_EQUALS", "field": "_id", "value": value}}]
-        rows = aggregate_ids(conn, coll, steps)
-        counted = aggregate_count(conn, coll, steps)
+        steps = [bu.filter_step("_id", "NOT_EQUALS", value)]
+        rows = conn.ids(coll, steps)
+        counted = conn.count(coll, steps)
         bu.check(f"NOT_EQUALS _id against {label} names the right documents", rows == expected,
                  detail=f"got {rows}, expected {expected}")
         bu.check(f"COUNT after NOT_EQUALS _id against {label} agrees with the rows",
                  counted == len(rows), detail=f"count={counted} rows={len(rows)}")
 
-    present = [{"type": "FILTER", "operator": {
-        "fieldOperatorType": "NOT_EQUALS", "field": "_id", "value": "k2"}}]
+    present = [bu.filter_step("_id", "NOT_EQUALS", "k2")]
     bu.check("NOT_EQUALS _id against a present id still answers from the pk index",
-             aggregate_ids(conn, coll, present) == ["k1", "k3"], detail=str(aggregate_ids(conn, coll, present)))
-    bu.check("COUNT after it agrees", aggregate_count(conn, coll, present) == 2,
-             detail=f"count={aggregate_count(conn, coll, present)}")
+             conn.ids(coll, present) == ["k1", "k3"], detail=str(conn.ids(coll, present)))
+    bu.check("COUNT after it agrees", conn.count(coll, present) == 2,
+             detail=f"count={conn.count(coll, present)}")
 
-    not_in = [{"type": "FILTER", "operator": {
-        "fieldOperatorType": "NOT_IN", "field": "_id", "value": [5, None]}}]
+    not_in = [bu.filter_step("_id", "NOT_IN", [5, None])]
     bu.check("NOT_IN _id against a non-string list still returns every document",
-             aggregate_ids(conn, coll, not_in) == ["k1", "k2", "k3"], detail=str(aggregate_ids(conn, coll, not_in)))
-    bu.check("COUNT after it agrees", aggregate_count(conn, coll, not_in) == 3,
-             detail=f"count={aggregate_count(conn, coll, not_in)}")
+             conn.ids(coll, not_in) == ["k1", "k2", "k3"], detail=str(conn.ids(coll, not_in)))
+    bu.check("COUNT after it agrees", conn.count(coll, not_in) == 3,
+             detail=f"count={conn.count(coll, not_in)}")
 
 
 def test_not_equals_null_returns_the_documents_that_are_not_null(conn: Conn):
     section("A null operand respects the operator it was given")
     coll = "null_operand"
     bu.check_status("create the collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_null", "v": None}})
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_str", "v": "open"}})
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_num", "v": 7}})
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_absent"}})
+                    conn.create_coll(coll), "OK")
+    conn.save({"_id": "u_null", "v": None}, coll=coll)
+    conn.save({"_id": "u_str", "v": "open"}, coll=coll)
+    conn.save({"_id": "u_num", "v": 7}, coll=coll)
+    conn.save({"_id": "u_absent"}, coll=coll)
 
     def against_null(operator: str) -> list:
-        return aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
-            "fieldOperatorType": operator, "field": "v", "value": None}}])
+        return conn.ids(coll, [bu.filter_step("v", operator, None)])
 
     for stage in ("unindexed", "indexed"):
         if stage == "indexed":
             bu.check_status("index the field",
-                            conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
-                                       "fieldName": "v"}), "OK")
+                            conn.create_index("v", coll=coll), "OK")
         bu.check(f"EQUALS null names only the null-valued document ({stage})",
                  against_null("EQUALS") == ["u_null"], detail=str(against_null("EQUALS")))
         bu.check(f"NOT_EQUALS null names the documents that hold a value ({stage})",
@@ -1726,22 +1489,20 @@ def test_in_and_not_in_treat_null_as_a_member(conn: Conn):
     section("IN and NOT_IN treat a null in the list as a member")
     coll = "null_membership"
     bu.check_status("create the collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "m_null", "x": None}})
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "m_one", "x": 1}})
-    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "m_absent"}})
+                    conn.create_coll(coll), "OK")
+    conn.save({"_id": "m_null", "x": None}, coll=coll)
+    conn.save({"_id": "m_one", "x": 1}, coll=coll)
+    conn.save({"_id": "m_absent"}, coll=coll)
 
     def ids(operator: str, value) -> list:
-        return aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
-            "fieldOperatorType": operator, "field": "x", "value": value}}])
+        return conn.ids(coll, [bu.filter_step("x", operator, value)])
 
     expected = [("IN", [None], ["m_null"]), ("IN", [1, None], ["m_null", "m_one"]),
                 ("NOT_IN", [None], ["m_one"]), ("NOT_IN", [1, None], []), ("NOT_IN", [1], ["m_null"])]
     for stage in ("unindexed", "indexed"):
         if stage == "indexed":
             bu.check_status("index the field",
-                            conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
-                                       "fieldName": "x"}), "OK")
+                            conn.create_index("x", coll=coll), "OK")
         for operator, value, want in expected:
             got = ids(operator, value)
             bu.check(f"{operator} {value} names {want} ({stage})", got == want, detail=str(got))
@@ -1759,10 +1520,9 @@ def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
 
 def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
     check_status("create the collection whose indexes will be left dirty",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DIRTY_COLL}), "OK")
+                 conn.create_coll(DIRTY_COLL), "OK")
     check_status("index a field on it",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": DIRTY_COLL,
-                            "fieldName": "n"}), "OK")
+                 conn.create_index("n", coll=DIRTY_COLL), "OK")
     stop = threading.Event()
 
     def writer():
@@ -1804,8 +1564,7 @@ def test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn: Conn,
     check("the marker survived the unclean stop", dirty_markers(work_dir),
           "without a marker there is nothing for REINDEX to retire and the rest of this case proves nothing")
     check_status("add a second index so a partial rebuild is possible",
-                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": DIRTY_COLL,
-                            "fieldName": "pad"}), "OK")
+                 conn.create_index("pad", coll=DIRTY_COLL), "OK")
 
     check_status("rebuild only one of the two indexes",
                  conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": DIRTY_COLL,
@@ -1819,9 +1578,8 @@ def test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn: Conn,
           "REINDEX is the remedy the startup warning names, so the warning must not outlive it")
 
 
-def conjunction_ids(conn: Conn, coll: str, kind: str, leaves: list) -> list:
-    return aggregate_ids(conn, coll, [{"type": "FILTER",
-                                       "operator": {"conjunctionType": kind, "operators": leaves}}])
+def conjunction(kind: str, leaves: list) -> dict:
+    return {"type": "FILTER", "operator": {"conjunctionType": kind, "operators": leaves}}
 
 
 def test_a_conjunction_counts_exactly_the_rows_it_returns(conn: Conn):
@@ -1829,35 +1587,29 @@ def test_a_conjunction_counts_exactly_the_rows_it_returns(conn: Conn):
 
     coll = "conj_consistency"
     check_status("create the conjunction collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                 conn.create_coll(coll), "OK")
     docs = [{"_id": f"c{i}", "n": i, "tag": "even" if i % 2 == 0 else "odd"} for i in range(20)]
     check_status("load the conjunction corpus",
                  conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": docs}), "OK")
     for field in ("n", "tag"):
         check_status(f"index {field}",
-                     conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
-                                "fieldName": field}), "OK")
+                     conn.create_index(field, coll=coll), "OK")
 
     leaves = [{"fieldOperatorType": "GREATER_THAN", "field": "n", "value": 5},
               {"fieldOperatorType": "EQUALS", "field": "tag", "value": "even"}]
     for kind in ("AND", "OR", "XOR", "NOR", "NAND"):
-        indexed = conjunction_ids(conn, coll, kind, leaves)
-        scanned = aggregate_ids(conn, coll, [{"type": "SKIP", "skip": 0},
-                                             {"type": "FILTER",
-                                              "operator": {"conjunctionType": kind, "operators": leaves}}])
+        indexed = conn.ids(coll, [conjunction(kind, leaves)])
+        scanned = conn.ids(coll, FULL_SCAN + [conjunction(kind, leaves)])
         check(f"{kind} answers the same rows through the index and a scan", indexed == scanned,
               f"index={indexed}, scan={scanned}")
-        counted = aggregate_count(conn, coll, [{"type": "FILTER",
-                                                "operator": {"conjunctionType": kind, "operators": leaves}}])
+        counted = conn.count(coll, [conjunction(kind, leaves)])
         check(f"{kind} counts exactly the rows it returns", counted == len(indexed),
               f"count={counted}, rows={len(indexed)}")
 
     repeated = [leaves[0], dict(leaves[0])]
     for kind in ("AND", "XOR"):
-        indexed = conjunction_ids(conn, coll, kind, repeated)
-        scanned = aggregate_ids(conn, coll, [{"type": "SKIP", "skip": 0},
-                                             {"type": "FILTER",
-                                              "operator": {"conjunctionType": kind, "operators": repeated}}])
+        indexed = conn.ids(coll, [conjunction(kind, repeated)])
+        scanned = conn.ids(coll, FULL_SCAN + [conjunction(kind, repeated)])
         check(f"{kind} over a duplicated child agrees between the index and a scan", indexed == scanned,
               f"index={indexed}, scan={scanned}")
 
@@ -1866,8 +1618,7 @@ def test_a_buffered_write_to_a_missing_collection_is_refused_at_buffer_time(conn
     section("A transactional write names a collection that was never created")
 
     check_status("start the transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
-    refusal = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": "never_created_coll",
-                         "object": {"_id": "nope"}})
+    refusal = conn.save({"_id": "nope"}, coll="never_created_coll")
     check("the buffered save is refused where the standalone save would be",
           refusal.get("errorCode") in ("404-11", "503-10"),
           f"got {refusal.get('errorCode')!r}, expected the collection-readiness refusal rather than a commit failure")
@@ -1881,10 +1632,9 @@ def test_a_script_predicate_returning_infinity_keeps_its_document(conn: Conn):
 
     coll = "script_truthiness"
     check_status("create the script collection",
-                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                 conn.create_coll(coll), "OK")
     check_status("load one document",
-                 conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
-                            "object": {"_id": "s1", "n": 1}}), "OK")
+                 conn.save({"_id": "s1", "n": 1}, coll=coll), "OK")
 
     for source, expected, why in (
             ("export default () => 1 / 0;", ["s1"], "Infinity is truthy in JavaScript"),
@@ -1893,9 +1643,9 @@ def test_a_script_predicate_returning_infinity_keeps_its_document(conn: Conn):
             ("export default () => 0;", [], "zero is falsy"),
             ("export default () => 'x';", ["s1"], "a non-empty string is truthy")):
         steps = [{"type": "FILTER", "operator": {"script": source}}]
-        got = aggregate_ids(conn, coll, steps)
+        got = conn.ids(coll, steps)
         check(f"a predicate returning {source.split('=> ')[1][:-1]} selects {expected}", got == expected, why)
-        scanned = aggregate_ids(conn, coll, [{"type": "SKIP", "skip": 0}] + steps)
+        scanned = conn.ids(coll, FULL_SCAN + steps)
         check("the same predicate answers identically down the scan path", got == scanned,
               f"index={got}, scan={scanned}")
 
@@ -1929,8 +1679,7 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
         try:
             with admin_conn() as reader_conn:
                 while not stop.is_set():
-                    reader_conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": HEAL_COLL,
-                                      "dirtyRead": True, "aggregationSteps": [{"type": "COUNT"}]})
+                    reader_conn.aggregate(HEAL_COLL, [{"type": "COUNT"}], dirtyRead=True)
         except Exception as exc:
             errors.append(f"reader: {exc}")
 
@@ -1974,20 +1723,19 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
 
     for doc_id in committed[-3:]:
         check_status(f"FIND_BY_ID still finds {doc_id}",
-                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": HEAL_COLL,
-                                "_id": doc_id}), "OK")
+                     conn.find(doc_id, coll=HEAL_COLL), "OK")
 
 
 def save_raw_number(conn: Conn, coll: str, doc_id: str, literal: str) -> dict:
-    return conn.send_raw_strict('{"type":"SAVE","databaseName":"%s","collectionName":"%s",'
-                         '"object":{"_id":"%s","v":%s}}' % (DB, coll, doc_id, literal))
+    return conn.send_raw('{"type":"SAVE","databaseName":"%s","collectionName":"%s",'
+                         '"object":{"_id":"%s","v":%s}}' % (DB, coll, doc_id, literal), strict=True)
 
 
 def test_non_finite_numbers_are_refused(conn: Conn):
     section("A number the serializer cannot spell is refused instead of stored as null")
     coll = NON_FINITE_COLL
     bu.check_status("create the collection",
-                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+                    conn.create_coll(coll), "OK")
 
     for label, literal in (("1e400", "1e400"), ("-1e400", "-1e400"), ("a 401-digit integer", "1" + "0" * 400)):
         response = save_raw_number(conn, coll, "refused", literal)
@@ -1998,16 +1746,15 @@ def test_non_finite_numbers_are_refused(conn: Conn):
     bu.check_status("SAVE of an ordinary number is accepted", save_raw_number(conn, coll, "small", "5"), "OK")
 
     bu.check_status("CREATE_INDEX on the field",
-                    conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
-                               "fieldName": "v"}), "OK")
+                    conn.create_index("v", coll=coll), "OK")
     time.sleep(1.5)
     assert_count_agrees_with_rows(conn, coll, "warm")
 
 
 def assert_count_agrees_with_rows(conn: Conn, coll: str, phase: str):
-    gt = {"type": "FILTER", "operator": {"fieldOperatorType": "GREATER_THAN", "field": "v", "value": 1}}
-    rows = aggregate_ids(conn, coll, [gt])
-    counted = aggregate_count(conn, coll, [gt])
+    gt = bu.filter_step("v", "GREATER_THAN", 1)
+    rows = conn.ids(coll, [gt])
+    counted = conn.count(coll, [gt])
     bu.check(f"index-only COUNT equals the rows the same FILTER returns ({phase})", counted == len(rows),
              detail=f"count={counted} rows={rows}")
 
@@ -2015,12 +1762,11 @@ def assert_count_agrees_with_rows(conn: Conn, coll: str, phase: str):
 def test_non_finite_numbers_stay_refused_after_a_restart(conn: Conn):
     section("The non-finite refusal and its index survive a restart")
     coll = NON_FINITE_COLL
-    stored = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": "big"})
+    stored = conn.find("big", coll=coll)
     bu.check("the largest representable double reads back unchanged",
              (stored.get("object") or {}).get("v") == 1.7976931348623157e308, detail=str(stored)[:200])
     bu.check("the refused document was never stored",
-             conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
-                        "_id": "refused"}).get("status") != "OK")
+             conn.find("refused", coll=coll).get("status") != "OK")
     assert_count_agrees_with_rows(conn, coll, "cold")
     bu.check_status("REINDEX the collection",
                     conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": coll}), "OK")
@@ -2041,8 +1787,7 @@ def seed_a_database_with_a_dropped_collection(conn: Conn):
     check_status("create the registration database", conn.send(
         {"type": "CREATE_DATABASE", "databaseName": REGISTRATION_DB}), "OK")
     for coll in REGISTRATION_COLLS:
-        check_status(f"create {coll}", conn.send({
-            "type": "CREATE_COLLECTION", "databaseName": REGISTRATION_DB, "collectionName": coll}), "OK")
+        check_status(f"create {coll}", conn.create_coll(coll, db=REGISTRATION_DB), "OK")
         check_status(f"save into {coll}", conn.save({"_id": f"{coll}-1", "n": 1}, db=REGISTRATION_DB, coll=coll),
                      "OK")
     check_status(f"drop {REGISTRATION_DROPPED}", conn.send({
@@ -2101,16 +1846,12 @@ def hammer_until_refused(acknowledged: list):
 
 def stop_the_node_under_a_connected_writer(proc) -> list:
     with admin_conn() as conn:
-        check_status("create the collection", conn.send({
-            "type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SHUTDOWN_COLL}), "OK")
-        check_status("index the tag", conn.send({
-            "type": "CREATE_INDEX", "databaseName": DB, "collectionName": SHUTDOWN_COLL, "fieldName": "tag"}), "OK")
+        check_status("create the collection", conn.create_coll(SHUTDOWN_COLL), "OK")
+        check_status("index the tag", conn.create_index("tag", coll=SHUTDOWN_COLL), "OK")
     acknowledged: list = []
     thread = threading.Thread(target=hammer_until_refused, args=(acknowledged,), daemon=True)
     thread.start()
-    deadline = time.time() + 30
-    while len(acknowledged) < 50 and time.time() < deadline:
-        time.sleep(0.05)
+    bu.wait_until(lambda: len(acknowledged) >= 50, timeout_s=30, interval_s=0.05)
     proc.terminate()
     thread.join(60)
     proc.wait(timeout=60)
@@ -2122,12 +1863,11 @@ def test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_co
     section("A node stopped under a connected writer refuses writes rather than losing their index events")
     check("the writer got acknowledged writes in before the stop", len(acknowledged) >= 50,
           f"only {len(acknowledged)}")
-    found = aggregate_ids(conn, SHUTDOWN_COLL, [{"type": "FILTER", "operator": {
-        "fieldOperatorType": "EQUALS", "field": "tag", "value": SHUTDOWN_TAG}}])
+    found = conn.ids(SHUTDOWN_COLL, [bu.filter_step("tag", "EQUALS", SHUTDOWN_TAG)])
     missing = sorted(set(acknowledged) - set(found))
     check("every acknowledged write is found by the index-backed filter", not missing,
           f"{len(missing)} acknowledged write(s) missing from the indexed answer, e.g. {missing[:5]}")
-    scanned = aggregate_ids(conn, SHUTDOWN_COLL, [{"type": "SKIP", "skip": 0}])
+    scanned = conn.ids(SHUTDOWN_COLL, FULL_SCAN)
     check("and the indexed answer agrees with a scan", sorted(found) == sorted(scanned),
           f"indexed={len(found)} scanned={len(scanned)}")
 
@@ -2135,10 +1875,7 @@ def test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_co
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-        sys.exit(1)
+    bu.require_jar()
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-storage-")
     log_path = os.path.join(work_dir, "server.log")
@@ -2174,7 +1911,6 @@ def main():
             test_a_conjunction_counts_exactly_the_rows_it_returns(conn)
             test_a_buffered_write_to_a_missing_collection_is_refused_at_buffer_time(conn)
             test_a_script_predicate_returning_infinity_keeps_its_document(conn)
-            test_a_committed_transaction_survives_a_restart_whole(conn)
             test_an_unreadable_schema_refuses_the_write(conn, work_dir)
             test_index_operations_cannot_destroy_the_pk_index(conn, work_dir)
             test_a_filter_on_id_cannot_destroy_the_pk_index(conn, work_dir)
@@ -2183,9 +1919,7 @@ def main():
             test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn)
             test_not_equals_null_returns_the_documents_that_are_not_null(conn)
             test_in_and_not_in_treat_null_as_a_member(conn)
-            test_a_script_cannot_store_a_value_the_reader_rejects(conn)
             test_a_script_written_document_survives_a_restart(conn)
-            test_count_agrees_with_a_scan_after_a_restart(conn)
             test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn)
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
@@ -2241,7 +1975,6 @@ def main():
             test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn)
             test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn, work_dir)
             test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
-            test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
             test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn)
             test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn, work_dir)

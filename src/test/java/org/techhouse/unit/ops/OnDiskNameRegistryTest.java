@@ -4,9 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -51,10 +55,22 @@ public class OnDiskNameRegistryTest {
         assertNull(OnDiskNameRegistry.collidingCollection(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    @Test
-    public void test_case_differing_database_collides() {
-        assertEquals(TestGlobals.DB, OnDiskNameRegistry.collidingDatabase(TestGlobals.DB.toUpperCase(Locale.ROOT)));
-        assertEquals(TestGlobals.DB, OnDiskNameRegistry.collidingDatabase(TestGlobals.DB.toLowerCase(Locale.ROOT)));
+    private static Stream<Arguments> collidingDatabases() {
+        return Stream.of(
+                Arguments.of("test_case_differing_database_collides upper", TestGlobals.DB.toUpperCase(Locale.ROOT),
+                        TestGlobals.DB),
+                Arguments.of("test_case_differing_database_collides lower", TestGlobals.DB.toLowerCase(Locale.ROOT),
+                        TestGlobals.DB),
+                Arguments.of("test_case_differing_admin_database_collides Admin", "Admin", Globals.ADMIN_DB_NAME),
+                Arguments.of("test_case_differing_admin_database_collides ADMIN", "ADMIN", Globals.ADMIN_DB_NAME),
+                Arguments.of("test_admin_pages_reserved_name_collides", "Admin_Pages", Globals.ADMIN_PAGES_DB_NAME),
+                Arguments.of("test_case_differing_cluster_folder_collides", "Cluster", Globals.CLUSTER_FOLDER));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("collidingDatabases")
+    public void test_a_database_name_collides_with_its_on_disk_folder(String name, String requested, String expected) {
+        assertEquals(expected, OnDiskNameRegistry.collidingDatabase(requested), name);
     }
 
     @Test
@@ -76,22 +92,6 @@ public class OnDiskNameRegistryTest {
     public void test_case_differing_definition_name_collides() {
         assertEquals("MyProc", OnDiskNameRegistry.collidingDefinition(List.of("MyProc", "other"), "myproc"));
         assertNull(OnDiskNameRegistry.collidingDefinition(List.of("MyProc", "other"), "MyProc"));
-    }
-
-    @Test
-    public void test_case_differing_admin_database_collides() {
-        assertEquals(Globals.ADMIN_DB_NAME, OnDiskNameRegistry.collidingDatabase("Admin"));
-        assertEquals(Globals.ADMIN_DB_NAME, OnDiskNameRegistry.collidingDatabase("ADMIN"));
-    }
-
-    @Test
-    public void test_admin_pages_reserved_name_collides() {
-        assertEquals(Globals.ADMIN_PAGES_DB_NAME, OnDiskNameRegistry.collidingDatabase("Admin_Pages"));
-    }
-
-    @Test
-    public void test_case_differing_cluster_folder_collides() {
-        assertEquals(Globals.CLUSTER_FOLDER, OnDiskNameRegistry.collidingDatabase("Cluster"));
     }
 
     @Test
@@ -149,5 +149,4 @@ public class OnDiskNameRegistryTest {
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
         assertTrue(OnDiskNameRegistry.groupedByOnDiskKey().isEmpty());
     }
-
 }

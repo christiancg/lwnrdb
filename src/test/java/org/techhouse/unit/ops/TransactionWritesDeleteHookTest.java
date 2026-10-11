@@ -1,16 +1,9 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.io.File;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,17 +13,14 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.RollbackTransactionRequest;
-import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.resp.OperationResponse;
@@ -38,7 +28,6 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class TransactionWritesDeleteHookTest {
-    private static final String ACTOR = "alice";
     private static final Configuration configuration = Configuration.getInstance();
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -51,17 +40,8 @@ public class TransactionWritesDeleteHookTest {
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.setPrivateField(configuration, "triggersEnabled", true);
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
-        ProcedureOperationHelper
-                .executeSave(new SaveProcedureRequest(TestGlobals.DB, "allow", "export default (d) => {};"), ACTOR);
-        cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
-                List.of(new TriggerDefinition("guard", new LinkedHashSet<>(Set.of(EventType.DELETED)), "allow",
-                        TriggerDefinition.MODE_DOCUMENT, TriggerDefinition.TIMING_BEFORE, false, true, ACTOR, 1L, 1L,
-                        1L, ACTOR)));
-        final var socket = mock(Socket.class);
-        final var address = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(address);
-        when(address.getHostAddress()).thenReturn("127.0.0.1");
-        client = clientTracker.addClient(socket);
+        BeforeHookTestSupport.installHook("guard", "allow", "export default (d) => {};", EventType.DELETED);
+        client = BeforeHookTestSupport.newClient();
     }
 
     @AfterEach

@@ -1,47 +1,6 @@
-"""End-to-end tests for the RUN_SCRIPT operation (the SimpleJS engine over the wire).
-
-Like the TLS and clustering suites this script is **self-contained**: it starts its own
-LWNRDB instance on a dedicated port and working directory, because the feature needs a
-configured sandbox that the shared CI server does not have. It runs in two phases:
-
-  phase 1 — `scriptsEnabled=true` with a deliberately tight sandbox
-            (small instruction budget, short deadline, low log caps, small source cap)
-            so every limit is reachable in a test rather than only in theory;
-  phase 2 — the same data directory restarted with `scriptProcedureImportEnabled=false`,
-            proving that switch closes the `procedures/` prefix while leaving the
-            built-in specifiers and import-free procedures working;
-  phase 3 — restarted again with `scriptsEnabled=false`, proving the master switch
-            refuses the operation for everyone, admins included.
-
-What is covered:
-
-  * gating: engine disabled, no permission, per-database grants, revocation, ownership,
-    unauthenticated, and the reserved/unknown-database and missing-script validations;
-  * the sandbox: instruction budget, recursion depth, wall-clock deadline, source size,
-    and the console log caps (line count + per-line clipping);
-  * the host `db` interface: reads (findById/aggregate/listCollections/listDatabases),
-    writes (save/bulkSave/delete), transactions (commit, rollback, async rejection), the
-    database scope, and the fact that every refused operation throws into the script;
-  * the rest of the host surface: EJson custom types (Geo/Vector/DbDateTime/DbTime),
-    `crypto`, the host-gated `fetch` and text-import capabilities, module resolution,
-    `import.meta`, and the configured time zone / locale;
-  * importing a stored procedure as a module (`procedures/<name>`): every import form,
-    library-to-library chains, the scope restriction, disabled procedures, cycles,
-    one-evaluation-per-run, budget sharing, and the exports-only contract;
-  * `args` in its various shapes, and the result contract (return / export default /
-    named exports / awaited promise / undefined);
-  * a broad sweep of the ES2026 language surface the engine implements, so a regression
-    in the interpreter shows up here and not only in test262.
-
-The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping
-it never touches an unrelated LWNRDB process.
-"""
-
 import http.server
-import json
 import os
 import re
-import sys
 import tempfile
 import threading
 import time
@@ -59,13 +18,8 @@ OTHER_DB = "script_other_db"
 COLL = "docs"
 COLL2 = "more"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
-# Sandbox for phase 1. Tight enough that every limit is reachable, loose enough that a
-# legitimate script on a slow shared runner never trips one by accident.
 INSTRUCTION_BUDGET = 2_000_000
 TIMEOUT_MS = 5_000
 MAX_DEPTH = 64
@@ -77,15 +31,11 @@ MAX_RESULT_BYTES = 64 * 1024
 CURSOR_BATCH_SIZE = 100
 CURSOR_MAX_BATCH_SIZE = 500
 
-# The paged-read collection: big enough that materialising it at once costs more than
-# MAX_MEMORY_BYTES, so the cursor is the only way a script can walk it.
 BIG_COLL = "big"
 EMPTY_COLL = "empty"
 BIG_DOCS = 300
 BIG_PAYLOAD_CHARS = 8 * 1024
 
-
-# ── reporting helpers (mirrors the other suites) ─────────────────────────────
 
 def check_failed_script(label: str, response: dict, expected_code: str, message_contains: str = ""):
     ok = (response.get("status") == "ERROR" and response.get("errorCode") == expected_code
@@ -106,8 +56,6 @@ def check_no_stack(label: str, response: dict):
     check(label, not response.get("stack"), f"expected no stack, got {response.get('stack')!r}")
 
 
-# ── connection / protocol ────────────────────────────────────────────────────
-
 class Conn(bu.Conn):
     def run(self, script: str, args=None, db=DB) -> dict:
         payload = {"type": "RUN_SCRIPT", "databaseName": db, "script": script}
@@ -120,55 +68,41 @@ class Conn(bu.Conn):
         payload.update(extra)
         return self.send(payload)
 
-def admin_conn() -> Conn:
-    conn = Conn()
-    conn.authenticate()
-    return conn
+admin_conn = Conn.authenticated
 
-
-# ── server lifecycle ─────────────────────────────────────────────────────────
 
 def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled: bool = True,
                  history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE", history_enabled: bool = True,
                  fetch_enabled: bool = False, fetch_allowlist: str = "", fetch_timeout_ms: int = 5000,
                  fetch_max_response_bytes: str = "1Mb"):
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-        f"scriptsEnabled={'true' if scripts_enabled else 'false'}\n"
-        f"scriptInstructionBudget={INSTRUCTION_BUDGET}\n"
-        f"scriptTimeoutMs={TIMEOUT_MS}\n"
-        f"scriptMaxDepth={MAX_DEPTH}\n"
-        f"scriptMaxSourceBytes={MAX_SOURCE_BYTES}\n"
-        f"scriptMaxLogLines={MAX_LOG_LINES}\n"
-        f"scriptMaxLogLineChars={MAX_LOG_LINE_CHARS}\n"
-        f"scriptMaxMemoryBytes={MAX_MEMORY_BYTES}\n"
-        f"scriptMaxResultBytes={MAX_RESULT_BYTES}\n"
-        f"scriptCursorBatchSize={CURSOR_BATCH_SIZE}\n"
-        f"scriptCursorMaxBatchSize={CURSOR_MAX_BATCH_SIZE}\n"
-        "scriptTextImportEnabled=false\n"
-        f"scriptProcedureImportEnabled={'true' if procedure_imports_enabled else 'false'}\n"
-        "scriptTimeZone=UTC\n"
-        "scriptLocale=en-US\n"
-        f"scriptRunHistoryEnabled={'true' if history_enabled else 'false'}\n"
-        f"scriptRunHistoryKinds={history_kinds}\n"
-        "scriptRunHistoryRetentionMs=604800000\n"
-        "scriptRunHistoryIncludeLogs=false\n"
-        "scriptRunHistoryMaxErrorChars=2000\n"
-        f"scriptFetchEnabled={'true' if fetch_enabled else 'false'}\n"
-        f"scriptFetchAllowlist={fetch_allowlist}\n"
-        f"scriptFetchTimeoutMs={fetch_timeout_ms}\n"
-        f"scriptFetchMaxResponseBytes={fetch_max_response_bytes}\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+    bu.write_config(work_dir, PORT,
+                    scriptsEnabled=scripts_enabled,
+                    scriptInstructionBudget=INSTRUCTION_BUDGET,
+                    scriptTimeoutMs=TIMEOUT_MS,
+                    scriptMaxDepth=MAX_DEPTH,
+                    scriptMaxSourceBytes=MAX_SOURCE_BYTES,
+                    scriptMaxLogLines=MAX_LOG_LINES,
+                    scriptMaxLogLineChars=MAX_LOG_LINE_CHARS,
+                    scriptMaxMemoryBytes=MAX_MEMORY_BYTES,
+                    scriptMaxResultBytes=MAX_RESULT_BYTES,
+                    scriptCursorBatchSize=CURSOR_BATCH_SIZE,
+                    scriptCursorMaxBatchSize=CURSOR_MAX_BATCH_SIZE,
+                    scriptTextImportEnabled=False,
+                    scriptProcedureImportEnabled=procedure_imports_enabled,
+                    scriptTimeZone="UTC",
+                    scriptLocale="en-US",
+                    scriptRunHistoryEnabled=history_enabled,
+                    scriptRunHistoryKinds=history_kinds,
+                    scriptRunHistoryRetentionMs=604800000,
+                    scriptRunHistoryIncludeLogs=False,
+                    scriptRunHistoryMaxErrorChars=2000,
+                    scriptFetchEnabled=fetch_enabled,
+                    scriptFetchAllowlist=fetch_allowlist,
+                    scriptFetchTimeoutMs=fetch_timeout_ms,
+                    scriptFetchMaxResponseBytes=fetch_max_response_bytes)
 
 
 class FetchFixture:
-    """A stdlib HTTP server the fetch phase points at, so the suite keeps its no-dependency rule."""
 
     def __init__(self):
         self.requests = []
@@ -217,8 +151,6 @@ class FetchFixture:
         self.server.server_close()
 
 
-# ── fixtures ─────────────────────────────────────────────────────────────────
-
 def setup_data(conn: Conn):
     section("Setup")
     for db in (DB, OTHER_DB):
@@ -244,10 +176,6 @@ def setup_data(conn: Conn):
         seeded = seeded and response.get("status") == "OK"
     check(f"seed {BIG_DOCS} large documents into {BIG_COLL}", seeded)
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 1 tests — scripts enabled
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_basics(conn: Conn):
     section("Basics and the result contract")
@@ -297,7 +225,6 @@ def test_stack_traces(conn: Conn):
 
     check_no_stack("a successful run carries no stack", conn.run("return 1;"))
 
-    # A sandbox abort is not a program error, so it deliberately reports no frames
     check_no_stack("an instruction-budget abort carries no stack", conn.run("while (true) {}"))
     check_no_stack("a depth abort carries no stack",
                    conn.run("function recurse(n) { return recurse(n + 1); }\nreturn recurse(0);"))
@@ -390,7 +317,6 @@ def test_sandbox_limits(conn: Conn):
                  conn.run('return "x".repeat(1000).length;'), 1000)
     check_result("incremental string building is not penalised by the memory budget",
                  conn.run('let s = "";\nfor (let i = 0; i < 20000; i++) s += "x";\nreturn s.length;'), 20000)
-    # The result conversion runs inside the sandbox, so a runaway getter aborts rather than hanging
     check_code("a runaway getter hits the instruction budget",
                conn.run("return { get n() { while (true) {} } };"), "ERROR", "400-11")
 
@@ -416,8 +342,6 @@ def test_run_metrics(conn: Conn):
            .get("metrics") or {}).get("instructions", 0)
     check("a bigger loop costs more instructions", big > small, f"small={small} big={big}")
 
-    # The holder is filled by the interpreter's own finally, so an abort still reports its cost —
-    # which is exactly the run an operator wants the numbers for.
     exhausted = conn.run("while (true) {}")
     check_code("the runaway run still fails", exhausted, "ERROR", "400-11")
     check("a run that exhausted its budget still reports metrics",
@@ -438,8 +362,6 @@ def test_run_metrics(conn: Conn):
     check("dbOperations counts the host calls the script made",
           (reads.get("metrics") or {}).get("dbOperations") == 3, f"metrics={reads.get('metrics')!r}")
 
-    # peakMemoryBytes is a high-water mark: a drained cursor batch is credited back, so a figure
-    # taken at the end would read as ~0 for a walk that really did hold a batch in heap.
     walk = conn.run(f'import db from "db";\n'
                     f'const cur = db.cursor(db.name, "{COLL}", '
                     f'[{{ type: "SORT", fieldName: "_id", ascending: true }}], {{ batchSize: 2 }});\n'
@@ -455,13 +377,10 @@ def test_run_metrics(conn: Conn):
 
 def test_history_kinds(conn: Conn):
     section("Run history kinds")
-    # RUN_SCRIPT is deliberately absent from the default kinds: an exploratory client would otherwise
-    # fill the collection with one row per keystroke.
     check_result("an ad-hoc run still works", conn.run("return 'unrecorded';"), "unrecorded")
     time.sleep(1.0)
     response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
                           "aggregationSteps": [{"type": "SORT", "fieldName": "startedAt", "ascending": False}]})
-    # The collection may well exist - CALL_PROCEDURE is recorded by default - but no ad-hoc run is in it.
     ad_hoc = [row for row in (response.get("results") or []) if row.get("kind") == "RUN_SCRIPT"]
     check("an ad-hoc run is not recorded under the default kinds", not ad_hoc, f"rows={ad_hoc!r}")
 
@@ -498,13 +417,13 @@ def test_a_script_cannot_mutate_the_run_history(conn: Conn):
 def test_history_kinds_enabled(conn: Conn):
     section("Run history with RUN_SCRIPT recorded")
     check_result("a recorded ad-hoc run", conn.run("let t = 0; for (let i = 0; i < 20; i++) t += i; return t;"), 190)
-    deadline = time.time() + 15.0
-    rows = []
-    while not rows and time.time() < deadline:
-        time.sleep(0.3)
+
+    def recorded_runs() -> list:
         response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
                               "aggregationSteps": [{"type": "SORT", "fieldName": "startedAt", "ascending": False}]})
-        rows = [row for row in (response.get("results") or []) if row.get("kind") == "RUN_SCRIPT"]
+        return [row for row in (response.get("results") or []) if row.get("kind") == "RUN_SCRIPT"]
+
+    rows = bu.wait_until(recorded_runs, timeout_s=15.0, interval_s=0.3) or []
     check("the ad-hoc run is recorded once the kind is configured", bool(rows), f"rows={rows!r}")
     if rows:
         check("the row reports the outcome", rows[0].get("outcome") == "ok", f"row={rows[0]!r}")
@@ -555,7 +474,6 @@ def test_fetch(conn: Conn, base_url: str, fixture):
                       "return (await res.json()).n;")
     check_result("a POST round-trips a JSON body", posted, 7)
 
-    # Refused before any connection is attempted, which is what the fixture's empty log proves.
     before = len(fixture.requests)
     denied = conn.run("return fetch('http://elsewhere.invalid/x').then(r => r.status);")
     check_failed_script("a host outside the allowlist is refused", denied, "400-9", "host not allowed")
@@ -567,8 +485,6 @@ def test_fetch(conn: Conn, base_url: str, fixture):
     slow = conn.run(f"return fetch('{base_url}/slow').then(r => r.text());")
     check_failed_script("a response past the timeout fails", slow, "400-9", "")
 
-    # The capability reaches stored code too: the trigger and schedule dispatchers rebuild the limits
-    # with their own wall clock, and the fetch grant has to survive that rebuild.
     check_status("store a fetching procedure",
                  conn.send({"type": "SAVE_PROCEDURE", "databaseName": DB, "name": "fetcher",
                             "script": f"const res = await fetch('{base_url}/hello');\nreturn await res.text();"}),
@@ -579,8 +495,6 @@ def test_fetch(conn: Conn, base_url: str, fixture):
 
 def test_locale_arguments(conn: Conn):
     section("Locale arguments")
-    # Swedish sorts "ä" after "z" and English does not, which is what proves the argument is read
-    # rather than the configured scriptLocale being used regardless.
     check_result("localeCompare honours an explicit locale",
                  conn.run("return ['z', 'ä'].sort((a, b) => a.localeCompare(b, 'sv')).join('');"), "zä")
     check_result("… and differs from the host locale",
@@ -893,6 +807,12 @@ def test_value_guards(conn: Conn):
     check_failed_script("a malformed custom value is refused", conn.run(
         'import db from "db";\n'
         f'db.save(db.name, "{COLL}", {{ _id: "badcustom", f: "#geo(bad)" }});'), "400-9", "Cannot serialize")
+    for label, literal in (("a key shaped like an unregistered custom type", '{ _id: "badcustom", "#nosuch(1)": 1 }'),
+                           ("a key shaped like a malformed custom value",
+                            '{ _id: "badcustom", nested: { "#geo(bad)": 1 } }')):
+        check_failed_script(f"a script storing {label} is refused", conn.run(
+            'import db from "db";\n'
+            f'db.save(db.name, "{COLL}", {literal});'), "400-9")
     check_code("neither reached the collection",
                conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
                           "_id": "badcustom"}), "NOT_FOUND", "404-2")
@@ -1079,7 +999,6 @@ def test_procedure_imports(conn: Conn):
     check_result("a library may import another library",
                  conn.run("import { twiceCents } from 'procedures/lib_chain';\nreturn twiceCents(1.5);"), 300)
 
-    # Absence, not failure, is still an error here: an unresolvable specifier throws into the script.
     check_result("an unknown procedure throws a catchable error",
                  conn.run("try { await import('procedures/nope'); return 'resolved'; }\n"
                           "catch (e) { return e.message; }"),
@@ -1097,7 +1016,6 @@ def test_procedure_imports(conn: Conn):
                         conn.run("import { x } from 'procedures/nope';\nreturn x;"),
                         "400-9", "Cannot find module 'procedures/nope'")
 
-    # An unresolvable import is refused when the procedure is installed, not when it is called.
     check_code("saving a procedure whose import does not exist is refused",
                conn.save_procedure("lib_broken", "import { x } from 'procedures/absent';\nexport const y = x;"),
                "ERROR", "400-18")
@@ -1109,7 +1027,6 @@ def test_procedure_imports(conn: Conn):
     check_status("the built-in specifiers are never checked",
                  conn.save_procedure("lib_builtins", "import db from 'db';\nexport const n = typeof db;"), "OK")
 
-    # The re-export forms carry a specifier too, so they are checked and they fail the same way.
     check_code("a re-export from a missing procedure is refused at save time",
                conn.save_procedure("lib_reexport", "export { cents } from 'procedures/absent';"), "ERROR", "400-18")
     check_code("an export-all from a missing procedure is refused at save time",
@@ -1136,8 +1053,6 @@ def test_procedure_imports(conn: Conn):
     check_result("a sourceless export still reads the local scope",
                  conn.run("const local = 5;\nexport { local };"), {"local": 5})
 
-    # A computed specifier is not statically visible, so the save-time check cannot see it. It must still
-    # fail when it runs - the install-time check is an early warning, not a guarantee.
     check_status("a computed specifier passes the save-time check",
                  conn.save_procedure("lib_computed",
                                      "const where = 'procedures/' + 'absent';\n"
@@ -1149,7 +1064,6 @@ def test_procedure_imports(conn: Conn):
           and "Cannot find module 'procedures/absent'" in (computed.get("message") or ""),
           f"got {computed.get('errorCode')} {computed.get('message')!r}")
 
-    # A library deleted after its importer was installed: the check ran when there was nothing wrong.
     check_status("store a base library", conn.save_procedure("lib_base", "export const base = 7;"), "OK")
     check_status("store a library that imports it",
                  conn.save_procedure("lib_mid", "import { base } from 'procedures/lib_base';\n"
@@ -1162,8 +1076,6 @@ def test_procedure_imports(conn: Conn):
                         conn.run("import { mid } from 'procedures/lib_mid';\nreturn mid();"),
                         "400-9", "Cannot find module 'procedures/lib_base'")
 
-    # Console output still comes back when the failure is an import. A static import is bound before any
-    # statement runs, so the logging has to happen before a dynamic one for the point to be observable.
     failed = conn.run("console.log('before the import');\n"
                       "await import('procedures/absent');\n"
                       "return 'unreachable';")
@@ -1193,8 +1105,6 @@ def test_procedure_imports(conn: Conn):
     check_failed_script("a self-import is a cycle",
                         conn.run("import { self } from 'procedures/lib_loop';\nreturn self();"),
                         "400-9", "Circular import of module")
-    # A save refuses an import that does not resolve yet, so the pair is built dependency-first and
-    # the cycle is closed by updating the second one afterwards.
     check_status("store the second half without its import first",
                  conn.save_procedure("lib_b", "export function b() { return 1; }"), "OK")
     check_status("store the first half of a mutual import",
@@ -1219,14 +1129,11 @@ def test_procedure_imports(conn: Conn):
                           "await import('procedures/lib_counter');\n"
                           "return db.findById(db.name, '%s', 'eval-count').seen;" % COLL), 1)
 
-    # The importer's own budget pays for the import, so a runaway library cannot buy fresh compute.
     check_status("store a library that never terminates",
                  conn.save_procedure("lib_spin", "while (true) { }"), "OK")
     check_failed_script("an imported module shares the importing run's budget",
                         conn.run("import 'procedures/lib_spin';\nreturn 'never';"), "400-11")
 
-    # A procedure written for CALL_PROCEDURE returns rather than exports, and only exports are
-    # importable - so it imports as undefined. The trap worth pinning, not a defect.
     check_status("store a procedure written in the CALL_PROCEDURE style",
                  conn.save_procedure("lib_returning", "return 5;"), "OK")
     check_result("a procedure written with a top-level return imports as undefined",
@@ -1445,8 +1352,6 @@ def test_cursor(conn: Conn):
     check("… and the total matches a plain AGGREGATE count", wire_count == BIG_DOCS,
           f"AGGREGATE count={wire_count!r}")
 
-    # The premise of the whole feature: the same work, one batch at a time, fits a budget the
-    # all-at-once read cannot.
     check_code("db.aggregate of the whole collection exceeds the memory budget",
                conn.run('import db from "db";\n'
                         f'return db.aggregate(db.name, "{BIG_COLL}", []).length;'), "ERROR", "400-12")
@@ -1487,13 +1392,8 @@ DOOMED_PASSWORD = "password1234"
 
 
 def await_document(conn: Conn, coll: str, doc_id: str, timeout=15.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        found = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": doc_id})
-        if found.get("status") == "OK":
-            return True
-        time.sleep(0.05)
-    return False
+    return bool(bu.wait_until(lambda: conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
+                                                 "_id": doc_id}).get("status") == "OK", timeout, 0.05))
 
 
 def test_a_script_transaction_releases_its_locks_when_its_user_is_deleted_mid_run(conn: Conn):
@@ -1626,7 +1526,6 @@ def test_permissions(conn: Conn):
     users = conn.send({"type": "LIST_USERS", "aggregationSteps": [
         {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "_id", "value": "script_reader"}}]})
     listed = (users.get("users") or [{}])[0]
-    # The grant is reported as a level; a boolean sent by an older client reads as RUN.
     check("LIST_USERS reports the script grants", listed.get("scriptPermissions") == {DB: "RUN"},
           f"scriptPermissions={listed.get('scriptPermissions')!r}")
 
@@ -1641,10 +1540,6 @@ def test_admin_is_unrestricted(conn: Conn):
     check_result("an admin may script the other database in its own run",
                  conn.run("return 'other db';", db=OTHER_DB), "other db")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 2 — scripts disabled
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_procedure_imports_disabled(conn: Conn):
     section("Procedure imports disabled (scriptProcedureImportEnabled=false)")
@@ -1684,15 +1579,10 @@ def cleanup(conn: Conn):
         check_status(f"drop {db}", conn.send({"type": "DROP_DATABASE", "databaseName": db}), "OK")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-
 def main():
     bu.banner("RUN_SCRIPT (SimpleJS over the wire) test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-        sys.exit(1)
+    bu.require_jar()
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-runscript-")
     log_path = os.path.join(work_dir, "server.log")
@@ -1751,8 +1641,6 @@ def main():
         with admin_conn() as conn:
             test_procedure_imports_disabled(conn)
 
-        # A phase of its own: fetch and the RUN_SCRIPT history kind are both server-fixed switches, and
-        # the fetch allowlist has to name the fixture's host, which only exists once it is listening.
         bu.stop_server(proc)
         proc = None
         fixture = FetchFixture()

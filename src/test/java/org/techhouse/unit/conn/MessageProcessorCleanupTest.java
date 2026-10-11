@@ -2,18 +2,11 @@ package org.techhouse.unit.conn;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,8 +14,6 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -33,30 +24,13 @@ public class MessageProcessorCleanupTest {
     void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        final var createReq = new CreateUserRequest();
-        createReq.setUsername(USERNAME);
-        createReq.setPassword("password123");
-        createReq.setAdmin(true);
-        createReq.setGlobalPermissions(new HashSet<>());
-        createReq.setDatabasePermissions(new HashMap<>());
-        createReq.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(createReq);
+        TestUtils.createAdmin(USERNAME);
     }
 
     @AfterEach
     void tearDown() throws Exception {
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
-    }
-
-    private static Socket mockSocket(InputStream in, OutputStream out) throws Exception {
-        final var socket = mock(Socket.class);
-        final var address = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(address);
-        when(address.getHostAddress()).thenReturn("127.0.0.1");
-        when(socket.getInputStream()).thenReturn(in);
-        when(socket.getOutputStream()).thenReturn(out);
-        return socket;
     }
 
     private static final class ThrowingAfterSave extends OutputStream {
@@ -91,7 +65,7 @@ public class MessageProcessorCleanupTest {
                 + "\",\"password\":\"password123\"}\n" + "{\"type\":\"START_TRANSACTION\"}\n"
                 + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"object\":{\"_id\":\"cleanup-1\"}}\n";
-        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+        final var socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
                 new ThrowingAfterSave(toThrow));
         final var thread = new Thread(new MessageProcessor(socket));
         thread.setUncaughtExceptionHandler((ignoredThread, ignoredError) -> {

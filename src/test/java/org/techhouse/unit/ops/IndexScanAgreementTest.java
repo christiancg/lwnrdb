@@ -4,39 +4,25 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cache.Cache;
-import org.techhouse.config.Globals;
-import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.custom_types.JsonDateTime;
-import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.IndexHelper;
-import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
-import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
-import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
 /**
  * The single property the whole index layer owes its callers: an index-backed answer equals the
@@ -46,65 +32,7 @@ import org.techhouse.test.TestUtils;
  * value classes that have historically disagreed (an integral operand the parser narrows to Integer
  * against a Double index entry, negative zero, Integer.MIN_VALUE, case variants, absent fields).
  */
-public class IndexScanAgreementTest {
-    private Cache cache;
-    private final org.techhouse.ejson.EJson eJson = new org.techhouse.ejson.EJson();
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-        cache = IocContainer.get(Cache.class);
-    }
-
-    @AfterEach
-    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
-        TestUtils.releaseAllLocks();
-        TestUtils.standardTearDown();
-    }
-
-    private void insert(String id, String field, JsonBaseElement value) throws IOException {
-        final var object = new JsonObject();
-        object.add(Globals.PK_FIELD, new JsonString(id));
-        if (value != null) {
-            object.add(field, value);
-        }
-        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, object);
-        entry.set_id(id);
-        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
-    }
-
-    private void indexField(String field) throws InterruptedException {
-        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
-        final var entry = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
-        final var indexes = new java.util.HashSet<>(entry.getIndexes());
-        indexes.add(field);
-        entry.setIndexes(indexes);
-    }
-
-    private List<String> run(BaseAggregationStep... steps) throws IOException {
-        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setAggregationSteps(List.of(steps));
-        final var results = new ArrayList<String>();
-        for (final var document : AggregationOperationHelper.processAggregation(request)) {
-            results.add(eJson.toJson(document));
-        }
-        java.util.Collections.sort(results);
-        return results;
-    }
-
-    private static FilterAggregationStep filter(FieldOperatorType type, String field, JsonBaseElement value) {
-        return new FilterAggregationStep(new FieldOperator(type, field, value));
-    }
-
-    private static JsonArray array(JsonBaseElement... values) {
-        final var arr = new JsonArray();
-        for (final var value : values) {
-            arr.add(value);
-        }
-        return arr;
-    }
-
+public class IndexScanAgreementTest extends FilterResolutionSupport {
     private static JsonNumber parsed(String literal) {
         return new JsonNumber(literal);
     }
@@ -148,9 +76,9 @@ public class IndexScanAgreementTest {
                         () -> new BaseAggregationStep[]{filter(type, "score", parsed(literal))});
             }
         }
-        for (final var operands : List.of(array(parsed("2")), array(parsed("2"), parsed("9")),
-                array(parsed("2"), parsed("2.5")), array(parsed("0")),
-                array(parsed(Integer.toString(Integer.MIN_VALUE))))) {
+        for (final var operands : List.of(arrayOf(parsed("2")), arrayOf(parsed("2"), parsed("9")),
+                arrayOf(parsed("2"), parsed("2.5")), arrayOf(parsed("0")),
+                arrayOf(parsed(Integer.toString(Integer.MIN_VALUE))))) {
             queries.put("IN score " + operands,
                     () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "score", operands)});
             queries.put("NOT_IN score " + operands,
@@ -159,7 +87,7 @@ public class IndexScanAgreementTest {
         queries.put("COUNT after EQUALS score 2", () -> new BaseAggregationStep[]{
                 filter(FieldOperatorType.EQUALS, "score", parsed("2")), new CountAggregationStep()});
         queries.put("COUNT after IN score [2,9]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.IN, "score", array(parsed("2"), parsed("9"))), new CountAggregationStep()});
+                filter(FieldOperatorType.IN, "score", arrayOf(parsed("2"), parsed("9"))), new CountAggregationStep()});
         queries.put("SORT score asc", () -> new BaseAggregationStep[]{new SortAggregationStep("score", true)});
         queries.put("SORT score desc", () -> new BaseAggregationStep[]{new SortAggregationStep("score", false)});
         queries.put("DISTINCT score", () -> new BaseAggregationStep[]{new DistinctAggregationStep("score")});
@@ -177,24 +105,24 @@ public class IndexScanAgreementTest {
             }
         }
         queries.put("IN name [bob,carol]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.IN, "name", array(new JsonString("bob"), new JsonString("carol")))});
+                filter(FieldOperatorType.IN, "name", arrayOf(new JsonString("bob"), new JsonString("carol")))});
         queries.put("NOT_IN name [bob]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("bob")))});
+                filter(FieldOperatorType.NOT_IN, "name", arrayOf(new JsonString("bob")))});
         queries.put("IN name [BOB]",
-                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", array(new JsonString("BOB")))});
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", arrayOf(new JsonString("BOB")))});
         queries.put("NOT_IN name [BOB]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("BOB")))});
+                filter(FieldOperatorType.NOT_IN, "name", arrayOf(new JsonString("BOB")))});
         queries.put("IN name [missing]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.IN, "name", array(new JsonString("missing")))});
+                filter(FieldOperatorType.IN, "name", arrayOf(new JsonString("missing")))});
         queries.put("NOT_IN name [missing]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("missing")))});
+                filter(FieldOperatorType.NOT_IN, "name", arrayOf(new JsonString("missing")))});
         queries.put("IN name ['']",
-                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", array(new JsonString("")))});
-        queries.put("IN name []", () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", array())});
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", arrayOf(new JsonString("")))});
+        queries.put("IN name []", () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", arrayOf())});
         queries.put("COUNT after IN name [BOB]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.IN, "name", array(new JsonString("BOB"))), new CountAggregationStep()});
+                filter(FieldOperatorType.IN, "name", arrayOf(new JsonString("BOB"))), new CountAggregationStep()});
         queries.put("COUNT after NOT_IN name [BOB]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("BOB"))), new CountAggregationStep()});
+                filter(FieldOperatorType.NOT_IN, "name", arrayOf(new JsonString("BOB"))), new CountAggregationStep()});
         queries.put("SORT name asc", () -> new BaseAggregationStep[]{new SortAggregationStep("name", true)});
         queries.put("DISTINCT name", () -> new BaseAggregationStep[]{new DistinctAggregationStep("name")});
         queries.put("GROUP_BY name", () -> new BaseAggregationStep[]{new GroupByAggregationStep("name")});
@@ -217,9 +145,9 @@ public class IndexScanAgreementTest {
                     filter(type, "state", org.techhouse.ejson.elements.JsonNull.INSTANCE)});
         }
         queries.put("IN state [null]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.IN, "state", array(org.techhouse.ejson.elements.JsonNull.INSTANCE))});
+                filter(FieldOperatorType.IN, "state", arrayOf(org.techhouse.ejson.elements.JsonNull.INSTANCE))});
         queries.put("NOT_IN state [null]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.NOT_IN, "state", array(org.techhouse.ejson.elements.JsonNull.INSTANCE))});
+                filter(FieldOperatorType.NOT_IN, "state", arrayOf(org.techhouse.ejson.elements.JsonNull.INSTANCE))});
         queries.put("COUNT after NOT_EQUALS state null",
                 () -> new BaseAggregationStep[]{
                         filter(FieldOperatorType.NOT_EQUALS, "state", org.techhouse.ejson.elements.JsonNull.INSTANCE),
@@ -238,9 +166,9 @@ public class IndexScanAgreementTest {
                     filter(FieldOperatorType.NOT_EQUALS, "flag", new JsonBoolean(operand))});
         }
         queries.put("IN flag [true]",
-                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "flag", array(new JsonBoolean(true)))});
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "flag", arrayOf(new JsonBoolean(true)))});
         queries.put("NOT_IN flag [true]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.NOT_IN, "flag", array(new JsonBoolean(true)))});
+                filter(FieldOperatorType.NOT_IN, "flag", arrayOf(new JsonBoolean(true)))});
         queries.put("SORT flag asc", () -> new BaseAggregationStep[]{new SortAggregationStep("flag", true)});
         return queries;
     }
@@ -249,14 +177,14 @@ public class IndexScanAgreementTest {
             throws Exception {
         final var scanned = new LinkedHashMap<String, List<String>>();
         for (final var query : queries.entrySet()) {
-            scanned.put(query.getKey(), run(query.getValue().get()));
+            scanned.put(query.getKey(), rowsJson(query.getValue().get()));
         }
         assertFalse(scanned.isEmpty(), "the matrix must actually run something");
 
         indexField(field);
 
         for (final var query : queries.entrySet()) {
-            final var indexed = run(query.getValue().get());
+            final var indexed = rowsJson(query.getValue().get());
             assertEquals(scanned.get(query.getKey()), indexed, "index and scan disagree for: " + query.getKey());
         }
     }
@@ -288,7 +216,7 @@ public class IndexScanAgreementTest {
                         () -> new BaseAggregationStep[]{filter(type, "folded", new JsonString(value))});
             }
             queries.put("IN folded " + value, () -> new BaseAggregationStep[]{
-                    filter(FieldOperatorType.IN, "folded", array(new JsonString(value)))});
+                    filter(FieldOperatorType.IN, "folded", arrayOf(new JsonString(value)))});
             queries.put("COUNT EQUALS folded " + value, () -> new BaseAggregationStep[]{
                     filter(FieldOperatorType.EQUALS, "folded", new JsonString(value)), new CountAggregationStep()});
         }
@@ -322,11 +250,11 @@ public class IndexScanAgreementTest {
         queries.put("EQUALS mixed '1'",
                 () -> new BaseAggregationStep[]{filter(FieldOperatorType.EQUALS, "mixed", new JsonString("1"))});
         queries.put("NOT_IN mixed [1]",
-                () -> new BaseAggregationStep[]{filter(FieldOperatorType.NOT_IN, "mixed", array(parsed("1")))});
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.NOT_IN, "mixed", arrayOf(parsed("1")))});
         queries.put("IN mixed ['1']",
-                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "mixed", array(new JsonString("1")))});
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "mixed", arrayOf(new JsonString("1")))});
         queries.put("IN mixed [1]",
-                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "mixed", array(parsed("1")))});
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "mixed", arrayOf(parsed("1")))});
         queries.put("SORT mixed asc", () -> new BaseAggregationStep[]{new SortAggregationStep("mixed", true)});
 
         assertEveryQueryAgrees("mixed", queries);
@@ -344,20 +272,20 @@ public class IndexScanAgreementTest {
 
     @Test
     public void test_custom_values_inside_arrays_agree_across_spellings() throws Exception {
-        insert("a_long", "times", array(new JsonDateTime(LONG_SPELLING)));
-        insert("a_short", "times", array(new JsonDateTime(SHORT_SPELLING)));
-        insert("a_other", "times", array(new JsonDateTime(OTHER_INSTANT)));
+        insert("a_long", "times", arrayOf(new JsonDateTime(LONG_SPELLING)));
+        insert("a_short", "times", arrayOf(new JsonDateTime(SHORT_SPELLING)));
+        insert("a_other", "times", arrayOf(new JsonDateTime(OTHER_INSTANT)));
         final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
         for (final var type : List.of(FieldOperatorType.EQUALS, FieldOperatorType.NOT_EQUALS)) {
             queries.put(type + " times [short]",
-                    () -> new BaseAggregationStep[]{filter(type, "times", array(new JsonDateTime(SHORT_SPELLING)))});
+                    () -> new BaseAggregationStep[]{filter(type, "times", arrayOf(new JsonDateTime(SHORT_SPELLING)))});
         }
         queries.put("IN times [[long]]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.IN, "times", array(array(new JsonDateTime(LONG_SPELLING))))});
+                filter(FieldOperatorType.IN, "times", arrayOf(arrayOf(new JsonDateTime(LONG_SPELLING))))});
         queries.put("CONTAINS times short", () -> new BaseAggregationStep[]{
                 filter(FieldOperatorType.CONTAINS, "times", new JsonDateTime(SHORT_SPELLING))});
 
-        assertEquals(2, run(queries.get("EQUALS times [short]").get()).size(),
+        assertEquals(2, rowsJson(queries.get("EQUALS times [short]").get()).size(),
                 "both spellings of one instant are equal inside an array");
         assertEveryQueryAgrees("times", queries);
     }
@@ -373,7 +301,7 @@ public class IndexScanAgreementTest {
                     () -> new BaseAggregationStep[]{filter(type, "meta", whenOf(SHORT_SPELLING))});
         }
 
-        assertEquals(2, run(queries.get("EQUALS meta {when: short}").get()).size(),
+        assertEquals(2, rowsJson(queries.get("EQUALS meta {when: short}").get()).size(),
                 "both spellings of one instant are equal inside an object");
         assertEveryQueryAgrees("meta", queries);
     }

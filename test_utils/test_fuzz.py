@@ -2,22 +2,19 @@ import argparse
 import os
 import random
 import shutil
-import sys
 import tempfile
 
 import base_utils as bu
 from base_utils import check, section
 
-from fuzz import oracles, report, write_paths
+from fuzz import oracles, shrink, write_paths
 from fuzz.execute import Executor
 from fuzz.ops import generate_plan, plan_literal, repair
-from fuzz.shrink import Budget
-from fuzz.shrink import ddmin, matches_signature, signature_of
+from fuzz.shrink import Budget, ddmin, matches_signature, signature_of
 from fuzz.regression_seeds import REGRESSION_SEEDS
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("FUZZ_TEST_PORT", "8994"))
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 
 DEFAULT_OPS = 80
 DEFAULT_BUDGET_SECONDS = 180
@@ -64,6 +61,16 @@ def evaluate(executor, plan, namespace, seed, stats, signature=None):
     return check_all(executor, outcome, namespace, seed, stats, signature), outcome
 
 
+def _discard(executor, work_dir: str, keep: bool) -> None:
+    try:
+        executor.stop()
+    except Exception:
+        pass
+    finally:
+        if not keep:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def run_plan(plan: list, namespace, seed, signature=None):
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-fuzz-")
     executor = Executor(work_dir, PORT)
@@ -73,12 +80,7 @@ def run_plan(plan: list, namespace, seed, signature=None):
         divergences, outcome = evaluate(executor, plan, namespace, seed, stats, signature)
         return divergences, outcome, stats
     finally:
-        try:
-            executor.stop()
-        except Exception:
-            pass
-        if not os.environ.get("FUZZ_KEEP_DIRS"):
-            shutil.rmtree(work_dir, ignore_errors=True)
+        _discard(executor, work_dir, keep=bool(os.environ.get("FUZZ_KEEP_DIRS")))
 
 
 class PersistentReplayer:
@@ -97,12 +99,7 @@ class PersistentReplayer:
         return matches_signature(divergences, self.signature)
 
     def close(self) -> None:
-        try:
-            self.executor.stop()
-        except Exception:
-            pass
-        finally:
-            shutil.rmtree(self.work_dir, ignore_errors=True)
+        _discard(self.executor, self.work_dir, keep=False)
 
 
 def fresh_replayer(namespace, seed, signature):
@@ -141,7 +138,7 @@ def report_failure(seed, label: str, plan: list, divergences: list, tier: str = 
                    budget=None) -> None:
     print(f"\n  seed {seed} ({label}) produced {len(divergences)} divergence(s) "
           f"on the full plan:")
-    for line in report.listed_divergences(divergences):
+    for line in shrink.listed_divergences(divergences):
         print(f"      - {line}")
     if tier:
         replays = budget.replays if budget else 0
@@ -166,11 +163,11 @@ def run_seed(seed, label: str, ops: int, shrink_seconds: float = 0.0, report_pat
             minimal, budget, tier = shrink_plan(plan, namespace, seed, divergences,
                                                 shrink_seconds)
             report_failure(seed, label, minimal, divergences, tier, budget)
-            report.append(report_path,
-                          report.failure_markdown(seed, label, minimal, divergences, tier))
+            shrink.append(report_path,
+                          shrink.failure_markdown(seed, label, minimal, divergences, tier))
         else:
             report_failure(seed, label, plan, divergences)
-            report.append(report_path, report.failure_markdown(seed, label, plan, divergences, ""))
+            shrink.append(report_path, shrink.failure_markdown(seed, label, plan, divergences, ""))
     elif stats.get("index_vs_scan_queries") == 0:
         bu.warn(f"seed {seed} ({label}) compared no index-vs-scan queries",
                 "the plan left no indexed collection alive")
@@ -199,14 +196,7 @@ def run_soak(minutes: float, ops: int, start_seed, shrink_seconds: float,
             print("\n  Stopping the soak on the first failing seed.")
             return
     print(f"\n  {attempts} seed(s) ran clean.")
-    report.append(report_path, report.clean_markdown(start_seed, attempts, minutes))
-
-
-def require_jar() -> None:
-    jar = os.path.join(bu.REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-        sys.exit(1)
+    shrink.append(report_path, shrink.clean_markdown(start_seed, attempts, minutes))
 
 
 def parse_args():
@@ -257,7 +247,7 @@ def main():
         bu.summary()
         return
 
-    require_jar()
+    bu.require_jar()
     bu.banner("differential fuzz harness", HOST, PORT)
 
     if args.seeds == "regression":

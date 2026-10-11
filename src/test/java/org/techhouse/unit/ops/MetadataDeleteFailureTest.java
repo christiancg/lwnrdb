@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -25,10 +27,20 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.ProcedureCallHelper;
+import org.techhouse.ops.ProcedureOperationHelper;
+import org.techhouse.ops.ScheduleOperationHelper;
+import org.techhouse.ops.TriggerOperationHelper;
+import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.req.CallProcedureRequest;
+import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.DeleteSchemaRequest;
 import org.techhouse.ops.req.DeleteTriggerRequest;
+import org.techhouse.ops.req.ListProceduresRequest;
+import org.techhouse.ops.req.ListSchedulesRequest;
+import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
@@ -37,6 +49,8 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class MetadataDeleteFailureTest {
+    private static final String ADMIN = "unreadableadmin";
+    private static final String UNPARSEABLE = "{not json";
     private static final Configuration configuration = Configuration.getInstance();
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -48,6 +62,14 @@ public class MetadataDeleteFailureTest {
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
+        final var request = new CreateUserRequest();
+        request.setUsername(ADMIN);
+        request.setPassword("password123");
+        request.setAdmin(true);
+        request.setGlobalPermissions(new HashSet<>());
+        request.setDatabasePermissions(new HashMap<>());
+        request.setCollectionPermissions(new HashMap<>());
+        UserOperationHelper.processCreateUser(request);
     }
 
     @AfterAll
@@ -65,6 +87,16 @@ public class MetadataDeleteFailureTest {
         TestUtils.setPrivateField(configuration, "schedulesEnabled", true);
         TestUtils.setPrivateField(configuration, "scheduleMaxPerDatabase", 100);
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
+        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
+            fs.deleteProcedure(TestGlobals.DB, name);
+        }
+        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
+            fs.deleteSchedule(TestGlobals.DB, name);
+        }
+        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        cache.removeProceduresForDatabase(TestGlobals.DB);
+        cache.removeSchedulesForDatabase(TestGlobals.DB);
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(OperationStatus.OK,
                 processor.processMessage(new SaveProcedureRequest(TestGlobals.DB, "kept", "return 1;")).getStatus());
     }
@@ -133,5 +165,43 @@ public class MetadataDeleteFailureTest {
 
         assertEquals(ErrorCode.ERROR_DELETING_TRIGGER.getCode(), response.getErrorCode(), response.getMessage());
         assertFalse(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
+    }
+
+    @Test
+    public void test_listing_procedures_answers_an_error_when_a_definition_is_unparseable() throws Exception {
+        fs.writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
+
+        final var response = ProcedureOperationHelper.executeList(new ListProceduresRequest(TestGlobals.DB));
+
+        assertEquals(ErrorCode.ERROR_RETRIEVING.getCode(), response.getErrorCode());
+    }
+
+    @Test
+    public void test_listing_triggers_answers_an_error_when_a_trigger_file_is_unparseable() throws Exception {
+        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, UNPARSEABLE);
+
+        final var response = TriggerOperationHelper
+                .executeList(new ListTriggersRequest(TestGlobals.DB, TestGlobals.COLL));
+
+        assertEquals(ErrorCode.ERROR_RETRIEVING.getCode(), response.getErrorCode());
+    }
+
+    @Test
+    public void test_listing_schedules_answers_an_error_when_a_definition_is_unparseable() throws Exception {
+        fs.writeSchedule(TestGlobals.DB, "broken", UNPARSEABLE);
+
+        final var response = ScheduleOperationHelper.executeList(new ListSchedulesRequest(TestGlobals.DB));
+
+        assertEquals(ErrorCode.ERROR_RETRIEVING.getCode(), response.getErrorCode());
+    }
+
+    @Test
+    public void test_calling_a_procedure_answers_an_error_when_its_definition_is_unparseable() throws Exception {
+        fs.writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
+        final var request = new CallProcedureRequest(TestGlobals.DB, "broken", new JsonObject());
+
+        final var response = ProcedureCallHelper.execute(request, ADMIN, null);
+
+        assertEquals(ErrorCode.ERROR_RETRIEVING.getCode(), response.getErrorCode());
     }
 }

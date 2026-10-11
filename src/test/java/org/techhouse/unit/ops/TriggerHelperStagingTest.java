@@ -37,7 +37,6 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.StagedTriggerRuns;
-import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -48,6 +47,7 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerHelperStagingTest {
     private static final String DRAIN_MARKER = "__drain-marker__";
@@ -78,9 +78,7 @@ public class TriggerHelperStagingTest {
         TestUtils.setPrivateField(configuration, "triggerThreads", 1);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
         triggerExecutor.stop();
-        for (final var run : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(run.getRunId(), run.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     private List<TriggerEvent> dispatched(Callable<?> emit) {

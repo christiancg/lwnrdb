@@ -26,16 +26,13 @@ import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.Tx2pcFixtures;
 
 public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBase {
 
     private void seedPreparedSlice(String dtxId, String id) throws Exception {
-        final var obj = new JsonObject();
-        obj.add(Globals.PK_FIELD, new JsonString(id));
-        AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "coordinator", 0,
-                AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, obj));
-        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"),
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        Tx2pcFixtures.seedPreparedSlice(Tx2pcFixtures.saveOp(dtxId, "coordinator", TestGlobals.COLL, id),
+                Tx2pcFixtures.SELF_ADDRESS, List.of(Tx2pcFixtures.SELF_ADDRESS));
     }
 
     private ClusterMessage txResolutionRequest(ClusterMessageType type, String dtxId) {

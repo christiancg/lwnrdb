@@ -5,10 +5,14 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.internal.JsonReader;
 
 public class JsonReaderTest {
+    private static final int LIMIT = 8;
+    private final EJson eJson = new EJson();
+
     @SuppressWarnings("unused")
     static class TestClass {
         private String name;
@@ -254,5 +258,38 @@ public class JsonReaderTest {
         assertTrue(parsed.get("a").asJsonArray().isEmpty());
         assertEquals(0, parsed.get("b").asJsonObject().size());
         assertEquals(1, parsed.get("c").asJsonArray().size());
+    }
+
+    private static String nestedObjects(int depth) {
+        return "{\"a\":".repeat(depth - 1) + "{}" + "}".repeat(depth - 1);
+    }
+
+    private static String objectsAroundArrays(int depth) {
+        final var prefix = new StringBuilder("{\"a\":");
+        final var suffix = new StringBuilder("}");
+        for (var level = 2; level < depth; level++) {
+            prefix.append(level % 2 == 0 ? "[" : "{\"a\":");
+            suffix.insert(0, level % 2 == 0 ? "]" : "}");
+        }
+        return prefix + "[]" + suffix;
+    }
+
+    @Test
+    public void depth_at_the_limit_parses() {
+        assertDoesNotThrow(() -> eJson.fromJson(nestedObjects(LIMIT), JsonObject.class, LIMIT));
+        assertDoesNotThrow(() -> eJson.fromJson(objectsAroundArrays(LIMIT), JsonObject.class, LIMIT));
+    }
+
+    @Test
+    public void depth_past_the_limit_throws_malformed() {
+        assertThrows(MalformedJsonException.class,
+                () -> eJson.fromJson(nestedObjects(LIMIT + 1), JsonObject.class, LIMIT));
+        assertThrows(MalformedJsonException.class,
+                () -> eJson.fromJson(objectsAroundArrays(LIMIT + 1), JsonObject.class, LIMIT));
+    }
+
+    @Test
+    public void unlimited_overload_parses_beyond_the_limit() {
+        assertDoesNotThrow(() -> eJson.fromJson(nestedObjects(LIMIT * 4), JsonObject.class));
     }
 }

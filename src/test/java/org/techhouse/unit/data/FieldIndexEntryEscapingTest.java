@@ -4,7 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
@@ -21,42 +26,26 @@ public class FieldIndexEntryEscapingTest {
         return FieldIndexEntry.fromIndexFileEntry("db", "coll", line, String.class);
     }
 
-    @Test
-    public void test_index_key_with_newline_round_trips() {
-        final var parsed = roundTrip("x\ny", Set.of("id1"));
-        assertEquals("x\ny", parsed.getValue());
-        assertEquals(Set.of("id1"), parsed.getIds());
+    static Stream<Arguments> roundTripCases() {
+        return Stream.of(Arguments.of("x\ny", Set.of("id1")), Arguments.of("x\ry", Set.of("id1")),
+                Arguments.of("a" + SEPARATOR + "b", Set.of("id1")), Arguments.of("C:\\path", Set.of("id1")),
+                Arguments.of("value", Set.of("we\nird")), Arguments.of("value", Set.of("a" + SEPARATOR + "b")),
+                Arguments.of("value", Set.of("id1", "id2", "id3")), Arguments.of("a\ud800b", Set.of("id1")),
+                Arguments.of("ab\udc00", Set.of("id1")), Arguments.of("a😀b", Set.of("id1")));
     }
 
-    @Test
-    public void test_index_key_with_carriage_return_round_trips() {
-        final var parsed = roundTrip("x\ry", Set.of("id1"));
-        assertEquals("x\ry", parsed.getValue());
+    @ParameterizedTest
+    @MethodSource("roundTripCases")
+    public void test_index_entry_round_trips(String value, Set<String> ids) {
+        final var parsed = roundTrip(value, ids);
+        assertEquals(value, parsed.getValue());
+        assertEquals(ids, parsed.getIds());
     }
 
-    @Test
-    public void test_index_key_with_id_separator_round_trips() {
-        final var parsed = roundTrip("a" + SEPARATOR + "b", Set.of("id1"));
-        assertEquals("a" + SEPARATOR + "b", parsed.getValue());
-        assertEquals(Set.of("id1"), parsed.getIds());
-    }
-
-    @Test
-    public void test_index_key_with_backslash_round_trips() {
-        final var parsed = roundTrip("C:\\path", Set.of("id1"));
-        assertEquals("C:\\path", parsed.getValue());
-    }
-
-    @Test
-    public void test_id_with_newline_round_trips() {
-        final var parsed = roundTrip("value", Set.of("we\nird"));
-        assertEquals(Set.of("we\nird"), parsed.getIds());
-    }
-
-    @Test
-    public void test_id_with_separator_does_not_split_into_two_ids() {
-        final var parsed = roundTrip("value", Set.of("a" + SEPARATOR + "b"));
-        assertEquals(Set.of("a" + SEPARATOR + "b"), parsed.getIds());
+    @ParameterizedTest
+    @ValueSource(strings = {"a\ud800b", "ab\udc00", "\ud800", "\udc00"})
+    public void test_lone_surrogate_token_round_trips(String value) {
+        assertEquals(value, FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken(value)));
     }
 
     @Test
@@ -78,36 +67,9 @@ public class FieldIndexEntryEscapingTest {
     }
 
     @Test
-    public void test_multiple_ids_round_trip() {
-        final var parsed = roundTrip("value", Set.of("id1", "id2", "id3"));
-        assertEquals(Set.of("id1", "id2", "id3"), parsed.getIds());
-    }
-
-    @Test
-    public void test_unpaired_high_surrogate_round_trips() {
-        final var value = "a\ud800b";
-        assertEquals(value, FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken(value)));
-        assertEquals(value, roundTrip(value, Set.of("id1")).getValue());
-    }
-
-    @Test
-    public void test_unpaired_low_surrogate_round_trips() {
-        final var value = "ab\udc00";
-        assertEquals(value, FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken(value)));
-        assertEquals(value, roundTrip(value, Set.of("id1")).getValue());
-    }
-
-    @Test
-    public void test_lone_surrogate_only_value_round_trips() {
-        assertEquals("\ud800", FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken("\ud800")));
-        assertEquals("\udc00", FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken("\udc00")));
-    }
-
-    @Test
     public void test_paired_surrogate_is_written_unescaped() {
         final var emoji = "a😀b";
         assertEquals(emoji, FieldIndexEntry.escapeIndexToken(emoji));
-        assertEquals(emoji, roundTrip(emoji, Set.of("id1")).getValue());
     }
 
     @Test

@@ -3,17 +3,21 @@ package org.techhouse.unit.bckg_ops;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.mockStatic;
 
 import java.io.File;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.StartupWarnings;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.LogWriter;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.CreateIndexRequest;
@@ -105,5 +109,21 @@ public class UncleanStopMarkerTest {
         writeAndDrain("doc-1");
 
         assertTrue(fs.indexMarkers().retainUncleanStops().isEmpty());
+    }
+
+    @Test
+    public void test_startup_names_an_unclean_collection_and_a_half_built_index() throws Exception {
+        fs.indexMarkers().markDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().mark(TestGlobals.DB, TestGlobals.COLL, "name");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.retainAndReportUncleanStops();
+
+            logWriter.verify(() -> LogWriter.writeLogEntry(
+                    argThat(entry -> entry.contains(identifier()) && entry.contains("field-index work outstanding"))));
+            logWriter.verify(() -> LogWriter.writeLogEntry(
+                    argThat(entry -> entry.contains(identifier() + "|name") && entry.contains("REINDEX"))));
+        } finally {
+            fs.indexMarkers().clear(TestGlobals.DB, TestGlobals.COLL, "name");
+        }
     }
 }

@@ -5,8 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,8 +14,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
 import org.techhouse.test.TestGlobals;
@@ -32,14 +28,7 @@ public class EnforcingDatabaseAccessUserDeletedTest {
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        final var request = new CreateUserRequest();
-        request.setUsername(USER);
-        request.setPassword("password123");
-        request.setAdmin(true);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TestUtils.createAdmin(USER);
     }
 
     @AfterEach

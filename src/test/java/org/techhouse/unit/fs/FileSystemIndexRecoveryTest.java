@@ -12,60 +12,28 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class FileSystemIndexRecoveryTest {
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        Configuration config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        File dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
-
+public class FileSystemIndexRecoveryTest extends FileSystemTestBase {
     @Test
-    public void test_empty_index_entry_map() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_empty_index_entry_map() throws IOException {
         String fieldName = "testField";
         Map<Class<?>, List<FieldIndexEntry<?>>> emptyMap = new HashMap<>();
-        fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, emptyMap);
-        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName,
-                String.class);
+        fs.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, emptyMap);
+        final var index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
         assertNull(index);
     }
 
     @Test
-    public void test_drop_index_nonexistent_collection() throws NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_drop_index_nonexistent_collection() {
 
         String dbName = "nonExistentDb";
         String collName = "nonExistentColl";
@@ -77,10 +45,7 @@ public class FileSystemIndexRecoveryTest {
     }
 
     @Test
-    public void test_empty_index_file_returns_empty_list()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_empty_index_file_returns_empty_list() throws IOException {
 
         List<FieldIndexEntry<String>> entries = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL,
                 "emptyField", String.class);
@@ -89,23 +54,18 @@ public class FileSystemIndexRecoveryTest {
     }
 
     @Test
-    public void test_empty_index_file_returns_empty_list_2()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_empty_index_file_returns_empty_list_2() throws IOException {
 
         File mockIndexFile = mock(File.class);
         when(mockIndexFile.exists()).thenReturn(false);
 
-        List<PkIndexEntry> result = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        List<PkIndexEntry> result = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
 
         assertTrue(result.isEmpty());
     }
 
     @Test
     public void test_readWholePkIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
-        final var fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         final var entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -135,8 +95,6 @@ public class FileSystemIndexRecoveryTest {
 
     @Test
     public void test_readWholePkIndexFile_dedups_duplicate_keys_keeping_last() throws Exception {
-        final var fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         final var entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -169,8 +127,6 @@ public class FileSystemIndexRecoveryTest {
 
     @Test
     public void test_readWholeFieldIndexFiles_drops_and_rewrites_malformed_lines() throws Exception {
-        final var fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
         final var fieldName = "selfHeal";
 
         final var entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "good", Set.of("id1"));
@@ -194,8 +150,6 @@ public class FileSystemIndexRecoveryTest {
 
     @Test
     public void test_readWholeHashIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
-        final var fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
         final var fieldName = "hashSelfHeal";
 
         final var entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aaaa1111",

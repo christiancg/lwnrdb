@@ -1,15 +1,16 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.techhouse.test.LockHolder.startParked;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,35 +19,43 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.ScheduleOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
+import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.LockHolder;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.ReflectionUtils;
 
 public class DatabaseBarrierRaceTest {
     private static final String ACTOR = "alice";
     private static final String PROCEDURE = "rollup";
     private static final String RACED_DB = "raced_db";
+    private static final String LATE_COLL = "lateColl";
+    private static final long DROP_BUDGET_MS = 1000L;
     private static final long SHORT_BUDGET_MS = 100L;
     private static final long LONG_BUDGET_MS = 10_000L;
     private static final Configuration configuration = Configuration.getInstance();
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ScheduleRegistry registry = IocContainer.get(ScheduleRegistry.class);
-    private final ExecutorService holder = Executors.newSingleThreadExecutor();
-    private final List<String> heldBarriers = new ArrayList<>();
+    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
+    private final LockHolder holder = new LockHolder();
     private final long originalTimeout = configuration.getTransactionLockTimeoutMs();
 
     @BeforeEach
@@ -65,14 +74,7 @@ public class DatabaseBarrierRaceTest {
 
     @AfterEach
     public void tearDown() throws Exception {
-        onHolder(() -> {
-            for (final var dbName : heldBarriers) {
-                locks.releaseDatabaseExclusive(dbName);
-            }
-            return null;
-        });
-        holder.shutdown();
-        assertTrue(holder.awaitTermination(5, TimeUnit.SECONDS));
+        holder.close();
         registry.clear();
         TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", originalTimeout);
         TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
@@ -81,44 +83,13 @@ public class DatabaseBarrierRaceTest {
         TestUtils.standardTearDown();
     }
 
-    private <T> T onHolder(Callable<T> action) throws Exception {
-        return holder.submit(action).get(30, TimeUnit.SECONDS);
-    }
-
     private void holdBarrier(String dbName) throws Exception {
-        assertTrue(onHolder(() -> locks.tryLockDatabaseExclusive(dbName, LONG_BUDGET_MS)));
-        heldBarriers.add(dbName);
-    }
-
-    private void releaseBarrier(String dbName) throws Exception {
-        onHolder(() -> {
-            locks.releaseDatabaseExclusive(dbName);
-            return null;
-        });
-        heldBarriers.remove(dbName);
-    }
-
-    @SuppressWarnings("BusyWait")
-    private static Thread startParked(Callable<OperationResponse> action, AtomicReference<OperationResponse> result)
-            throws InterruptedException {
-        final var thread = new Thread(() -> {
-            try {
-                result.set(action.call());
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
-        });
-        thread.start();
-        final var deadline = System.currentTimeMillis() + LONG_BUDGET_MS;
-        while (thread.getState() != Thread.State.TIMED_WAITING && thread.getState() != Thread.State.WAITING) {
-            assertTrue(System.currentTimeMillis() < deadline, "the request never parked on the barrier");
-            Thread.sleep(5);
-        }
-        return thread;
+        holder.hold(() -> locks.tryLockDatabaseExclusive(dbName, LONG_BUDGET_MS),
+                () -> locks.releaseDatabaseExclusive(dbName));
     }
 
     private void dropTestDatabaseWhileHoldingTheBarrier() throws Exception {
-        final var dropped = onHolder(
+        final var dropped = holder.run(
                 () -> DatabaseOperationHelper.processDropDatabaseOperation(new DropDatabaseRequest(TestGlobals.DB)));
         assertEquals(OperationStatus.OK, dropped.getStatus());
     }
@@ -144,7 +115,7 @@ public class DatabaseBarrierRaceTest {
         final var setter = startParked(() -> DatabaseOperationHelper.processSetDatabaseOwners(owners), result);
 
         dropTestDatabaseWhileHoldingTheBarrier();
-        releaseBarrier(TestGlobals.DB);
+        holder.release();
         setter.join(LONG_BUDGET_MS);
 
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), result.get().getErrorCode());
@@ -172,7 +143,7 @@ public class DatabaseBarrierRaceTest {
                 .executeSave(new SaveProcedureRequest(TestGlobals.DB, "p", "return 2;"), ACTOR), result);
 
         dropTestDatabaseWhileHoldingTheBarrier();
-        releaseBarrier(TestGlobals.DB);
+        holder.release();
         saver.join(LONG_BUDGET_MS);
 
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), result.get().getErrorCode());
@@ -198,7 +169,7 @@ public class DatabaseBarrierRaceTest {
         final var saver = startParked(() -> ScheduleOperationHelper.executeSave(scheduleRequest(), ACTOR), result);
 
         dropTestDatabaseWhileHoldingTheBarrier();
-        releaseBarrier(TestGlobals.DB);
+        holder.release();
         saver.join(LONG_BUDGET_MS);
 
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), result.get().getErrorCode());
@@ -215,11 +186,11 @@ public class DatabaseBarrierRaceTest {
                 () -> DatabaseOperationHelper.processCreateDatabaseOperation(new CreateDatabaseRequest(RACED_DB), null),
                 result);
 
-        onHolder(() -> {
+        holder.run(() -> {
             AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(RACED_DB, new ArrayList<>(), List.of("first")));
             return null;
         });
-        releaseBarrier(RACED_DB);
+        holder.release();
         creator.join(LONG_BUDGET_MS);
 
         assertEquals(ErrorCode.DATABASE_ALREADY_EXISTS.getCode(), result.get().getErrorCode());
@@ -245,5 +216,68 @@ public class DatabaseBarrierRaceTest {
 
         assertEquals(OperationStatus.OK, response.getStatus());
         holdBarrier(RACED_DB);
+    }
+
+    @Test
+    public void test_create_collection_times_out_while_a_drop_holds_the_database() throws Exception {
+        TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", DROP_BUDGET_MS);
+        holdBarrier(TestGlobals.DB);
+
+        final var response = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, LATE_COLL));
+
+        assertEquals("409-5", response.getErrorCode());
+        assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, LATE_COLL));
+    }
+
+    @Test
+    public void test_drop_gives_up_on_a_held_collection_lock_and_releases_everything() throws Exception {
+        TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", DROP_BUDGET_MS);
+        holder.hold(() -> locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL),
+                () -> locks.release(TestGlobals.DB, TestGlobals.COLL));
+
+        final var response = dropAsync().get(10, TimeUnit.SECONDS);
+
+        assertEquals("409-5", response.getErrorCode());
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB), "a drop that gave up must leave the database");
+        assertTrue(locks.tryLockDatabaseExclusive(TestGlobals.DB, 0), "the drop must have released the barrier");
+        locks.releaseDatabaseExclusive(TestGlobals.DB);
+    }
+
+    @Test
+    public void test_drop_locks_a_collection_registered_while_it_waited_for_the_database() throws Exception {
+        TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", DROP_BUDGET_MS);
+        assertTrue(holder.run(() -> locks.tryLockDatabaseShared(TestGlobals.DB, DROP_BUDGET_MS)));
+        final var drop = dropAsync();
+        awaitQueuedDrop();
+        holder.hold(() -> {
+            AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, LATE_COLL));
+            IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, LATE_COLL);
+            final var locked = locks.tryLockWrite(TestGlobals.DB, LATE_COLL, DROP_BUDGET_MS);
+            locks.releaseDatabaseShared(TestGlobals.DB);
+            return locked;
+        }, () -> locks.release(TestGlobals.DB, LATE_COLL));
+
+        final var response = drop.get(10, TimeUnit.SECONDS);
+
+        assertEquals("409-5", response.getErrorCode(),
+                "the drop must wait on the late collection's lock instead of deleting it unlocked");
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, LATE_COLL));
+        holder.release();
+        assertEquals(OperationStatus.OK, processor.processMessage(new DropDatabaseRequest(TestGlobals.DB)).getStatus());
+    }
+
+    private CompletableFuture<OperationResponse> dropAsync() {
+        return CompletableFuture.supplyAsync(() -> processor.processMessage(new DropDatabaseRequest(TestGlobals.DB)));
+    }
+
+    private void awaitQueuedDrop() throws Exception {
+        final var type = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {
+        };
+        final var barrier = TestUtils.getPrivateField(locks, "locks", type).get(TestGlobals.DB);
+        final var deadline = System.currentTimeMillis() + 5000;
+        while (!barrier.hasQueuedThreads()) {
+            assertTrue(System.currentTimeMillis() < deadline);
+            Thread.onSpinWait();
+        }
     }
 }

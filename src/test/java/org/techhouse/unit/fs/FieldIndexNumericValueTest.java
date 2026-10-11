@@ -7,47 +7,15 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class FieldIndexNumericValueTest {
+public class FieldIndexNumericValueTest extends FileSystemTestBase {
     private static final String FIELD = "bucket";
-
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        Configuration config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        File dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
-
-    private static FileSystem fs() throws NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        return fileSystem;
-    }
 
     private static List<FieldIndexEntry<Number>> read(FileSystem fileSystem) throws IOException {
         return fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, Number.class);
@@ -55,7 +23,7 @@ public class FieldIndexNumericValueTest {
 
     @Test
     public void test_integer_and_double_spellings_of_one_value_share_an_entry() throws Exception {
-        final var fileSystem = fs();
+        final var fileSystem = fs;
 
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 7, Set.of("id1")), null);
@@ -69,7 +37,7 @@ public class FieldIndexNumericValueTest {
 
     @Test
     public void test_integral_value_written_as_double_keeps_the_canonical_key() throws Exception {
-        final var fileSystem = fs();
+        final var fileSystem = fs;
 
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 3.0d, Set.of("a")), null);
@@ -83,7 +51,7 @@ public class FieldIndexNumericValueTest {
 
     @Test
     public void test_value_above_integer_max_round_trips_on_one_line() throws Exception {
-        final var fileSystem = fs();
+        final var fileSystem = fs;
         final var big = 10_000_000_000d;
 
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
@@ -99,7 +67,7 @@ public class FieldIndexNumericValueTest {
 
     @Test
     public void test_non_integral_values_are_unaffected() throws Exception {
-        final var fileSystem = fs();
+        final var fileSystem = fs;
 
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 0.5d, Set.of("p")), null);
@@ -114,7 +82,7 @@ public class FieldIndexNumericValueTest {
 
     @Test
     public void test_distinct_values_stay_on_separate_entries() throws Exception {
-        final var fileSystem = fs();
+        final var fileSystem = fs;
 
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 1, Set.of("a")), null);
@@ -127,7 +95,7 @@ public class FieldIndexNumericValueTest {
 
     @Test
     public void test_non_finite_index_line_is_dropped_and_file_rewritten() throws Exception {
-        final var fileSystem = fs();
+        final var fileSystem = fs;
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, numberEntry(5d, "finite"), null);
         Files.writeString(numberIndexFile().toPath(), "Infinity" + Globals.ID_SEPARATOR + "a" + Globals.NEWLINE,
                 StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
@@ -143,7 +111,7 @@ public class FieldIndexNumericValueTest {
 
     @Test
     public void test_file_of_only_non_finite_lines_is_left_untouched() throws Exception {
-        final var fileSystem = fs();
+        final var fileSystem = fs;
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, numberEntry(7d, "seed"), null);
         final var onlyNonFinite = "Infinity" + Globals.ID_SEPARATOR + "a" + Globals.NEWLINE;
         Files.writeString(numberIndexFile().toPath(), onlyNonFinite, StandardCharsets.UTF_8);

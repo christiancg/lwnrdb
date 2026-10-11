@@ -2,18 +2,12 @@ package org.techhouse.unit.conn;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
-import java.net.InetAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,8 +15,6 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -39,23 +31,11 @@ public class MessageProcessorDeletedUserTest {
     void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        final var createReq = new CreateUserRequest();
-        createReq.setUsername(USERNAME);
-        createReq.setPassword(PASSWORD);
-        createReq.setAdmin(true);
-        createReq.setGlobalPermissions(new HashSet<>());
-        createReq.setDatabasePermissions(new HashMap<>());
-        createReq.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(createReq);
+        TestUtils.createAdmin(USERNAME);
 
         final var serverIn = new PipedInputStream(toServer, 1 << 16);
         final var serverOut = new PipedOutputStream(fromServer);
-        final var socket = mock(Socket.class);
-        final var address = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(address);
-        when(address.getHostAddress()).thenReturn("127.0.0.1");
-        when(socket.getInputStream()).thenReturn(serverIn);
-        when(socket.getOutputStream()).thenReturn(serverOut);
+        final var socket = TestUtils.clientSocket(serverIn, serverOut);
         responses = new BufferedReader(new InputStreamReader(fromServer, StandardCharsets.UTF_8));
         connection = new Thread(new MessageProcessor(socket));
         connection.start();

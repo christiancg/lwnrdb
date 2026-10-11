@@ -2,6 +2,7 @@ package org.techhouse.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,77 +14,28 @@ import static org.mockito.Mockito.when;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cache.Cache;
-import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.OperationProcessor;
-import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.admin.CollectionIncarnation;
+import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.DropCollectionRequest;
+import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class AntiEntropyIncarnationTest {
+public class AntiEntropyIncarnationTest extends AntiEntropyTestBase {
     private static final long PEER_VERSION = 9_999_999L;
-    private final AntiEntropyService service = IocContainer.get(AntiEntropyService.class);
-    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private final Cache cache = IocContainer.get(Cache.class);
-    private MembershipService realMembership;
-    private PeerConnectionPool realPool;
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-        realMembership = TestUtils.getPrivateField(service, "membershipService", MembershipService.class);
-        realPool = TestUtils.getPrivateField(service, "pool", PeerConnectionPool.class);
-    }
-
-    @AfterEach
-    public void tearDown() throws Exception {
-        TestUtils.setPrivateField(service, "membershipService", realMembership);
-        TestUtils.setPrivateField(service, "pool", realPool);
-        TestUtils.releaseAllLocks();
-        TestUtils.standardTearDown();
-    }
-
-    private void seed() {
-        final var object = new JsonObject();
-        object.addProperty("_id", "a");
-        object.addProperty("v", 1);
-        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setObject(object);
-        processor.processMessage(request);
-    }
+    private static final String RECREATED_COLL = "aeRecreated";
+    private static final long RECREATED_PEER_VERSION = 1_000L;
 
     private void setLocalIncarnation(long incarnation) {
         final var entry = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         assertNotNull(entry, "the test collection must be registered before its incarnation can be set");
         entry.setIncarnation(incarnation);
-    }
-
-    private boolean holdsLocally(String id) throws Exception {
-        return cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
-                .anyMatch(entry -> entry.getValue().equals(id));
-    }
-
-    private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
-    }
-
-    private void injectPeer(PeerConnectionPool pool, NodeInfo peer) throws Exception {
-        final var self = node("self", 5000);
-        final var membership = mock(MembershipService.class);
-        when(membership.getSelf()).thenReturn(self);
-        when(membership.membershipView()).thenReturn(new MembershipView(List.of(self, peer)));
-        TestUtils.setPrivateField(service, "membershipService", membership);
-        TestUtils.setPrivateField(service, "pool", pool);
     }
 
     private PeerConnectionPool poolAnswering(AntiEntropyPayload digestAnswer, List<ClusterMessageType> sentTypes)
@@ -218,7 +170,7 @@ public class AntiEntropyIncarnationTest {
 
         assertFalse(sentTypes.contains(ClusterMessageType.PULL),
                 "a peer that answered staleIncarnation must never be pulled from");
-        assertFalse(holdsLocally("resurrect"),
+        assertFalse(hasLive("resurrect"),
                 "documents belonging to a dropped incarnation must not be seeded into the live one");
     }
 
@@ -234,7 +186,7 @@ public class AntiEntropyIncarnationTest {
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
         assertFalse(sentTypes.contains(ClusterMessageType.PULL));
-        assertFalse(holdsLocally("resurrect"));
+        assertFalse(hasLive("resurrect"));
     }
 
     @Test
@@ -250,7 +202,7 @@ public class AntiEntropyIncarnationTest {
 
         assertTrue(sentTypes.contains(ClusterMessageType.PULL),
                 "an ordinary catch-up must still pull the ids this node lacks");
-        assertTrue(holdsLocally("wanted"), "the pulled document must actually be applied");
+        assertTrue(hasLive("wanted"), "the pulled document must actually be applied");
     }
 
     @Test
@@ -265,6 +217,100 @@ public class AntiEntropyIncarnationTest {
 
         assertTrue(sentTypes.isEmpty(),
                 "a peer that has not conformed to the admin snapshot yet must not be asked for a digest at all");
-        assertFalse(holdsLocally("resurrect"));
+        assertFalse(hasLive("resurrect"));
+    }
+
+    private void create() {
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, RECREATED_COLL)).getStatus());
+    }
+
+    private void dropAndRecreate() {
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new DropCollectionRequest(TestGlobals.DB, RECREATED_COLL)).getStatus());
+        create();
+    }
+
+    private static JsonObject deadDocument() {
+        final var document = new JsonObject();
+        document.addProperty("_id", "dead");
+        return document;
+    }
+
+    private static ClusterMessage answer(ClusterMessage request, ClusterMessageType type, AntiEntropyPayload payload) {
+        payload.setIncarnation(request.getAntiEntropy().getIncarnation());
+        final var response = new ClusterMessage();
+        response.setType(type);
+        response.setAntiEntropy(payload);
+        return response;
+    }
+
+    private PeerConnectionPool peerThatAnswers(List<ClusterMessage> requests, Runnable beforePullAnswer,
+            Runnable beforeDigestAnswer, DigestEntry peerEntry) throws Exception {
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {
+            final ClusterMessage request = invocation.getArgument(1);
+            requests.add(request);
+            final var payload = new AntiEntropyPayload(TestGlobals.DB, RECREATED_COLL);
+            if (request.getType() == ClusterMessageType.DIGEST) {
+                beforeDigestAnswer.run();
+                payload.setDigest(List.of(peerEntry));
+                return answer(request, ClusterMessageType.DIGEST_ACK, payload);
+            }
+            beforePullAnswer.run();
+            payload.setDocuments(List.of(deadDocument()));
+            payload.setVersions(List.of(Long.toString(RECREATED_PEER_VERSION)));
+            return answer(request, ClusterMessageType.PULL_ACK, payload);
+        });
+        return pool;
+    }
+
+    private OperationStatus findDead() {
+        final var request = new FindByIdRequest(TestGlobals.DB, RECREATED_COLL);
+        request.set_id("dead");
+        return processor.processMessage(request).getStatus();
+    }
+
+    @Test
+    public void test_a_pull_answered_across_a_drop_and_recreate_seeds_nothing() throws Exception {
+        create();
+        final var before = CollectionIncarnation.current(TestGlobals.DB, RECREATED_COLL);
+        injectPeer(peerThatAnswers(new ArrayList<>(), this::dropAndRecreate, () -> {
+        }, new DigestEntry("dead", RECREATED_PEER_VERSION, false)));
+
+        service.reconcile(TestGlobals.DB, RECREATED_COLL);
+
+        assertNotEquals(before, CollectionIncarnation.current(TestGlobals.DB, RECREATED_COLL));
+        assertEquals(OperationStatus.NOT_FOUND, findDead(),
+                "a pre-drop document pulled into the new incarnation is replicated cluster-wide from there");
+    }
+
+    @Test
+    public void test_a_delete_decided_across_a_drop_and_recreate_writes_no_tombstone() throws Exception {
+        create();
+        injectPeer(peerThatAnswers(new ArrayList<>(), () -> {
+        }, this::dropAndRecreate, new DigestEntry("dead", RECREATED_PEER_VERSION, true)));
+
+        service.reconcile(TestGlobals.DB, RECREATED_COLL);
+
+        assertFalse(fs.tombstones().read(TestGlobals.DB, RECREATED_COLL).containsKey("dead"));
+    }
+
+    @Test
+    public void test_a_reconcile_round_sends_the_incarnation_it_snapshotted() throws Exception {
+        create();
+        final var incarnation = CollectionIncarnation.current(TestGlobals.DB, RECREATED_COLL);
+        final var requests = new ArrayList<ClusterMessage>();
+        injectPeer(peerThatAnswers(requests, () -> {
+        }, () -> {
+        }, new DigestEntry("dead", RECREATED_PEER_VERSION, false)));
+
+        service.reconcile(TestGlobals.DB, RECREATED_COLL);
+
+        assertEquals(2, requests.size());
+        for (final var request : requests) {
+            assertEquals(incarnation, request.getAntiEntropy().incarnationValue());
+        }
+        assertEquals(OperationStatus.OK, findDead());
     }
 }

@@ -3,38 +3,11 @@ package org.techhouse.unit.fs;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
-import java.util.Objects;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class TombstoneStoreTest {
-    private FileSystem fs;
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        final var config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
-        fs.createBaseDbPath();
-        fs.createAdminDatabase();
-        fs.createDatabaseFolder(TestGlobals.DB);
-        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        final var dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
+public class TombstoneStoreTest extends FileSystemTestBase {
 
     private File tombstoneFile() {
         return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR

@@ -12,24 +12,18 @@ import static org.mockito.Mockito.when;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.ClusterCoordinator;
-import org.techhouse.cluster.MembershipView;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.Replicator;
 import org.techhouse.cluster.admin.AdminRecord;
 import org.techhouse.cluster.admin.AdminRecords;
-import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
-import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -39,6 +33,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -48,12 +43,9 @@ import org.techhouse.test.TestUtils;
  */
 public class ClusterReplicationCoverageTest {
     private final Configuration config = Configuration.getInstance();
-    private final MembershipService membershipService = IocContainer.get(MembershipService.class);
-    private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private final Replicator replicator = IocContainer.get(Replicator.class);
-    private boolean origEnabled;
-    private int origExpected;
+    private final ClusterTestHarness cluster = new ClusterTestHarness();
 
     private static JsonObject doc(String id) {
         final var object = new JsonObject();
@@ -69,27 +61,12 @@ public class ClusterReplicationCoverageTest {
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        origEnabled = config.isClusterEnabled();
-        origExpected = config.getClusterExpectedSize();
-        TestUtils.setPrivateField(config, "clusterEnabled", true);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
-        final var members = new ConcurrentHashMap<String, NodeInfo>();
-        final var self = new NodeInfo("self", "127.0.0.1", 19990, NodeState.ALIVE, 1L, 1L);
-        members.put("self", self);
-        TestUtils.setPrivateField(membershipService, "members", members);
-        TestUtils.setPrivateField(membershipService, "self", self);
-        ownership.setSelfNodeId("self");
-        ownership.onMembershipChanged(membershipService.membershipView());
+        cluster.enableAlone(ClusterTestHarness.node("self", 19990));
     }
 
     @AfterEach
     public void tearDown() throws Exception {
-        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        cluster.disable();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -140,16 +117,9 @@ public class ClusterReplicationCoverageTest {
 
     @Test
     public void test_two_node_ids_at_one_address_count_as_one_ack() throws Exception {
-        final var self = new NodeInfo("self", "127.0.0.1", 19990, NodeState.ALIVE, 1L, 1L);
-        final var stale = new NodeInfo("stale-id", "127.0.0.1", 19991, NodeState.ALIVE, 1L, 1L);
-        final var fresh = new NodeInfo("fresh-id", "127.0.0.1", 19991, NodeState.ALIVE, 1L, 1L);
-        final var members = new ConcurrentHashMap<String, NodeInfo>();
-        members.put(self.getNodeId(), self);
-        members.put(stale.getNodeId(), stale);
-        members.put(fresh.getNodeId(), fresh);
-        TestUtils.setPrivateField(membershipService, "members", members);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", 3);
-        ownership.onMembershipChanged(membershipService.membershipView());
+        final var stale = ClusterTestHarness.node("stale-id", 19991);
+        cluster.configureMembership(3, ClusterTestHarness.node("self", 19990), stale,
+                ClusterTestHarness.node("fresh-id", 19991));
         final var originalTimeout = config.getReplicationAckTimeoutMs();
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 200L);
         final var realPool = TestUtils.getPrivateField(replicator, "pool", PeerConnectionPool.class);

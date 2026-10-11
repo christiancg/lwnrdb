@@ -37,6 +37,7 @@ import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerConsumingSliceTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -69,9 +70,7 @@ public class TriggerConsumingSliceTest {
         triggerExecutor.stop();
         triggerExecutor.start(captured::add);
         saveLiveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         txId = null;
     }

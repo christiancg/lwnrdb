@@ -7,9 +7,12 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.sun.management.UnixOperatingSystemMXBean;
 import java.lang.management.ManagementFactory;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.techhouse.cache.Cache;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
@@ -54,40 +57,30 @@ public class AggregationStreamLifetimeTest {
         TestUtils.standardTearDown();
     }
 
-    @Test
-    public void sort_over_an_unwritten_collection_does_not_leak_descriptors() {
-        assertNoDescriptorLeak(List.of(new SortAggregationStep(FIELD, true)));
+    private static Stream<Arguments> pipelines() {
+        return Stream.of(
+                Arguments.of("sort_over_an_unwritten_collection_does_not_leak_descriptors",
+                        List.of(new SortAggregationStep(FIELD, true))),
+                Arguments.of("bounded_sort_over_an_unwritten_collection_does_not_leak_descriptors",
+                        List.of(new SortAggregationStep(FIELD, true), new LimitAggregationStep(2))),
+                Arguments.of("group_by_over_an_unwritten_collection_does_not_leak_descriptors",
+                        List.of(new GroupByAggregationStep(FIELD))),
+                Arguments.of("join_over_an_unwritten_collection_does_not_leak_descriptors",
+                        List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, FIELD, FIELD, "joined"))),
+                Arguments.of("count_after_an_unindexed_filter_does_not_leak_descriptors",
+                        List.of(unindexedFilter(), new CountAggregationStep())),
+                Arguments.of("reduce_over_an_unwritten_collection_does_not_leak_descriptors",
+                        List.of(new ReduceAggregationStep("export default (acc, doc) => acc + doc.score;",
+                                new JsonNumber(0), "total"))),
+                Arguments.of("filter_and_distinct_stay_leak_free",
+                        List.of(unindexedFilter(), new DistinctAggregationStep(FIELD))));
     }
 
-    @Test
-    public void bounded_sort_over_an_unwritten_collection_does_not_leak_descriptors() {
-        assertNoDescriptorLeak(List.of(new SortAggregationStep(FIELD, true), new LimitAggregationStep(2)));
-    }
-
-    @Test
-    public void group_by_over_an_unwritten_collection_does_not_leak_descriptors() {
-        assertNoDescriptorLeak(List.of(new GroupByAggregationStep(FIELD)));
-    }
-
-    @Test
-    public void join_over_an_unwritten_collection_does_not_leak_descriptors() {
-        assertNoDescriptorLeak(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, FIELD, FIELD, "joined")));
-    }
-
-    @Test
-    public void count_after_an_unindexed_filter_does_not_leak_descriptors() {
-        assertNoDescriptorLeak(List.of(unindexedFilter(), new CountAggregationStep()));
-    }
-
-    @Test
-    public void reduce_over_an_unwritten_collection_does_not_leak_descriptors() {
-        assertNoDescriptorLeak(List.of(new ReduceAggregationStep("export default (acc, doc) => acc + doc.score;",
-                new JsonNumber(0), "total")));
-    }
-
-    @Test
-    public void filter_and_distinct_stay_leak_free() {
-        assertNoDescriptorLeak(List.of(unindexedFilter(), new DistinctAggregationStep(FIELD)));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("pipelines")
+    public void a_pipeline_over_an_unwritten_collection_does_not_leak_descriptors(String name,
+            List<BaseAggregationStep> steps) {
+        assertNoDescriptorLeak(steps);
     }
 
     private static FilterAggregationStep unindexedFilter() {

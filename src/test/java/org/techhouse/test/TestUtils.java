@@ -4,12 +4,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.mockito.Mockito;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
@@ -28,6 +35,9 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.utils.ReflectionUtils;
 
 public class TestUtils {
@@ -309,5 +319,31 @@ public class TestUtils {
             }
         }
         return result;
+    }
+
+    public static OperationResponse createAdmin(String username) {
+        final var request = new CreateUserRequest();
+        request.setUsername(username);
+        request.setPassword("password123");
+        request.setAdmin(true);
+        request.setGlobalPermissions(new HashSet<>());
+        request.setDatabasePermissions(new HashMap<>());
+        request.setCollectionPermissions(new HashMap<>());
+        return UserOperationHelper.processCreateUser(request);
+    }
+
+    public static Socket clientSocket() {
+        final var socket = Mockito.mock(Socket.class);
+        final var address = Mockito.mock(InetAddress.class);
+        Mockito.when(socket.getInetAddress()).thenReturn(address);
+        Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
+        return socket;
+    }
+
+    public static Socket clientSocket(InputStream in, OutputStream out) throws IOException {
+        final var socket = clientSocket();
+        Mockito.when(socket.getInputStream()).thenReturn(in);
+        Mockito.when(socket.getOutputStream()).thenReturn(out);
+        return socket;
     }
 }

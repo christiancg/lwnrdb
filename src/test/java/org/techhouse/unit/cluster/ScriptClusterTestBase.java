@@ -2,8 +2,6 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.techhouse.cache.Cache;
@@ -22,8 +20,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
@@ -81,14 +77,7 @@ abstract class ScriptClusterTestBase {
     }
 
     static void createAdminUser() {
-        final var request = new CreateUserRequest();
-        request.setUsername(ADMIN);
-        request.setPassword("password123");
-        request.setAdmin(true);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TestUtils.createAdmin(ADMIN);
     }
 
     static JsonObject doc(String id) {

@@ -10,46 +10,17 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class PageRollbackTest {
-
-    private FileSystem fileSystem;
-
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        final var config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        final var dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
+public class PageRollbackTest extends FileSystemTestBase {
 
     private File collectionFolder() {
         return new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL);
@@ -91,25 +62,24 @@ public class PageRollbackTest {
     }
 
     private Set<String> idsOnThePages() throws IOException {
-        try (var entries = fileSystem.streamEntries(TestGlobals.DB, TestGlobals.COLL)) {
+        try (var entries = fs.streamEntries(TestGlobals.DB, TestGlobals.COLL)) {
             return entries.map(DbEntry::get_id).collect(Collectors.toSet());
         }
     }
 
     private Set<String> idsInThePkIndex() throws IOException {
-        return fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream().map(PkIndexEntry::getValue)
+        return fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream().map(PkIndexEntry::getValue)
                 .collect(Collectors.toSet());
     }
 
     @Test
     public void test_a_failed_bulk_index_write_rolls_the_appended_records_back() throws Exception {
-        fileSystem.insertIntoCollection(entry("kept"));
+        fs.insertIntoCollection(entry("kept"));
         final var before = Files.readAllBytes(pageFile().toPath());
         replacePkIndexWithAnUnwritableDirectory();
 
         final var batch = new ArrayList<>(List.of(entry("a"), entry("b"), entry("c")));
-        assertThrows(IOException.class,
-                () -> fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch),
+        assertThrows(IOException.class, () -> fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch),
                 "a bulk insert whose index write fails must surface the failure");
 
         assertArrayEquals(before, Files.readAllBytes(pageFile().toPath()),
@@ -119,11 +89,11 @@ public class PageRollbackTest {
 
     @Test
     public void test_a_failed_single_index_write_rolls_the_appended_record_back() throws Exception {
-        fileSystem.insertIntoCollection(entry("kept"));
+        fs.insertIntoCollection(entry("kept"));
         final var before = Files.readAllBytes(pageFile().toPath());
         replacePkIndexWithAnUnwritableDirectory();
 
-        assertThrows(IOException.class, () -> fileSystem.insertIntoCollection(entry("orphan")),
+        assertThrows(IOException.class, () -> fs.insertIntoCollection(entry("orphan")),
                 "a single insert whose index write fails must surface the failure");
 
         assertArrayEquals(before, Files.readAllBytes(pageFile().toPath()),
@@ -132,12 +102,12 @@ public class PageRollbackTest {
 
     @Test
     public void test_a_failed_delete_index_write_restores_the_page() throws Exception {
-        final var first = fileSystem.insertIntoCollection(entry("first"));
-        fileSystem.insertIntoCollection(entry("second"));
+        final var first = fs.insertIntoCollection(entry("first"));
+        fs.insertIntoCollection(entry("second"));
         final var before = Files.readAllBytes(pageFile().toPath());
         replacePkIndexWithAnUnwritableDirectory();
 
-        assertThrows(RuntimeException.class, () -> fileSystem.deleteFromCollection(first),
+        assertThrows(RuntimeException.class, () -> fs.deleteFromCollection(first),
                 "a delete whose index write fails must surface the failure");
 
         assertArrayEquals(before, Files.readAllBytes(pageFile().toPath()),
@@ -146,14 +116,14 @@ public class PageRollbackTest {
 
     @Test
     public void test_a_failed_update_index_write_restores_the_page() throws Exception {
-        final var first = fileSystem.insertIntoCollection(entry("first"));
-        fileSystem.insertIntoCollection(entry("second"));
+        final var first = fs.insertIntoCollection(entry("first"));
+        fs.insertIntoCollection(entry("second"));
         final var before = Files.readAllBytes(pageFile().toPath());
         replacePkIndexWithAnUnwritableDirectory();
 
         final var replacement = entry("first");
         replacement.getData().add("value", new JsonString("changed"));
-        assertThrows(IOException.class, () -> fileSystem.updateFromCollection(replacement, first),
+        assertThrows(IOException.class, () -> fs.updateFromCollection(replacement, first),
                 "an update whose index write fails must surface the failure");
 
         assertArrayEquals(before, Files.readAllBytes(pageFile().toPath()),
@@ -162,14 +132,13 @@ public class PageRollbackTest {
 
     @Test
     public void test_a_failed_page_append_rolls_the_earlier_pages_back() throws Exception {
-        fileSystem.insertIntoCollection(entry("kept"));
+        fs.insertIntoCollection(entry("kept"));
         final var beforePage = Files.readAllBytes(pageFile().toPath());
         final var beforeIndex = Files.readString(pkIndexFile().toPath());
         assertTrue(pageFile(1).mkdirs(), "the test needs the second page of the batch to be unwritable");
 
         final var batch = new ArrayList<>(List.of(entry("a", 0), entry("b", 0), entry("c", 1)));
-        assertThrows(IOException.class,
-                () -> fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch),
+        assertThrows(IOException.class, () -> fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch),
                 "a bulk insert whose page append fails must surface the failure");
 
         assertArrayEquals(beforePage, Files.readAllBytes(pageFile().toPath()),
@@ -181,12 +150,11 @@ public class PageRollbackTest {
 
     @Test
     public void test_a_rolled_back_batch_leaves_the_pages_and_the_pk_index_describing_the_same_ids() throws Exception {
-        fileSystem.insertIntoCollection(entry("kept"));
+        fs.insertIntoCollection(entry("kept"));
         assertTrue(pageFile(1).mkdirs(), "the test needs the second page of the batch to be unwritable");
 
         final var batch = new ArrayList<>(List.of(entry("a", 0), entry("c", 1)));
-        assertThrows(IOException.class,
-                () -> fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch));
+        assertThrows(IOException.class, () -> fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch));
         assertTrue(pageFile(1).delete(), "the unwritable placeholder must be gone before the collection is scanned");
 
         assertEquals(idsInThePkIndex(), idsOnThePages(),
@@ -196,12 +164,12 @@ public class PageRollbackTest {
 
     @Test
     public void test_a_failed_single_append_leaves_neither_a_record_nor_an_index_row() throws Exception {
-        fileSystem.insertIntoCollection(entry("kept"));
+        fs.insertIntoCollection(entry("kept"));
         final var beforePage = Files.readAllBytes(pageFile().toPath());
         final var beforeIndex = Files.readString(pkIndexFile().toPath());
         assertTrue(pageFile(1).mkdirs(), "the test needs the target page to be unwritable");
 
-        assertThrows(IOException.class, () -> fileSystem.insertIntoCollection(entry("orphan", 1)),
+        assertThrows(IOException.class, () -> fs.insertIntoCollection(entry("orphan", 1)),
                 "a single insert whose page append fails must surface the failure");
 
         assertArrayEquals(beforePage, Files.readAllBytes(pageFile().toPath()));
@@ -214,7 +182,7 @@ public class PageRollbackTest {
     public void test_a_successful_bulk_insert_leaves_every_record_on_the_page() throws Exception {
         final var batch = new ArrayList<>(List.of(entry("a"), entry("b"), entry("c")));
 
-        final var indexed = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch);
+        final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch);
 
         assertEquals(3, indexed.size(), "the rollback path must not disturb the ordinary bulk insert");
         assertTrue(pageFile().length() > 0, "the records must actually be on the page");

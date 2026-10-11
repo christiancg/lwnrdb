@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminTransactionEntry;
@@ -74,5 +75,33 @@ public class AdminTransactionEntryTest {
         final var text = entry.toString();
         assertTrue(text.contains("txn-4"));
         assertTrue(text.contains(AdminTransactionEntry.OP_TYPE_BULK_SAVE));
+    }
+
+    @Test
+    public void test_a_buffered_op_remembers_the_cascade_depth() {
+        final var entry = new AdminTransactionEntry("tx", "client", 0, AdminTransactionEntry.OP_TYPE_SAVE, "db", "coll",
+                new JsonObject());
+        entry.setTriggerContext(List.of("id"), "someone", 3);
+        final var data = entry.getData();
+        data.addProperty(Globals.PK_FIELD, entry.get_id());
+
+        final var roundTripped = AdminTransactionEntry.fromJsonObject(data);
+
+        assertEquals(3, roundTripped.getTriggerDepth(),
+                "a replay that reset the depth to zero ran triggers the online commit suppressed and restarted"
+                        + " the cascade budget");
+        assertEquals("someone", roundTripped.getActingUser());
+    }
+
+    @Test
+    public void test_an_op_written_before_the_depth_field_reads_as_zero() {
+        final var entry = new AdminTransactionEntry("tx", "client", 0, AdminTransactionEntry.OP_TYPE_SAVE, "db", "coll",
+                new JsonObject());
+        entry.setTriggerContext(List.of(), "someone", 0);
+        final var data = entry.getData();
+        data.addProperty(Globals.PK_FIELD, entry.get_id());
+        data.remove("triggerDepth");
+
+        assertEquals(0, AdminTransactionEntry.fromJsonObject(data).getTriggerDepth());
     }
 }

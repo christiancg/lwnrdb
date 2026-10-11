@@ -3,6 +3,7 @@ package org.techhouse.unit.ops;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -12,9 +13,11 @@ import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -30,6 +33,7 @@ public class CommittedOpTriggersOutcomeTest {
     private static final String ACTING_USER = "fence-owner";
     private static final String OBJECTS_FIELD = "objects";
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
+    private static final String OTHER_COLL = "otherColl";
 
     private Transaction transaction;
     private long nextSeq;
@@ -48,20 +52,29 @@ public class CommittedOpTriggersOutcomeTest {
         return Cache.getCollectionIdentifier(TestGlobals.DB, collName) + Globals.COLL_IDENTIFIER_SEPARATOR + id;
     }
 
-    private static JsonObject document(String id) {
+    private static JsonObject doc(String id) {
         final var object = new JsonObject();
         object.add(Globals.PK_FIELD, new JsonString(id));
+        return object;
+    }
+
+    private static JsonObject document(String id) {
+        final var object = doc(id);
         object.add("value", new JsonString("v"));
         return object;
     }
 
-    private AdminTransactionEntry op(String opType, JsonObject payload, String... insertedIds) {
+    private AdminTransactionEntry opIn(String collName, String opType, JsonObject payload, String... insertedIds) {
         final var seq = nextSeq++;
         if (insertedIds.length > 0) {
             transaction.recordInserts(seq, List.of(insertedIds));
         }
         return new AdminTransactionEntry(transaction.getTransactionId().toString(), "client", seq, opType,
-                TestGlobals.DB, TestGlobals.COLL, payload);
+                TestGlobals.DB, collName, payload);
+    }
+
+    private AdminTransactionEntry op(String opType, JsonObject payload, String... insertedIds) {
+        return opIn(TestGlobals.COLL, opType, payload, insertedIds);
     }
 
     private AdminTransactionEntry saveOp(String id, boolean inserted) {
@@ -279,5 +292,113 @@ public class CommittedOpTriggersOutcomeTest {
             triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
                     eq(EventType.UPDATED), eq(List.of("b")), eq(ACTING_USER), anyInt(), anyString()), times(1));
         }
+    }
+
+    private AdminTransactionEntry insertOf(String id) {
+        return opIn(TestGlobals.COLL, AdminTransactionEntry.OP_TYPE_SAVE, doc(id), id);
+    }
+
+    private AdminTransactionEntry bulkInsertOfAAndB() {
+        final var objects = new JsonArray();
+        objects.add(doc("a"));
+        objects.add(doc("b"));
+        final var payload = new JsonObject();
+        payload.add(OBJECTS_FIELD, objects);
+        return opIn(TestGlobals.COLL, AdminTransactionEntry.OP_TYPE_BULK_SAVE, payload, "a", "b");
+    }
+
+    private AdminTransactionEntry removalOf(String coll, String id) {
+        final var payload = doc(id);
+        payload.add(DELETED_DOCUMENT_FIELD, doc(id));
+        return opIn(coll, AdminTransactionEntry.OP_TYPE_DELETE, payload);
+    }
+
+    private void commit(AdminTransactionEntry... ops) {
+        fire(List.of(ops), Map.of());
+    }
+
+    private static void verifyDeletedFired(MockedStatic<TriggerHelper> triggers, String coll, int count) {
+        triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(coll), eq(EventType.DELETED),
+                anyList(), anyString(), anyInt(), anyString()), times(count));
+    }
+
+    private static void verifyCreatedFor(MockedStatic<TriggerHelper> triggers, List<String> ids) {
+        triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                eq(EventType.CREATED), argThat(list -> list.equals(ids)), anyString(), anyInt(), anyString()));
+    }
+
+    @Test
+    public void test_save_new_then_delete_fires_nothing() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(insertOf("x"), removalOf(TestGlobals.COLL, "x"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 0);
+            verifyCreatedFor(triggers, List.of());
+        }
+    }
+
+    @Test
+    public void test_save_new_then_delete_then_save_fires_one_created() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(insertOf("x2"), removalOf(TestGlobals.COLL, "x2"), insertOf("x2"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 0);
+            verifyCreatedFor(triggers, List.of("x2"));
+        }
+    }
+
+    @Test
+    public void test_save_existing_then_delete_fires_deleted() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(opIn(TestGlobals.COLL, AdminTransactionEntry.OP_TYPE_SAVE, doc("y")),
+                    removalOf(TestGlobals.COLL, "y"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 1);
+        }
+    }
+
+    @Test
+    public void test_bulk_save_new_then_delete_fires_nothing() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(bulkInsertOfAAndB(), removalOf(TestGlobals.COLL, "a"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 0);
+            verifyCreatedFor(triggers, List.of("b"));
+        }
+    }
+
+    @Test
+    public void test_create_and_delete_in_different_collections_are_independent() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(insertOf("z"), removalOf(OTHER_COLL, "z"));
+            verifyDeletedFired(triggers, OTHER_COLL, 1);
+            verifyCreatedFor(triggers, List.of("z"));
+            triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), eq(TestGlobals.COLL), eq(EventType.DELETED),
+                    anyList(), anyString(), anyInt(), anyString()), never());
+        }
+    }
+
+    @Test
+    public void test_deletes_in_one_transaction_are_staged_once_per_collection() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(removalOf(TestGlobals.COLL, "d1"), removalOf(TestGlobals.COLL, "d2"),
+                    removalOf(TestGlobals.COLL, "d3"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 1);
+            triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.DELETED), argThat(entries -> idsOf(entries).equals(List.of("d1", "d2", "d3"))),
+                    anyString(), anyInt(), anyString()));
+        }
+    }
+
+    @Test
+    public void test_deletes_across_collections_are_staged_separately() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(removalOf(TestGlobals.COLL, "e1"), removalOf(OTHER_COLL, "e2"), removalOf(TestGlobals.COLL, "e3"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 1);
+            verifyDeletedFired(triggers, OTHER_COLL, 1);
+            triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.DELETED), argThat(entries -> idsOf(entries).equals(List.of("e1", "e3"))), anyString(),
+                    anyInt(), anyString()));
+        }
+    }
+
+    private static List<String> idsOf(List<DbEntry> entries) {
+        return entries.stream().map(DbEntry::get_id).toList();
     }
 }

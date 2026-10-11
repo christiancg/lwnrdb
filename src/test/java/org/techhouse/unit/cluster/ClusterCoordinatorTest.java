@@ -2,6 +2,7 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.techhouse.test.ClusterTestHarness.node;
 
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -9,8 +10,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.MembershipView;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -27,10 +26,6 @@ public class ClusterCoordinatorTest {
     private final Configuration config = Configuration.getInstance();
     private boolean origEnabled;
     private int origExpected;
-
-    private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
-    }
 
     @BeforeEach
     public void setUp() throws Exception {

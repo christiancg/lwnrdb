@@ -8,10 +8,6 @@ import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
@@ -37,20 +33,10 @@ public class MessageProcessorShutdownTest {
         TestUtils.standardTearDown();
     }
 
-    private static Socket socket(InputStream in, OutputStream out) throws Exception {
-        final var socket = mock(Socket.class);
-        final var address = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(address);
-        when(address.getHostAddress()).thenReturn("127.0.0.1");
-        when(socket.getInputStream()).thenReturn(in);
-        when(socket.getOutputStream()).thenReturn(out);
-        return socket;
-    }
-
     private static String run(String message, BooleanSupplier shuttingDown) throws Exception {
         final var out = new ByteArrayOutputStream();
         final var in = new ByteArrayInputStream((message + "\n").getBytes(StandardCharsets.UTF_8));
-        final var thread = new Thread(new MessageProcessor(socket(in, out), shuttingDown));
+        final var thread = new Thread(new MessageProcessor(TestUtils.clientSocket(in, out), shuttingDown));
         thread.start();
         thread.join(3000);
         assertFalse(thread.isAlive());
@@ -76,7 +62,7 @@ public class MessageProcessorShutdownTest {
         final var processor = mock(OperationProcessor.class);
         final var out = new ByteArrayOutputStream();
         final var in = new ByteArrayInputStream("{\"type\":\"LIST_DATABASES\"}\n".getBytes(StandardCharsets.UTF_8));
-        final var messageProcessor = new MessageProcessor(socket(in, out), () -> true);
+        final var messageProcessor = new MessageProcessor(TestUtils.clientSocket(in, out), () -> true);
         TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
 
         final var thread = new Thread(messageProcessor);
@@ -118,7 +104,7 @@ public class MessageProcessorShutdownTest {
         final var out = new ByteArrayOutputStream();
         final var in = new ByteArrayInputStream(
                 "{\"type\":\"LIST_DATABASES\"}\n{\"type\":\"CLOSE_CONNECTION\"}\n".getBytes(StandardCharsets.UTF_8));
-        final var messageProcessor = new MessageProcessor(socket(in, out));
+        final var messageProcessor = new MessageProcessor(TestUtils.clientSocket(in, out));
         TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
 
         final var thread = new Thread(messageProcessor);
@@ -142,7 +128,7 @@ public class MessageProcessorShutdownTest {
                 });
         final var out = new ByteArrayOutputStream();
         final var in = new ByteArrayInputStream("{\"type\":\"LIST_DATABASES\"}\n".getBytes(StandardCharsets.UTF_8));
-        final var messageProcessor = new MessageProcessor(socket(in, out));
+        final var messageProcessor = new MessageProcessor(TestUtils.clientSocket(in, out));
         TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
 
         final var thread = new Thread(messageProcessor);
@@ -161,7 +147,7 @@ public class MessageProcessorShutdownTest {
                 .thenThrow(new IllegalStateException("boom"));
         final var out = new ByteArrayOutputStream();
         final var in = new ByteArrayInputStream("{\"type\":\"LIST_DATABASES\"}\n".getBytes(StandardCharsets.UTF_8));
-        final var messageProcessor = new MessageProcessor(socket(in, out));
+        final var messageProcessor = new MessageProcessor(TestUtils.clientSocket(in, out));
         TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
 
         final var thread = new Thread(messageProcessor);

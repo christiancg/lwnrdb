@@ -3,15 +3,13 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.techhouse.test.ClusterTestHarness.SECRET;
 import static org.techhouse.test.ClusterTestHarness.node;
+import static org.techhouse.test.Tx2pcFixtures.findStatus;
 
-import java.net.InetAddress;
-import java.net.Socket;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.NodeInfo;
@@ -106,12 +104,6 @@ public class TransactionClusterIntegrationTest {
         return request;
     }
 
-    private OperationStatus findStatus(String id) {
-        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.set_id(id);
-        return processor.processMessage(request).getStatus();
-    }
-
     private String collectionOwnedByOther() {
         for (var i = 0; i < 500; i++) {
             final var coll = "tx-routed-" + i;
@@ -128,11 +120,7 @@ public class TransactionClusterIntegrationTest {
     }
 
     private UUID newClient() {
-        final var socket = Mockito.mock(Socket.class);
-        final var addr = Mockito.mock(InetAddress.class);
-        Mockito.when(socket.getInetAddress()).thenReturn(addr);
-        Mockito.when(addr.getHostAddress()).thenReturn("127.0.0.1");
-        return clientTracker.addClient(socket);
+        return clientTracker.addClient(TestUtils.clientSocket());
     }
 
     @Test

@@ -105,5 +105,7 @@ public class DatabaseBarrierLockingTest {
         rl.releaseDatabaseShared(DB);
         rl.removeDatabaseLock(DB);
         assertNull(locks(rl).get(DB));
+        assertTrue(rl.tryLockDatabaseExclusive(DB, 100), "an evicted barrier must leave nothing held behind");
+        rl.releaseDatabaseExclusive(DB);
     }
 }

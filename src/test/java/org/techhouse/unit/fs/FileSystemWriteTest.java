@@ -7,8 +7,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -21,28 +19,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-public class FileSystemWriteTest {
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        Configuration config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        File dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
-
+public class FileSystemWriteTest extends FileSystemTestBase {
     @Test
     public void test_create_base_db_path_success() {
         FileSystem fs = new FileSystem();
@@ -56,7 +33,7 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_create_base_db_path_invalid_path() throws NoSuchFieldException, IllegalAccessException {
+    public void test_create_base_db_path_invalid_path() throws Exception {
         FileSystem fs = new FileSystem();
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "filePath", "/invalid/path/that/cannot/be/created");
@@ -83,7 +60,7 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_creates_new_db_folder_successfully() throws NoSuchFieldException, IllegalAccessException {
+    public void test_creates_new_db_folder_successfully() throws Exception {
         String testDbPath = System.getProperty("java.io.tmpdir");
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, testDbPath);
@@ -97,10 +74,7 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_bulk_insert_multiple_entries_success()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_bulk_insert_multiple_entries_success() throws IOException {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -129,10 +103,7 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_bulk_insert_groups_entries_by_page()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_bulk_insert_groups_entries_by_page() throws IOException {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -166,9 +137,7 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_bulk_insert_empty_list() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_bulk_insert_empty_list() throws IOException {
 
         List<DbEntry> entries = new ArrayList<>();
 
@@ -179,10 +148,8 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_bulk_update_multiple_entries_success()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_bulk_update_multiple_entries_success() throws IOException {
+        final var fileSystem = fs;
 
         final var data1 = new JsonObject();
         data1.addProperty("_id", "1");
@@ -211,10 +178,8 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_bulk_update_preserves_the_write_version()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_bulk_update_preserves_the_write_version() throws IOException {
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("_id", "v1");
         data.addProperty("field", "value");
@@ -234,9 +199,8 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_bulk_update_empty_entries_list() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_bulk_update_empty_entries_list() throws IOException {
+        final var fileSystem = fs;
 
         List<IndexedDbEntry> entries = new ArrayList<>();
 
@@ -249,8 +213,7 @@ public class FileSystemWriteTest {
 
     @Test
     public void test_bulk_update_multiple_same_page_entries_no_corruption() throws Exception {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var toInsert = new ArrayList<DbEntry>();
         for (var id : List.of("1", "2", "3")) {
             final var data = new JsonObject();
@@ -275,9 +238,8 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_update_file_length() throws NoSuchFieldException, IllegalAccessException, IOException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_update_file_length() throws IOException {
+        final var fileSystem = fs;
         final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
         final var jsonObject = new JsonObject();
@@ -294,8 +256,7 @@ public class FileSystemWriteTest {
 
     @Test
     public void test_concurrent_inserts_and_reads_keep_page_coherent() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final int writers = 8;
         final int perWriter = 25;
         final var errors = new java.util.concurrent.CopyOnWriteArrayList<Throwable>();
@@ -329,11 +290,11 @@ public class FileSystemWriteTest {
 
     @Test
     public void test_bulk_update_mid_batch_failure_throws_partial_bulk_update_exception() throws Exception {
-        FileSystem fs = FileSystemPages.freshFs();
-        final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
-        final var idxB = FileSystemPages.insertOnPage(fs, "b", 1);
-        final var updates = List.of(FileSystemPages.updateEntry(idxA, "a", "updated-value-for-a"),
-                FileSystemPages.updateEntry(idxB, "b", "updated-value-for-b"));
+        FileSystem fs = FileSystemTestBase.freshFs();
+        final var idxA = FileSystemTestBase.insertOnPage(fs, "a", 0);
+        final var idxB = FileSystemTestBase.insertOnPage(fs, "b", 1);
+        final var updates = List.of(FileSystemTestBase.updateEntry(idxA, "a", "updated-value-for-a"),
+                FileSystemTestBase.updateEntry(idxB, "b", "updated-value-for-b"));
 
         final var pageBFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
@@ -347,42 +308,42 @@ public class FileSystemWriteTest {
         final var partial = thrown.getPartialResult();
         assertEquals(1, partial.updated().size(), "only the entry before the failing one committed");
         assertEquals("a", partial.updated().getFirst().get_id());
-        assertEquals("updated-value-for-a", FileSystemPages.readValueFromDisk(fs, "a"),
+        assertEquals("updated-value-for-a", FileSystemTestBase.readValueFromDisk(fs, "a"),
                 "the entry before the failing one must be durably readable back from disk");
     }
 
     @Test
     public void test_bulk_update_multi_page_reads_back_intact() throws Exception {
-        FileSystem fs = FileSystemPages.freshFs();
-        final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
-        final var idxB = FileSystemPages.insertOnPage(fs, "b", 1);
-        final var idxC = FileSystemPages.insertOnPage(fs, "c", 2);
-        final var updates = List.of(FileSystemPages.updateEntry(idxA, "a", "updated-longer-value-for-a"),
-                FileSystemPages.updateEntry(idxB, "b", "updated-longer-value-for-b"),
-                FileSystemPages.updateEntry(idxC, "c", "updated-longer-value-for-c"));
+        FileSystem fs = FileSystemTestBase.freshFs();
+        final var idxA = FileSystemTestBase.insertOnPage(fs, "a", 0);
+        final var idxB = FileSystemTestBase.insertOnPage(fs, "b", 1);
+        final var idxC = FileSystemTestBase.insertOnPage(fs, "c", 2);
+        final var updates = List.of(FileSystemTestBase.updateEntry(idxA, "a", "updated-longer-value-for-a"),
+                FileSystemTestBase.updateEntry(idxB, "b", "updated-longer-value-for-b"),
+                FileSystemTestBase.updateEntry(idxC, "c", "updated-longer-value-for-c"));
 
         fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates);
 
-        assertEquals("updated-longer-value-for-a", FileSystemPages.readValueFromDisk(fs, "a"));
-        assertEquals("updated-longer-value-for-b", FileSystemPages.readValueFromDisk(fs, "b"));
-        assertEquals("updated-longer-value-for-c", FileSystemPages.readValueFromDisk(fs, "c"));
+        assertEquals("updated-longer-value-for-a", FileSystemTestBase.readValueFromDisk(fs, "a"));
+        assertEquals("updated-longer-value-for-b", FileSystemTestBase.readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-c", FileSystemTestBase.readValueFromDisk(fs, "c"));
     }
 
     @Test
     public void test_bulk_update_same_page_reads_back_intact() throws Exception {
-        FileSystem fs = FileSystemPages.freshFs();
-        final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
-        final var idxB = FileSystemPages.insertOnPage(fs, "b", 0);
-        final var idxC = FileSystemPages.insertOnPage(fs, "c", 0);
-        final var updates = List.of(FileSystemPages.updateEntry(idxA, "a", "updated-longer-value-for-a"),
-                FileSystemPages.updateEntry(idxB, "b", "updated-longer-value-for-b"),
-                FileSystemPages.updateEntry(idxC, "c", "updated-longer-value-for-c"));
+        FileSystem fs = FileSystemTestBase.freshFs();
+        final var idxA = FileSystemTestBase.insertOnPage(fs, "a", 0);
+        final var idxB = FileSystemTestBase.insertOnPage(fs, "b", 0);
+        final var idxC = FileSystemTestBase.insertOnPage(fs, "c", 0);
+        final var updates = List.of(FileSystemTestBase.updateEntry(idxA, "a", "updated-longer-value-for-a"),
+                FileSystemTestBase.updateEntry(idxB, "b", "updated-longer-value-for-b"),
+                FileSystemTestBase.updateEntry(idxC, "c", "updated-longer-value-for-c"));
 
         fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates);
 
-        assertEquals("updated-longer-value-for-a", FileSystemPages.readValueFromDisk(fs, "a"));
-        assertEquals("updated-longer-value-for-b", FileSystemPages.readValueFromDisk(fs, "b"));
-        assertEquals("updated-longer-value-for-c", FileSystemPages.readValueFromDisk(fs, "c"));
+        assertEquals("updated-longer-value-for-a", FileSystemTestBase.readValueFromDisk(fs, "a"));
+        assertEquals("updated-longer-value-for-b", FileSystemTestBase.readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-c", FileSystemTestBase.readValueFromDisk(fs, "c"));
     }
 
     private static File pageFile() {
@@ -399,8 +360,7 @@ public class FileSystemWriteTest {
 
     @Test
     public void test_a_failed_index_write_truncates_the_page() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         fileSystem.insertIntoCollection(entry("kept"));
         final var lengthBefore = pageFile().length();
         final var folder = pageFile().getParentFile();
@@ -418,8 +378,7 @@ public class FileSystemWriteTest {
 
     @Test
     public void test_quarantine_moves_the_collection_folder_aside() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         fileSystem.createDatabaseFolder(TestGlobals.DB);
         fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
         final var data = new JsonObject();
@@ -440,9 +399,8 @@ public class FileSystemWriteTest {
     }
 
     @Test
-    public void test_quarantine_of_a_collection_with_no_folder_reports_nothing_moved() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_quarantine_of_a_collection_with_no_folder_reports_nothing_moved() {
+        final var fileSystem = fs;
         fileSystem.createDatabaseFolder(TestGlobals.DB);
 
         assertFalse(fileSystem.folderQuarantine().moveCollectionAside(TestGlobals.DB, "never_created", 7L));

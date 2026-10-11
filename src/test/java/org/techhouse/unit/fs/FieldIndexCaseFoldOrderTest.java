@@ -8,48 +8,21 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 import org.techhouse.utils.CaseFolding;
 import org.techhouse.utils.SearchUtils;
 
-public class FieldIndexCaseFoldOrderTest {
+public class FieldIndexCaseFoldOrderTest extends FileSystemTestBase {
     private static final String FIELD = "folded";
     private static final String EMOJI = "😀";
     private static final String FULLWIDTH_A = "Ａ";
     private static final List<String> VALUES = List.of(EMOJI, FULLWIDTH_A, "aa" + FULLWIDTH_A, "\ud83d" + EMOJI);
-
-    private FileSystem fileSystem;
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        TestUtils.setPrivateField(Configuration.getInstance(), "filePath", TestGlobals.PATH);
-        fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        final var dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
 
     private static File indexFile() {
         return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
@@ -81,11 +54,11 @@ public class FieldIndexCaseFoldOrderTest {
     private List<FieldIndexEntry<String>> indexWrittenInOrder(List<String> order) throws IOException {
         Files.deleteIfExists(indexFile().toPath());
         for (final var value : order) {
-            fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+            fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                     new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, value, new HashSet<>(Set.of(idOf(value)))),
                     null);
         }
-        return fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
+        return fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
     }
 
     private static Set<String> scanEquals(String operand) {

@@ -1,14 +1,11 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.techhouse.test.LockHolder.startParked;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,37 +22,40 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.DatabaseOperationHelper;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
+import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
+import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.LockHolder;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class UserOperationHelperConcurrencyTest {
     private static final long BUDGET_MS = 10_000L;
+    private static final String NEW_DB = "ownerracedb";
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private final ExecutorService holder = Executors.newSingleThreadExecutor();
-    private final java.util.concurrent.atomic.AtomicBoolean usersLockHeld = new java.util.concurrent.atomic.AtomicBoolean();
+    private final LockHolder holder = new LockHolder();
 
     @BeforeEach
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
+        TestUtils.createTestDatabaseAndCollection();
         createUser("alpha", true);
         createUser("beta", true);
         createUser("gamma", false);
+        createUser("delta", false);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
-        if (usersLockHeld.get()) {
-            releaseUsersLock();
-        }
-        holder.shutdown();
-        assertTrue(holder.awaitTermination(5, TimeUnit.SECONDS));
+        holder.close();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -68,7 +68,7 @@ public class UserOperationHelperConcurrencyTest {
         final var deleteAlpha = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("alpha")), first);
         final var deleteBeta = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("beta")), second);
 
-        releaseUsersLock();
+        holder.release();
         deleteAlpha.join(BUDGET_MS);
         deleteBeta.join(BUDGET_MS);
 
@@ -88,7 +88,7 @@ public class UserOperationHelperConcurrencyTest {
         final var demoteBeta = startParked(
                 () -> UserOperationHelper.processChangePermissions(permissionsRequest("beta")), second);
 
-        releaseUsersLock();
+        holder.release();
         demoteAlpha.join(BUDGET_MS);
         demoteBeta.join(BUDGET_MS);
 
@@ -103,12 +103,12 @@ public class UserOperationHelperConcurrencyTest {
         holdUsersLock();
         final var first = new AtomicReference<OperationResponse>();
         final var second = new AtomicReference<OperationResponse>();
-        final var createOne = startParked(() -> UserOperationHelper.processCreateUser(createRequest("delta", "one")),
+        final var createOne = startParked(() -> UserOperationHelper.processCreateUser(createRequest("epsilon", "one")),
                 first);
-        final var createTwo = startParked(() -> UserOperationHelper.processCreateUser(createRequest("delta", "two")),
+        final var createTwo = startParked(() -> UserOperationHelper.processCreateUser(createRequest("epsilon", "two")),
                 second);
 
-        releaseUsersLock();
+        holder.release();
         createOne.join(BUDGET_MS);
         createTwo.join(BUDGET_MS);
 
@@ -117,7 +117,7 @@ public class UserOperationHelperConcurrencyTest {
         final var refused = first.get().getStatus() == OperationStatus.OK ? second.get() : first.get();
         assertEquals(ErrorCode.USER_ALREADY_EXISTS.getCode(), refused.getErrorCode());
         final var winner = first.get().getStatus() == OperationStatus.OK ? "one" : "two";
-        assertTrue(PasswordHasher.verify(winner + "-password", cache.getAdminUserEntry("delta").getPasswordHash()));
+        assertTrue(PasswordHasher.verify(winner + "-password", cache.getAdminUserEntry("epsilon").getPasswordHash()));
     }
 
     @Test
@@ -127,11 +127,8 @@ public class UserOperationHelperConcurrencyTest {
         final var change = startParked(() -> UserOperationHelper.processChangePermissions(permissionsRequest("gamma")),
                 result);
 
-        onHolder(() -> {
-            AdminOperationHelper.deleteUserEntry("gamma");
-            return null;
-        });
-        releaseUsersLock();
+        deleteUserOnHolder("gamma");
+        holder.release();
         change.join(BUDGET_MS);
 
         assertEquals(ErrorCode.USER_NOT_FOUND.getCode(), result.get().getErrorCode());
@@ -146,13 +143,13 @@ public class UserOperationHelperConcurrencyTest {
         final var setPassword = startParked(
                 () -> UserOperationHelper.processSetPassword(renewGammaPassword(), callerId), result);
 
-        onHolder(() -> {
+        holder.run(() -> {
             final var current = cache.getAdminUserEntry("gamma");
             AdminOperationHelper.saveUserEntry(new AdminUserEntry("gamma", current.getPasswordHash(), false,
                     Set.of(GlobalPermissionType.CREATE_DATABASE), new HashMap<>(), new HashMap<>()));
             return null;
         });
-        releaseUsersLock();
+        holder.release();
         setPassword.join(BUDGET_MS);
 
         assertEquals(OperationStatus.OK, result.get().getStatus());
@@ -170,14 +167,14 @@ public class UserOperationHelperConcurrencyTest {
         request.setCurrentPassword("gamma-password");
         final var setPassword = startParked(() -> UserOperationHelper.processSetPassword(request, callerId), result);
 
-        onHolder(() -> {
+        holder.run(() -> {
             final var current = cache.getAdminUserEntry("gamma");
             AdminOperationHelper.saveUserEntry(new AdminUserEntry("gamma", PasswordHasher.hash("reset-by-admin"), false,
                     current.getGlobalPermissions(), current.getDatabasePermissions(),
                     current.getCollectionPermissions()));
             return null;
         });
-        releaseUsersLock();
+        holder.release();
         setPassword.join(BUDGET_MS);
 
         assertEquals(ErrorCode.CURRENT_PASSWORD_INCORRECT.getCode(), result.get().getErrorCode());
@@ -192,7 +189,7 @@ public class UserOperationHelperConcurrencyTest {
         final var deleteOne = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("gamma")), first);
         final var deleteTwo = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("gamma")), second);
 
-        releaseUsersLock();
+        holder.release();
         deleteOne.join(BUDGET_MS);
         deleteTwo.join(BUDGET_MS);
 
@@ -217,11 +214,8 @@ public class UserOperationHelperConcurrencyTest {
         final var authenticate = startParked(
                 () -> UserOperationHelper.processAuthenticate(authenticateGamma(), clientId), result);
 
-        onHolder(() -> {
-            AdminOperationHelper.deleteUserEntry("gamma");
-            return null;
-        });
-        releaseUsersLock();
+        deleteUserOnHolder("gamma");
+        holder.release();
         authenticate.join(BUDGET_MS);
 
         assertEquals(ErrorCode.WRONG_CREDENTIALS.getCode(), result.get().getErrorCode());
@@ -237,14 +231,14 @@ public class UserOperationHelperConcurrencyTest {
         final var authenticate = startParked(
                 () -> UserOperationHelper.processAuthenticate(authenticateGamma(), clientId), result);
 
-        onHolder(() -> {
+        holder.run(() -> {
             final var gamma = cache.getAdminUserEntry("gamma");
             AdminOperationHelper.saveUserEntry(new AdminUserEntry("gamma", PasswordHasher.hash("renewed-password"),
                     gamma.isAdmin(), gamma.getGlobalPermissions(), gamma.getDatabasePermissions(),
                     gamma.getCollectionPermissions(), gamma.getScriptPermissions()));
             return null;
         });
-        releaseUsersLock();
+        holder.release();
         authenticate.join(BUDGET_MS);
 
         assertEquals(ErrorCode.WRONG_CREDENTIALS.getCode(), result.get().getErrorCode());
@@ -311,41 +305,80 @@ public class UserOperationHelperConcurrencyTest {
     }
 
     private void holdUsersLock() throws Exception {
-        onHolder(() -> {
+        holder.hold(() -> {
             locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+            return true;
+        }, () -> locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME));
+    }
+
+    private void deleteUserOnHolder(String username) throws Exception {
+        holder.run(() -> {
+            AdminOperationHelper.deleteUserEntry(username);
             return null;
         });
-        usersLockHeld.set(true);
     }
 
-    private void releaseUsersLock() throws Exception {
-        onHolder(() -> {
-            locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-            return null;
-        });
-        usersLockHeld.set(false);
+    private static SetDatabaseOwnersRequest ownersRequest(List<String> owners) {
+        final var request = new SetDatabaseOwnersRequest(TestGlobals.DB);
+        request.setOwners(owners);
+        return request;
     }
 
-    private void onHolder(Callable<Void> action) throws Exception {
-        holder.submit(action).get(BUDGET_MS, TimeUnit.MILLISECONDS);
+    @Test
+    public void test_set_owners_refuses_a_user_deleted_while_it_waited() throws Exception {
+        holdUsersLock();
+        final var result = new AtomicReference<OperationResponse>();
+        final var setOwners = startParked(
+                () -> DatabaseOperationHelper.processSetDatabaseOwners(ownersRequest(List.of("gamma"))), result);
+
+        deleteUserOnHolder("gamma");
+        holder.release();
+        setOwners.join(BUDGET_MS);
+
+        assertEquals(ErrorCode.USER_NOT_FOUND.getCode(), result.get().getErrorCode());
+        assertFalse(cache.getAdminDbEntry(TestGlobals.DB).getOwners().contains("gamma"),
+                "a deleted name left as owner hands the database to the next user created under it");
     }
 
-    @SuppressWarnings("BusyWait")
-    private static Thread startParked(Callable<OperationResponse> action, AtomicReference<OperationResponse> result)
-            throws InterruptedException {
-        final var thread = new Thread(() -> {
-            try {
-                result.set(action.call());
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
-        });
-        thread.start();
-        final var deadline = System.currentTimeMillis() + BUDGET_MS;
-        while (thread.getState() != Thread.State.WAITING && thread.getState() != Thread.State.TIMED_WAITING) {
-            assertTrue(System.currentTimeMillis() < deadline, "the request never parked on the users lock");
-            Thread.sleep(5);
-        }
-        return thread;
+    @Test
+    public void test_create_database_is_ownerless_when_its_caller_was_deleted_meanwhile() throws Exception {
+        final var callerId = clientTracker.registerForwardedClient("delta");
+        holdUsersLock();
+        final var result = new AtomicReference<OperationResponse>();
+        final var create = startParked(() -> DatabaseOperationHelper
+                .processCreateDatabaseOperation(new CreateDatabaseRequest(NEW_DB), callerId), result);
+
+        deleteUserOnHolder("delta");
+        holder.release();
+        create.join(BUDGET_MS);
+
+        assertEquals(OperationStatus.OK, result.get().getStatus());
+        assertTrue(cache.getAdminDbEntry(NEW_DB).getOwners().isEmpty());
+    }
+
+    @Test
+    public void test_create_database_is_owned_by_its_existing_caller() {
+        final var callerId = clientTracker.registerForwardedClient("delta");
+
+        DatabaseOperationHelper.processCreateDatabaseOperation(new CreateDatabaseRequest(NEW_DB), callerId);
+
+        assertEquals(List.of("delta"), cache.getAdminDbEntry(NEW_DB).getOwners());
+    }
+
+    @Test
+    public void test_set_owners_of_existing_users_is_written() {
+        final var response = DatabaseOperationHelper.processSetDatabaseOwners(ownersRequest(List.of("gamma", "delta")));
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(List.of("gamma", "delta"), cache.getAdminDbEntry(TestGlobals.DB).getOwners());
+    }
+
+    @Test
+    public void test_set_owners_of_a_missing_database_answers_not_found() {
+        final var request = new SetDatabaseOwnersRequest("no_such_db");
+        request.setOwners(List.of("gamma"));
+
+        assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(),
+                DatabaseOperationHelper.processSetDatabaseOwners(request).getErrorCode());
     }
 }

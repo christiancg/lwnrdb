@@ -1,22 +1,3 @@
-"""Extensive memory-bound stress test for LWNRDB.
-
-Pushes much more data than maxMemory through the server, mixes
-inserts, indexed reads, full scans, and aggregations across many collections,
-and verifies that:
-
-  - userCacheBytes (in-cache JVM-managed budget) never exceeds the configured
-    cap by more than CACHE_CAP_TOLERANCE.
-  - heapUsedRatio stays below the configured high watermark (we read it from
-    GET_DATABASE_STATS for each snapshot, falling back to 80%).
-  - The OS-visible process RSS does not balloon beyond a sane envelope
-    relative to -Xmx (assumes the operator follows CLAUDE.md guidance).
-  - Every document we wrote is still retrievable (eviction is transparent).
-
-Server is expected to be already running with:
-    maxMemory=64mb in lwnrdb.cfg
-    java -Xmx128m -jar target/lwnrdb-1.0-SNAPSHOT.jar
-"""
-
 import os
 import random
 import string
@@ -40,12 +21,10 @@ PAYLOAD_BYTES = int(os.environ.get("MEM_TEST_PAYLOAD_BYTES", "768"))
 BULK_BATCH_SIZE = int(os.environ.get("MEM_TEST_BATCH_SIZE", "250"))
 INDEXED_FIELDS = ["category", "score"]
 
-# How much over the cap we tolerate transiently between sweeps.
 CACHE_CAP_TOLERANCE = 1.25
 LATENCY_BUDGET_MS = 3_000
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
-
 
 
 def rand_str(n):
@@ -91,9 +70,6 @@ def fmt_snap(s, pid=None):
             f"entries={tot.get('entryCount', 0)}{rss}")
 
 
-# ── workload ──────────────────────────────────────────────────────────────
-
-
 def setup(c):
     c.send({"type": "DROP_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
@@ -108,10 +84,6 @@ def teardown(c):
 
 
 def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
-    """Insert NUM_COLLECTIONS x DOCS_PER_COLLECTION docs with ~PAYLOAD_BYTES filler.
-
-    Total raw data ~= NUM_COLLECTIONS * DOCS * PAYLOAD_BYTES (well over the cap).
-    """
     section(f"Mass insert: {NUM_COLLECTIONS} collections x {DOCS_PER_COLLECTION} docs "
             f"x {PAYLOAD_BYTES}B "
             f"(~{(NUM_COLLECTIONS * DOCS_PER_COLLECTION * PAYLOAD_BYTES) // (1024*1024)}MB)")
@@ -145,13 +117,11 @@ def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
                 if len(samples[coll]) < 30:
                     samples[coll].append(doc_id)
                 batch = []
-                # Responsiveness probe
                 probes += 1
                 if probes % 30 == 0:
                     t0 = time.perf_counter()
                     c.send({"type": "LIST_DATABASES"})
                     max_probe_ms = max(max_probe_ms, (time.perf_counter() - t0) * 1000.0)
-                # Memory samples every ~10 batches
                 if probes % 10 == 0:
                     s = snapshot(c)
                     mem = s.get("memory", {})
@@ -182,7 +152,6 @@ def create_indexes(c, pid):
                                 "collectionName": coll, "fieldName": fld}, timeout=60)
             check(f"CREATE_INDEX {coll}.{fld}", r.get("status") == "OK",
                   detail=str(r) if r.get("status") != "OK" else "")
-    # let background workers settle
     time.sleep(3)
     print(f"  after indexing — {fmt_snap(snapshot(c), pid)}")
 
@@ -198,7 +167,6 @@ def mixed_workload(c, pid, rss_samples, cache_samples, heap_samples):
         choice = random.random()
         t0 = time.perf_counter()
         if choice < 0.4:
-            # indexed equality filter
             steps = [{"type": "FILTER",
                       "operator": {"fieldOperatorType": "EQUALS",
                                    "field": "category",
@@ -210,7 +178,6 @@ def mixed_workload(c, pid, rss_samples, cache_samples, heap_samples):
             if r.get("status") != "OK":
                 warn(f"AGGREGATE filter on {coll}.category", str(r))
         elif choice < 0.7:
-            # indexed range
             lo = random.randint(0, 500)
             steps = [{"type": "FILTER",
                       "operator": {"fieldOperatorType": "GREATER_THAN",
@@ -222,12 +189,10 @@ def mixed_workload(c, pid, rss_samples, cache_samples, heap_samples):
             if r.get("status") != "OK":
                 warn(f"AGGREGATE range on {coll}.score", str(r))
         elif choice < 0.9:
-            # full count
             c.send({"type": "AGGREGATE", "databaseName": DB,
                             "collectionName": coll,
                             "aggregationSteps": [{"type": "COUNT"}]})
         else:
-            # random FIND_BY_ID
             doc_id = f"{coll}_{random.randint(0, DOCS_PER_COLLECTION - 1):06d}"
             c.send({"type": "FIND_BY_ID", "databaseName": DB,
                             "collectionName": coll, "_id": doc_id})
@@ -265,9 +230,6 @@ def verify_correctness(c, samples):
                   "data survived eviction (read from disk)"))
 
 
-# ── assertions ────────────────────────────────────────────────────────────
-
-
 def assert_cap(label, cache_used_bytes, cap_bytes):
     if cap_bytes <= 0:
         warn(f"{label}: cap is 0 (unlimited?)")
@@ -290,8 +252,6 @@ def assert_heap(label, heap_ratio, high_watermark):
 
 
 def assert_rss_bounded(label, max_rss_mb, xmx_mb):
-    # RSS envelope = -Xmx + reasonable native/metaspace overhead.
-    # Allow 2x as the upper bound (very generous; usually << 1.5x in practice).
     envelope = xmx_mb * 2.0
     check(f"{label}: max RSS {max_rss_mb:.1f}MB <= envelope {envelope:.0f}MB "
           f"(-Xmx={xmx_mb}MB)",
@@ -300,9 +260,6 @@ def assert_rss_bounded(label, max_rss_mb, xmx_mb):
                   if max_rss_mb <= envelope else
                   "PROCESS SIZE BLEW PAST -Xmx ENVELOPE — investigate "
                   "native leaks / direct buffers"))
-
-
-# ── main ──────────────────────────────────────────────────────────────────
 
 
 def main():
@@ -353,7 +310,6 @@ def main():
     assert_cap("peak userCacheBytes vs cap", max_cache_seen, cap_bytes)
     assert_cap("final userCacheBytes vs cap", final_memory.get("userCacheBytes", 0), cap_bytes)
 
-    # Confirm we actually exceeded the cap on disk — otherwise the cap was not exercised.
     if on_disk > cap_bytes:
         check(f"on-disk size {on_disk/1024/1024:.1f}MB > cap "
               f"{cap_bytes/1024/1024:.0f}MB → cache MUST be a subset",

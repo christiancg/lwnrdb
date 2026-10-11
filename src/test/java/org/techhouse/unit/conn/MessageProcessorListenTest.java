@@ -4,25 +4,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -39,19 +30,10 @@ public class MessageProcessorListenTest {
         TestUtils.standardTearDown();
     }
 
-    private Socket mockSocket(InputStream in, OutputStream out) throws Exception {
-        final var s = Mockito.mock(Socket.class);
-        final var addr = Mockito.mock(InetAddress.class);
-        Mockito.when(s.getInetAddress()).thenReturn(addr);
-        Mockito.when(addr.getHostAddress()).thenReturn("127.0.0.1");
-        Mockito.when(s.getInputStream()).thenReturn(in);
-        Mockito.when(s.getOutputStream()).thenReturn(out);
-        return s;
-    }
-
     private String runMessages(String messages) throws Exception {
         final var out = new ByteArrayOutputStream();
-        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
+        final var socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+                out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
@@ -60,14 +42,7 @@ public class MessageProcessorListenTest {
     }
 
     private void createListenAdmin(String username) {
-        final var req = new CreateUserRequest();
-        req.setUsername(username);
-        req.setPassword("password123");
-        req.setAdmin(true);
-        req.setGlobalPermissions(new HashSet<>());
-        req.setDatabasePermissions(new HashMap<>());
-        req.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(req);
+        TestUtils.createAdmin(username);
     }
 
     @Test
@@ -128,7 +103,8 @@ public class MessageProcessorListenTest {
         final var listenMsg = "{\"type\":\"AUTHENTICATE\",\"username\":\"listen_stop_admin\",\"password\":\"password123\"}\n"
                 + "{\"type\":\"LISTEN\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"aggregationSteps\":[]}\n";
-        final var socket = mockSocket(new ByteArrayInputStream(listenMsg.getBytes(StandardCharsets.UTF_8)), out);
+        final var socket = TestUtils.clientSocket(new ByteArrayInputStream(listenMsg.getBytes(StandardCharsets.UTF_8)),
+                out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
@@ -154,7 +130,8 @@ public class MessageProcessorListenTest {
         final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"listen_delivery_admin\",\"password\":\"password123\"}\n"
                 + "{\"type\":\"LISTEN\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"aggregationSteps\":[]}\n";
-        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
+        final var socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+                out);
         final var original = swapListenManager(recording);
         final MessageProcessor processor;
         try {

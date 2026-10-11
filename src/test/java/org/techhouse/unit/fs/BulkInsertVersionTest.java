@@ -3,48 +3,18 @@ package org.techhouse.unit.fs;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.List;
-import java.util.Objects;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class BulkInsertVersionTest {
-
-    private FileSystem fileSystem;
-
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        final var config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        final var dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
+public class BulkInsertVersionTest extends FileSystemTestBase {
 
     private static DbEntry entry(String id, long version) {
         final var object = new JsonObject();
@@ -64,7 +34,7 @@ public class BulkInsertVersionTest {
     }
 
     private PkIndexEntry pkById(String id) throws IOException {
-        final var found = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
+        final var found = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(e -> e.getValue().equals(id)).findFirst().orElse(null);
         assertNotNull(found, "the bulk insert must write a pk index row for " + id);
         return found;
@@ -72,7 +42,7 @@ public class BulkInsertVersionTest {
 
     @Test
     public void test_the_returned_indexed_entry_carries_the_write_version() throws Exception {
-        final var indexed = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
+        final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
                 List.of(entry("a", 41L), entry("b", 42L)));
 
         assertEquals(41L, indexedById(indexed, "a").getVersion(),
@@ -82,7 +52,7 @@ public class BulkInsertVersionTest {
 
     @Test
     public void test_the_db_entry_the_indexed_entry_produces_carries_the_write_version() throws Exception {
-        final var indexed = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
+        final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
                 List.of(entry("a", 41L), entry("b", 42L)));
 
         assertEquals(41L, indexedById(indexed, "a").toDbEntry().getVersion());
@@ -91,7 +61,7 @@ public class BulkInsertVersionTest {
 
     @Test
     public void test_the_returned_version_matches_what_the_pk_index_recorded() throws Exception {
-        final var indexed = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
+        final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
                 List.of(entry("a", 41L), entry("b", 42L)));
 
         assertEquals(pkById("a").getVersion(), indexedById(indexed, "a").getVersion());
@@ -100,8 +70,7 @@ public class BulkInsertVersionTest {
 
     @Test
     public void test_a_zero_version_is_carried_through_unchanged() throws Exception {
-        final var indexed = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
-                List.of(entry("a", 0L)));
+        final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, List.of(entry("a", 0L)));
 
         assertEquals(0L, indexedById(indexed, "a").getVersion());
         assertEquals(0L, pkById("a").getVersion());

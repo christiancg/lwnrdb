@@ -3,9 +3,8 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.test.TriggerTestSupport.pendingRun;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -19,21 +18,17 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
-import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerInternalErrorTest {
     private static final String DEFINER = "arityowner";
@@ -41,21 +36,12 @@ public class TriggerInternalErrorTest {
     private static final String FIRED_ID = "doc1";
     private static final Configuration configuration = Configuration.getInstance();
     private final Cache cache = IocContainer.get(Cache.class);
-    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        org.techhouse.ops.AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of(DEFINER));
-        final var request = new CreateUserRequest();
-        request.setUsername(DEFINER);
-        request.setPassword("password123");
-        request.setAdmin(false);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TriggerTestSupport.createDefiner(DEFINER);
     }
 
     @AfterAll
@@ -76,15 +62,8 @@ public class TriggerInternalErrorTest {
         TestUtils.setPrivateField(configuration, "triggerTimeoutMs", 5_000L);
         TestUtils.setPrivateField(configuration, "scriptTimeoutMs", 5_000L);
         TestUtils.setPrivateField(configuration, "scriptInstructionBudget", 10_000_000L);
-        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
-        }
-        cache.removeProceduresForDatabase(TestGlobals.DB);
-        IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.clearTriggersAndProcedures();
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     private void storeProcedure(String script) throws Exception {
@@ -110,15 +89,6 @@ public class TriggerInternalErrorTest {
                 "arity", EventType.CREATED, false, DEFINER, 0, System.currentTimeMillis(), List.of(firedDocument())));
     }
 
-    private static AdminTriggerRunEntry runRecord(String runId) throws Exception {
-        for (final var entry : TriggerRunLog.pending()) {
-            if (runId.equals(entry.getRunId())) {
-                return entry;
-            }
-        }
-        return null;
-    }
-
     private static TriggerEvent event(String runId) {
         return new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, TRIGGER, "arity", false,
                 List.of(firedDocument()), DEFINER, 0, runId);
@@ -131,7 +101,7 @@ public class TriggerInternalErrorTest {
 
         TriggerDispatcher.dispatch(event(runId));
 
-        final var record = runRecord(runId);
+        final var record = pendingRun(runId);
         assertNotNull(record, "the run must stay visible for the operator");
         assertEquals(TriggerRunStatus.DEAD, record.getStatus());
         assertEquals(1, record.getAttempts());
@@ -146,7 +116,7 @@ public class TriggerInternalErrorTest {
 
         TriggerDispatcher.dispatch(event(runId));
 
-        final var record = runRecord(runId);
+        final var record = pendingRun(runId);
         assertNotNull(record);
         assertEquals(TriggerRunStatus.DEAD, record.getStatus());
         assertTrue(record.getLastError().contains("TypeError"), record.getLastError());
@@ -159,7 +129,7 @@ public class TriggerInternalErrorTest {
 
         TriggerDispatcher.dispatch(event(runId));
 
-        final var record = runRecord(runId);
+        final var record = pendingRun(runId);
         assertNotNull(record);
         assertEquals(TriggerRunStatus.DEAD, record.getStatus());
         assertEquals("Error: nope", record.getLastError());

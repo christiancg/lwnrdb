@@ -25,10 +25,10 @@ import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerRunLogStagingTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -49,9 +49,7 @@ public class TriggerRunLogStagingTest {
     @BeforeEach
     void clear() throws Exception {
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     private static DbEntry idEntry(String id) {

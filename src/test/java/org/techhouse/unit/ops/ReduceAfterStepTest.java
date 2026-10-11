@@ -8,19 +8,14 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
-import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
-import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -32,22 +27,10 @@ import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class ReduceAfterStepTest {
+public class ReduceAfterStepTest extends FilterResolutionSupport {
     private static final String TAG = "tag";
     private static final List<String> IDS = List.of("m", "c", "x", "a", "q", "f", "z", "b", "k", "e", "t", "h");
-
-    @BeforeEach
-    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-    }
-
-    @AfterEach
-    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
-        TestUtils.standardTearDown();
-    }
 
     private static JsonObject doc(String id, String tag) {
         final var obj = new JsonObject();
@@ -77,9 +60,7 @@ public class ReduceAfterStepTest {
     }
 
     private static String runOnCollection(BaseAggregationStep... steps) throws IOException {
-        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setAggregationSteps(List.of(steps));
-        return foldedOf(AggregationOperationHelper.processAggregation(request));
+        return foldedOf(rows(steps));
     }
 
     private static String sortedFold(List<String> ids) {
@@ -98,11 +79,6 @@ public class ReduceAfterStepTest {
         request.setObject(doc(id, tag));
         IocContainer.get(OperationProcessor.class).processMessage(request);
         IocContainer.get(PendingIndexWrites.class).clear(TestGlobals.DB, TestGlobals.COLL, id, 0L);
-    }
-
-    private static void indexTag() throws InterruptedException {
-        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, TAG);
-        IocContainer.get(Cache.class).getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(TAG));
     }
 
     @Test
@@ -149,7 +125,7 @@ public class ReduceAfterStepTest {
             }
         }
         final var scanned = runOnCollection(taggedX(), foldOf("row._id"));
-        indexTag();
+        indexField(TAG);
         final var indexed = runOnCollection(taggedX(), foldOf("row._id"));
         final var forcedScan = runOnCollection(new SkipAggregationStep(0), taggedX(), foldOf("row._id"));
 
@@ -164,7 +140,7 @@ public class ReduceAfterStepTest {
             save(IDS.get(i), "t" + (i % 5));
         }
         final var scanned = runOnCollection(new GroupByAggregationStep(TAG), foldOf("row.tag"));
-        indexTag();
+        indexField(TAG);
         final var indexed = runOnCollection(new GroupByAggregationStep(TAG), foldOf("row.tag"));
 
         assertEquals(Set.of("t0", "t1", "t2", "t3", "t4"), Set.of(indexed.substring(1).split("\\|")));

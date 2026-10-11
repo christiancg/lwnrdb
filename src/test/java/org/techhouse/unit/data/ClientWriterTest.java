@@ -4,13 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.BufferedWriter;
 import java.io.StringWriter;
-import java.net.InetAddress;
-import java.net.Socket;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Client;
+import org.techhouse.test.TestUtils;
 
 public class ClientWriterTest {
 
@@ -27,12 +25,7 @@ public class ClientWriterTest {
     @Test
     public void clientTracker_registerAndGetWriter() {
         final var tracker = new ClientTracker();
-        final var socket = Mockito.mock(Socket.class);
-        final var addr = Mockito.mock(InetAddress.class);
-        Mockito.when(socket.getInetAddress()).thenReturn(addr);
-        Mockito.when(addr.getHostAddress()).thenReturn("127.0.0.1");
-
-        final var clientId = tracker.addClient(socket);
+        final var clientId = tracker.addClient(TestUtils.clientSocket());
         final var writer = new BufferedWriter(new StringWriter());
 
         tracker.registerWriter(clientId, writer);

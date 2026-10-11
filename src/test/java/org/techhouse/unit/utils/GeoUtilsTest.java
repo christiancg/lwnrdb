@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.techhouse.utils.GeoPoint;
 import org.techhouse.utils.GeoUtils;
 
@@ -197,5 +199,30 @@ public class GeoUtilsTest {
         final var lng2 = lng1 + Math.atan2(Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
                 Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2));
         return new GeoPoint(Math.toDegrees(lat2), Math.toDegrees(lng2));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({"east of the antimeridian, 0, 179.99, 50000, 0, 179.95, 0, -179.95",
+            "west of the antimeridian, 0, -179.99, 50000, 0, 179.95, 0, -179.95",
+            "centred on the antimeridian, 0, 180.0, 1000000, 0, 179.95, 0, -179.95",
+            "near the pole, 89.95, 0, 50000, 89.97, 170, 89.97, -170"})
+    public void test_a_radius_near_a_wrap_covers_every_point_within(String label, double lat, double lng,
+            double radiusMeters, double lat1, double lng1, double lat2, double lng2) {
+        final var centre = new GeoPoint(lat, lng);
+        final var box = GeoUtils.boundingBoxForRadius(centre, radiusMeters);
+        for (final var candidate : List.of(new GeoPoint(lat1, lng1), new GeoPoint(lat2, lng2))) {
+            if (GeoUtils.haversineMeters(centre, candidate) <= radiusMeters) {
+                assertTrue(box.contains(candidate),
+                        "the box must be a superset of the true circle: FILTER re-tests exactly but can never"
+                                + " recover a point the pre-filter excluded");
+            }
+        }
+    }
+
+    @Test
+    public void test_an_ordinary_radius_keeps_a_selective_box() {
+        final var box = GeoUtils.boundingBoxForRadius(new GeoPoint(0, 0), 50000);
+        assertTrue(box.minLng() > -1 && box.maxLng() < 1,
+                "widening to the whole longitude band away from the wrap would forfeit the index everywhere");
     }
 }

@@ -28,13 +28,13 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerRunRecoveryStagedTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -70,9 +70,7 @@ public class TriggerRunRecoveryStagedTest {
         requeued.clear();
         triggerExecutor.stop();
         triggerExecutor.start(requeued::add);
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     private static JsonObject document(String id, String value) {

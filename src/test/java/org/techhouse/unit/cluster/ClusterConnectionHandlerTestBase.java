@@ -2,8 +2,6 @@ package org.techhouse.unit.cluster;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
@@ -33,8 +31,7 @@ public abstract class ClusterConnectionHandlerTestBase {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         cluster.start(true, ACK_TIMEOUT_MS);
-        cluster.configureMembership(1,
-                new NodeInfo("self", "127.0.0.1", cluster.serverPort(), NodeState.ALIVE, 1L, 1L));
+        cluster.configureMembership(1, ClusterTestHarness.node("self", cluster.serverPort()));
     }
 
     @AfterEach

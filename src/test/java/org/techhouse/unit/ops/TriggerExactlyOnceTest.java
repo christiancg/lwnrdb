@@ -5,9 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.test.TriggerTestSupport.statusOf;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -35,11 +34,10 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerExactlyOnceTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -60,15 +58,7 @@ public class TriggerExactlyOnceTest {
         IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, COUNTER_COLL);
         AdminOperationHelper.createPageCollections(TestGlobals.DB, COUNTER_COLL);
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, COUNTER_COLL));
-        AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of(DEFINER));
-        final var request = new CreateUserRequest();
-        request.setUsername(DEFINER);
-        request.setPassword("password123");
-        request.setAdmin(false);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TriggerTestSupport.createDefiner(DEFINER);
     }
 
     @AfterAll
@@ -96,9 +86,7 @@ public class TriggerExactlyOnceTest {
     }
 
     private void drainPendingRuns() throws Exception {
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     // Both CREATED and UPDATED: a save that carries an _id is an upsert, which the write path reports as an
@@ -270,15 +258,6 @@ public class TriggerExactlyOnceTest {
         TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep(50);
         assertTrue(captured.isEmpty(), "a dead-lettered run must not be replayed by startup recovery");
-    }
-
-    private static TriggerRunStatus statusOf(String runId) throws Exception {
-        for (final var entry : TriggerRunLog.pending()) {
-            if (runId.equals(entry.getRunId())) {
-                return entry.getStatus();
-            }
-        }
-        return null;
     }
 
     @Test

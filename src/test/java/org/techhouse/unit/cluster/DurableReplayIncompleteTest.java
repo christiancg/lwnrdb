@@ -6,29 +6,24 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.test.Tx2pcFixtures.SELF_ADDRESS;
+import static org.techhouse.test.Tx2pcFixtures.collectionId;
+import static org.techhouse.test.Tx2pcFixtures.findStatus;
+import static org.techhouse.test.Tx2pcFixtures.saveOp;
+import static org.techhouse.test.Tx2pcFixtures.seedPreparedSlice;
 
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.Main;
-import org.techhouse.cache.Cache;
-import org.techhouse.cluster.MembershipView;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.Tx2pcRecovery;
-import org.techhouse.cluster.membership.MembershipService;
-import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminTransactionEntry;
-import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
@@ -39,86 +34,47 @@ import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.CreateCollectionRequest;
-import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.tx.TransactionRecovery;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.Tx2pcFixtures;
 
 public class DurableReplayIncompleteTest {
-    private static final String SELF_ADDRESS = "127.0.0.1:5000";
     private static final String ABSENT_COLL = "late-collection";
-    private final Configuration config = Configuration.getInstance();
     private final Tx2pcRecovery recovery = IocContainer.get(Tx2pcRecovery.class);
-    private final MembershipService membershipService = IocContainer.get(MembershipService.class);
-    private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private volatile boolean origEnabled;
+    private final ClusterTestHarness cluster = new ClusterTestHarness();
+    private final Configuration config = Configuration.getInstance();
     private volatile long origAckTimeoutMs;
-
-    private static NodeInfo node() {
-        return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
-    }
-
-    private static String collectionId() {
-        return Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
-    }
 
     @BeforeEach
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        origEnabled = config.isClusterEnabled();
         origAckTimeoutMs = config.getReplicationAckTimeoutMs();
-        TestUtils.setPrivateField(config, "clusterEnabled", true);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 2000L);
-        TestUtils.setPrivateField(membershipService, "members",
-                new ConcurrentHashMap<>(java.util.Map.of("self", node())));
-        TestUtils.setPrivateField(membershipService, "self", node());
-        ownership.setSelfNodeId("self");
-        ownership.onMembershipChanged(membershipService.membershipView());
+        cluster.enableAlone();
     }
 
     @AfterEach
     public void tearDown() throws Exception {
-        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAckTimeoutMs);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        cluster.disable();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
 
-    private static AdminTransactionEntry saveOp(String txId, String collName, JsonObject payload) {
-        return new AdminTransactionEntry(txId, "client", 0, AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB,
-                collName, payload);
-    }
-
     private static AdminTransactionEntry unappliableOp(String txId) {
-        return saveOp(txId, ABSENT_COLL, document("into-a-missing-collection"));
-    }
-
-    private static JsonObject document(String id) {
-        final var obj = new JsonObject();
-        obj.add(Globals.PK_FIELD, new JsonString(id));
-        return obj;
+        return saveOp(txId, "client", ABSENT_COLL, "into-a-missing-collection");
     }
 
     private static String seedUnappliablePreparedSlice() throws Exception {
         final var dtxId = UUID.randomUUID().toString();
-        AdminOperationHelper.saveTransactionOp(unappliableOp(dtxId));
-        Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS), List.of(collectionId()));
+        seedPreparedSlice(unappliableOp(dtxId), SELF_ADDRESS, List.of(SELF_ADDRESS));
         return dtxId;
-    }
-
-    private OperationStatus findStatus(String collName, String id) {
-        final var request = new FindByIdRequest(TestGlobals.DB, collName);
-        request.set_id(id);
-        return processor.processMessage(request).getStatus();
     }
 
     private void createAbsentCollection() {
@@ -131,7 +87,7 @@ public class DurableReplayIncompleteTest {
         final var status = new AtomicReference<OperationStatus>();
         final var writer = Thread.ofVirtual().start(() -> {
             final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
-            request.setObject(document(id));
+            request.setObject(Tx2pcFixtures.document(id));
             request.set_id(id);
             status.set(processor.processMessage(request).getStatus());
         });
@@ -166,13 +122,12 @@ public class DurableReplayIncompleteTest {
     @Test
     public void test_resolving_a_replayable_slice_still_completes_normally() throws Exception {
         final var dtxId = UUID.randomUUID().toString();
-        AdminOperationHelper.saveTransactionOp(saveOp(dtxId, TestGlobals.COLL, document("replayable")));
-        Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS), List.of(collectionId()));
+        seedPreparedSlice(dtxId, "replayable");
 
         assertDoesNotThrow(() -> TransactionRecovery.resolveFromDurable(dtxId, true, 0L));
 
         assertFalse(Tx2pcLog.isPrepared(dtxId));
-        assertEquals(OperationStatus.OK, findStatus(TestGlobals.COLL, "replayable"));
+        assertEquals(OperationStatus.OK, findStatus("replayable"));
     }
 
     @Test

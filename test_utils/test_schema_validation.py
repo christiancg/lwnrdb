@@ -16,8 +16,6 @@ COLL = "people"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-# ── operation wrappers ───────────────────────────────────────────────────────
-
 def create_user(c, username, password, admin=False, global_perms=None, db_perms=None, coll_perms=None):
     return c.send({
         "type": "CREATE_USER", "username": username, "password": password, "admin": admin,
@@ -78,8 +76,6 @@ PERSON_SCHEMA = {
 }
 
 
-# ── setup / teardown ──────────────────────────────────────────────────────────
-
 def teardown(c):
     drop_db(c, DB)
 
@@ -89,8 +85,6 @@ def setup(c):
     check_status("setup: create database", create_db(c, DB), "OK")
     check_status("setup: create collection", create_coll(c, COLL), "OK")
 
-
-# ── tests ─────────────────────────────────────────────────────────────────────
 
 def test_save_and_enforce_schema(c):
     section("SAVE_SCHEMA and enforcement")
@@ -277,7 +271,6 @@ def test_delete_schema(c):
 
 def test_permissions(c):
     section("Permissions: admin/owner only")
-    # owner user can manage the schema; a read-only user cannot.
     create_user(c, "schema_owner", "schema_owner1234")
     create_user(c, "schema_reader", "schema_reader1234", db_perms={DB: "READ"})
     set_database_owners(c, DB, ["schema_owner"])
@@ -295,7 +288,6 @@ def test_permissions(c):
         check_status("read-only user cannot delete a schema",
               delete_schema(rc, COLL), "FORBIDDEN")
 
-    # restore ownership so teardown (admin) can drop the db
     set_database_owners(c, DB, [])
     delete_user(c, "schema_owner")
     delete_user(c, "schema_reader")
@@ -328,7 +320,6 @@ def main():
     for group in groups:
         with Conn() as c:
             c.authenticate()
-            # reset the collection schema before each group so groups are independent
             delete_schema(c, COLL)
             group(c)
 

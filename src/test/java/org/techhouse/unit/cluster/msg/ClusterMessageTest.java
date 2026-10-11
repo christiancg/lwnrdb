@@ -5,10 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.test.ClusterTestHarness;
 
 public class ClusterMessageTest {
 
@@ -20,7 +19,7 @@ public class ClusterMessageTest {
     @Test
     public void test_setters_and_getters() {
         final var message = new ClusterMessage();
-        final var sender = new NodeInfo("n", "127.0.0.1", 9990, NodeState.ALIVE, 1L, 1L);
+        final var sender = ClusterTestHarness.node("n", 9990);
         message.setCorrelationId("corr");
         message.setType(ClusterMessageType.JOIN_REQUEST);
         message.setSecret("secret");

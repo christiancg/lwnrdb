@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mockStatic;
 
@@ -21,28 +22,33 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
-import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
+import org.techhouse.ops.TwoPhaseParticipant;
+import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TransactionOpCleanupOrderTest {
     private static final String TRIGGER = "cleanup-order";
     private static final String DELETE_OPS = "deleteTransactionOps";
     private static final String CLEAR_LOCAL_COMMIT = "clearLocalCommit";
     private static final String TRANSIENT_ID = "transient";
+    private static final String COORDINATOR = "127.0.0.1:9999";
     private static final Configuration configuration = Configuration.getInstance();
 
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -55,9 +61,7 @@ public class TransactionOpCleanupOrderTest {
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.setPrivateField(configuration, "triggersEnabled", true);
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
-        for (final var run : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(run.getRunId(), run.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     @AfterEach
@@ -266,5 +270,100 @@ public class TransactionOpCleanupOrderTest {
                 "a replay needs every op while the marker stands");
         TransactionOperationHelper.cleanupOrphansAtStartup();
         assertFalse(TxCommitLog.isLocallyCommitted(txId));
+    }
+
+    private UUID preparedParticipantSaving(String... ids) {
+        final var clientId = clientTracker.registerForwardedClient("participant-" + UUID.randomUUID());
+        TransactionOperationHelper.start(clientId);
+        for (final var id : ids) {
+            final var object = new JsonObject();
+            object.add(Globals.PK_FIELD, new JsonString(id));
+            final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.setObject(object);
+            request.set_id(id);
+            assertEquals(OperationStatus.OK, TransactionOperationHelper
+                    .bufferSave(request, clientTracker.getActiveTransaction(clientId)).getStatus());
+        }
+        assertTrue(TwoPhaseParticipant.prepare(clientId, COORDINATOR, List.of(COORDINATOR)));
+        return clientId;
+    }
+
+    private boolean everyOpLeft(List<String> opIds) {
+        return opIds.stream().allMatch(id -> cache.getTransactionPkIndexes().containsKey(id));
+    }
+
+    @Test
+    public void test_commit_prepared_resolves_markers_before_deleting_its_ops() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggersEnabled", false);
+        final var clientId = preparedParticipantSaving("p-a", "p-b");
+        final var opIds = List.copyOf(clientTracker.getActiveTransaction(clientId).getBufferedOpIds());
+        final var calls = new CopyOnWriteArrayList<String>();
+        final Answer<Object> recording = invocation -> {
+            calls.add(deletesTheSlice(invocation, opIds) ? "slice" : invocation.getMethod().getName());
+            return invocation.callRealMethod();
+        };
+
+        try (var ignoredAdmin = mockStatic(AdminOperationHelper.class, recording);
+                var ignoredLog = mockStatic(Tx2pcLog.class, recording)) {
+            assertEquals(OperationStatus.OK, TwoPhaseParticipant.commitPrepared(clientId).getStatus());
+        }
+
+        final var slice = calls.indexOf("slice");
+        assertTrue(slice >= 0, "the commit never deleted its ops: " + calls);
+        assertTrue(calls.indexOf("deleteParticipantMarker") < slice, calls.toString());
+        assertTrue(calls.indexOf("recordOutcome") < slice, calls.toString());
+    }
+
+    @Test
+    public void test_a_failed_op_deletion_after_resolution_answers_ok() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggersEnabled", false);
+        final var clientId = preparedParticipantSaving("p-undeletable");
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var dtxId = transaction.getTransactionId().toString();
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+
+        try (var ignored = mockStatic(AdminOperationHelper.class, invocation -> {
+            if (deletesTheSlice(invocation, opIds)) {
+                throw new IOException("disk full");
+            }
+            return invocation.callRealMethod();
+        })) {
+            assertEquals(OperationStatus.OK, TwoPhaseParticipant.commitPrepared(clientId).getStatus());
+        }
+
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+        assertNull(clientTracker.getActiveTransaction(clientId));
+        assertFalse(locks.holdsCollectionLock(TestGlobals.DB, TestGlobals.COLL));
+        AdminOperationHelper.deleteTransactionOps(opIds);
+        Tx2pcLog.deleteOutcomeMarker(dtxId);
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_a_failed_marker_resolution_still_fences() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggersEnabled", false);
+        final var clientId = preparedParticipantSaving("p-fenced-a", "p-fenced-b");
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var dtxId = transaction.getTransactionId().toString();
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+
+        try (var ignored = mockStatic(Tx2pcLog.class, invocation -> {
+            if ("deleteParticipantMarker".equals(invocation.getMethod().getName())) {
+                throw new IOException("marker unresolvable");
+            }
+            return invocation.callRealMethod();
+        })) {
+            assertEquals(ErrorCode.TRANSACTION_HALF_APPLIED.getCode(),
+                    TwoPhaseParticipant.commitPrepared(clientId).getErrorCode());
+        }
+
+        assertTrue(Tx2pcLog.isPrepared(dtxId));
+        assertTrue(everyOpLeft(opIds), "recovery replays the slice the PREPARED marker points at");
+        Tx2pcLog.deleteParticipantMarker(dtxId);
+        AdminOperationHelper.deleteTransactionOps(opIds);
+        TestUtils.releaseAllLocks();
+        clientTracker.clearActiveTransaction(clientId);
+        clientTracker.clearTransactionState(clientId);
+        clientTracker.removeById(clientId);
     }
 }

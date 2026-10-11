@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.techhouse.test.ClusterTestHarness.node;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -28,7 +29,6 @@ import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.admin.AdminRecord;
 import org.techhouse.cluster.membership.MembershipService;
@@ -61,10 +61,6 @@ public class AdminAntiEntropyServiceTest {
     private boolean origEnabled;
     private long origInterval;
     private int origExpected;
-
-    private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
-    }
 
     @BeforeEach
     public void setUp() throws Exception {

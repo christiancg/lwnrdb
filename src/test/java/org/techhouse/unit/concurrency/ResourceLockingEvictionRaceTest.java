@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -160,5 +162,87 @@ public class ResourceLockingEvictionRaceTest {
         assertTrue(contender.get(5, TimeUnit.SECONDS));
         rl.removeLock(DB, COLL);
         assertNull(locks().get(COLL_ID));
+    }
+
+    private final class AcquiredDuringEviction extends ReentrantReadWriteLock {
+        private final AtomicBoolean fired = new AtomicBoolean();
+        private final CountDownLatch acquired = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private CompletableFuture<Void> contender = CompletableFuture.completedFuture(null);
+        private volatile boolean acquiredInTime;
+
+        @Override
+        public boolean isWriteLocked() {
+            final var observed = super.isWriteLocked();
+            if (fired.compareAndSet(false, true)) {
+                contender = CompletableFuture.runAsync(this::holdUntilReleased);
+                acquiredInTime = awaitQuietly(acquired);
+            }
+            return observed;
+        }
+
+        private void holdUntilReleased() {
+            try {
+                rl.lock(DB, COLL);
+                acquired.countDown();
+                final var released = release.await(5, TimeUnit.SECONDS);
+                rl.releaseWrite(DB, COLL);
+                if (!released) {
+                    throw new IllegalStateException("the test never released the contender");
+                }
+            } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        private static boolean awaitQuietly(CountDownLatch latch) {
+            try {
+                return latch.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+    }
+
+    @Test
+    public void test_an_acquire_inside_the_eviction_window_keeps_the_lock_mapped() throws Exception {
+        final var hooked = new AcquiredDuringEviction();
+        locks().put(COLL_ID, hooked);
+
+        rl.removeLock(DB, COLL);
+
+        try {
+            assertTrue(hooked.acquiredInTime, "the contender must have acquired inside the window");
+            assertSame(hooked, locks().get(COLL_ID),
+                    "a lock acquired while the eviction decided must stay mapped, or its holder is unnamed");
+            assertFalse(rl.tryLockWrite(DB, COLL, 100),
+                    "a second writer must not get a fresh lock while the contender still holds the evicted one");
+        } finally {
+            hooked.release.countDown();
+            hooked.contender.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    public void test_eviction_never_removes_a_lock_the_caller_holds() throws Exception {
+        rl.lock(DB, COLL);
+        final var held = locks().get(COLL_ID);
+
+        rl.removeLock(DB, COLL);
+
+        assertSame(held, locks().get(COLL_ID));
+        assertTrue(rl.releaseWrite(DB, COLL));
+    }
+
+    @Test
+    public void test_eviction_never_removes_a_read_held_lock() throws Exception {
+        rl.lockRead(DB, COLL);
+        final var held = locks().get(COLL_ID);
+
+        rl.removeLock(DB, COLL);
+
+        assertSame(held, locks().get(COLL_ID));
+        rl.releaseRead(DB, COLL);
     }
 }

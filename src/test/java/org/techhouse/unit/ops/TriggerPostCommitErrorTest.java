@@ -3,9 +3,8 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.test.TriggerTestSupport.entry;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -19,29 +18,25 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TxCommitLog;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerPostCommitErrorTest {
     private static final String DEFINER = "postcommitowner";
@@ -50,7 +45,6 @@ public class TriggerPostCommitErrorTest {
     private static final Configuration configuration = Configuration.getInstance();
 
     private final Cache cache = IocContainer.get(Cache.class);
-    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private final CopyOnWriteArrayList<TriggerEvent> requeued = new CopyOnWriteArrayList<>();
 
@@ -62,15 +56,7 @@ public class TriggerPostCommitErrorTest {
         AdminOperationHelper.createPageCollections(TestGlobals.DB, AUDIT_COLL);
         AdminOperationHelper
                 .saveCollectionEntry(new org.techhouse.data.admin.AdminCollEntry(TestGlobals.DB, AUDIT_COLL));
-        AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of(DEFINER));
-        final var request = new CreateUserRequest();
-        request.setUsername(DEFINER);
-        request.setPassword("password123");
-        request.setAdmin(false);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TriggerTestSupport.createDefiner(DEFINER);
     }
 
     @AfterAll
@@ -100,15 +86,8 @@ public class TriggerPostCommitErrorTest {
         requeued.clear();
         triggerExecutor.stop();
         triggerExecutor.start(requeued::add);
-        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
-        }
-        cache.removeProceduresForDatabase(TestGlobals.DB);
-        IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.clearTriggersAndProcedures();
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     private void storeProcedureThatCommitsThenExhaustsItsBudget() throws Exception {
@@ -128,17 +107,6 @@ public class TriggerPostCommitErrorTest {
         cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
                 List.of(new TriggerDefinition("audit", new LinkedHashSet<>(Set.of(EventType.CREATED)), "audit",
                         TriggerDefinition.MODE_DOCUMENT, false, true, DEFINER, 1L, 1L, 1L, DEFINER)));
-    }
-
-    private static DbEntry entry(String id) {
-        final var data = new JsonObject();
-        data.add("_id", new JsonString(id));
-        final var dbEntry = new DbEntry();
-        dbEntry.setDatabaseName(TestGlobals.DB);
-        dbEntry.setCollectionName(TestGlobals.COLL);
-        dbEntry.set_id(id);
-        dbEntry.setData(data);
-        return dbEntry;
     }
 
     private static void registerFencedCollectionWithoutItsFolder() throws Exception {

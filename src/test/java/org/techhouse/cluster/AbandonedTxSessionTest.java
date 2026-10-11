@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.techhouse.test.ClusterTestHarness.node;
 
 import java.util.List;
 import java.util.UUID;
@@ -38,10 +39,6 @@ public class AbandonedTxSessionTest {
     private ClusterConfig realConfig;
     private MembershipService realMembership;
     private PeerConnectionPool realPool;
-
-    private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
-    }
 
     private void coordinatorAnswers(String status) throws Exception {
         final var reply = new ClusterMessage();

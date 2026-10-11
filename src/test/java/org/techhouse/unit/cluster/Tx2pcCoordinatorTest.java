@@ -10,9 +10,8 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.techhouse.test.Tx2pcFixtures.findStatus;
 
-import java.net.InetAddress;
-import java.net.Socket;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,9 +20,6 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.MembershipView;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.Tx2pcCoordinator;
 import org.techhouse.cluster.membership.MembershipService;
@@ -44,10 +40,10 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.CommitTransactionRequest;
-import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -60,54 +56,31 @@ public class Tx2pcCoordinatorTest {
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
-    private volatile boolean origEnabled;
-    private volatile int origExpected;
+    private final ClusterTestHarness cluster = new ClusterTestHarness();
     private volatile long origAckTimeoutMs;
     private PeerConnectionPool origPool;
-
-    private static NodeInfo node() {
-        return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
-    }
 
     @BeforeEach
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.resetClients();
-        origEnabled = config.isClusterEnabled();
-        origExpected = config.getClusterExpectedSize();
         origAckTimeoutMs = config.getReplicationAckTimeoutMs();
         origPool = TestUtils.getPrivateField(coordinator, "pool", PeerConnectionPool.class);
-        TestUtils.setPrivateField(config, "clusterEnabled", true);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
-        final var self = node();
-        TestUtils.setPrivateField(membershipService, "members",
-                new ConcurrentHashMap<>(java.util.Map.of("self", self)));
-        TestUtils.setPrivateField(membershipService, "self", self);
-        ownership.setSelfNodeId("self");
-        ownership.onMembershipChanged(membershipService.membershipView());
+        cluster.enableAlone();
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(coordinator, "pool", origPool);
-        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAckTimeoutMs);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        cluster.disable();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
 
     private UUID clientWithLocalAndRemoteSlice(String id) {
-        final var socket = mock(Socket.class);
-        final var addr = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(addr);
-        when(addr.getHostAddress()).thenReturn("127.0.0.1");
-        final var clientId = clientTracker.addClient(socket);
+        final var clientId = clientTracker.addClient(TestUtils.clientSocket());
         processor.processMessage(new StartTransactionRequest(), clientId);
         final var req = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var obj = new JsonObject();
@@ -137,12 +110,6 @@ public class Tx2pcCoordinatorTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-    }
-
-    private OperationStatus findStatus(String id) {
-        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.set_id(id);
-        return processor.processMessage(request).getStatus();
     }
 
     private String breakLocalSlice(UUID clientId) throws Exception {
@@ -288,11 +255,7 @@ public class Tx2pcCoordinatorTest {
 
     @Test
     public void test_rollback_without_active_transaction() {
-        final var socket = mock(Socket.class);
-        final var addr = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(addr);
-        when(addr.getHostAddress()).thenReturn("127.0.0.1");
-        final var clientId = clientTracker.addClient(socket);
+        final var clientId = clientTracker.addClient(TestUtils.clientSocket());
         assertEquals("409-4", coordinator.rollback(clientId).getErrorCode());
     }
 
@@ -377,8 +340,8 @@ public class Tx2pcCoordinatorTest {
 
     @Test
     public void test_force_resolve_broadcasts_to_remote_members() throws Exception {
-        final var self = node();
-        final var other = new NodeInfo("other", "127.0.0.1", 59998, NodeState.ALIVE, 1L, 1L);
+        final var self = ClusterTestHarness.node("self", 5000);
+        final var other = ClusterTestHarness.node("other", 59998);
         TestUtils.setPrivateField(membershipService, "members",
                 new ConcurrentHashMap<>(java.util.Map.of("self", self, "other", other)));
         TestUtils.setPrivateField(membershipService, "self", self);
@@ -398,8 +361,8 @@ public class Tx2pcCoordinatorTest {
 
     @Test
     public void test_force_resolve_records_the_real_participants() throws Exception {
-        final var self = node();
-        final var other = new NodeInfo("other", "127.0.0.1", 59998, NodeState.ALIVE, 1L, 1L);
+        final var self = ClusterTestHarness.node("self", 5000);
+        final var other = ClusterTestHarness.node("other", 59998);
         TestUtils.setPrivateField(membershipService, "members",
                 new ConcurrentHashMap<>(java.util.Map.of("self", self, "other", other)));
         TestUtils.setPrivateField(membershipService, "self", self);
@@ -442,11 +405,7 @@ public class Tx2pcCoordinatorTest {
 
     @Test
     public void test_commit_without_active_transaction() {
-        final var socket = mock(Socket.class);
-        final var addr = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(addr);
-        when(addr.getHostAddress()).thenReturn("127.0.0.1");
-        final var clientId = clientTracker.addClient(socket);
+        final var clientId = clientTracker.addClient(TestUtils.clientSocket());
         assertEquals(OperationType.COMMIT_TRANSACTION, coordinator.commit(clientId).getType());
         assertEquals("409-4", coordinator.commit(clientId).getErrorCode());
     }

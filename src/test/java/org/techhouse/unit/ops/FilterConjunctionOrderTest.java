@@ -6,9 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -72,32 +76,26 @@ public class FilterConjunctionOrderTest {
                 doc("w", "user", "no"), doc("v", "admin", "yes"), doc("u", "user", "yes"));
     }
 
-    @Test
-    public void test_and_after_a_sorted_input_keeps_its_order() throws IOException {
-        assertEquals(List.of("x", "v"), run(sortedSource(), filter(conjunction(ConjunctionOperatorType.AND))));
+    private static Stream<Arguments> conjunctionsAfterASortedInput() {
+        return Stream.of(
+                Arguments.of("test_and_after_a_sorted_input_keeps_its_order", ConjunctionOperatorType.AND,
+                        List.of("x", "v"), "AND"),
+                Arguments.of("test_or_after_a_sorted_input_keeps_its_order", ConjunctionOperatorType.OR,
+                        List.of("z", "y", "x", "v", "u"),
+                        "OR must keep input order rather than listing each branch's matches in turn"),
+                Arguments.of("test_xor_after_a_sorted_input_keeps_its_order", ConjunctionOperatorType.XOR,
+                        List.of("z", "y", "u"), "XOR"),
+                Arguments.of("test_nor_after_a_sorted_input_keeps_its_order", ConjunctionOperatorType.NOR, List.of("w"),
+                        "NOR"),
+                Arguments.of("test_nand_after_a_sorted_input_keeps_its_order", ConjunctionOperatorType.NAND,
+                        List.of("z", "y", "w", "u"), "NAND"));
     }
 
-    @Test
-    public void test_or_after_a_sorted_input_keeps_its_order() throws IOException {
-        assertEquals(List.of("z", "y", "x", "v", "u"),
-                run(sortedSource(), filter(conjunction(ConjunctionOperatorType.OR))),
-                "OR must keep input order rather than listing each branch's matches in turn");
-    }
-
-    @Test
-    public void test_xor_after_a_sorted_input_keeps_its_order() throws IOException {
-        assertEquals(List.of("z", "y", "u"), run(sortedSource(), filter(conjunction(ConjunctionOperatorType.XOR))));
-    }
-
-    @Test
-    public void test_nor_after_a_sorted_input_keeps_its_order() throws IOException {
-        assertEquals(List.of("w"), run(sortedSource(), filter(conjunction(ConjunctionOperatorType.NOR))));
-    }
-
-    @Test
-    public void test_nand_after_a_sorted_input_keeps_its_order() throws IOException {
-        assertEquals(List.of("z", "y", "w", "u"),
-                run(sortedSource(), filter(conjunction(ConjunctionOperatorType.NAND))));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("conjunctionsAfterASortedInput")
+    public void test_a_conjunction_after_a_sorted_input_keeps_its_order(String name, ConjunctionOperatorType type,
+            List<String> expected, String message) throws IOException {
+        assertEquals(expected, run(sortedSource(), filter(conjunction(type))), message);
     }
 
     @Test

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminAntiEntropyService;
@@ -19,6 +20,9 @@ import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
+import org.techhouse.fault.FaultAction;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.test.TestGlobals;
@@ -26,6 +30,14 @@ import org.techhouse.test.TestUtils;
 
 public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBase {
     private static final List<String> QUEUED_IDS = List.of("drain1", "drain2");
+    private static final long DROPPED_REPLY_WAIT_MS = 500L;
+    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+
+    @AfterEach
+    public void disableFaults() throws Exception {
+        faultInjector.releaseAll();
+        TestUtils.setPrivateField(faultInjector, "enabled", false);
+    }
 
     // A SAVE into a collection whose write lock the test holds: it reaches the handler and then blocks,
     // which is the shape of the slow request that used to hold up everything queued behind it.
@@ -206,5 +218,19 @@ public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBa
         } finally {
             markAdminSyncCompleted(false);
         }
+    }
+
+    @Test
+    public void test_a_dropped_reply_writes_nothing_and_the_next_reply_is_written() throws Exception {
+        TestUtils.setPrivateField(faultInjector, "enabled", true);
+        final var address = cluster.serverAddress();
+        faultInjector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, "GOSSIP");
+
+        assertThrows(Exception.class,
+                () -> pool.request(address, envelope(ClusterMessageType.GOSSIP), DROPPED_REPLY_WAIT_MS));
+        assertTrue(faultInjector.awaitReached(FaultPoint.PEER_REPLY, 0));
+
+        final var ack = pool.request(address, envelope(ClusterMessageType.GOSSIP), SHORT_ACK_TIMEOUT_MS);
+        assertEquals(ClusterMessageType.GOSSIP_ACK, ack.getType());
     }
 }

@@ -15,6 +15,8 @@ import org.techhouse.ioc.IocContainer;
 
 public final class ClusterTestHarness {
     public static final String SECRET = "s";
+    public static final String SELF = "self";
+    public static final int SELF_PORT = 5000;
     private static final long DEFAULT_ACK_TIMEOUT_MS = 1500L;
 
     private final Configuration config = Configuration.getInstance();
@@ -37,12 +39,36 @@ public final class ClusterTestHarness {
         start(true, DEFAULT_ACK_TIMEOUT_MS);
     }
 
-    public void start(boolean clusterEnabled, long ackTimeoutMs) throws Exception {
+    public void enableAlone() throws Exception {
+        enableAlone(node(SELF, SELF_PORT));
+    }
+
+    public void enableAlone(NodeInfo self) throws Exception {
+        saveClusterFlags();
+        TestUtils.setPrivateField(config, "clusterEnabled", true);
+        configureMembership(1, self);
+    }
+
+    public void disable() throws Exception {
+        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
+        TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
+        ownership.setSelfNodeId(null);
+        ownership.onMembershipChanged(new MembershipView(List.of()));
+        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(membershipService, "lastSeen", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(membershipService, "self", null);
+    }
+
+    private void saveClusterFlags() {
         origEnabled = config.isClusterEnabled();
+        origExpected = config.getClusterExpectedSize();
+    }
+
+    public void start(boolean clusterEnabled, long ackTimeoutMs) throws Exception {
+        saveClusterFlags();
         origSecret = config.getClusterSecret();
         origTls = config.isClusterTlsEnabled();
         origAck = config.getReplicationAckTimeoutMs();
-        origExpected = config.getClusterExpectedSize();
         if (clusterEnabled) {
             TestUtils.setPrivateField(config, "clusterEnabled", true);
         }
@@ -57,16 +83,10 @@ public final class ClusterTestHarness {
     public void stop() throws Exception {
         pool.closeAll();
         server.stop();
-        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "clusterSecret", origSecret);
         TestUtils.setPrivateField(config, "clusterTlsEnabled", origTls);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAck);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "lastSeen", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        disable();
     }
 
     public ClusterServer server() {

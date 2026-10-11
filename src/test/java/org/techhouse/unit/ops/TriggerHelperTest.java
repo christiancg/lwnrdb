@@ -1,6 +1,7 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.techhouse.test.TriggerTestSupport.entry;
 
 import java.io.IOException;
 import java.util.LinkedHashSet;
@@ -21,8 +22,6 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
-import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
@@ -85,17 +84,6 @@ public class TriggerHelperTest {
             fail(e);
         }
         return List.copyOf(captured);
-    }
-
-    private static DbEntry entry(String id) {
-        final var data = new JsonObject();
-        data.add("_id", new JsonString(id));
-        final var dbEntry = new DbEntry();
-        dbEntry.setDatabaseName(TestGlobals.DB);
-        dbEntry.setCollectionName(TestGlobals.COLL);
-        dbEntry.set_id(id);
-        dbEntry.setData(data);
-        return dbEntry;
     }
 
     private void install(Set<EventType> events, String mode, boolean allowCascade, boolean enabled) {

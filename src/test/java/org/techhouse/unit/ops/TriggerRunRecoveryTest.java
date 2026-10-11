@@ -24,11 +24,11 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerRunRecoveryTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -59,9 +59,7 @@ public class TriggerRunRecoveryTest {
         captured.clear();
         triggerExecutor.stop();
         triggerExecutor.start(captured::add);
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     private static void sleep() {
@@ -97,9 +95,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_recovery_preserves_the_attempt_count() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         writeRecord("run-attempts", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
@@ -117,9 +113,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_a_fresh_record_recovers_as_its_first_attempt() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         writeRecord("run-fresh", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
@@ -134,9 +128,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_a_replayed_dead_letter_starts_from_a_full_budget() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         writeRecord("run-replay", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
@@ -154,9 +146,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_pending_run_is_resubmitted_at_startup() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         writeRecord("run-a", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
@@ -172,9 +162,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_a_run_older_than_the_retention_is_still_replayed_at_startup() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         writeRecord("run-old", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), 1L);
 
@@ -190,9 +178,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_a_run_stamped_local_is_replayed_once_the_cluster_is_enabled() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         writeRecord("run-standalone-era", Globals.STANDALONE_NODE_ID, EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
@@ -211,9 +197,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_a_run_stamped_with_this_nodes_former_cluster_id_is_replayed_standalone() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         TestUtils.setPrivateField(configuration, "clusterEnabled", true);
         final String clusteredId;
@@ -247,9 +231,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_a_run_recorded_after_the_startup_snapshot_is_not_requeued() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         final var now = System.currentTimeMillis();
         writeRecord("run-old", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), now);
@@ -380,9 +362,7 @@ public class TriggerRunRecoveryTest {
     @Test
     public void test_a_run_that_cannot_be_rebuilt_does_not_strand_the_runs_after_it() throws Exception {
         saveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         final var firedAt = System.currentTimeMillis();
         final var unreadable = new JsonObject();

@@ -9,26 +9,24 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.techhouse.test.Tx2pcFixtures.SELF_ADDRESS;
+import static org.techhouse.test.Tx2pcFixtures.collectionId;
+import static org.techhouse.test.Tx2pcFixtures.findStatus;
+import static org.techhouse.test.Tx2pcFixtures.saveOp;
 
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cache.Cache;
 import org.techhouse.cluster.HybridClock;
-import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeAddress;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
@@ -43,47 +41,32 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.Tx2pcFixtures;
 
 public class Tx2pcRecoveryTest {
-    private static final String SELF_ADDRESS = "127.0.0.1:5000";
     private static final long LOCK_HOLD_MILLIS = 1_500L;
     private final Configuration config = Configuration.getInstance();
     private final Tx2pcRecovery recovery = IocContainer.get(Tx2pcRecovery.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
-    private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private boolean origEnabled;
+    private final ClusterTestHarness cluster = new ClusterTestHarness();
     private PeerConnectionPool origPool;
-
-    private static NodeInfo node() {
-        return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
-    }
 
     @BeforeEach
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        origEnabled = config.isClusterEnabled();
         origPool = TestUtils.getPrivateField(recovery, "pool", PeerConnectionPool.class);
-        TestUtils.setPrivateField(config, "clusterEnabled", true);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
-        TestUtils.setPrivateField(membershipService, "members",
-                new ConcurrentHashMap<>(java.util.Map.of("self", node())));
-        TestUtils.setPrivateField(membershipService, "self", node());
-        ownership.setSelfNodeId("self");
-        ownership.onMembershipChanged(membershipService.membershipView());
+        cluster.enableAlone();
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(recovery, "pool", origPool);
-        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        cluster.disable();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -98,20 +81,9 @@ public class Tx2pcRecoveryTest {
 
     private void seedPreparedSlice(String dtxId, String id, String coordinatorAddress, List<String> participants)
             throws Exception {
-        final var obj = new JsonObject();
-        obj.add("_id", new JsonString(id));
-        final var op = new AdminTransactionEntry(dtxId, "client", 0, AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB,
-                TestGlobals.COLL, obj);
+        final var op = saveOp(dtxId, "client", TestGlobals.COLL, id);
         op.setVersions(List.of(IocContainer.get(HybridClock.class).next()));
-        AdminOperationHelper.saveTransactionOp(op);
-        Tx2pcLog.recordParticipantPrepared(dtxId, coordinatorAddress, participants,
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
-    }
-
-    private OperationStatus findStatus(String id) {
-        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.set_id(id);
-        return processor.processMessage(request).getStatus();
+        Tx2pcFixtures.seedPreparedSlice(op, coordinatorAddress, participants);
     }
 
     @Test
@@ -193,8 +165,7 @@ public class Tx2pcRecoveryTest {
         delPayload.add("_id", new JsonString("mix-del"));
         AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 2,
                 AdminTransactionEntry.OP_TYPE_DELETE, TestGlobals.DB, TestGlobals.COLL, delPayload));
-        Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS),
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS), List.of(collectionId()));
         Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         recovery.recover();

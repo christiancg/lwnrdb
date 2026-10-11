@@ -1,12 +1,9 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.techhouse.test.LockHolder.startParked;
 
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +25,7 @@ import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.LockHolder;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -40,8 +38,7 @@ public class ProcedureReferenceRaceTest {
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ScheduleRegistry registry = IocContainer.get(ScheduleRegistry.class);
-    private final ExecutorService holder = Executors.newSingleThreadExecutor();
-    private final java.util.concurrent.atomic.AtomicBoolean proceduresLockHeld = new java.util.concurrent.atomic.AtomicBoolean();
+    private final LockHolder holder = new LockHolder();
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -59,11 +56,7 @@ public class ProcedureReferenceRaceTest {
 
     @AfterEach
     public void tearDown() throws Exception {
-        if (proceduresLockHeld.get()) {
-            releaseProceduresLock();
-        }
-        holder.shutdown();
-        assertTrue(holder.awaitTermination(5, TimeUnit.SECONDS));
+        holder.close();
         registry.clear();
         TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
@@ -80,7 +73,7 @@ public class ProcedureReferenceRaceTest {
                 ACTOR), result);
 
         deleteProcedureWhileHoldingTheLock();
-        releaseProceduresLock();
+        holder.release();
         saver.join(BUDGET_MS);
 
         assertEquals(ErrorCode.PROCEDURE_NOT_FOUND.getCode(), result.get().getErrorCode());
@@ -96,7 +89,7 @@ public class ProcedureReferenceRaceTest {
         final var saver = startParked(() -> ScheduleOperationHelper.executeSave(request, ACTOR), result);
 
         deleteProcedureWhileHoldingTheLock();
-        releaseProceduresLock();
+        holder.release();
         saver.join(BUDGET_MS);
 
         assertEquals(ErrorCode.PROCEDURE_NOT_FOUND.getCode(), result.get().getErrorCode());
@@ -138,47 +131,15 @@ public class ProcedureReferenceRaceTest {
     }
 
     private void deleteProcedureWhileHoldingTheLock() throws Exception {
-        final var deleted = onHolder(
+        final var deleted = holder.run(
                 () -> ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE)));
         assertEquals(OperationStatus.OK, deleted.getStatus());
     }
 
     private void holdProceduresLock() throws Exception {
-        onHolder(() -> {
+        holder.hold(() -> {
             locks.lock(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
-            return null;
-        });
-        proceduresLockHeld.set(true);
-    }
-
-    private void releaseProceduresLock() throws Exception {
-        onHolder(() -> {
-            locks.release(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
-            return null;
-        });
-        proceduresLockHeld.set(false);
-    }
-
-    private <T> T onHolder(Callable<T> action) throws Exception {
-        return holder.submit(action).get(BUDGET_MS, TimeUnit.MILLISECONDS);
-    }
-
-    @SuppressWarnings("BusyWait")
-    private static Thread startParked(Callable<OperationResponse> action, AtomicReference<OperationResponse> result)
-            throws InterruptedException {
-        final var thread = new Thread(() -> {
-            try {
-                result.set(action.call());
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
-        });
-        thread.start();
-        final var deadline = System.currentTimeMillis() + BUDGET_MS;
-        while (thread.getState() != Thread.State.WAITING && thread.getState() != Thread.State.TIMED_WAITING) {
-            assertTrue(System.currentTimeMillis() < deadline, "the save never parked on the procedures lock");
-            Thread.sleep(5);
-        }
-        return thread;
+            return true;
+        }, () -> locks.release(TestGlobals.DB, Globals.PROCEDURES_FOLDER));
     }
 }

@@ -119,4 +119,35 @@ public class UserCacheIndexPublishTest {
 
         assertNull(fieldIndexMap().get(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
     }
+
+    @Test
+    public void test_a_locked_reader_still_publishes_the_field_index() throws Exception {
+        cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, "name");
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "name", String.class);
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertTrue(cachedSlotsForCollection() > 0,
+                "a lock holder is the only caller allowed to publish, and must still do so");
+    }
+
+    @Test
+    public void test_a_lock_free_read_still_answers_the_same_entries_as_a_locked_one() throws Exception {
+        cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, "name");
+        final var unlocked = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "name",
+                String.class);
+
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            assertEquals(
+                    cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "name", String.class)
+                            .size(),
+                    unlocked.size(), "refusing to publish must not change what the lock-free reader is answered");
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
 }

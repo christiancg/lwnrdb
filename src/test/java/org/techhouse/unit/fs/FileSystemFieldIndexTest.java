@@ -13,52 +13,24 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-public class FileSystemFieldIndexTest {
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        Configuration config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        File dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
-
+public class FileSystemFieldIndexTest extends FileSystemTestBase {
     @Test
     public void test_getById_data_contains_id_field() throws Exception {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
         String id = "abc123";
         JsonObject data = new JsonObject();
@@ -69,9 +41,9 @@ public class FileSystemFieldIndexTest {
         dbEntry.setCollectionName(TestGlobals.COLL);
         dbEntry.setData(data);
         dbEntry.set_id(id);
-        PkIndexEntry indexEntry = fileSystem.insertIntoCollection(dbEntry);
+        PkIndexEntry indexEntry = fs.insertIntoCollection(dbEntry);
 
-        DbEntry result = fileSystem.getById(indexEntry);
+        DbEntry result = fs.getById(indexEntry);
 
         assertNotNull(result);
         assertTrue(result.getData().has(Globals.PK_FIELD), "_id must be present in getData() for positioned reads");
@@ -80,10 +52,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_insert_entry_creates_index() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
-
+    public void test_insert_entry_creates_index() throws Exception {
         JsonObject data = new JsonObject();
         data.addProperty("name", "test");
 
@@ -105,16 +74,14 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_writes_index_entries_to_file() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_writes_index_entries_to_file() throws IOException {
         String fieldName = "testField";
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
         List<FieldIndexEntry<?>> stringEntries = List.of(
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", Set.of("id1", "id2")),
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3")));
         indexEntryMap.put(String.class, stringEntries);
-        fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
+        fs.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
@@ -125,10 +92,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_update_index_files_with_insert_and_remove()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_update_index_files_with_insert_and_remove() throws IOException {
         String fieldName = "testField";
 
         Set<String> ids1 = new HashSet<>(Arrays.asList("id1", "id2"));
@@ -137,7 +101,7 @@ public class FileSystemFieldIndexTest {
         FieldIndexEntry<String> insertEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", ids1);
         FieldIndexEntry<String> removeEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", ids2);
 
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, insertEntry, removeEntry);
+        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, insertEntry, removeEntry);
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
@@ -149,17 +113,14 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_update_index_files_with_empty_ids_remove()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_update_index_files_with_empty_ids_remove() throws IOException {
 
         String fieldName = "testField";
 
         Set<String> emptyIds = new HashSet<>();
         FieldIndexEntry<Integer> removeEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123, emptyIds);
 
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, removeEntry);
+        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, removeEntry);
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
@@ -170,9 +131,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_delete_index_files_success() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_delete_index_files_success() throws IOException {
 
         String fieldName = "testField";
 
@@ -195,10 +154,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_drop_index_spares_a_field_whose_name_extends_the_dropped_one()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_drop_index_spares_a_field_whose_name_extends_the_dropped_one() throws IOException {
 
         File collFolder = new File(
                 TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
@@ -224,10 +180,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_drop_index_removes_every_type_of_the_targeted_field()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_drop_index_removes_every_type_of_the_targeted_field() throws IOException {
 
         File collFolder = new File(
                 TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
@@ -251,10 +204,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_drop_index_does_not_delete_the_pk_index_or_tombstones()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_drop_index_does_not_delete_the_pk_index_or_tombstones() throws IOException {
 
         File mockCollFolder = new File(
                 TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
@@ -278,10 +228,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_drop_index_on_a_hyphenated_collection_spares_the_pk_index()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_drop_index_on_a_hyphenated_collection_spares_the_pk_index() throws IOException {
 
         String collName = "user-data";
         File collFolder = new File(
@@ -307,9 +254,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_read_number_type_index_entries() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_read_number_type_index_entries() throws IOException {
 
         String fieldName = "testField";
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
@@ -329,10 +274,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_read_index_file_returns_sorted_entries()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_read_index_file_returns_sorted_entries() throws IOException {
 
         File mockIndexFile = mock(File.class);
         when(mockIndexFile.exists()).thenReturn(true);
@@ -349,7 +291,7 @@ public class FileSystemFieldIndexTest {
                         + Globals.ID_SEPARATOR + "0");
         Files.write(path, fileLines);
 
-        List<PkIndexEntry> result = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        List<PkIndexEntry> result = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
 
         assertEquals(3, result.size());
         assertEquals("value1", result.get(0).getValue());
@@ -358,20 +300,14 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_get_by_index_entries_empty_input()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_get_by_index_entries_empty_input() throws IOException {
 
         assertTrue(fs.getByIndexEntries(null).isEmpty());
         assertTrue(fs.getByIndexEntries(new ArrayList<>()).isEmpty());
     }
 
     @Test
-    public void test_get_by_index_entries_reads_requested_across_pages()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_get_by_index_entries_reads_requested_across_pages() throws IOException {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -411,10 +347,7 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_get_by_index_entries_single_page_multiple()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_get_by_index_entries_single_page_multiple() throws IOException {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -439,24 +372,21 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_update_returns_index_entry_and_compaction()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_update_returns_index_entry_and_compaction() throws IOException {
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         entry1.set_id("1");
         final var entry2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         entry2.set_id("2");
-        final var pk1 = fileSystem.insertIntoCollection(entry1);
-        fileSystem.insertIntoCollection(entry2);
+        final var pk1 = fs.insertIntoCollection(entry1);
+        fs.insertIntoCollection(entry2);
         data.get("name").asJsonString().setValue("updated");
         final var updatedEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         updatedEntry.set_id("1");
 
         // Updating entry "1" (not the last one) relocates it to the end, so a survivor moves.
-        final var result = fileSystem.updateFromCollection(updatedEntry, pk1);
+        final var result = fs.updateFromCollection(updatedEntry, pk1);
 
         assertNotNull(result.indexEntry());
         assertEquals("1", result.indexEntry().getValue());

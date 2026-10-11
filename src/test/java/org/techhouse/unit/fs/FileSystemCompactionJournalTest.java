@@ -8,44 +8,18 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Objects;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class FileSystemCompactionJournalTest {
-    private FileSystem fs;
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        TestUtils.setPrivateField(Configuration.getInstance(), "filePath", TestGlobals.PATH);
-        fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
-        fs.createBaseDbPath();
-        fs.createAdminDatabase();
-        fs.createDatabaseFolder(TestGlobals.DB);
-        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
+public class FileSystemCompactionJournalTest extends FileSystemTestBase {
 
     private static List<Path> compactionMarkers() throws IOException {
         try (var files = Files.walk(Path.of(TestGlobals.PATH))) {
             return files.filter(path -> path.getFileName().toString().endsWith(".compacting")).toList();
-        }
-    }
-
-    @AfterEach
-    public void tearDown() {
-        final var dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
         }
     }
 

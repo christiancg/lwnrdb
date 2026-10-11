@@ -5,9 +5,9 @@ import tempfile
 from base_utils import check, section
 
 from . import ops as op_kinds
-from . import report
-from .ops import Op, generate_plan, plan_literal, repair
-from .shrink import Budget, ddmin, matches_signature, signature_of
+from .ops import Op, generate_plan, repair
+from .shrink import (Budget, append, clean_markdown, ddmin, failure_markdown, matches_signature,
+                     signature_of)
 from .values import RawJson, to_json_text
 
 
@@ -85,24 +85,12 @@ def _test_repair_is_idempotent() -> None:
 
 
 def _test_generation_is_deterministic() -> None:
-    first, _ = generate_plan(random.Random("selftest-determinism"), 50)
-    second, _ = generate_plan(random.Random("selftest-determinism"), 50)
-    check("generate_plan is deterministic for one seed", first == second)
-
-
-def _test_namespace_is_deterministic() -> None:
-    _, first = generate_plan(random.Random("selftest-namespace"), 20)
-    _, second = generate_plan(random.Random("selftest-namespace"), 20)
+    first_plan, first = generate_plan(random.Random("selftest-determinism"), 50)
+    second_plan, second = generate_plan(random.Random("selftest-determinism"), 50)
+    check("generate_plan is deterministic for one seed", first_plan == second_plan)
     check("the namespace is deterministic for one seed",
           (first.databases, first.collections, first.fields, first.ids)
           == (second.databases, second.collections, second.fields, second.ids))
-
-
-def _test_plan_survives_its_literal_form() -> None:
-    plan = repair(generate_plan(random.Random("selftest-literal"), 40)[0])
-    scope = {"Op": Op, "RawJson": RawJson}
-    exec(plan_literal(plan), scope)
-    check("a plan round-trips through its printed literal", scope["PLAN"] == plan)
 
 
 def _test_raw_json_survives_serialisation() -> None:
@@ -136,7 +124,7 @@ def _reported_plan(markdown: str) -> list:
 
 def _test_failure_report_names_the_seed_and_how_to_pin_it() -> None:
     plan = repair(generate_plan(random.Random("selftest-report"), 20)[0])
-    markdown = report.failure_markdown(4242, "soak", plan, [FakeDivergence("count-vs-rows")], "tier-1")
+    markdown = failure_markdown(4242, "soak", plan, [FakeDivergence("count-vs-rows")], "tier-1")
     named = ("4242" in markdown and "count-vs-rows" in markdown and "--seed 4242" in markdown
              and '(4242, "' in markdown)
     check("the failure report names the seed, its oracle, the replay and the pin line", named,
@@ -145,20 +133,20 @@ def _test_failure_report_names_the_seed_and_how_to_pin_it() -> None:
 
 def _test_failure_report_carries_a_replayable_plan() -> None:
     plan = repair(generate_plan(random.Random("selftest-report"), 20)[0])
-    markdown = report.failure_markdown(7, "soak", plan, [FakeDivergence("index-vs-scan")], "")
+    markdown = failure_markdown(7, "soak", plan, [FakeDivergence("index-vs-scan")], "")
     check("the failure report's reproduction replays the same plan", _reported_plan(markdown) == plan)
 
 
 def _test_failure_report_caps_the_listed_divergences() -> None:
     divergences = [FakeDivergence(f"oracle-{index}") for index in range(7)]
-    markdown = report.failure_markdown(7, "soak", [], divergences, "")
+    markdown = failure_markdown(7, "soak", [], divergences, "")
     capped = "oracle-4 fake" in markdown and "oracle-5 fake" not in markdown and "2 more" in markdown
     check("the failure report lists five divergences and counts the rest", capped,
           _unless(capped, markdown))
 
 
 def _test_clean_report_names_the_start_seed() -> None:
-    markdown = report.clean_markdown(99, 12, 1.5)
+    markdown = clean_markdown(99, 12, 1.5)
     check("the clean soak report names its start seed and seed count",
           "99" in markdown and "12 seed(s)" in markdown, markdown)
 
@@ -166,9 +154,9 @@ def _test_clean_report_names_the_start_seed() -> None:
 def _test_report_append_writes_nothing_without_a_path() -> None:
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-report-")
     path = os.path.join(work_dir, "summary.md")
-    report.append(None, "x")
-    report.append(path, "a")
-    report.append(path, "b")
+    append(None, "x")
+    append(path, "a")
+    append(path, "b")
     with open(path, encoding="utf-8") as written:
         content = written.read()
     os.remove(path)
@@ -191,8 +179,6 @@ def run_self_test() -> None:
 
     section("Determinism")
     _test_generation_is_deterministic()
-    _test_namespace_is_deterministic()
-    _test_plan_survives_its_literal_form()
     _test_raw_json_survives_serialisation()
 
     section("Report")

@@ -29,23 +29,9 @@ import org.techhouse.test.TestUtils;
 
 public class AntiEntropyServiceTest extends AntiEntropyTestBase {
 
-    private void seed() {
-        final var obj = new JsonObject();
-        obj.addProperty("_id", "a");
-        obj.addProperty("v", 1);
-        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setObject(obj);
-        processor.processMessage(request);
-    }
-
     private long versionOf() throws Exception {
         return cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(e -> e.getValue().equals("a")).findFirst().orElseThrow().getVersion();
-    }
-
-    private boolean hasLive() throws Exception {
-        return cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
-                .anyMatch(e -> e.getValue().equals("a"));
     }
 
     @Test
@@ -173,7 +159,7 @@ public class AntiEntropyServiceTest extends AntiEntropyTestBase {
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
-        assertTrue(hasLive());
+        assertTrue(hasLive(SEEDED_ID));
         assertEquals(1000L, versionOf());
     }
 
@@ -194,7 +180,7 @@ public class AntiEntropyServiceTest extends AntiEntropyTestBase {
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
-        assertFalse(hasLive());
+        assertFalse(hasLive(SEEDED_ID));
         assertEquals(tombstoneVersion, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("a"));
     }
 
@@ -253,7 +239,7 @@ public class AntiEntropyServiceTest extends AntiEntropyTestBase {
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
-        assertTrue(hasLive());
+        assertTrue(hasLive(SEEDED_ID));
         assertEquals(localVersion, versionOf());
     }
 

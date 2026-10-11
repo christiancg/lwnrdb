@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.test.ClusterTestHarness.node;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.NodeAddress;
 import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
@@ -31,10 +31,6 @@ public class ClusterServerIntegrationTest {
     private PeerConnectionPool pool;
     private MembershipService membershipService;
     private String originalSecret;
-
-    private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
-    }
 
     private ClusterMessage message(ClusterMessageType type, String secret, NodeInfo sender, List<NodeInfo> members) {
         return new ClusterMessage(null, type, secret, sender, members);

@@ -1,5 +1,6 @@
 package org.techhouse.unit.bckg_ops;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
@@ -91,39 +92,15 @@ public class TriggerExecutorOverflowTest {
     @Test
     public void test_a_dropped_run_is_dead_lettered_rather_than_deleted() throws Exception {
         final var executor = executorThatNeverDrains();
-        final var evictedRun = recordRun("evicted");
-        executor.submit(eventFor("evicted", evictedRun));
+        final var evictedRun = recordRun("replayable");
+        executor.submit(eventFor("replayable", evictedRun));
 
         executor.submit(eventFor("kept", recordRun("kept")));
 
         final var record = firstChunk(evictedRun);
         assertNotNull(record, "deleting the record is the one place the run log is thrown away rather than used");
-        assertEquals(TriggerRunStatus.DEAD, record.getStatus());
-    }
-
-    @Test
-    public void test_the_dropped_run_records_why_it_was_dropped() throws Exception {
-        final var executor = executorThatNeverDrains();
-        final var evictedRun = recordRun("why");
-        executor.submit(eventFor("why", evictedRun));
-
-        executor.submit(eventFor("kept", recordRun("kept2")));
-
-        final var record = firstChunk(evictedRun);
-        assertNotNull(record);
-        assertEquals("dropped: trigger queue full", record.getLastError());
-    }
-
-    @Test
-    public void test_the_dropped_run_keeps_its_payload_so_it_stays_replayable() throws Exception {
-        final var executor = executorThatNeverDrains();
-        final var evictedRun = recordRun("replayable");
-        executor.submit(eventFor("replayable", evictedRun));
-
-        executor.submit(eventFor("kept", recordRun("kept3")));
-
-        final var record = firstChunk(evictedRun);
-        assertNotNull(record);
-        assertEquals(List.of("replayable"), record.getIds());
+        assertAll(() -> assertEquals(TriggerRunStatus.DEAD, record.getStatus()),
+                () -> assertEquals("dropped: trigger queue full", record.getLastError()),
+                () -> assertEquals(List.of("replayable"), record.getIds()));
     }
 }

@@ -12,8 +12,6 @@ ADMIN_PASSWORD = "administrator"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-# ── helpers ────────────────────────────────────────────────────────────────
-
 def create_user(c, username, password, admin=False, global_perms=None, db_perms=None, coll_perms=None):
     return c.send({
         "type": "CREATE_USER",
@@ -52,10 +50,7 @@ def set_password(c, username: str, new_password: str, current_password: str = No
     return c.send(payload)
 
 
-# ── setup: create the fixtures we need ─────────────────────────────────────
-
 def setup_fixtures(c):
-    """Create databases and collections used by the tests. Runs as admin."""
     for msg in [
         {"type": "CREATE_DATABASE", "databaseName": "auth_db"},
         {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "allowed"},
@@ -73,10 +68,6 @@ def teardown_fixtures(c):
     for db in ("auth_db", "new_db", "transfer_db", "no_drop_db"):
         c.send({"type": "DROP_DATABASE", "databaseName": db})
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Tests
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_unauthenticated(c):
     section("Unauthenticated requests — all must return UNAUTHENTICATED")
@@ -112,7 +103,6 @@ def test_unauthenticated(c):
           c.send({"type": "LIST_COLLECTIONS", "databaseName": "auth_db"}),
           "UNAUTHENTICATED")
 
-    # These two are intentionally public — verify they still work unauthenticated
     check_status("LIST_DATABASES is public (must return OK)",
           c.send({"type": "LIST_DATABASES"}),
           "OK")
@@ -201,46 +191,35 @@ def test_collection_permission_boundary(c):
           "FORBIDDEN")
 
 
+CARVE_OUT_CASES = (
+    ("SAVE on a collection with no entry of its own (OK)",
+     {"type": "SAVE", "collectionName": "allowed", "object": {"_id": "carve_probe", "value": 1}}, "OK", None),
+    ("SAVE on the carved collection (FORBIDDEN)",
+     {"type": "SAVE", "collectionName": "carved", "object": {"_id": "nope", "value": 1}}, "FORBIDDEN", "403-1"),
+    ("DELETE on the carved collection (FORBIDDEN)",
+     {"type": "DELETE", "collectionName": "carved", "_id": "doc1"}, "FORBIDDEN", "403-1"),
+    ("CREATE_INDEX on the carved collection (FORBIDDEN)",
+     {"type": "CREATE_INDEX", "collectionName": "carved", "fieldName": "value"}, "FORBIDDEN", "403-1"),
+    ("DROP_COLLECTION on the carved collection (FORBIDDEN)",
+     {"type": "DROP_COLLECTION", "collectionName": "carved"}, "FORBIDDEN", "403-1"),
+    ("FIND_BY_ID on the carved collection (OK)",
+     {"type": "FIND_BY_ID", "collectionName": "carved", "_id": "doc1"}, "OK", None),
+    ("AGGREGATE (COUNT) on the carved collection (OK)",
+     {"type": "AGGREGATE", "collectionName": "carved", "aggregationSteps": [{"type": "COUNT"}]}, "OK", None),
+)
+
+
 def test_collection_carve_out(c):
     section("User with db READ_WRITE and a collection carved down to READ")
 
-    check_status("AUTHENTICATE as 'carve_user'",
-          c.authenticate("carve_user", "carve_user1234"),
-          "OK")
+    check_status("AUTHENTICATE as 'carve_user'", c.authenticate("carve_user", "carve_user1234"), "OK")
 
-    check_status("SAVE on a collection with no entry of its own (OK)",
-          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
-                      "object": {"_id": "carve_probe", "value": 1}}),
-          "OK")
-
-    check_code("SAVE on the carved collection (FORBIDDEN)",
-          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "carved",
-                      "object": {"_id": "nope", "value": 1}}),
-          "FORBIDDEN", "403-1")
-
-    check_code("DELETE on the carved collection (FORBIDDEN)",
-          c.send({"type": "DELETE", "databaseName": "auth_db",
-                      "collectionName": "carved", "_id": "doc1"}),
-          "FORBIDDEN", "403-1")
-
-    check_code("CREATE_INDEX on the carved collection (FORBIDDEN)",
-          c.send({"type": "CREATE_INDEX", "databaseName": "auth_db",
-                      "collectionName": "carved", "fieldName": "value"}),
-          "FORBIDDEN", "403-1")
-
-    check_code("DROP_COLLECTION on the carved collection (FORBIDDEN)",
-          c.send({"type": "DROP_COLLECTION", "databaseName": "auth_db", "collectionName": "carved"}),
-          "FORBIDDEN", "403-1")
-
-    check_status("FIND_BY_ID on the carved collection (OK)",
-          c.send({"type": "FIND_BY_ID", "databaseName": "auth_db",
-                      "collectionName": "carved", "_id": "doc1"}),
-          "OK")
-
-    check_status("AGGREGATE (COUNT) on the carved collection (OK)",
-          c.send({"type": "AGGREGATE", "databaseName": "auth_db",
-                      "collectionName": "carved", "aggregationSteps": [{"type": "COUNT"}]}),
-          "OK")
+    for label, request, status, code in CARVE_OUT_CASES:
+        response = c.send({"type": request["type"], "databaseName": "auth_db", **request})
+        if code is None:
+            check_status(label, response, status)
+        else:
+            check_code(label, response, status, code)
 
 
 def save_trigger_on(c, coll: str, name: str) -> dict:
@@ -372,7 +351,6 @@ def test_user_management(c):
           delete_user(c, "tmp_user"),
           "NOT_FOUND")
 
-    # Verify non-admin cannot manage users
     check_status("AUTHENTICATE as 'db_reader' (non-admin)",
           c.authenticate("db_reader", "db_reader1234"),
           "OK")
@@ -412,8 +390,6 @@ def test_set_password(c):
           create_user(c, "pwd_user", "original_pass_1"),
           "OK")
 
-    # ── Non-admin changing own password ────────────────────────────────────
-
     check_status("AUTHENTICATE as 'pwd_user'",
           c.authenticate("pwd_user", "original_pass_1"),
           "OK")
@@ -437,8 +413,6 @@ def test_set_password(c):
     check_status("User cannot change another user's password (FORBIDDEN)",
           set_password(c, ADMIN_USERNAME, "hacked12345", current_password="changed_pass_1"),
           "FORBIDDEN")
-
-    # ── Admin changing another user's password ────────────────────────────
 
     check_status("AUTHENTICATE as admin",
           c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD),
@@ -477,7 +451,6 @@ def test_list_users(c):
           "OK")
 
     check_status("LIST_USERS response does not include passwordHash",
-          # the check here is that the call succeeds; field inspection is in unit tests
           list_users(c),
           "OK")
 
@@ -529,8 +502,6 @@ def test_list_users(c):
 def test_ownership(c):
     section("Database ownership — creation, transfer, and access control")
 
-    # ── Auto-ownership: the user who creates a database becomes its owner ──
-
     check_status("AUTHENTICATE as 'db_maker' (has CREATE_DATABASE permission)",
           c.authenticate("db_maker", "db_maker1234"),
           "OK")
@@ -558,8 +529,6 @@ def test_ownership(c):
           c.send({"type": "DROP_DATABASE", "databaseName": "owned_db"}),
           "OK")
 
-    # ── DROP_DATABASE requires ownership, not just global permission ───────
-
     check_status("AUTHENTICATE as admin",
           c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD),
           "OK")
@@ -582,8 +551,6 @@ def test_ownership(c):
 
     c.send({"type": "DROP_DATABASE", "databaseName": "no_drop_db"})
 
-    # ── SET_DATABASE_OWNERS transfers ownership ────────────────────────────
-
     check_status("Admin creates 'transfer_db' (admin is owner)",
           c.send({"type": "CREATE_DATABASE", "databaseName": "transfer_db"}),
           "OK")
@@ -600,8 +567,6 @@ def test_ownership(c):
     check_status("SET_DATABASE_OWNERS with non-existent user returns ERROR",
           set_database_owners(c, "transfer_db", ["ghost_user999"]),
           "ERROR")
-
-    # ── New owner has full access, non-owner is denied ─────────────────────
 
     check_status("AUTHENTICATE as 'new_owner'",
           c.authenticate("new_owner", "new_owner1234"),
@@ -624,8 +589,6 @@ def test_ownership(c):
     check_status("New owner can DROP_DATABASE 'transfer_db'",
           c.send({"type": "DROP_DATABASE", "databaseName": "transfer_db"}),
           "OK")
-
-    # ── Former owner (admin) loses ownership when replaced; db_maker never had it ─
 
     check_status("AUTHENTICATE as 'db_maker'",
           c.authenticate("db_maker", "db_maker1234"),
@@ -807,14 +770,9 @@ def test_a_deleted_user_can_still_roll_back(c):
     c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "after_rollback"})
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════
-
 def main():
     bu.banner("Authentication & Authorization test suite", HOST, PORT)
 
-    # ── pre-flight: create test users and fixtures ─────────────────────
     with Conn() as c:
         r = c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         if r.get("status") != "OK":
@@ -843,7 +801,6 @@ def main():
                 "scriptPermissions": {"auth_db": "MANAGE"}})
         create_user(c, "new_owner", "new_owner1234")
 
-    # ── run each test group on a fresh connection ──────────────────────
     with Conn() as c:
         test_unauthenticated(c)
 
@@ -895,7 +852,6 @@ def main():
     with Conn() as c:
         test_a_deleted_user_can_still_roll_back(c)
 
-    # ── cleanup ────────────────────────────────────────────────────────
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(c)
@@ -903,8 +859,7 @@ def main():
                   "pwd_user"):
             delete_user(c, u)
 
-    # ── summary ───────────────────────────────────────────────────────
-    total_run = 0  # approximate from section counts
+    total_run = 0
     bu.summary()
 
 

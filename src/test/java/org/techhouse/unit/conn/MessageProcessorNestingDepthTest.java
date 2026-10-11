@@ -3,16 +3,10 @@ package org.techhouse.unit.conn;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.net.InetAddress;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,8 +16,6 @@ import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -37,14 +29,7 @@ public class MessageProcessorNestingDepthTest {
     void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        final var createReq = new CreateUserRequest();
-        createReq.setUsername(USERNAME);
-        createReq.setPassword("password123");
-        createReq.setAdmin(true);
-        createReq.setGlobalPermissions(new HashSet<>());
-        createReq.setDatabasePermissions(new HashMap<>());
-        createReq.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(createReq);
+        TestUtils.createAdmin(USERNAME);
     }
 
     @AfterEach
@@ -59,13 +44,9 @@ public class MessageProcessorNestingDepthTest {
     }
 
     private static List<String> converse(String messages) throws Exception {
-        final var socket = mock(Socket.class);
-        final var address = mock(InetAddress.class);
         final var out = new ByteArrayOutputStream();
-        when(socket.getInetAddress()).thenReturn(address);
-        when(address.getHostAddress()).thenReturn("127.0.0.1");
-        when(socket.getInputStream()).thenReturn(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)));
-        when(socket.getOutputStream()).thenReturn(out);
+        final var socket = TestUtils.clientSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)),
+                out);
         final var thread = new Thread(new MessageProcessor(socket));
         thread.start();
         thread.join(20000);

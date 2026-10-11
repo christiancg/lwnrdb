@@ -4,7 +4,7 @@ import sys
 import time
 
 import base_utils as bu
-from base_utils import Conn, check, check_code, check_field, check_status, section
+from base_utils import Conn, check, check_code, check_field, check_status, filter_step, ids_of, section
 
 HOST = os.environ.get("API_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("API_TEST_PORT", "8989"))
@@ -16,8 +16,6 @@ DB = "api_test_db"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
-
-# ── operation wrappers ───────────────────────────────────────────────────────
 
 def create_user(c, username, password, admin=False, global_perms=None, db_perms=None, coll_perms=None):
     return c.send({
@@ -99,31 +97,19 @@ def reindex(c, coll, fields=None, db=DB) -> dict:
     return c.send(payload)
 
 
-def filter_step(field, op, value):
-    return {"type": "FILTER", "operator": {"fieldOperatorType": op, "field": field, "value": value}}
-
-
-def ids_of(response) -> list:
-    return sorted(d.get("_id") for d in (response.get("results") or []))
-
-
 def wait_for_index(c, coll, field, db=DB, timeout_s=15.0):
-    """Indexes are built in the background; poll GET_DATABASE_STATS until the field shows up."""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
+    def _registered():
         r = c.send({"type": "GET_DATABASE_STATS"})
-        for d in r.get("stats", {}).get("databases", []):
-            if d.get("name") != db:
-                continue
-            for c in d.get("collections", []):
-                if c.get("name") == coll and field in (c.get("indexes") or []):
-                    return True
-        time.sleep(0.3)
-    time.sleep(2)  # fallback grace period in case stats lag the actual files
+        return any(d.get("name") == db and coll_stats.get("name") == coll
+                   and field in (coll_stats.get("indexes") or [])
+                   for d in r.get("stats", {}).get("databases", [])
+                   for coll_stats in d.get("collections", []))
+
+    if bu.wait_until(_registered, timeout_s, 0.3):
+        return True
+    time.sleep(2)
     return False
 
-
-# ── fixtures ─────────────────────────────────────────────────────────────────
 
 COLL_CRUD = "crud"
 COLL_AGG = "agg"
@@ -145,18 +131,15 @@ def teardown(c):
 
 
 def setup(c):
-    teardown(c)  # idempotent: clean any leftovers from a previous run
+    teardown(c)
     create_db(c, DB)
     for coll in (COLL_CRUD, COLL_AGG, COLL_JOIN_LEFT, COLL_JOIN_RIGHT, COLL_TYPES, COLL_FLOWS, COLL_PERM):
         create_coll(c, coll)
 
-    # A read-only user (no write/index perms) and a user that can read the left
-    # join collection but NOT the right one (for the JOIN permission negative).
     create_user(c, "api_reader", "api_reader1234", db_perms={DB: "READ"})
     create_user(c, "api_join_user", "api_join_user1234",
                 coll_perms={f"{DB}|{COLL_JOIN_LEFT}": "READ"})
 
-    # Seed the aggregation dataset: varied types so every operator has matches.
     bulk_save(c, COLL_AGG, [
         {"_id": "a1", "name": "alice", "age": 30, "rating": 4.5, "active": True,
          "nick": None, "tags": ["x", "y"], "meta": {"k": 1}},
@@ -168,7 +151,6 @@ def setup(c):
          "tags": ["w"], "meta": {"k": 3}},
     ])
 
-    # JOIN fixtures: left rows reference right rows by key.
     bulk_save(c, COLL_JOIN_LEFT, [
         {"_id": "l1", "key": "k1"}, {"_id": "l2", "key": "k2"},
     ])
@@ -178,15 +160,9 @@ def setup(c):
     ])
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Groups
-# ══════════════════════════════════════════════════════════════════════════
-
 def test_reserved_script_runs_collection(c):
     section("Reserved script_runs collection")
 
-    # The history collection is the server's to write. Every mutation is refused by validation, whether or
-    # not the collection exists yet.
     check_code("SAVE into script_runs -> 400-1",
                save(c, "script_runs", {"_id": "x", "a": 1}), "ERROR", "400-1")
     check_code("BULK_SAVE into script_runs -> 400-1",
@@ -198,8 +174,6 @@ def test_reserved_script_runs_collection(c):
     check_code("DROP_COLLECTION script_runs -> 400-1",
                drop_coll(c, "script_runs"), "ERROR", "400-1")
 
-    # Reads stay open: the collection exists to be queried, and is simply empty until a script has run.
-    # What matters is that a read is never refused for naming a reserved collection.
     read = aggregate(c, "script_runs", [{"type": "COUNT"}])
     check("AGGREGATE over script_runs is not refused as reserved",
                read.get("errorCode") != "400-1", detail=f"got {read}")
@@ -362,12 +336,19 @@ def test_value_types(c):
                 find_by_id(c, COLL_TYPES, "t_datetime"), "object.v", "#datetime(2025-06-26T14:30:45)")
     check_field("Time round-trips", find_by_id(c, COLL_TYPES, "t_time"), "object.v", "#time(14:30:45)")
 
-    # The integer must not be serialized as "42.0": inspect the raw response line.
     c.s.sendall((json.dumps({"type": "FIND_BY_ID", "databaseName": DB,
                              "collectionName": COLL_TYPES, "_id": "t_int"}) + "\n").encode())
     raw = c.f.readline().decode()
     check("Integer is serialized without a trailing .0 on the wire",
                '"v":42' in raw and '"v":42.0' not in raw, detail=raw.strip())
+
+
+def check_client_refusal(label: str, response: dict, connection_kept: bool = False) -> bool:
+    refused = (response.get("status") == "ERROR" and not str(response.get("errorCode") or "").startswith("500")
+               and not (connection_kept and "closed connection" in str(response.get("message"))))
+    return check(label, refused,
+                 detail=f"status={response.get('status')} code={response.get('errorCode')} "
+                        f"msg={response.get('message')!r}")
 
 
 def test_a_malformed_document_is_refused_as_a_client_error(c):
@@ -377,10 +358,7 @@ def test_a_malformed_document_is_refused_as_a_client_error(c):
                             ("a leading comma in an array", '{"_id":"mal3","v":[,1]}')):
         line = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES
                 + '","object":' + document + '}')
-        refused = c.send_raw(line)
-        check(f"{label} is refused as an invalid command, not a server error",
-              refused.get("status") == "ERROR" and not str(refused.get("errorCode") or "").startswith("500"),
-              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+        check_client_refusal(f"{label} is refused as an invalid command, not a server error", c.send_raw(line))
     for doc_id in ("mal1", "mal2", "mal3"):
         check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
     check_field("the connection still answers afterwards", find_by_id(c, COLL_TYPES, "t_int"), "object.v", 42)
@@ -395,10 +373,7 @@ def test_a_line_with_a_second_value_or_a_nan_point_is_refused(c):
             ("a NaN latitude", save_prefix + '{"_id":"nan_geo","p":"#geo(NaN,1)"}}', "nan_geo"),
             ("a NaN nested inside an array", save_prefix + '{"_id":"nan_geo2","ps":["#geo(1,NaN)"]}}',
              "nan_geo2")):
-        refused = c.send_raw(line)
-        check(f"{label} is refused as an invalid command, not a server error",
-              refused.get("status") == "ERROR" and not str(refused.get("errorCode") or "").startswith("500"),
-              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+        check_client_refusal(f"{label} is refused as an invalid command, not a server error", c.send_raw(line))
         check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
     check_status("a finite geo point is still accepted",
                  c.send_raw(save_prefix + '{"_id":"finite_geo","p":"#geo(1,2)"}}'), "OK")
@@ -412,11 +387,10 @@ def test_deep_nesting_is_refused_not_dropped(c):
     section("A request nested past the limit is answered with a refusal and the connection stays open")
     save_prefix = '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":'
     for depth in (200, 5000):
-        refused = c.send_raw(save_prefix + '{"_id":"deep_' + str(depth) + '","n":' + nested_value(depth) + '}}')
-        check(f"a document {depth} levels deep is refused as an invalid command",
-              refused.get("status") == "ERROR" and "closed connection" not in str(refused.get("message"))
-              and not str(refused.get("errorCode") or "").startswith("500"),
-              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+        check_client_refusal(f"a document {depth} levels deep is refused as an invalid command",
+                             c.send_raw(save_prefix + '{"_id":"deep_' + str(depth) + '","n":'
+                                        + nested_value(depth) + '}}'),
+                             connection_kept=True)
         check(f"the same connection still answers after the {depth}-level request",
               find_by_id(c, COLL_TYPES, "deep_" + str(depth)).get("errorCode") == "404-2")
     check_status("a document 120 levels deep is accepted",
@@ -486,7 +460,6 @@ def test_filter_with_indexes(c):
         ("meta EQUALS object", "meta", [filter_step("meta", "EQUALS", {"k": 1})]),
         ("tags EQUALS array", "tags", [filter_step("tags", "EQUALS", ["x", "z"])]),
     ]
-    # Capture scan results first, then build the index and re-query.
     scan = {name: ids_of(aggregate(c, COLL_AGG, steps)) for name, _field, steps in cases}
     for _name, field, _steps in cases:
         create_index(c, COLL_AGG, field)
@@ -519,7 +492,6 @@ def test_conjunctions(c):
     check("NAND (NOT(active AND rating=4.5))",
                ids_of(aggregate(c, COLL_AGG, conj("NAND", active, rating45))) == ["a2", "a4"])
 
-    # NOR/NAND complement against the PK universe via the index-only COUNT path.
     r = aggregate(c, COLL_AGG, conj("NAND", active, rating45) + [{"type": "COUNT"}])
     check_field("COUNT after NAND conjunction", r, "results.0.count", 2)
 
@@ -576,15 +548,27 @@ def test_map_conditions_and_number_casts(c):
                  oversized_k_refused, "ERROR")
 
 
-def raw_send(c, payload) -> str:
-    c.s.sendall((json.dumps(payload) + "\n").encode())
-    return c.f.readline().decode().strip()
-
-
 def map_math(c, operation, operands, field="r"):
     steps = [{"type": "MAP", "operators": [
         {"fieldName": field, "operator": {"type": operation, "operands": operands}}]}]
     return (aggregate(c, COLL_MATH, steps).get("results") or [{}])[0].get(field)
+
+
+MAP_MATH_CASES = (
+    ("MULTIPLY [10,2] is 20", (("MULTIPLY", [10, 2], 20),)),
+    ("MULTIPLY [2,'a'] does not depend on operand order",
+     (("MULTIPLY", [2, "a"], 20), ("MULTIPLY", ["a", 2], 20))),
+    ("a field holding zero does not restart the fold",
+     (("MULTIPLY", ["a", "z", "b"], 0), ("MULTIPLY", ["z", "a", "b"], 0))),
+    ("SUBS and DIVIDE keep left-to-right order", (("SUBS", [10, 2, 1], 7), ("DIVIDE", [100, 5, 2], 10))),
+    ("POW seeds from the first operand", (("POW", [2, 10], 1024),)),
+    ("SUM is unchanged", (("SUM", [10, 2], 12),)),
+    ("MIN over a value past the int range does not leak Integer.MAX_VALUE", (("MIN", ["big"], 3000000000),)),
+    ("MAX over a value past the int range does not leak Integer.MIN_VALUE", (("MAX", ["big"], 3000000000),)),
+    *((f"{operation} over only {operand} answers null", ((operation, [operand], None),))
+      for operation in ("MIN", "MAX", "AVG", "MULTIPLY") for operand in ("missing", "nullField")),
+    ("a divide by zero answers null", (("DIVIDE", ["a", "z"], None),)),
+)
 
 
 def test_map_arithmetic(c):
@@ -600,34 +584,9 @@ def test_map_arithmetic(c):
               from_literals == from_fields,
               detail=f"literals={from_literals!r} fields={from_fields!r}")
 
-    check("MULTIPLY [10,2] is 20", map_math(c, "MULTIPLY", [10, 2]) == 20,
-          detail=f"got {map_math(c, 'MULTIPLY', [10, 2])!r}")
-    check("MULTIPLY [2,'a'] does not depend on operand order",
-          map_math(c, "MULTIPLY", [2, "a"]) == map_math(c, "MULTIPLY", ["a", 2]) == 20,
-          detail=f"got {map_math(c, 'MULTIPLY', [2, 'a'])!r}")
-    check("a field holding zero does not restart the fold",
-          map_math(c, "MULTIPLY", ["a", "z", "b"]) == 0 and map_math(c, "MULTIPLY", ["z", "a", "b"]) == 0,
-          detail=f"a,z,b={map_math(c, 'MULTIPLY', ['a', 'z', 'b'])!r} "
-                 f"z,a,b={map_math(c, 'MULTIPLY', ['z', 'a', 'b'])!r}")
-    check("SUBS and DIVIDE keep left-to-right order",
-          map_math(c, "SUBS", [10, 2, 1]) == 7 and map_math(c, "DIVIDE", [100, 5, 2]) == 10,
-          detail=f"subs={map_math(c, 'SUBS', [10, 2, 1])!r} divide={map_math(c, 'DIVIDE', [100, 5, 2])!r}")
-    check("POW seeds from the first operand", map_math(c, "POW", [2, 10]) == 1024,
-          detail=f"got {map_math(c, 'POW', [2, 10])!r}")
-    check("SUM is unchanged", map_math(c, "SUM", [10, 2]) == 12,
-          detail=f"got {map_math(c, 'SUM', [10, 2])!r}")
-
-    check("MIN over a value past the int range does not leak Integer.MAX_VALUE",
-          map_math(c, "MIN", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MIN', ['big'])!r}")
-    check("MAX over a value past the int range does not leak Integer.MIN_VALUE",
-          map_math(c, "MAX", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MAX', ['big'])!r}")
-    for operation in ("MIN", "MAX", "AVG", "MULTIPLY"):
-        for operand in ("missing", "nullField"):
-            check(f"{operation} over only {operand} answers null",
-                  map_math(c, operation, [operand]) is None,
-                  detail=f"got {map_math(c, operation, [operand])!r}")
-    check("a divide by zero answers null", map_math(c, "DIVIDE", ["a", "z"]) is None,
-          detail=f"got {map_math(c, 'DIVIDE', ['a', 'z'])!r}")
+    for label, calls in MAP_MATH_CASES:
+        got = [map_math(c, operation, operands) for operation, operands, _ in calls]
+        check(label, got == [expected for _, _, expected in calls], detail=f"got {got!r}")
 
     concat_literal_null = map_math(c, "CONCAT", ["-x", None, "-y"])
     concat_null_field = map_math(c, "CONCAT", ["-x", "nullField", "-y"])
@@ -682,9 +641,6 @@ def test_map_arithmetic(c):
 def test_every_aggregate_response_is_strict_json(c):
     section("Every AGGREGATE response parses under a strict RFC 8259 reader")
 
-    def reject(token):
-        raise ValueError(f"non-RFC JSON token {token!r}")
-
     shapes = {
         "a divide by zero": {"type": "DIVIDE", "operands": ["a", "z"]},
         "an average of nothing": {"type": "AVG", "operands": ["missing"]},
@@ -692,22 +648,19 @@ def test_every_aggregate_response_is_strict_json(c):
         "an overflowing pow": {"type": "POW", "operands": [1.7976931348623157e308, 2]},
     }
     for label, operator in shapes.items():
-        raw = raw_send(c, {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_MATH,
-                           "aggregationSteps": [{"type": "MAP", "operators": [
-                               {"fieldName": "r", "operator": operator}]}]})
         try:
-            json.loads(raw, parse_constant=reject)
-            ok = True
+            response = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_MATH,
+                               "aggregationSteps": [{"type": "MAP", "operators": [
+                                   {"fieldName": "r", "operator": operator}]}]}, strict=True)
+            ok, detail = not response.get(bu.UNPARSED), json.dumps(response)
         except ValueError as failure:
-            ok = False
-            raw = f"{failure}: {raw}"
-        check(f"the response for {label} is strict JSON", ok, detail=raw)
+            ok, detail = False, str(failure)
+        check(f"the response for {label} is strict JSON", ok, detail=detail)
 
 
 def test_aggregation_steps(c):
     section("Aggregation steps (MAP / GROUP_BY / JOIN / COUNT / DISTINCT / LIMIT / SKIP / SORT)")
 
-    # A MAP operator without an "operator" field removes the named field from each doc.
     r = aggregate(c, COLL_AGG, [{"type": "MAP", "operators": [{"fieldName": "meta"}]}])
     check_status("MAP remove-field (OK)", r, "OK")
     check("MAP keeps one row per input doc", len(r.get("results") or []) == 4)
@@ -762,7 +715,6 @@ def test_aggregation_steps(c):
     check("SORT descending by age",
                [d.get("age") for d in (r.get("results") or [])] == [40, 30, 25, 25])
 
-    # Booleans order the conventional way: false before true ascending, and the reverse descending.
     r = aggregate(c, COLL_AGG, [{"type": "SORT", "fieldName": "active", "ascending": True}])
     check("SORT ascending by a boolean puts false first",
                [d.get("active") for d in (r.get("results") or [])] == [False, False, True, True])
@@ -785,7 +737,6 @@ def test_aggregation_steps(c):
     check_status("Empty aggregationSteps returns all docs",
           aggregate(c, COLL_AGG, []), "OK")
 
-    # Multi-step pipeline: FILTER -> SORT -> LIMIT.
     r = aggregate(c, COLL_AGG, [filter_step("active", "EQUALS", True),
                                    {"type": "SORT", "fieldName": "age", "ascending": True},
                                    {"type": "LIMIT", "limit": 1}])
@@ -839,8 +790,6 @@ def test_analyze(c):
         {"_id": "z3", "name": "carol", "age": 40},
     ])
 
-    # Scan path (no index yet): the diagnostic reports indexUsed=false, names the field as an
-    # index candidate, and still returns the matching results alongside the analyzeResult.
     r = analyze(c, coll, [filter_step("name", "EQUALS", "alice")])
     check_status("AGGREGATE analyze=true returns OK", r, "OK")
     check("analyzeResult object is present", isinstance(r.get("analyzeResult"), dict))
@@ -857,8 +806,6 @@ def test_analyze(c):
                detail=f"durationMillis={duration}")
     check("analyze still returns the matching results", ids_of(r) == ["z1"])
 
-    # Index path: once the index exists the diagnostic reports indexUsed=true, names the index,
-    # and records the field-index read lock.
     create_index(c, coll, "name")
     wait_for_index(c, coll, "name")
     r = analyze(c, coll, [filter_step("name", "EQUALS", "alice")])
@@ -870,7 +817,6 @@ def test_analyze(c):
                any(lock.endswith("|name") for lock in (bu.dig(r, "analyzeResult.locksAcquired") or [])),
                detail=f"locksAcquired={bu.dig(r, 'analyzeResult.locksAcquired')}")
 
-    # Empty result in analyze mode returns OK (not the NO_RESULTS error) with the diagnostic.
     r = analyze(c, coll, [filter_step("name", "EQUALS", "nobody")])
     check_status("analyze on a no-match query returns OK (not NO_RESULTS)", r, "OK")
     check("analyzeResult present even with no results",
@@ -878,14 +824,12 @@ def test_analyze(c):
     check("no-match analyze returns an empty results list",
                (r.get("results") or []) == [], detail=f"results={r.get('results')}")
 
-    # A FILTER that is not the first step yields a "move it to the top" suggestion.
     r = analyze(c, coll, [{"type": "SORT", "fieldName": "age", "ascending": True},
                              filter_step("name", "EQUALS", "alice")])
     check("suggests moving a non-leading FILTER to the top of the pipeline",
                any("move it to the top" in sug for sug in (bu.dig(r, "analyzeResult.suggestions") or [])),
                detail=f"suggestions={bu.dig(r, 'analyzeResult.suggestions')}")
 
-    # analyze=false (the default) leaves the response untouched: no analyzeResult field.
     r = aggregate(c, coll, [filter_step("name", "EQUALS", "alice")])
     check("plain AGGREGATE carries no analyzeResult", r.get("analyzeResult") is None)
 
@@ -924,7 +868,6 @@ def test_index_ops(c):
     check_code("it carries no index the refused CREATE_INDEX promised -> REINDEX email 404-6",
                reindex(c, "idx_never_created", ["email"]), "NOT_FOUND", "404-6")
     drop_coll(c, "idx_never_created")
-    # DROP_INDEX is idempotent: dropping a field with no index is a no-op that returns OK.
     check_status("DROP_INDEX on a field with no index is idempotent (OK)",
           drop_index(c, "idx_coll", "no_such_field"), "OK")
 
@@ -934,24 +877,20 @@ def test_index_ops(c):
 def test_flows(c):
     section("Multi-operation flows (save -> update -> verify)")
 
-    # Upsert flow: same _id overwrites, count stays 1.
     save(c, COLL_FLOWS, {"_id": "f1", "status": "new"})
     check_field("Initial value is 'new'", find_by_id(c, COLL_FLOWS, "f1"), "object.status", "new")
     save(c, COLL_FLOWS, {"_id": "f1", "status": "done"})
     check_field("Value updated to 'done'", find_by_id(c, COLL_FLOWS, "f1"), "object.status", "done")
-    # Upsert overwrote f1 rather than inserting a second doc: exactly one doc has status 'done'.
     check_field("Upsert did not insert a duplicate (count==1)",
                 aggregate(c, COLL_FLOWS, [filter_step("status", "EQUALS", "done"), {"type": "COUNT"}]),
                 "results.0.count", 1)
 
-    # Grow-update / relocation flow: tiny doc then a much larger one (same id).
     save(c, COLL_FLOWS, {"_id": "grow", "payload": "x"})
     big = "y" * 4096
     save(c, COLL_FLOWS, {"_id": "grow", "payload": big})
     check_field("Grow-update reads back the larger value",
                 find_by_id(c, COLL_FLOWS, "grow"), "object.payload", big)
 
-    # Index-consistency flow: write then immediately query the index-backed path.
     create_index(c, COLL_FLOWS, "status")
     wait_for_index(c, COLL_FLOWS, "status")
     save(c, COLL_FLOWS, {"_id": "ic", "status": "fresh"})
@@ -963,14 +902,12 @@ def test_flows(c):
     check("New value matches immediately after update",
                "ic" in ids_of(aggregate(c, COLL_FLOWS, [filter_step("status", "EQUALS", "changed")])))
 
-    # Delete-then-recreate flow.
     save(c, COLL_FLOWS, {"_id": "dr", "v": 1})
     delete(c, COLL_FLOWS, "dr")
     check_code("Deleted doc is gone -> 404-2", find_by_id(c, COLL_FLOWS, "dr"), "NOT_FOUND", "404-2")
     save(c, COLL_FLOWS, {"_id": "dr", "v": 2})
     check_field("Re-created doc reads back", find_by_id(c, COLL_FLOWS, "dr"), "object.v", 2)
 
-    # Bulk-update flow: insert then bulk-update all to longer values.
     bulk_save(c, COLL_FLOWS, [{"_id": f"bu_{i}", "v": "short"} for i in range(4)])
     bulk_save(c, COLL_FLOWS, [{"_id": f"bu_{i}", "v": f"updated-longer-value-{i}"} for i in range(4)])
     bad = sum(1 for i in range(4)
@@ -981,12 +918,10 @@ def test_flows(c):
 def test_operation_permissions(c):
     section("Operation-level permission edges (non-overlapping with test_auth)")
 
-    # Unauthenticated connection.
     with Conn() as uc:
         check_code("AGGREGATE before auth -> 401-1",
                    aggregate(uc, COLL_AGG, []), "UNAUTHENTICATED", "401-1")
 
-    # Read-only user: writes and index ops are forbidden.
     with Conn() as rc:
         rc.authenticate("api_reader", "api_reader1234")
         check_code("read-only user SAVE -> 403-1",
@@ -999,7 +934,6 @@ def test_operation_permissions(c):
                    reindex(rc, COLL_AGG), "FORBIDDEN", "403-1")
         check_status("read-only user can still AGGREGATE", aggregate(rc, COLL_AGG, []), "OK")
 
-    # JOIN requires READ on the remote collection too.
     with Conn() as jc:
         jc.authenticate("api_join_user", "api_join_user1234")
         check_status("join user can read the left collection", aggregate(jc, COLL_JOIN_LEFT, []), "OK")
@@ -1009,10 +943,6 @@ def test_operation_permissions(c):
                                "localField": "key", "remoteField": "key", "asField": "j"}]),
                    "FORBIDDEN", "403-1")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_fault_operations_are_disabled_by_default(c):
     section("Fault injection operations on a server with the default configuration")

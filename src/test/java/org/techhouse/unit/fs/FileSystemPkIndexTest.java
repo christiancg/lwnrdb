@@ -4,46 +4,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class FileSystemPkIndexTest {
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        Configuration config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        File dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
-
+public class FileSystemPkIndexTest extends FileSystemTestBase {
     @Test
     public void test_a_malformed_line_does_not_throw_from_the_write_path() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var first = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -65,9 +41,8 @@ public class FileSystemPkIndexTest {
     }
 
     @Test
-    public void test_delete_returns_compaction() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_delete_returns_compaction() throws IOException {
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -88,10 +63,8 @@ public class FileSystemPkIndexTest {
     }
 
     @Test
-    public void test_delete_last_entry_returns_null_compaction()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_delete_last_entry_returns_null_compaction() throws IOException {
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -104,8 +77,7 @@ public class FileSystemPkIndexTest {
     // The stale-position fix: the caller must apply the returned compaction to keep survivors consistent.
     @Test
     public void test_sequential_deletes_applying_compaction_no_crash() throws Exception {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var pks = new ArrayList<PkIndexEntry>();
@@ -135,74 +107,54 @@ public class FileSystemPkIndexTest {
     }
 
     @Test
-    public void test_delete_with_over_eof_position_is_refused_and_leaves_the_page_intact()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        final var data = new JsonObject();
-        data.addProperty("name", "test");
-        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
-        entry.set_id("1");
-        final var pk = fileSystem.insertIntoCollection(entry);
-        final var stale = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", pk.getPosition() + 1000,
-                pk.getLength(), pk.getPage());
-        final var pageBefore = java.nio.file.Files.readAllBytes(pageFile().toPath());
-
-        assertThrows(RuntimeException.class, () -> fileSystem.deleteFromCollection(stale));
-
-        assertArrayEquals(pageBefore, java.nio.file.Files.readAllBytes(pageFile().toPath()));
-        assertEquals(1, fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).size());
-    }
-
-    @Test
     public void test_single_update_multi_page_preserves_other_positions() throws Exception {
-        FileSystem fs = FileSystemPages.freshFs();
-        final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
-        FileSystemPages.insertOnPage(fs, "b", 1);
+        FileSystem fs = FileSystemTestBase.freshFs();
+        final var idxA = FileSystemTestBase.insertOnPage(fs, "a", 0);
+        FileSystemTestBase.insertOnPage(fs, "b", 1);
 
-        fs.updateFromCollection(FileSystemPages.updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(), idxA);
+        fs.updateFromCollection(FileSystemTestBase.updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(),
+                idxA);
 
-        assertEquals("short", FileSystemPages.readValueFromDisk(fs, "b"));
-        assertEquals("updated-longer-value-for-a", FileSystemPages.readValueFromDisk(fs, "a"));
+        assertEquals("short", FileSystemTestBase.readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-a", FileSystemTestBase.readValueFromDisk(fs, "a"));
     }
 
     @Test
     public void test_single_update_same_page_shifts_only_later_position() throws Exception {
-        FileSystem fs = FileSystemPages.freshFs();
-        final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
-        final var idxB = FileSystemPages.insertOnPage(fs, "b", 0);
+        FileSystem fs = FileSystemTestBase.freshFs();
+        final var idxA = FileSystemTestBase.insertOnPage(fs, "a", 0);
+        final var idxB = FileSystemTestBase.insertOnPage(fs, "b", 0);
         final long bPosBefore = idxB.getPosition();
         assertTrue(bPosBefore > 0, "second same-page entry should start past position 0");
 
-        fs.updateFromCollection(FileSystemPages.updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(), idxA);
+        fs.updateFromCollection(FileSystemTestBase.updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(),
+                idxA);
 
         final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         final var bDisk = disk.stream().filter(p -> p.getValue().equals("b")).findFirst().orElseThrow();
         assertEquals(bPosBefore - idxA.getLength(), bDisk.getPosition(),
                 "'b' shifts toward the start by 'a's old length after 'a' is relocated");
         assertEquals("short", fs.getById(bDisk).getData().get("v").asJsonString().getValue());
-        assertEquals("updated-longer-value-for-a", FileSystemPages.readValueFromDisk(fs, "a"));
+        assertEquals("updated-longer-value-for-a", FileSystemTestBase.readValueFromDisk(fs, "a"));
     }
 
     @Test
     public void test_delete_same_page_preserves_survivor_positions() throws Exception {
-        FileSystem fs = FileSystemPages.freshFs();
-        FileSystemPages.insertOnPage(fs, "a", 0);
-        final var idxB = FileSystemPages.insertOnPage(fs, "b", 0);
-        FileSystemPages.insertOnPage(fs, "c", 0);
+        FileSystem fs = FileSystemTestBase.freshFs();
+        FileSystemTestBase.insertOnPage(fs, "a", 0);
+        final var idxB = FileSystemTestBase.insertOnPage(fs, "b", 0);
+        FileSystemTestBase.insertOnPage(fs, "c", 0);
 
         fs.deleteFromCollection(idxB);
 
-        assertEquals("short", FileSystemPages.readValueFromDisk(fs, "a"));
-        assertEquals("short", FileSystemPages.readValueFromDisk(fs, "c"));
+        assertEquals("short", FileSystemTestBase.readValueFromDisk(fs, "a"));
+        assertEquals("short", FileSystemTestBase.readValueFromDisk(fs, "c"));
         final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(disk.stream().noneMatch(p -> p.getValue().equals("b")), "'b' must be removed from the index");
     }
 
     @Test
     public void test_compactTombstones_dedups_and_drops_old() throws Exception {
-        final var fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "keep", 1000L);
         fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "keep", 2000L);
         fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "old", 100L);
@@ -215,16 +167,13 @@ public class FileSystemPkIndexTest {
 
     @Test
     public void test_compactTombstones_missing_file_is_noop() throws Exception {
-        final var fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.tombstones().compact(TestGlobals.DB, "noSuchColl", 0L);
         assertTrue(fs.tombstones().read(TestGlobals.DB, "noSuchColl").isEmpty());
     }
 
     @Test
     public void test_a_self_heal_does_not_erase_a_concurrent_append() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -279,8 +228,7 @@ public class FileSystemPkIndexTest {
 
     @Test
     public void test_two_concurrent_heals_do_not_collide() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -315,19 +263,13 @@ public class FileSystemPkIndexTest {
                 .anyMatch(e -> e.getValue().equals("seed")));
     }
 
-    private File pageFile() {
-        return new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL
-                + File.separator + TestGlobals.COLL + "-0.dat");
-    }
-
     private File pkIndexFile() {
         return new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL
                 + File.separator + TestGlobals.COLL + "-pk.idx");
     }
 
     private FileSystem seededFileSystem() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         for (final var id : new String[]{"a", "b"}) {
@@ -382,8 +324,7 @@ public class FileSystemPkIndexTest {
 
     @Test
     public void test_a_document_read_from_disk_carries_its_write_version() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -399,8 +340,7 @@ public class FileSystemPkIndexTest {
 
     @Test
     public void test_every_document_read_by_index_entries_carries_its_write_version() throws Exception {
-        final var fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var indexEntries = new ArrayList<PkIndexEntry>();
@@ -417,5 +357,52 @@ public class FileSystemPkIndexTest {
         for (final var entry : read) {
             assertEquals(entry.get_id().equals("v1") ? 11L : 22L, entry.getVersion());
         }
+    }
+
+    private static DbEntry document(String id) {
+        final var entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id(id);
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+        return entry;
+    }
+
+    @Test
+    public void test_update_after_pk_index_corruption_refuses_to_rewrite() throws IOException {
+
+        final var good1Index = fs.insertIntoCollection(document("good1"));
+        fs.insertIntoCollection(document("good2"));
+
+        Files.writeString(pkIndexFile().toPath(), "this is not a valid pk index line\nnor is this",
+                StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+        final var corruptedBytes = Files.readAllBytes(pkIndexFile().toPath());
+
+        assertThrows(RuntimeException.class, () -> fs.deleteFromCollection(good1Index));
+
+        final var afterBytes = Files.readAllBytes(pkIndexFile().toPath());
+        assertArrayEquals(corruptedBytes, afterBytes,
+                "a pk index write that could not parse a single line must leave the file untouched");
+    }
+
+    @Test
+    public void test_update_with_one_malformed_and_one_valid_line_still_self_heals() throws IOException {
+
+        fs.insertIntoCollection(document("good1"));
+        Files.writeString(pkIndexFile().toPath(), "\nthis is not a valid pk index line\n", StandardCharsets.UTF_8,
+                StandardOpenOption.APPEND);
+        final var good2Index = fs.insertIntoCollection(document("good2"));
+
+        fs.deleteFromCollection(good2Index);
+
+        final var diskLines = Files.readAllLines(pkIndexFile().toPath());
+        assertTrue(diskLines.stream().noneMatch(l -> l.contains("not a valid")),
+                "the malformed pk index line should have been removed");
+        assertEquals(1, diskLines.stream().filter(l -> !l.isEmpty()).count());
+
+        final var remaining = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, remaining.size());
+        assertEquals("good1", remaining.getFirst().getValue());
     }
 }

@@ -19,7 +19,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.ScriptRunDirectory;
 import org.techhouse.cluster.membership.MembershipService;
@@ -32,6 +31,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRegistry;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestUtils;
 
 public class ScriptRunDirectoryTest {
@@ -45,11 +45,11 @@ public class ScriptRunDirectoryTest {
     private PeerConnectionPool origPool;
 
     private static NodeInfo self() {
-        return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node("self", 5000);
     }
 
     private static NodeInfo other() {
-        return new NodeInfo("other", "127.0.0.1", 5001, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node("other", 5001);
     }
 
     @BeforeEach

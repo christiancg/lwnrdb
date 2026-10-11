@@ -27,13 +27,13 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
-import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunResolution;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerRunResolutionTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -66,9 +66,7 @@ public class TriggerRunResolutionTest {
         triggerExecutor.stop();
         triggerExecutor.start(captured::add);
         saveLiveDocument();
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         AdminOperationHelper.saveTriggerRun(new AdminTriggerRunEntry(RUN_ID, 0L, TriggerRunLog.currentNodeId(),
                 TestGlobals.DB, TestGlobals.COLL, "audit", "recalc", EventType.UPDATED, false, "alice", 0,
                 System.currentTimeMillis(), List.of("live"), List.of()));

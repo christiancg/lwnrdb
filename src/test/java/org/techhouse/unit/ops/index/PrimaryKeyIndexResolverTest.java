@@ -4,49 +4,32 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.util.Set;
-import org.junit.jupiter.api.AfterEach;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.techhouse.cache.Cache;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.techhouse.config.Globals;
-import org.techhouse.data.DbEntry;
-import org.techhouse.data.PkIndexEntry;
-import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.custom_types.JsonDateTime;
-import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.PrimaryKeyIndexResolver;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
+import org.techhouse.unit.ops.FilterResolutionSupport;
 
-public class PrimaryKeyIndexResolverTest {
+public class PrimaryKeyIndexResolverTest extends FilterResolutionSupport {
     @BeforeEach
-    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-        final var cache = IocContainer.get(Cache.class);
-        cache.putAdminCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL),
-                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "seed", 0, 100, 0));
+    public void seedIds() throws IOException {
+        mixedTypeFixture();
         for (final var id : new String[]{"a", "b", "c"}) {
-            final var obj = new JsonObject();
-            obj.add(Globals.PK_FIELD, new JsonString(id));
-            final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
-            entry.set_id(id);
-            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
+            insert(id);
         }
-    }
-
-    @AfterEach
-    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
-        TestUtils.standardTearDown();
     }
 
     private Set<String> resolve(FieldOperatorType type, JsonBaseElement operand) throws IOException {
@@ -54,93 +37,70 @@ public class PrimaryKeyIndexResolverTest {
                 TestGlobals.COLL);
     }
 
-    private static JsonArray arrayOf(JsonBaseElement... values) {
-        final var array = new JsonArray();
-        for (final var value : values) {
-            array.add(value);
-        }
-        return array;
+    private static Stream<Arguments> resolvedOperands() {
+        return Stream.of(
+                Arguments.of("test_equals_resolves_the_single_id", FieldOperatorType.EQUALS, new JsonString("b"),
+                        Set.of("b")),
+                Arguments.of("test_equals_on_a_missing_id_resolves_empty", FieldOperatorType.EQUALS,
+                        new JsonString("missing"), Set.of()),
+                Arguments.of("test_not_equals_resolves_the_complement", FieldOperatorType.NOT_EQUALS,
+                        new JsonString("b"), Set.of("a", "c")),
+                Arguments.of("test_in_resolves_every_present_operand", FieldOperatorType.IN,
+                        arrayOf(new JsonString("a"), new JsonString("c")), Set.of("a", "c")),
+                Arguments.of("test_not_in_resolves_the_complement", FieldOperatorType.NOT_IN,
+                        arrayOf(new JsonString("a"), new JsonString("c")), Set.of("b")),
+                Arguments.of("test_contains_resolves_by_substring", FieldOperatorType.CONTAINS, new JsonString("a"),
+                        Set.of("a")),
+                Arguments.of("test_not_equals_still_complements_an_empty_string_operand", FieldOperatorType.NOT_EQUALS,
+                        new JsonString(""), Set.of("a", "b", "c")),
+                Arguments.of("test_equals_and_contains_still_answer_empty_for_a_non_string_operand EQUALS",
+                        FieldOperatorType.EQUALS, new JsonNumber(5), Set.of()),
+                Arguments.of("test_equals_and_contains_still_answer_empty_for_a_non_string_operand CONTAINS",
+                        FieldOperatorType.CONTAINS, new JsonNumber(5), Set.of()),
+                Arguments.of("test_not_in_still_complements_a_non_string_operand_list", FieldOperatorType.NOT_IN,
+                        arrayOf(new JsonNumber(5), JsonNull.INSTANCE), Set.of("a", "b", "c")),
+                Arguments.of("test_a_non_array_operand_for_in_resolves_empty", FieldOperatorType.IN,
+                        new JsonString("a"), Set.of()),
+                Arguments.of("test_resolution_is_case_sensitive", FieldOperatorType.EQUALS, new JsonString("A"),
+                        Set.of()));
     }
 
-    @Test
-    public void test_equals_resolves_the_single_id() throws IOException {
-        assertEquals(Set.of("b"), resolve(FieldOperatorType.EQUALS, new JsonString("b")));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("resolvedOperands")
+    public void test_the_primary_key_resolver_answers(String name, FieldOperatorType type, JsonBaseElement operand,
+            Set<String> expected) throws IOException {
+        assertEquals(expected, resolve(type, operand), name);
     }
 
-    @Test
-    public void test_equals_on_a_missing_id_resolves_empty() throws IOException {
-        assertEquals(Set.of(), resolve(FieldOperatorType.EQUALS, new JsonString("missing")));
+    private static Stream<Arguments> declinedOperands() {
+        final var rangeOperand = new JsonString("b");
+        return Stream.of(
+                Arguments.of("test_range_operators_decline_so_the_caller_scans GREATER_THAN",
+                        FieldOperatorType.GREATER_THAN, rangeOperand),
+                Arguments.of("test_range_operators_decline_so_the_caller_scans GREATER_THAN_EQUALS",
+                        FieldOperatorType.GREATER_THAN_EQUALS, rangeOperand),
+                Arguments.of("test_range_operators_decline_so_the_caller_scans SMALLER_THAN",
+                        FieldOperatorType.SMALLER_THAN, rangeOperand),
+                Arguments.of("test_range_operators_decline_so_the_caller_scans SMALLER_THAN_EQUALS",
+                        FieldOperatorType.SMALLER_THAN_EQUALS, rangeOperand),
+                Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonNumber",
+                        FieldOperatorType.NOT_EQUALS, new JsonNumber(5)),
+                Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonNull",
+                        FieldOperatorType.NOT_EQUALS, JsonNull.INSTANCE),
+                Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonObject",
+                        FieldOperatorType.NOT_EQUALS, new JsonObject()),
+                Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonArray",
+                        FieldOperatorType.NOT_EQUALS, arrayOf()),
+                Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonBoolean",
+                        FieldOperatorType.NOT_EQUALS, new JsonBoolean(true)),
+                Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonDateTime",
+                        FieldOperatorType.NOT_EQUALS, new JsonDateTime("#datetime(2024-01-01T10:00:00)")));
     }
 
-    @Test
-    public void test_not_equals_resolves_the_complement() throws IOException {
-        assertEquals(Set.of("a", "c"), resolve(FieldOperatorType.NOT_EQUALS, new JsonString("b")));
-    }
-
-    @Test
-    public void test_in_resolves_every_present_operand() throws IOException {
-        assertEquals(Set.of("a", "c"),
-                resolve(FieldOperatorType.IN, arrayOf(new JsonString("a"), new JsonString("c"))));
-    }
-
-    @Test
-    public void test_not_in_resolves_the_complement() throws IOException {
-        assertEquals(Set.of("b"), resolve(FieldOperatorType.NOT_IN, arrayOf(new JsonString("a"), new JsonString("c"))));
-    }
-
-    @Test
-    public void test_contains_resolves_by_substring() throws IOException {
-        assertEquals(Set.of("a"), resolve(FieldOperatorType.CONTAINS, new JsonString("a")));
-    }
-
-    @Test
-    public void test_range_operators_decline_so_the_caller_scans() throws IOException {
-        for (final var type : new FieldOperatorType[]{FieldOperatorType.GREATER_THAN,
-                FieldOperatorType.GREATER_THAN_EQUALS, FieldOperatorType.SMALLER_THAN,
-                FieldOperatorType.SMALLER_THAN_EQUALS}) {
-            assertNull(resolve(type, new JsonString("b")), type + " must decline rather than resolve");
-        }
-    }
-
-    @Test
-    public void test_a_non_string_operand_resolves_empty() throws IOException {
-        assertEquals(Set.of(), resolve(FieldOperatorType.EQUALS, new JsonNumber(1)));
-    }
-
-    @Test
-    public void test_not_equals_declines_every_operand_that_is_not_a_primary_key() throws IOException {
-        final var operands = new JsonBaseElement[]{new JsonNumber(5), JsonNull.INSTANCE, new JsonObject(), arrayOf(),
-                new JsonBoolean(true), new JsonDateTime("#datetime(2024-01-01T10:00:00)")};
-        for (final var operand : operands) {
-            assertNull(resolve(FieldOperatorType.NOT_EQUALS, operand),
-                    operand.getClass().getSimpleName() + " must decline rather than complement the collection");
-        }
-    }
-
-    @Test
-    public void test_not_equals_still_complements_an_empty_string_operand() throws IOException {
-        assertEquals(Set.of("a", "b", "c"), resolve(FieldOperatorType.NOT_EQUALS, new JsonString("")));
-    }
-
-    @Test
-    public void test_equals_and_contains_still_answer_empty_for_a_non_string_operand() throws IOException {
-        assertEquals(Set.of(), resolve(FieldOperatorType.EQUALS, new JsonNumber(5)));
-        assertEquals(Set.of(), resolve(FieldOperatorType.CONTAINS, new JsonNumber(5)));
-    }
-
-    @Test
-    public void test_not_in_still_complements_a_non_string_operand_list() throws IOException {
-        assertEquals(Set.of("a", "b", "c"),
-                resolve(FieldOperatorType.NOT_IN, arrayOf(new JsonNumber(5), JsonNull.INSTANCE)));
-    }
-
-    @Test
-    public void test_a_non_array_operand_for_in_resolves_empty() throws IOException {
-        assertEquals(Set.of(), resolve(FieldOperatorType.IN, new JsonString("a")));
-    }
-
-    @Test
-    public void test_resolution_is_case_sensitive() throws IOException {
-        assertEquals(Set.of(), resolve(FieldOperatorType.EQUALS, new JsonString("A")));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("declinedOperands")
+    public void test_the_primary_key_resolver_declines_so_the_caller_scans(String name, FieldOperatorType type,
+            JsonBaseElement operand) throws IOException {
+        assertNull(resolve(type, operand), name + " must decline rather than resolve");
     }
 }

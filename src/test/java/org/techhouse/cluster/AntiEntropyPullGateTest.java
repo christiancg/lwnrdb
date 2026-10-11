@@ -1,6 +1,7 @@
 package org.techhouse.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -9,73 +10,32 @@ import static org.mockito.Mockito.when;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cache.Cache;
-import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.DigestEntry;
+import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class AntiEntropyPullGateTest {
-    private static final String ID = "a";
+public class AntiEntropyPullGateTest extends AntiEntropyTestBase {
+    private static final String ID = SEEDED_ID;
     private static final String HIGHER_NODE_ID = "zeta";
     private static final long PEER_VERSION = 5L;
     private static final int BEYOND_ONE_BATCH = AntiEntropyService.PULL_BATCH_SIZE + 1;
 
-    private final AntiEntropyService service = IocContainer.get(AntiEntropyService.class);
-    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private final Cache cache = IocContainer.get(Cache.class);
     private final AtomicInteger pulls = new AtomicInteger();
-    private MembershipService realMembership;
-    private PeerConnectionPool realPool;
 
-    @BeforeEach
-    public void setUp() throws Exception {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-        realMembership = TestUtils.getPrivateField(service, "membershipService", MembershipService.class);
-        realPool = TestUtils.getPrivateField(service, "pool", PeerConnectionPool.class);
-    }
-
-    @AfterEach
-    public void tearDown() throws Exception {
-        TestUtils.setPrivateField(service, "membershipService", realMembership);
-        TestUtils.setPrivateField(service, "pool", realPool);
-        TestUtils.releaseAllLocks();
-        TestUtils.standardTearDown();
-    }
-
-    private void injectPeer(PeerConnectionPool pool) throws Exception {
-        final var self = new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
-        final var peer = new NodeInfo(HIGHER_NODE_ID, "127.0.0.1", 5001, NodeState.ALIVE, 1L, 1L);
-        final var membership = mock(MembershipService.class);
-        when(membership.getSelf()).thenReturn(self);
-        when(membership.membershipView()).thenReturn(new MembershipView(List.of(self, peer)));
-        TestUtils.setPrivateField(service, "membershipService", membership);
-        TestUtils.setPrivateField(service, "pool", pool);
-    }
-
-    private static JsonObject document(String id, int value) {
+    private static JsonObject document(String id) {
         final var object = new JsonObject();
         object.addProperty("_id", id);
-        object.addProperty("v", value);
+        object.addProperty("v", 9);
         return object;
-    }
-
-    private void seedLocal() {
-        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setObject(document(ID, 1));
-        processor.processMessage(request);
     }
 
     private PkIndexEntry localEntry() throws Exception {
@@ -105,7 +65,7 @@ public class AntiEntropyPullGateTest {
                 final var documents = new ArrayList<JsonObject>();
                 final var versions = new ArrayList<String>();
                 for (final var id : message.getAntiEntropy().getIds()) {
-                    documents.add(document(id, 9));
+                    documents.add(document(id));
                     versions.add(Long.toString(PEER_VERSION));
                 }
                 payload.setDocuments(documents);
@@ -127,9 +87,10 @@ public class AntiEntropyPullGateTest {
 
     @Test
     public void test_an_equal_version_equal_length_copy_is_not_pulled() throws Exception {
-        seedLocal();
+        seed();
         final var local = localEntry();
-        injectPeer(peer(List.of(new DigestEntry(ID, local.getVersion(), false, HIGHER_NODE_ID, local.getLength())), 0));
+        injectPeer(peer(List.of(new DigestEntry(ID, local.getVersion(), false, HIGHER_NODE_ID, local.getLength())), 0),
+                node(HIGHER_NODE_ID, 5001));
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
@@ -138,10 +99,11 @@ public class AntiEntropyPullGateTest {
 
     @Test
     public void test_an_equal_version_different_length_copy_is_still_pulled_from_the_higher_node_id() throws Exception {
-        seedLocal();
+        seed();
         final var local = localEntry();
-        injectPeer(peer(List.of(new DigestEntry(ID, local.getVersion(), false, HIGHER_NODE_ID, local.getLength() + 1)),
-                0));
+        injectPeer(
+                peer(List.of(new DigestEntry(ID, local.getVersion(), false, HIGHER_NODE_ID, local.getLength() + 1)), 0),
+                node(HIGHER_NODE_ID, 5001));
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
@@ -150,7 +112,7 @@ public class AntiEntropyPullGateTest {
 
     @Test
     public void test_pulls_are_sent_in_batches() throws Exception {
-        injectPeer(peer(remoteOnlyDigestBeyondOneBatch(), 0));
+        injectPeer(peer(remoteOnlyDigestBeyondOneBatch(), 0), node(HIGHER_NODE_ID, 5001));
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
@@ -160,11 +122,56 @@ public class AntiEntropyPullGateTest {
 
     @Test
     public void test_a_failed_batch_does_not_stop_the_others() throws Exception {
-        injectPeer(peer(remoteOnlyDigestBeyondOneBatch(), 1));
+        injectPeer(peer(remoteOnlyDigestBeyondOneBatch(), 1), node(HIGHER_NODE_ID, 5001));
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
         assertEquals(2, pulls.get());
         assertEquals(1, localCount(), "the batch after the failed one must still be pulled and applied");
+    }
+
+    private void save(String id) {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add(Globals.PK_FIELD, new JsonString(id));
+        object.addProperty("payload", id + "-value");
+        request.setObject(object);
+        request.set_id(id);
+        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+    }
+
+    private PkIndexEntry byId(String id) throws Exception {
+        return cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(e -> e.getValue().equals(id)).findFirst().orElseThrow();
+    }
+
+    @Test
+    public void test_pull_answers_each_requested_id_with_its_own_document() throws Exception {
+        save("a");
+        save("b");
+
+        final var pull = service.buildPull(TestGlobals.DB, TestGlobals.COLL, List.of("a", "b"));
+
+        assertEquals(2, pull.getDocuments().size());
+        for (final var document : pull.getDocuments()) {
+            final var id = document.get(Globals.PK_FIELD).asJsonString().getValue();
+            assertEquals(id + "-value", document.get("payload").asJsonString().getValue(),
+                    "a pulled document must be the one its id names");
+        }
+    }
+
+    @Test
+    public void test_pull_never_answers_with_a_different_document() throws Exception {
+        save("a");
+        save("b");
+        final var target = byId("a");
+        final var other = byId("b");
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "a");
+        target.setPosition(other.getPosition());
+        target.setLength(other.getLength());
+        target.setPage(other.getPage());
+
+        assertThrows(Exception.class, () -> service.buildPull(TestGlobals.DB, TestGlobals.COLL, List.of("a")),
+                "a stale offset must fail the pull rather than ship another document's body to a peer");
     }
 }

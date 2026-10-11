@@ -39,7 +39,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.TransactionOperationHelper;
-import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.TwoPhaseParticipant;
@@ -49,6 +48,7 @@ import org.techhouse.ops.tx.CommittedOpTriggers;
 import org.techhouse.ops.tx.TransactionRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerStartupReplayTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -82,9 +82,7 @@ public class TriggerStartupReplayTest {
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
         triggerExecutor.stop();
         triggerExecutor.start(captured::add);
-        for (final var entry : TriggerRunLog.pending()) {
-            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         final var definition = new ProcedureDefinition("noop", "export default 1;", 1L, null, true, 1L, 1L, "admin");
         fs.writeProcedure(TestGlobals.DB, "noop", eJson.toJson(definition.toJsonObject()));

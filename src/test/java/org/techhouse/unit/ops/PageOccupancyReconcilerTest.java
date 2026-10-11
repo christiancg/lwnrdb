@@ -6,11 +6,21 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
+import java.util.List;
+import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
@@ -22,8 +32,14 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class PageOccupancyReconcilerTest {
+    private static final String KEPT = "a";
+    private static final String ORPHAN = "orphan";
+    private static final String ORPHAN_RECORD = "{\"_id\":\"orphan\",\"payload\":\"left by a crash\"}\n";
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private BackgroundTaskManager originalTaskManager;
+    private BackgroundTaskManager stubTaskManager;
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -33,6 +49,10 @@ public class PageOccupancyReconcilerTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        if (originalTaskManager != null) {
+            TestUtils.setPrivateStaticField(PageOccupancyReconciler.class, "taskManager", originalTaskManager);
+            pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        }
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -144,8 +164,7 @@ public class PageOccupancyReconcilerTest {
     @Test
     public void test_a_torn_page_tail_is_healed_so_the_next_insert_is_visible_to_a_scan() throws Exception {
         save("before");
-        java.nio.file.Files.writeString(firstUserPage().toPath(), "{\"_id\":\"torn\",\"pay",
-                java.nio.file.StandardOpenOption.APPEND);
+        Files.writeString(firstUserPage().toPath(), "{\"_id\":\"torn\",\"pay", StandardOpenOption.APPEND);
 
         PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL);
         cache.evictCollection(TestGlobals.DB, TestGlobals.COLL);
@@ -157,5 +176,86 @@ public class PageOccupancyReconcilerTest {
         assertTrue(scanned.containsKey("after"), "an insert after the heal must not share a line with torn bytes");
         assertFalse(scanned.containsKey("torn"));
         assertEquals(firstUserPage().length(), existingRow(0).getPageSize());
+    }
+
+    private void stubTheTaskManager() throws Exception {
+        originalTaskManager = TestUtils.getPrivateStaticField(PageOccupancyReconciler.class, "taskManager",
+                BackgroundTaskManager.class);
+        stubTaskManager = new BackgroundTaskManager();
+        TestUtils.setPrivateStaticField(PageOccupancyReconciler.class, "taskManager", stubTaskManager);
+    }
+
+    private void leaveAnUnindexedRecord() throws Exception {
+        Files.writeString(firstUserPage().toPath(), ORPHAN_RECORD, StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+    }
+
+    private AdminPageEntry firstPageRow() {
+        return cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().filter(r -> r.getPage() == 0)
+                .findFirst().orElseThrow();
+    }
+
+    private List<EntityEvent> queuedUpdates() throws Exception {
+        final LinkedBlockingQueue<?> queue = TestUtils.getPrivateField(stubTaskManager, "queue",
+                LinkedBlockingQueue.class);
+        return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast)
+                .filter(event -> event.getType() == EventType.UPDATED).toList();
+    }
+
+    @Test
+    public void test_an_unindexed_record_is_adopted_and_answered_by_find_by_id() throws Exception {
+        stubTheTaskManager();
+        save(KEPT);
+        leaveAnUnindexedRecord();
+
+        assertTrue(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+        cache.evictCollection(TestGlobals.DB, TestGlobals.COLL);
+
+        final var pkIds = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream().map(PkIndexEntry::getValue)
+                .sorted().toList();
+        assertEquals(List.of(KEPT, ORPHAN), pkIds);
+        final var whole = cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(2, whole.size());
+        assertEquals("left by a crash", whole.get(ORPHAN).getData().get("payload").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_an_adopted_record_is_pending_and_queued_for_its_indexes_with_no_page_delta() throws Exception {
+        stubTheTaskManager();
+        save(KEPT);
+        leaveAnUnindexedRecord();
+
+        PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(ORPHAN),
+                "an index-backed read must re-derive the adopted record before the worker indexes it");
+        final var updates = queuedUpdates();
+        assertEquals(1, updates.size());
+        final var adopted = updates.getFirst().getDbEntry();
+        assertEquals(ORPHAN, adopted.get_id());
+        assertEquals(adopted.byteSize(), adopted.getPreviousByteSize(),
+                "the reconcile already counts the record, so its event must not move the page size again");
+    }
+
+    @Test
+    public void test_rows_are_rebuilt_after_an_adoption_even_when_their_sizes_already_agree() throws Exception {
+        stubTheTaskManager();
+        save(KEPT);
+        leaveAnUnindexedRecord();
+        firstPageRow().setPageSize(firstUserPage().length());
+
+        assertTrue(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+
+        assertEquals(2, firstPageRow().getEntryCount());
+        assertEquals(firstUserPage().length(), firstPageRow().getPageSize());
+    }
+
+    @Test
+    public void test_nothing_is_queued_when_nothing_was_adopted() throws Exception {
+        stubTheTaskManager();
+        save(KEPT);
+
+        PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertTrue(queuedUpdates().isEmpty());
     }
 }

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
+import static org.techhouse.test.TriggerTestSupport.pendingRun;
 
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
@@ -16,7 +17,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
-import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -25,6 +25,7 @@ import org.techhouse.ops.TriggerRunResolution;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerRetryTest {
     private static final Configuration configuration = Configuration.getInstance();
@@ -52,9 +53,7 @@ public class TriggerRetryTest {
         TestUtils.setPrivateField(configuration, "triggerRunRetentionMs", 86_400_000L);
         TestUtils.setPrivateField(configuration, "triggerDeadLetterRetentionMs", 604_800_000L);
         TestUtils.setPrivateField(configuration, "maxEntrySize", 1_048_576L);
-        for (final var entry : TriggerRunLog.pending()) {
-            org.techhouse.ops.TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
-        }
+        TriggerTestSupport.consumeAllPendingRuns();
     }
 
     private static String recordRun(String triggerName) {
@@ -75,19 +74,10 @@ public class TriggerRetryTest {
                 triggerName, "proc", eventType, false, "alice", 0, System.currentTimeMillis(), List.of(entry)));
     }
 
-    private static AdminTriggerRunEntry firstChunk(String runId) throws Exception {
-        for (final var entry : TriggerRunLog.pending()) {
-            if (runId.equals(entry.getRunId())) {
-                return entry;
-            }
-        }
-        return null;
-    }
-
     @Test
     public void test_a_fresh_record_reads_as_a_pending_first_attempt() throws Exception {
         final var runId = recordRun("t1");
-        final var entry = firstChunk(runId);
+        final var entry = pendingRun(runId);
         assertNotNull(entry);
         assertEquals(TriggerRunStatus.PENDING, entry.getStatus());
         assertEquals(0, entry.getAttempts());
@@ -99,7 +89,7 @@ public class TriggerRetryTest {
         final var runId = recordRun("t2");
         TriggerRunLog.markAttempt(runId, TriggerRunStatus.PENDING, 1, "Error: nope", 1_700_000_000_000L);
 
-        final var entry = firstChunk(runId);
+        final var entry = pendingRun(runId);
         assertNotNull(entry);
         assertEquals(TriggerRunStatus.PENDING, entry.getStatus());
         assertEquals(1, entry.getAttempts());
@@ -113,7 +103,7 @@ public class TriggerRetryTest {
         final var runId = recordRun("t3");
         TriggerRunLog.markAttempt(runId, TriggerRunStatus.DEAD, 3, "Error: nope", 0L);
 
-        final var entry = firstChunk(runId);
+        final var entry = pendingRun(runId);
         assertNotNull(entry);
         assertEquals(TriggerRunStatus.DEAD, entry.getStatus());
         assertEquals(List.of("doc1"), entry.getIds());
@@ -121,18 +111,18 @@ public class TriggerRetryTest {
 
     @Test
     public void test_the_two_retentions_apply_to_the_two_states() throws Exception {
-        final String pendingRun;
+        final String foreignRun;
         try (var runLog = mockStatic(TriggerRunLog.class, CALLS_REAL_METHODS)) {
             runLog.when(TriggerRunLog::currentNodeId).thenReturn("another-node");
-            pendingRun = recordRun("t4");
+            foreignRun = recordRun("t4");
         }
         final var deadRun = recordRun("t5");
         TriggerRunLog.markAttempt(deadRun, TriggerRunStatus.DEAD, 3, "Error: nope", 0L);
 
         TriggerRunLog.garbageCollect(-1L, 3_600_000L);
 
-        assertNull(firstChunk(pendingRun), "another node's pending run past its retention is swept");
-        assertNotNull(firstChunk(deadRun), "a dead letter keeps its own, longer retention");
+        assertNull(pendingRun(foreignRun), "another node's pending run past its retention is swept");
+        assertNotNull(pendingRun(deadRun), "a dead letter keeps its own, longer retention");
     }
 
     @Test
@@ -161,7 +151,7 @@ public class TriggerRetryTest {
         TriggerRunLog.markAttempt(runId, TriggerRunStatus.DEAD, 3, "Error: nope", 0L);
 
         assertTrue(TriggerRunResolution.resolveLocal(runId, ResolveTriggerRunRequest.DECISION_DISCARD));
-        assertNull(firstChunk(runId));
+        assertNull(pendingRun(runId));
     }
 
     @Test
@@ -171,7 +161,7 @@ public class TriggerRetryTest {
 
         assertTrue(TriggerRunResolution.resolveLocal(runId, ResolveTriggerRunRequest.DECISION_REPLAY));
 
-        final var entry = firstChunk(runId);
+        final var entry = pendingRun(runId);
         assertNotNull(entry, "a replayed run keeps its record until the replay applies it");
         assertEquals(TriggerRunStatus.PENDING, entry.getStatus());
         assertEquals(0, entry.getAttempts());
@@ -235,7 +225,7 @@ public class TriggerRetryTest {
                 .processMessage(request);
 
         assertTrue(response.isResolved());
-        assertNull(firstChunk(runId));
+        assertNull(pendingRun(runId));
     }
 
     @Test
@@ -260,7 +250,7 @@ public class TriggerRetryTest {
         assertFalse(TriggerRunResolution.resolveLocal(runId, ResolveTriggerRunRequest.DECISION_DISCARD));
 
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
-        assertNotNull(firstChunk(runId), "the record itself is untouched");
+        assertNotNull(pendingRun(runId), "the record itself is untouched");
     }
 
     @Test
@@ -269,7 +259,7 @@ public class TriggerRetryTest {
         TriggerRunLog.markAttempt(runId, TriggerRunStatus.DEAD, 3, "Error: nope", 0L);
 
         assertTrue(TriggerRunResolution.resolveLocal(runId, ResolveTriggerRunRequest.DECISION_REPLAY));
-        assertNull(firstChunk(runId));
+        assertNull(pendingRun(runId));
     }
 
     @Test
@@ -279,7 +269,7 @@ public class TriggerRetryTest {
         assertFalse(TriggerRunResolution.resolveLocal(runId, ResolveTriggerRunRequest.DECISION_REPLAY),
                 "an in-flight run would be dispatched a second time");
 
-        final var entry = firstChunk(runId);
+        final var entry = pendingRun(runId);
         assertNotNull(entry);
         assertEquals(TriggerRunStatus.PENDING, entry.getStatus());
     }
@@ -288,6 +278,6 @@ public class TriggerRetryTest {
     public void test_an_unknown_decision_is_refused() throws Exception {
         final var runId = recordRun("t16");
         assertFalse(TriggerRunResolution.resolveLocal(runId, "sideways"));
-        assertNotNull(firstChunk(runId));
+        assertNotNull(pendingRun(runId));
     }
 }

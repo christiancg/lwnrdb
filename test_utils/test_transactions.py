@@ -21,7 +21,6 @@ bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSW
 
 
 def send_only(c, payload: dict):
-    """Send a request without waiting for the response (used to observe blocking)."""
     c.s.sendall((json.dumps(payload) + "\n").encode())
 
 
@@ -30,13 +29,10 @@ def result_ids(response: dict) -> list:
 
 
 def authed_conn():
-    """Open a connection and authenticate as admin, returning the Conn."""
     conn = Conn()
     conn.authenticate()
     return conn
 
-
-# ── operation wrappers ───────────────────────────────────────────────────────
 
 def start_txn(c) -> dict:
     return c.send({"type": "START_TRANSACTION"})
@@ -71,8 +67,6 @@ def aggregate(c, steps=None, coll=COLL, db=DB) -> dict:
                        "aggregationSteps": steps or []})
 
 
-# ── setup / teardown ─────────────────────────────────────────────────────────
-
 def setup_fixtures(c):
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
@@ -82,10 +76,6 @@ def setup_fixtures(c):
 def teardown_fixtures(c):
     c.send({"type": "DROP_DATABASE", "databaseName": DB})
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Tests
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_commit_and_read_your_writes(c):
     section("Commit path + read-your-writes")
@@ -98,14 +88,12 @@ def test_commit_and_read_your_writes(c):
     check_status("SAVE inside transaction is accepted (buffered)",
           save(c, {"_id": "c1", "total": 42}), "OK")
 
-    # Read-your-writes: the transaction sees its own uncommitted write.
     ryw = find_by_id(c, "c1")
     check_status("FIND_BY_ID inside txn sees the buffered document", ryw, "OK")
     check_field("read-your-writes returns the buffered value", ryw, "object.total", 42)
 
     check_status("COMMIT_TRANSACTION returns OK", commit_txn(c), "OK")
 
-    # After commit the write is durable and visible on a fresh (no-transaction) connection.
     with authed_conn() as oc:
         after = find_by_id(oc, "c1")
         check_status("committed document is visible to other connections", after, "OK")
@@ -156,16 +144,15 @@ def test_rollback_discards(c):
 def test_read_your_writes_aggregate(c):
     section("Read-your-writes for AGGREGATE (insert / update / delete overlay)")
 
-    # Seed two committed documents.
     check_status("START_TRANSACTION (seed)", start_txn(c), "OK")
     save(c, {"_id": "agg-upd", "status": "old"})
     save(c, {"_id": "agg-del", "status": "keep"})
     check_status("COMMIT seed", commit_txn(c), "OK")
 
     check_status("START_TRANSACTION", start_txn(c), "OK")
-    save(c, {"_id": "agg-ins", "status": "new"})      # buffered insert
-    save(c, {"_id": "agg-upd", "status": "updated"})  # buffered update
-    delete(c, "agg-del")                               # buffered delete
+    save(c, {"_id": "agg-ins", "status": "new"})
+    save(c, {"_id": "agg-upd", "status": "updated"})
+    delete(c, "agg-del")
 
     agg = aggregate(c)
     ids = result_ids(agg)
@@ -177,7 +164,6 @@ def test_read_your_writes_aggregate(c):
 
     check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
 
-    # After rollback the committed state is intact: agg-del is back, agg-ins is gone, agg-upd is 'old'.
     with authed_conn() as oc:
         agg2 = aggregate(oc)
         ids2 = result_ids(agg2)
@@ -303,7 +289,6 @@ def test_ddl_forbidden_during_transaction(c):
                "ERROR", "409-6")
     check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
 
-    # After rollback the connection is free to run DDL again.
     check_status("CREATE_COLLECTION works again after the transaction ends",
           c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": "after_txn"}),
           "OK")
@@ -313,18 +298,15 @@ def test_ddl_forbidden_during_transaction(c):
 def test_table_locking_blocks_other_clients(c):
     section("An open transaction locks the table against other connections")
 
-    # This connection (c) opens a transaction and writes, taking the collection's write lock.
     check_status("START_TRANSACTION", start_txn(c), "OK")
     check_status("SAVE buffered (acquires the collection write lock)", save(c, {"_id": "lock1", "v": 1}), "OK")
 
     with authed_conn() as bc:
-        # The other connection's read of the same collection must block while the lock is held.
         send_only(bc, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "lock1"})
         blocked = bc.recv(timeout=1.5)
         check("other client's read blocks while the transaction holds the table",
                    blocked is None, f"unexpectedly got a response: {blocked!r}")
 
-        # Committing releases the lock; the pending read then completes and sees the committed doc.
         check_status("COMMIT_TRANSACTION releases the lock", commit_txn(c), "OK")
         resumed = bc.recv(timeout=5.0)
         check("the blocked read completes once the transaction commits",
@@ -396,12 +378,6 @@ def test_crossed_read_and_write_sets_do_not_hang(c):
                                  "object": {"_id": "after", "v": 1}}), "OK")
 
 
-def user_conn(username: str, password: str):
-    conn = Conn()
-    conn.authenticate(username, password)
-    return conn
-
-
 def create_user(c, username: str, password: str, level: str) -> dict:
     return c.send({"type": "CREATE_USER", "username": username, "password": password, "admin": False,
                    "globalPermissions": [], "databasePermissions": {DB: level}, "collectionPermissions": {}})
@@ -417,7 +393,7 @@ def test_a_non_admin_user_can_use_transactions(c):
     check_status("CREATE_USER 'txn_reader' with READ", create_user(c, "txn_reader", "txn_reader1234", "READ"),
                  "OK")
 
-    with user_conn("txn_writer", "txn_writer1234") as writer:
+    with Conn.authenticated("txn_writer", "txn_writer1234") as writer:
         check_status("START_TRANSACTION as a non-admin", start_txn(writer), "OK")
         check_status("SAVE inside it", save(writer, {"_id": "nonadmin_commit", "v": 1}), "OK")
         check_status("COMMIT_TRANSACTION as a non-admin", commit_txn(writer), "OK")
@@ -427,7 +403,7 @@ def test_a_non_admin_user_can_use_transactions(c):
     check_status("the committed write is visible", find_by_id(c, "nonadmin_commit"), "OK")
     check_status("the rolled-back write is not", find_by_id(c, "nonadmin_rollback"), "NOT_FOUND")
 
-    with user_conn("txn_reader", "txn_reader1234") as reader:
+    with Conn.authenticated("txn_reader", "txn_reader1234") as reader:
         check_status("a READ user may open a transaction", start_txn(reader), "OK")
         check_code("but a write inside it is still authorized on its own",
                    save(reader, {"_id": "nonadmin_forbidden", "v": 1}), "FORBIDDEN", "403-1")
@@ -452,22 +428,17 @@ def test_entry_size_is_checked_after_the_id_is_assigned(c):
 def test_auto_rollback_on_disconnect():
     section("Disconnecting with an open transaction auto-rolls-back")
 
-    # Open a connection, start a transaction, buffer a write (taking the lock), then drop the socket.
     victim = authed_conn()
     check_status("START_TRANSACTION", start_txn(victim), "OK")
     check_status("SAVE buffered", save(victim, {"_id": "disc1", "v": 1}), "OK")
-    # shutdown() (not just close()) forces the FIN so the server sees EOF immediately: makefile("rb")
-    # dups the socket fd, so close() alone would leave the connection half-open until the process exits.
     victim.s.shutdown(socket.SHUT_RDWR)
     victim.f.close()
-    victim.s.close()  # abrupt disconnect — no COMMIT/ROLLBACK
+    victim.s.close()
 
-    # Give the server a moment to detect the closed connection and run auto-rollback.
     time.sleep(0.5)
 
     with authed_conn() as (c):
         check_status("the uncommitted write did not survive the disconnect", find_by_id(c, "disc1"), "NOT_FOUND")
-        # The lock was released on disconnect, so a normal write to the same collection succeeds.
         check_status("the collection is writable again (lock was released)",
               save(c, {"_id": "disc2", "v": 2}), "OK")
         c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "disc2"})
@@ -492,11 +463,6 @@ def test_a_committed_transaction_survives_the_disconnect():
                      save(c, {"_id": "disc4", "v": 4}), "OK")
         for stale in ("disc3", "disc4"):
             c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": stale})
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════════════════
 
 
 def test_join_reads_your_own_writes(c):
@@ -583,7 +549,6 @@ def main():
         print("\n  Setting up fixtures...")
         setup_fixtures(c)
 
-    # Each group runs on its own authenticated connection.
     with authed_conn() as (c):
         test_commit_and_read_your_writes(c)
     with authed_conn() as (c):

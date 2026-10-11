@@ -2,10 +2,13 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonTime;
@@ -56,84 +59,62 @@ public class FilterNotEqualsKindMismatchTest {
         return object;
     }
 
-    @Test
-    public void numberFieldNotEqualsStringOperandMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonString("b"), new JsonNumber(5)));
+    private static Arguments row(String name, FieldOperatorType operation, JsonBaseElement operand,
+            JsonBaseElement stored, boolean expected) {
+        return Arguments.of(name, operation, operand, stored, expected);
     }
 
-    @Test
-    public void stringFieldNotEqualsNumberOperandMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonNumber(5), new JsonString("a")));
-    }
-
-    @Test
-    public void booleanFieldNotEqualsNumberOperandMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonNumber(1), new JsonBoolean(true)));
-    }
-
-    @Test
-    public void customFieldNotEqualsPlainStringMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonString("abc"), new JsonGeo("#geo(1,2)")));
-    }
-
-    @Test
-    public void customFieldNotEqualsOtherCustomClassMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonTime("#time(10:00:00)"), new JsonGeo("#geo(1,2)")));
-    }
-
-    @Test
-    public void nullFieldNotEqualsScalarMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonNumber(5), JsonNull.INSTANCE));
-    }
-
-    @Test
-    public void arrayFieldNotEqualsScalarMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonNumber(5), arrayOf(new JsonNumber(5))));
-    }
-
-    @Test
-    public void objectFieldNotEqualsScalarMatches() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonNumber(5), objectHolding(new JsonNumber(5))));
-    }
-
-    @Test
-    public void missingFieldNotEqualsStillExcluded() {
-        assertFalse(matches(FieldOperatorType.NOT_EQUALS, new JsonNumber(5), null));
-    }
-
-    @Test
-    public void kindMismatchEqualsStillFalse() {
-        assertFalse(matches(FieldOperatorType.EQUALS, new JsonString("5"), new JsonNumber(5)));
-        assertFalse(matches(FieldOperatorType.EQUALS, new JsonNumber(5), JsonNull.INSTANCE));
-        assertFalse(matches(FieldOperatorType.EQUALS, new JsonNumber(5), arrayOf(new JsonNumber(5))));
-    }
-
-    @Test
-    public void kindMismatchRangeOperatorsStillFalse() {
+    private static Stream<Arguments> truthTable() {
+        final var five = new JsonNumber(5);
+        final var rows = Stream.<Arguments>builder();
+        rows.add(row("numberFieldNotEqualsStringOperandMatches", FieldOperatorType.NOT_EQUALS, new JsonString("b"),
+                new JsonNumber(5), true));
+        rows.add(row("stringFieldNotEqualsNumberOperandMatches", FieldOperatorType.NOT_EQUALS, five,
+                new JsonString("a"), true));
+        rows.add(row("booleanFieldNotEqualsNumberOperandMatches", FieldOperatorType.NOT_EQUALS, new JsonNumber(1),
+                new JsonBoolean(true), true));
+        rows.add(row("customFieldNotEqualsPlainStringMatches", FieldOperatorType.NOT_EQUALS, new JsonString("abc"),
+                new JsonGeo("#geo(1,2)"), true));
+        rows.add(row("customFieldNotEqualsOtherCustomClassMatches", FieldOperatorType.NOT_EQUALS,
+                new JsonTime("#time(10:00:00)"), new JsonGeo("#geo(1,2)"), true));
+        rows.add(row("nullFieldNotEqualsScalarMatches", FieldOperatorType.NOT_EQUALS, five, JsonNull.INSTANCE, true));
+        rows.add(row("arrayFieldNotEqualsScalarMatches", FieldOperatorType.NOT_EQUALS, five, arrayOf(new JsonNumber(5)),
+                true));
+        rows.add(row("objectFieldNotEqualsScalarMatches", FieldOperatorType.NOT_EQUALS, five,
+                objectHolding(new JsonNumber(5)), true));
+        rows.add(row("missingFieldNotEqualsStillExcluded", FieldOperatorType.NOT_EQUALS, five, null, false));
+        rows.add(row("kindMismatchEqualsStillFalse string", FieldOperatorType.EQUALS, new JsonString("5"),
+                new JsonNumber(5), false));
+        rows.add(row("kindMismatchEqualsStillFalse null", FieldOperatorType.EQUALS, five, JsonNull.INSTANCE, false));
+        rows.add(row("kindMismatchEqualsStillFalse array", FieldOperatorType.EQUALS, five, arrayOf(new JsonNumber(5)),
+                false));
         for (final var operation : List.of(FieldOperatorType.GREATER_THAN, FieldOperatorType.GREATER_THAN_EQUALS,
                 FieldOperatorType.SMALLER_THAN, FieldOperatorType.SMALLER_THAN_EQUALS)) {
-            assertFalse(matches(operation, new JsonString("b"), new JsonNumber(5)), operation.name());
-            assertFalse(matches(operation, new JsonNumber(5), JsonNull.INSTANCE), operation.name());
-            assertFalse(matches(operation, new JsonNumber(5), objectHolding(new JsonNumber(5))), operation.name());
+            final var name = "kindMismatchRangeOperatorsStillFalse " + operation.name();
+            rows.add(row(name + " string", operation, new JsonString("b"), new JsonNumber(5), false));
+            rows.add(row(name + " null", operation, five, JsonNull.INSTANCE, false));
+            rows.add(row(name + " object", operation, five, objectHolding(new JsonNumber(5)), false));
         }
+        rows.add(row("containsOnANonArrayContainerStillFalse object", FieldOperatorType.CONTAINS, five,
+                objectHolding(new JsonNumber(5)), false));
+        rows.add(row("containsOnANonArrayContainerStillFalse null", FieldOperatorType.CONTAINS, five, JsonNull.INSTANCE,
+                false));
+        rows.add(row("arrayFieldContainsScalarStillSearchesElements present", FieldOperatorType.CONTAINS, five,
+                arrayOf(new JsonNumber(5)), true));
+        rows.add(row("arrayFieldContainsScalarStillSearchesElements absent", FieldOperatorType.CONTAINS,
+                new JsonNumber(6), arrayOf(new JsonNumber(5)), false));
+        rows.add(row("sameKindNotEqualsIsUnchanged number", FieldOperatorType.NOT_EQUALS, new JsonNumber(6),
+                new JsonNumber(5), true));
+        rows.add(row("sameKindNotEqualsIsUnchanged string", FieldOperatorType.NOT_EQUALS, new JsonString("A"),
+                new JsonString("a"), false));
+        return rows.build();
     }
 
-    @Test
-    public void containsOnANonArrayContainerStillFalse() {
-        assertFalse(matches(FieldOperatorType.CONTAINS, new JsonNumber(5), objectHolding(new JsonNumber(5))));
-        assertFalse(matches(FieldOperatorType.CONTAINS, new JsonNumber(5), JsonNull.INSTANCE));
-    }
-
-    @Test
-    public void arrayFieldContainsScalarStillSearchesElements() {
-        assertTrue(matches(FieldOperatorType.CONTAINS, new JsonNumber(5), arrayOf(new JsonNumber(5))));
-        assertFalse(matches(FieldOperatorType.CONTAINS, new JsonNumber(6), arrayOf(new JsonNumber(5))));
-    }
-
-    @Test
-    public void sameKindNotEqualsIsUnchanged() {
-        assertTrue(matches(FieldOperatorType.NOT_EQUALS, new JsonNumber(6), new JsonNumber(5)));
-        assertFalse(matches(FieldOperatorType.NOT_EQUALS, new JsonString("A"), new JsonString("a")));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("truthTable")
+    public void kindMismatchTruthTable(String name, FieldOperatorType operation, JsonBaseElement operand,
+            JsonBaseElement stored, boolean expected) {
+        assertEquals(expected, matches(operation, operand, stored), name);
     }
 
     @Test

@@ -3,21 +3,25 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
@@ -32,6 +36,8 @@ public class IndexHelperDropRaceTest {
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Configuration configuration = Configuration.getInstance();
     private final long originalTimeout = configuration.getTransactionLockTimeoutMs();
+    private Thread idleHolder;
+    private CountDownLatch idleRelease;
 
     @FunctionalInterface
     private interface Maintenance {
@@ -47,6 +53,10 @@ public class IndexHelperDropRaceTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        if (idleRelease != null) {
+            idleRelease.countDown();
+            idleHolder.join(5000);
+        }
         TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", originalTimeout);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
@@ -164,5 +174,47 @@ public class IndexHelperDropRaceTest {
             release.countDown();
             holder.join(5000);
         }
+    }
+
+    private void budgetTheLockAt100Ms() throws Exception {
+        IocContainer.get(Cache.class).getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL)
+                .setIndexes(Set.of(FIELD));
+        TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", 100L);
+    }
+
+    private void holdTheCollectionLikeAnIdleTransaction() throws Exception {
+        final var taken = new CountDownLatch(1);
+        idleRelease = new CountDownLatch(1);
+        idleHolder = new Thread(() -> {
+            try {
+                locks.lock(TestGlobals.DB, TestGlobals.COLL);
+                taken.countDown();
+                idleRelease.await();
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        idleHolder.start();
+        assertTrue(taken.await(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    public void test_index_maintenance_gives_up_on_a_collection_an_idle_transaction_holds() throws Exception {
+        budgetTheLockAt100Ms();
+        holdTheCollectionLikeAnIdleTransaction();
+
+        assertThrows(CollectionBusyException.class,
+                () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "any"),
+                "a background worker must not park on one collection while every other collection waits behind it");
+        assertThrows(CollectionBusyException.class,
+                () -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("any")));
+    }
+
+    @Test
+    public void test_index_maintenance_runs_when_the_collection_is_free() throws Exception {
+        budgetTheLockAt100Ms();
+
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "missing"));
     }
 }

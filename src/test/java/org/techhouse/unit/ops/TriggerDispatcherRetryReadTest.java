@@ -6,11 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.test.TriggerTestSupport.entry;
+import static org.techhouse.test.TriggerTestSupport.pendingRun;
 
 import java.io.File;
 import java.nio.file.Files;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -21,27 +21,23 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
-import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.DeleteOperationHelper;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerDispatcherRetryReadTest {
     private static final String OWNER = "retryreadowner";
@@ -61,8 +57,7 @@ public class TriggerDispatcherRetryReadTest {
         TestUtils.setPrivateField(configuration, "triggerRunRetentionMs", 3_600_000L);
         TestUtils.setPrivateField(configuration, "triggerRetryBackoffMs", 60_000L);
         TestUtils.setPrivateField(configuration, "triggerRetryMaxBackoffMs", 60_000L);
-        AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of(OWNER));
-        createOwner();
+        TriggerTestSupport.createDefiner(OWNER);
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "audit", "return 'ok';"), OWNER);
         installTrigger();
     }
@@ -78,17 +73,6 @@ public class TriggerDispatcherRetryReadTest {
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
-    }
-
-    private static void createOwner() {
-        final var request = new CreateUserRequest();
-        request.setUsername(OWNER);
-        request.setPassword("password123");
-        request.setAdmin(false);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
     }
 
     private static void saveDocument(String id, String value) throws Exception {
@@ -107,35 +91,15 @@ public class TriggerDispatcherRetryReadTest {
         DeleteOperationHelper.executeDelete(request);
     }
 
-    private static DbEntry entry(String id) {
-        final var data = new JsonObject();
-        data.add("_id", new JsonString(id));
-        data.add("value", new JsonString("captured"));
-        final var dbEntry = new DbEntry();
-        dbEntry.setDatabaseName(TestGlobals.DB);
-        dbEntry.setCollectionName(TestGlobals.COLL);
-        dbEntry.set_id(id);
-        dbEntry.setData(data);
-        return dbEntry;
-    }
-
     private static String pendingRunFor(String id) {
         return TriggerRunLog.record(new TriggerRunLog.TriggerRunDescriptor(TestGlobals.DB, TestGlobals.COLL, "audit",
-                "audit", EventType.UPDATED, false, OWNER, 0, System.currentTimeMillis(), List.of(entry(id))));
+                "audit", EventType.UPDATED, false, OWNER, 0, System.currentTimeMillis(),
+                List.of(entry(id, "captured"))));
     }
 
     private static TriggerEvent firstAttempt(String id, String runId, EventType type) {
-        return new TriggerEvent(type, TestGlobals.DB, TestGlobals.COLL, "audit", "audit", false, List.of(entry(id)),
-                OWNER, 0, runId, 1);
-    }
-
-    private static AdminTriggerRunEntry runNamed(String runId) throws Exception {
-        for (final var run : TriggerRunLog.pending()) {
-            if (runId.equals(run.getRunId())) {
-                return run;
-            }
-        }
-        return null;
+        return new TriggerEvent(type, TestGlobals.DB, TestGlobals.COLL, "audit", "audit", false,
+                List.of(entry(id, "captured")), OWNER, 0, runId, 1);
     }
 
     private static TriggerEvent withCurrentEntries(TriggerEvent event) throws Exception {
@@ -165,7 +129,7 @@ public class TriggerDispatcherRetryReadTest {
 
         TriggerDispatcher.dispatch(firstAttempt("unreadable", runId, EventType.UPDATED).retry(2));
 
-        final var run = runNamed(runId);
+        final var run = pendingRun(runId);
         assertNotNull(run, "a read failure is not a vanished document, so the durable run must survive it");
         assertEquals(TriggerRunStatus.PENDING, run.getStatus());
         assertEquals(2, run.getAttempts());
@@ -181,7 +145,7 @@ public class TriggerDispatcherRetryReadTest {
 
         TriggerDispatcher.dispatch(firstAttempt("stillunreadable", runId, EventType.UPDATED).retry(MAX_ATTEMPTS));
 
-        final var run = runNamed(runId);
+        final var run = pendingRun(runId);
         assertNotNull(run);
         assertEquals(TriggerRunStatus.DEAD, run.getStatus());
     }
@@ -194,7 +158,7 @@ public class TriggerDispatcherRetryReadTest {
 
         TriggerDispatcher.dispatch(firstAttempt("gone", runId, EventType.UPDATED).retry(2));
 
-        assertNull(runNamed(runId), "a retry for a document that no longer exists is consumed, not replayed");
+        assertNull(pendingRun(runId), "a retry for a document that no longer exists is consumed, not replayed");
     }
 
     @Test
