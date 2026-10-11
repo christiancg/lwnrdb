@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.Main;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
@@ -241,5 +242,25 @@ public class DurableReplayIncompleteTest {
         } finally {
             clientTracker.removeTxSession(sessionId);
         }
+    }
+
+    @Test
+    public void test_a_local_commit_the_startup_cleanup_left_unfinished_is_finished_by_a_recovery_round()
+            throws Exception {
+        final var txId = UUID.randomUUID().toString();
+        final var unappliable = unappliableOp(txId);
+        AdminOperationHelper.saveTransactionOp(unappliable);
+        TxCommitLog.recordLocalCommit(txId, List.of(unappliable.get_id()), List.of(collectionId()));
+        final var cleanup = Main.class.getDeclaredMethod("cleanupOrphanedTransactions");
+        cleanup.setAccessible(true);
+        cleanup.invoke(null);
+        assertTrue(TxCommitLog.isLocallyCommitted(txId), "the startup finish could not apply the slice");
+
+        createAbsentCollection();
+        recovery.recoverNow();
+
+        assertFalse(TxCommitLog.isLocallyCommitted(txId),
+                "a recovery round finishes the slice, so the startup finish must not have kept its locks on main");
+        assertEquals(OperationStatus.OK, saveFromAnotherThread());
     }
 }

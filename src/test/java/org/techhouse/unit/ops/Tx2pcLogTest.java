@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.tx.SliceCommit;
 import org.techhouse.test.TestUtils;
 
 public class Tx2pcLogTest {
@@ -95,11 +96,15 @@ public class Tx2pcLogTest {
     }
 
     @Test
-    public void test_status_rechecks_the_decision_before_answering_no_record() throws Exception {
+    public void test_status_reads_the_decision_after_the_markers_it_answers_from() throws Exception {
         final var dtxId = "dddd4444-0000-0000-0000-000000000000";
-        Tx2pcLog.recordCoordinatorCommit(dtxId, "session", List.of("127.0.0.1:9001"));
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:9000", List.of("127.0.0.1:9001"), List.of("db|collA"));
         try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
-            log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false, true);
+            log.when(() -> Tx2pcLog.isPrepared(dtxId)).thenAnswer(_ -> {
+                Tx2pcLog.recordCoordinatorCommit(dtxId, "session", List.of("127.0.0.1:9001"));
+                Tx2pcLog.deleteParticipantMarker(dtxId);
+                return false;
+            });
 
             assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(dtxId, null));
         }
@@ -124,6 +129,21 @@ public class Tx2pcLogTest {
             log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
 
             assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, null));
+        }
+    }
+
+    @Test
+    public void test_status_sees_a_local_commit_written_while_it_read_the_prepare_marker() throws Exception {
+        final var dtxId = "77777777-0000-0000-0000-000000000000";
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:9000", List.of("127.0.0.1:9000"), List.of("db|collA"));
+        try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> Tx2pcLog.isPrepared(dtxId)).thenAnswer(_ -> {
+                SliceCommit.beginFromDurable(dtxId);
+                return false;
+            });
+
+            assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(dtxId, null),
+                    "|localcommit replaced |part while status read it; the slice is decided, not unknown");
         }
     }
 }

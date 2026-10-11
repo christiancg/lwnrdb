@@ -6,16 +6,25 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.MembershipView;
+import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.admin.AdminTransactionEntry;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.TxCommitLog;
+import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 
@@ -213,5 +222,30 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
         assertNull(clientTracker.txSession(sessionId));
         assertEquals(OperationStatus.NOT_FOUND, findById("leftover").getStatus());
         assertEquals(OperationStatus.NOT_FOUND, findById("continued").getStatus());
+    }
+
+    @Test
+    public void test_a_resent_commit_that_cannot_finish_leaves_its_locks_to_the_recovery_thread() throws Exception {
+        final var lateColl = "late-collection";
+        final var document = new JsonObject();
+        document.add("_id", new JsonString("late"));
+        final var op = new AdminTransactionEntry(txId, "client", 0, AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB,
+                lateColl, document);
+        AdminOperationHelper.saveTransactionOp(op);
+        TxCommitLog.recordLocalCommit(txId, List.of(op.get_id()),
+                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+
+        final var reply = pool.request(cluster.serverAddress(), forwarded(txId, commit(), true), ACK_TIMEOUT_MS);
+        assertEquals(ClusterMessageType.ERROR, reply.getType(), "a replay that could not finish is never acked");
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, lateColl)).getStatus());
+        IocContainer.get(Tx2pcRecovery.class).recoverNow();
+
+        assertFalse(TxCommitLog.isLocallyCommitted(txId),
+                "the recovery thread finishes the slice, so the re-sent commit must not have kept its locks");
+        final var find = new FindByIdRequest(TestGlobals.DB, lateColl);
+        find.set_id("late");
+        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus());
     }
 }

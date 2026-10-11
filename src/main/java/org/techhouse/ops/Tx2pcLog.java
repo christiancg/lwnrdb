@@ -65,6 +65,9 @@ public final class Tx2pcLog {
     }
 
     public static Status status(String dtxId, String selfAddress) throws Exception {
+        final var prepared = isPrepared(dtxId);
+        final var restartedUndecided = prepared && coordinatorRestartedUndecided(dtxId, selfAddress);
+        final var active = clientTracker.hasActiveTransaction(dtxId);
         if (isCommitted(dtxId) || TxCommitLog.isLocallyCommitted(dtxId)) {
             return Status.COMMITTED;
         }
@@ -72,24 +75,10 @@ public final class Tx2pcLog {
         if (outcome != null) {
             return outcome.committed() ? Status.COMMITTED : Status.ABORTED;
         }
-        if (isPrepared(dtxId)) {
-            return coordinatorRestartedUndecided(dtxId, selfAddress) ? Status.NO_RECORD : Status.PREPARED;
+        if (prepared) {
+            return restartedUndecided ? Status.NO_RECORD : Status.PREPARED;
         }
-        if (clientTracker.hasActiveTransaction(dtxId)) {
-            return Status.UNKNOWN;
-        }
-        return decidedOrNoRecord(dtxId);
-    }
-
-    private static Status decidedOrNoRecord(String dtxId) throws Exception {
-        if (isCommitted(dtxId)) {
-            return Status.COMMITTED;
-        }
-        final var outcome = readOutcome(dtxId);
-        if (outcome == null) {
-            return Status.NO_RECORD;
-        }
-        return outcome.committed() ? Status.COMMITTED : Status.ABORTED;
+        return active ? Status.UNKNOWN : Status.NO_RECORD;
     }
 
     private static boolean coordinatorRestartedUndecided(String dtxId, String selfAddress) throws Exception {
