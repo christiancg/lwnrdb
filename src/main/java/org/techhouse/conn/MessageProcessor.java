@@ -184,9 +184,12 @@ public class MessageProcessor implements Runnable {
             throw t;
         } finally {
             if (clientId != null) {
-                TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                listenManager.unregisterAllForClient(clientId);
-                clientTracker.removeById(clientId);
+                try {
+                    TransactionOperationHelper.cleanupOnDisconnect(clientId);
+                    listenManager.unregisterAllForClient(clientId);
+                } finally {
+                    clientTracker.removeById(clientId);
+                }
             }
         }
     }
