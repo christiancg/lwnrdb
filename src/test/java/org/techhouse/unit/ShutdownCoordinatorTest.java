@@ -7,13 +7,18 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.net.Socket;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -288,5 +293,65 @@ public class ShutdownCoordinatorTest {
 
         assertTrue(refusingAtTriggerDrain.get(),
                 "a peer write applied during the drains submits its index events into a draining queue");
+    }
+
+    private UUID connectionWithAnOpenTransaction(Socket socket, String id) {
+        final var clientId = clientTracker.addClient(socket);
+        TransactionOperationHelper.start(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document(id));
+        request.set_id(id);
+        TransactionOperationHelper.bufferSave(request, clientTracker.getActiveTransaction(clientId));
+        return clientId;
+    }
+
+    @Test
+    public void test_shutdown_waits_for_a_signalled_connection_to_release_and_depart() throws Exception {
+        final var socket = TestUtils.clientSocket();
+        final var closed = new CountDownLatch(1);
+        doAnswer(_ -> {
+            closed.countDown();
+            return null;
+        }).when(socket).close();
+        final var clientId = new AtomicReference<UUID>();
+        final var opened = new CountDownLatch(1);
+        final var connection = Thread.ofVirtual().start(() -> {
+            clientId.set(connectionWithAnOpenTransaction(socket, "departing"));
+            opened.countDown();
+            try {
+                if (closed.await(10, TimeUnit.SECONDS)) {
+                    TransactionOperationHelper.cleanupOnDisconnect(clientId.get());
+                    clientTracker.removeById(clientId.get());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertTrue(opened.await(10, TimeUnit.SECONDS));
+        final var started = System.currentTimeMillis();
+
+        TransactionOperationHelper.rollbackOpenTransactionsAtShutdown();
+
+        connection.join(5000);
+        assertNull(clientTracker.getActiveTransaction(clientId.get()));
+        assertTrue(System.currentTimeMillis() - started < 2000,
+                "the connection's own cleanup released the wait, so shutdown must not sit out its budget");
+    }
+
+    @Test
+    public void test_shutdown_stops_waiting_for_a_connection_that_never_departs() {
+        final var clientId = connectionWithAnOpenTransaction(TestUtils.clientSocket(), "lingering");
+        try {
+            final var started = System.currentTimeMillis();
+
+            TransactionOperationHelper.rollbackOpenTransactionsAtShutdown();
+
+            assertTrue(System.currentTimeMillis() - started < 5000, "the departure wait is bounded");
+            assertNotNull(clientTracker.getActiveTransaction(clientId),
+                    "only the connection's own thread may release its locks, so shutdown leaves the transaction");
+        } finally {
+            TransactionOperationHelper.cleanupOnDisconnect(clientId);
+            clientTracker.removeById(clientId);
+        }
     }
 }

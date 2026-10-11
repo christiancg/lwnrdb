@@ -22,11 +22,8 @@ public class TriggerExecutor {
     private final LongAdder dropped = new LongAdder();
     private final LongAdder retried = new LongAdder();
     private final LongAdder deadLettered = new LongAdder();
-    private final AtomicInteger inFlight = new AtomicInteger();
-    private final AtomicInteger parked = new AtomicInteger();
-    private final AtomicInteger workerCount = new AtomicInteger();
     private final AtomicInteger scheduled = new AtomicInteger();
-    private final IdleSignal idleSignal = new IdleSignal();
+    private final IdleSignal.Workers<TriggerEvent> workers = new IdleSignal.Workers<>();
     private volatile boolean draining;
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     private volatile ScheduledExecutorService retryScheduler;
@@ -90,47 +87,17 @@ public class TriggerExecutor {
             thread.setDaemon(true);
             return thread;
         });
-        final var threadCount = Math.max(1, Configuration.getInstance().getTriggerThreads());
-        workerCount.set(threadCount);
-        parked.set(0);
-        for (int i = 0; i < threadCount; i++) {
-            pool.execute(this::runWorker);
-        }
+        workers.start(pool, Math.max(1, Configuration.getInstance().getTriggerThreads()), queue, this::dispatch);
         logger.info("Started listening for triggers");
     }
 
-    private void runWorker() {
+    private void dispatch(TriggerEvent event) {
         try {
-            workLoop();
-        } finally {
-            workerCount.updateAndGet(live -> Math.max(0, live - 1));
-            idleSignal.signal();
-        }
-    }
-
-    private void workLoop() {
-        while (!Thread.currentThread().isInterrupted()) {
-            final TriggerEvent event;
-            parked.incrementAndGet();
-            try {
-                event = queue.take();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            } finally {
-                parked.decrementAndGet();
-            }
-            inFlight.incrementAndGet();
-            try {
-                dispatcher.accept(event);
-                fired.increment();
-            } catch (Exception e) {
-                failed.increment();
-                logger.error("Error while dispatching a trigger: ", e);
-            } finally {
-                inFlight.decrementAndGet();
-                idleSignal.signal();
-            }
+            dispatcher.accept(event);
+            fired.increment();
+        } catch (Exception e) {
+            failed.increment();
+            logger.error("Error while dispatching a trigger: ", e);
         }
     }
 
@@ -138,7 +105,7 @@ public class TriggerExecutor {
         draining = true;
         cancelPendingRetries();
         try {
-            if (idleSignal.awaitIdle(this::isIdle, workerCount.get() > 0 ? timeoutMillis : 0L)) {
+            if (workers.awaitIdle(() -> queue.isEmpty() && scheduled.get() <= 0, timeoutMillis)) {
                 stop();
                 return true;
             }
@@ -155,12 +122,8 @@ public class TriggerExecutor {
         scheduled.updateAndGet(current -> current > 0 ? current - 1 : 0);
     }
 
-    private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() <= 0 && parked.get() >= workerCount.get();
-    }
-
     public int pending() {
-        return queue.size() + inFlight.get() + scheduled.get();
+        return queue.size() + workers.inFlight() + scheduled.get();
     }
 
     private void cancelPendingRetries() {
@@ -173,7 +136,7 @@ public class TriggerExecutor {
     }
 
     public synchronized void stop() {
-        workerCount.set(0);
+        workers.stopped();
         cancelPendingRetries();
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Trigger");
         queue.clear();

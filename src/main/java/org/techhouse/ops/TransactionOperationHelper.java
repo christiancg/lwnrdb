@@ -43,6 +43,7 @@ public final class TransactionOperationHelper {
     private static ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
+    private static final long SHUTDOWN_DEPARTURE_WAIT_MS = 2000L;
 
     // START_TRANSACTION is allowed through so start() reports the "already active" conflict, not a generic one.
     public static boolean isAllowedDuringTransaction(OperationType type) {
@@ -221,14 +222,6 @@ public final class TransactionOperationHelper {
 
     // Runs on the connection's own thread - the only thread allowed to release its write locks.
     public static void cleanupOnDisconnect(UUID clientId) {
-        try {
-            releaseOnDisconnect(clientId);
-        } finally {
-            ShutdownRollbackWaits.complete(clientId);
-        }
-    }
-
-    private static void releaseOnDisconnect(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return;
@@ -247,6 +240,25 @@ public final class TransactionOperationHelper {
         }
     }
 
+    private static int awaitDepartures(List<CountDownLatch> departures) {
+        final var deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SHUTDOWN_DEPARTURE_WAIT_MS);
+        var cleared = 0;
+        for (final var departure : departures) {
+            try {
+                final var remaining = deadline - System.nanoTime();
+                if (remaining > 0 && departure.await(remaining, TimeUnit.NANOSECONDS)) {
+                    cleared++;
+                } else {
+                    logger.warning("A connection did not release its transaction before shutdown");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return cleared;
+            }
+        }
+        return cleared;
+    }
+
     public static void rollbackOpenTransactionsAtShutdown() {
         var rolledBack = 0;
         var skippedWithNoOwnerToSignal = 0;
@@ -258,12 +270,11 @@ public final class TransactionOperationHelper {
             if (transaction == null || sessionClientIds.contains(clientId) || isFenced(transaction)) {
                 continue;
             }
-            final var wait = ShutdownRollbackWaits.register(clientId);
-            if (clientTracker.signalDisconnect(clientId)) {
-                signalled.add(wait);
+            final var departure = clientTracker.signalDisconnect(clientId);
+            if (departure != null) {
+                signalled.add(departure);
                 continue;
             }
-            ShutdownRollbackWaits.cancel(clientId);
             if (!holdsEveryLockOnThisThread(transaction)) {
                 skippedWithNoOwnerToSignal++;
                 continue;
@@ -275,7 +286,7 @@ public final class TransactionOperationHelper {
                 logger.warning("Failed to roll back an open transaction during shutdown: " + e.getMessage());
             }
         }
-        rolledBack += ShutdownRollbackWaits.await(signalled);
+        rolledBack += awaitDepartures(signalled);
         for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
             final var session = entry.getValue();
             final var transaction = clientTracker.getActiveTransaction(session.clientId());

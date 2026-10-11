@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Configuration;
@@ -20,6 +21,7 @@ import org.techhouse.data.Transaction;
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
     private final Map<UUID, Runnable> disconnectSignals = new ConcurrentHashMap<>();
+    private final Map<UUID, CountDownLatch> departures = new ConcurrentHashMap<>();
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
     private final Configuration configuration = Configuration.getInstance();
 
@@ -37,15 +39,22 @@ public class ClientTracker {
     public void removeById(UUID clientId) {
         clients.remove(clientId);
         disconnectSignals.remove(clientId);
+        final var departure = departures.remove(clientId);
+        if (departure != null) {
+            departure.countDown();
+        }
     }
 
-    public boolean signalDisconnect(UUID clientId) {
+    public CountDownLatch signalDisconnect(UUID clientId) {
+        final var departure = new CountDownLatch(1);
+        departures.put(clientId, departure);
         final var signal = disconnectSignals.get(clientId);
         if (signal == null) {
-            return false;
+            departures.remove(clientId);
+            return null;
         }
         signal.run();
-        return true;
+        return departure;
     }
 
     private static void closeQuietly(Socket socket) {

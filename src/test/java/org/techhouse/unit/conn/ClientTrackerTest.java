@@ -272,4 +272,27 @@ public class ClientTrackerTest {
         assertTrue(clientTracker.transactionWriteHolders(null, List.of("db|a")).isEmpty());
         assertTrue(clientTracker.transactionWriteHolders(UUID.randomUUID(), List.of("db|a")).isEmpty());
     }
+
+    @Test
+    public void test_signalling_an_unknown_client_returns_no_departure() {
+        assertNull(new ClientTracker().signalDisconnect(UUID.randomUUID()));
+    }
+
+    @Test
+    public void test_a_signalled_client_departs_only_once_it_is_removed() throws Exception {
+        final var clientTracker = new ClientTracker();
+        final var socket = TestUtils.clientSocket();
+        final var clientId = clientTracker.addClient(socket);
+        final var bystander = clientTracker.addClient(TestUtils.clientSocket());
+
+        final var departure = clientTracker.signalDisconnect(clientId);
+
+        assertNotNull(departure);
+        Mockito.verify(socket).close();
+        clientTracker.removeById(bystander);
+        assertEquals(1, departure.getCount(), "another client's removal must not release this departure");
+        clientTracker.removeById(clientId);
+        assertEquals(0, departure.getCount(),
+                "the connection thread removes the client after its disconnect cleanup, which is the departure");
+    }
 }

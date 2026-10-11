@@ -2,7 +2,6 @@ package org.techhouse.ops.admin;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.PendingIndexWrites;
@@ -12,6 +11,7 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -163,7 +163,6 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse dropDatabase(String dbName, boolean bounded) {
         final var deadline = System.currentTimeMillis() + OperationLocks.lockBudgetMillis(bounded);
-        final var lockedColls = new ArrayList<String>();
         var barrierHeld = false;
         try {
             if (!locks.tryLockDatabaseExclusive(dbName, remainingUntil(deadline))) {
@@ -174,43 +173,35 @@ public final class DatabaseOperationHelper {
             if (dbEntry == null) {
                 return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
             }
-            final var collNames = new ArrayList<>(dbEntry.getCollections());
-            Collections.sort(collNames);
-            for (final var collName : collNames) {
-                if (!locks.tryLockWrite(dbName, collName, remainingUntil(deadline))) {
-                    return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
-                }
-                lockedColls.add(collName);
-            }
-            final var result = fs.deleteDatabase(dbName);
-            if (result) {
-                cache.evictDatabase(dbName);
-                pendingIndexWrites.clearDatabase(dbName);
-                AdminOperationHelper.deleteDatabaseEntry(dbName);
-                compiledProcedures.invalidateDatabase(dbName);
-                scheduleRegistry.removeDatabase(dbName);
-                listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
-                GrantPruner.forDroppedDatabase(dbName);
-                return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
-            }
-            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+            return locks.withRetiringCollectionLocks(dbName, dbEntry.getCollections(), remainingUntil(deadline),
+                    () -> deleteDatabaseUnderLocks(dbName));
+        } catch (CollectionBusyException busy) {
+            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             return dropFailed(exception);
         } catch (Exception exception) {
             return dropFailed(exception);
         } finally {
-            for (final var collName : lockedColls) {
-                locks.release(dbName, collName);
-            }
-            for (final var collName : lockedColls) {
-                locks.removeLock(dbName, collName);
-            }
             if (barrierHeld) {
                 locks.releaseDatabaseExclusive(dbName);
                 locks.removeDatabaseLock(dbName);
             }
         }
+    }
+
+    private static OperationResponse deleteDatabaseUnderLocks(String dbName) throws Exception {
+        if (!fs.deleteDatabase(dbName)) {
+            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+        }
+        cache.evictDatabase(dbName);
+        pendingIndexWrites.clearDatabase(dbName);
+        AdminOperationHelper.deleteDatabaseEntry(dbName);
+        compiledProcedures.invalidateDatabase(dbName);
+        scheduleRegistry.removeDatabase(dbName);
+        listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
+        GrantPruner.forDroppedDatabase(dbName);
+        return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
     }
 
     private static OperationResponse dropFailed(Exception exception) {

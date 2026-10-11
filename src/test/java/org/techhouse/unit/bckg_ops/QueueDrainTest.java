@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.IdleSignal;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
@@ -110,14 +111,20 @@ public class QueueDrainTest {
         assertEquals(0, backgroundTaskManager.pending());
     }
 
+    private static Object counters(Object executor) throws Exception {
+        return executor instanceof BackgroundTaskManager
+                ? executor
+                : TestUtils.getPrivateField(executor, "workers", IdleSignal.Workers.class);
+    }
+
     private static void takenButNotYetCounted(Object executor) throws Exception {
-        TestUtils.getPrivateField(executor, "workerCount", AtomicInteger.class).set(1);
-        TestUtils.getPrivateField(executor, "parked", AtomicInteger.class).set(0);
+        TestUtils.getPrivateField(counters(executor), "workerCount", AtomicInteger.class).set(1);
+        TestUtils.getPrivateField(counters(executor), "parked", AtomicInteger.class).set(0);
     }
 
     private static void parkedOnAnEmptyQueue(Object executor) throws Exception {
-        TestUtils.getPrivateField(executor, "workerCount", AtomicInteger.class).set(1);
-        TestUtils.getPrivateField(executor, "parked", AtomicInteger.class).set(1);
+        TestUtils.getPrivateField(counters(executor), "workerCount", AtomicInteger.class).set(1);
+        TestUtils.getPrivateField(counters(executor), "parked", AtomicInteger.class).set(1);
     }
 
     @Test

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -437,5 +438,43 @@ public class ResourceLockingTest {
 
         rl.releaseIndexRead("db", "coll", "field");
         rl.releaseIndex("db", "coll", "field");
+    }
+
+    @Test
+    public void test_retiring_locks_with_a_spent_budget_try_once_instead_of_waiting() throws Exception {
+        final var rl = new ResourceLocking();
+        final var holder = Thread.ofVirtual().start(() -> {
+            try {
+                rl.lock("retiredb", "held");
+                Thread.sleep(5_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                rl.release("retiredb", "held");
+            }
+        });
+        final var heldId = Cache.getCollectionIdentifier("retiredb", "held");
+        while (locks(rl).get(heldId) == null || !locks(rl).get(heldId).isWriteLocked()) {
+            Thread.onSpinWait();
+        }
+        final var started = System.nanoTime();
+
+        assertThrows(CollectionBusyException.class,
+                () -> rl.withRetiringCollectionLocks("retiredb", List.of("free", "held"), 0L, () -> true));
+
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 2_000,
+                "a budget already spent must not turn into an unbounded wait");
+        holder.interrupt();
+        holder.join(5_000);
+    }
+
+    @Test
+    public void test_retiring_locks_evicts_every_collection_lock_after_the_action() throws Exception {
+        final var rl = new ResourceLocking();
+
+        assertTrue(rl.withRetiringCollectionLocks("retiredb", List.of("a", "b"), 1_000L, () -> true));
+
+        assertFalse(locks(rl).containsKey(Cache.getCollectionIdentifier("retiredb", "a")));
+        assertFalse(locks(rl).containsKey(Cache.getCollectionIdentifier("retiredb", "b")));
     }
 }

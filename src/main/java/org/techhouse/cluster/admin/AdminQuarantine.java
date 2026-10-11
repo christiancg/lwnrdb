@@ -1,12 +1,12 @@
 package org.techhouse.cluster.admin;
 
-import java.util.ArrayList;
-import java.util.Collections;
+import java.util.List;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -100,36 +100,25 @@ final class AdminQuarantine {
 
     private boolean quarantineDatabaseUnderBarrier(String dbName, long waitMillis) throws Exception {
         final var dbEntry = cache.getAdminDbEntry(dbName);
-        final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
-        Collections.sort(collNames);
-        final var lockedColls = new ArrayList<String>();
+        final var collNames = dbEntry != null ? dbEntry.getCollections() : List.<String>of();
         try {
-            for (final var collName : collNames) {
-                if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
-                    logger.warning("Skipping the quarantine of database " + dbName + ": the write lock of " + collName
-                            + " stayed held for " + waitMillis + "ms. The next round retries it.");
-                    return false;
-                }
-                lockedColls.add(collName);
-            }
-            AdminOperationHelper.deleteDatabaseEntry(dbName);
-            listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
-            final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
-            cache.evictDatabase(dbName);
-            pendingIndexWrites.clearDatabase(dbName);
-            compiledProcedures.invalidateDatabase(dbName);
-            scheduleRegistry.removeDatabase(dbName);
-            logger.warning("Quarantined database " + dbName + ": the cluster dropped it while this node held it. Its"
-                    + " documents were " + movedOrLeft(moved) + " and it no longer serves reads or writes until an"
-                    + " operator reinstates or removes it.");
-            return true;
-        } finally {
-            for (final var collName : lockedColls) {
-                locks.release(dbName, collName);
-            }
-            for (final var collName : lockedColls) {
-                locks.removeLock(dbName, collName);
-            }
+            return locks.withRetiringCollectionLocks(dbName, collNames, waitMillis, () -> {
+                AdminOperationHelper.deleteDatabaseEntry(dbName);
+                listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
+                final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
+                cache.evictDatabase(dbName);
+                pendingIndexWrites.clearDatabase(dbName);
+                compiledProcedures.invalidateDatabase(dbName);
+                scheduleRegistry.removeDatabase(dbName);
+                logger.warning("Quarantined database " + dbName + ": the cluster dropped it while this node held it."
+                        + " Its documents were " + movedOrLeft(moved) + " and it no longer serves reads or writes"
+                        + " until an operator reinstates or removes it.");
+                return true;
+            });
+        } catch (CollectionBusyException busy) {
+            logger.warning("Skipping the quarantine of database " + dbName + ": " + busy.getMessage()
+                    + ". The next round retries it.");
+            return false;
         }
     }
 }

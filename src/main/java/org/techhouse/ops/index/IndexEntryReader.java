@@ -29,7 +29,6 @@ import org.techhouse.utils.JsonUtils;
 public final class IndexEntryReader {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
-    private static final IndexKind[] HASH_INDEX_KINDS = {IndexKind.OBJECT, IndexKind.ARRAY};
 
     private IndexEntryReader() {
     }
@@ -51,13 +50,10 @@ public final class IndexEntryReader {
             throw new IOException("Interrupted while acquiring index read lock", e);
         }
         try {
-            addEntriesOfType(combined, dbName, collName, fieldName, Number.class);
-            addEntriesOfType(combined, dbName, collName, fieldName, Boolean.class);
-            addEntriesOfType(combined, dbName, collName, fieldName, String.class);
-            for (var customType : CustomTypeFactory.getCustomTypes().values()) {
-                addEntriesOfType(combined, dbName, collName, fieldName, customType);
+            for (var type : IndexKind.scalarIndexClasses()) {
+                addEntriesOfType(combined, dbName, collName, fieldName, type);
             }
-            for (var kind : HASH_INDEX_KINDS) {
+            for (var kind : IndexKind.HASH_KINDS) {
                 final var hashEntries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
                 if (hashEntries != null) {
                     for (var entry : hashEntries) {
@@ -100,16 +96,13 @@ public final class IndexEntryReader {
         }
         final List<String> ordered;
         try {
-            for (var kind : HASH_INDEX_KINDS) {
+            for (var kind : IndexKind.HASH_KINDS) {
                 if (cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind) != null) {
                     return null;
                 }
             }
-            addCachedEntriesOfType(entries, dbName, collName, fieldName, Number.class);
-            addCachedEntriesOfType(entries, dbName, collName, fieldName, Boolean.class);
-            addCachedEntriesOfType(entries, dbName, collName, fieldName, String.class);
-            for (var customType : CustomTypeFactory.getCustomTypes().values()) {
-                addCachedEntriesOfType(entries, dbName, collName, fieldName, customType);
+            for (var type : IndexKind.scalarIndexClasses()) {
+                addCachedEntriesOfType(entries, dbName, collName, fieldName, type);
             }
             if (entries.isEmpty() || doesNotCoverEveryDocument(entries, dbName, collName)) {
                 return null;

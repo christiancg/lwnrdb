@@ -36,7 +36,6 @@ public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
-    private static final IndexKind[] HASH_INDEX_KINDS = {IndexKind.OBJECT, IndexKind.ARRAY};
 
     public static List<String> getSortedIdsForField(String dbName, String collName, String fieldName,
             java.util.Comparator<FieldIndexEntry<?>> order, long maxIds) throws IOException {
@@ -304,7 +303,7 @@ public class IndexHelper {
 
     private static void removeIdFromHashIndexes(String dbName, String collName, String fieldName, String entryId)
             throws IOException {
-        for (var kind : HASH_INDEX_KINDS) {
+        for (var kind : IndexKind.HASH_KINDS) {
             final var entries = cache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
             if (entries != null) {
                 for (var entry : entries) {

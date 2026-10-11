@@ -145,6 +145,21 @@ public class ResourceLocking {
         }
     }
 
+    public <T> T withRetiringCollectionLocks(String dbName, Collection<String> collNames, long timeoutMillis,
+            LockedAction<T> action) throws Exception {
+        final var collectionIds = collNames.stream().map(collName -> Cache.getCollectionIdentifier(dbName, collName))
+                .toList();
+        final var acquired = acquireWriteLocks(collectionIds, Math.max(1L, timeoutMillis));
+        try {
+            return action.run();
+        } finally {
+            releaseWriteLocks(acquired);
+            for (final var collName : collNames) {
+                removeLock(dbName, collName);
+            }
+        }
+    }
+
     private List<String> acquireWriteLocks(Collection<String> collectionIds, long timeoutMillis)
             throws InterruptedException {
         final var acquired = new ArrayList<String>();
