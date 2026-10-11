@@ -142,7 +142,7 @@ public class TransactionTombstoneTest {
         TestUtils.releaseAllLocks();
         save("survivor", "after-prepare");
 
-        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(), 0L);
+        org.techhouse.ops.TwoPhaseParticipant.resolveFromDurable(dtxId, true, 0L);
 
         assertFalse(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("survivor"),
                 "the replay skipped this delete because the document was written after the prepare, so reserving a"
@@ -170,7 +170,7 @@ public class TransactionTombstoneTest {
         clientTracker.clearTransactionState(clientId);
         TestUtils.releaseAllLocks();
 
-        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(), 0L);
+        org.techhouse.ops.TwoPhaseParticipant.resolveFromDurable(dtxId, true, 0L);
 
         assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("doomed"),
                 "a delete the replay actually applies must still leave its tombstone");

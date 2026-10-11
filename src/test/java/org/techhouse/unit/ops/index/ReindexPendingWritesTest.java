@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
@@ -24,7 +23,6 @@ import org.techhouse.test.TestUtils;
 public class ReindexPendingWritesTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
-    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -53,7 +51,7 @@ public class ReindexPendingWritesTest {
     }
 
     private boolean markerPresent() {
-        return fs.listDirtyIndexCollections().stream().anyMatch(entry -> entry.contains(TestGlobals.COLL));
+        return TestUtils.dirtyIndexCollections().stream().anyMatch(entry -> entry.contains(TestGlobals.COLL));
     }
 
     @Test

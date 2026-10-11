@@ -6,6 +6,7 @@ import java.util.Objects;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
@@ -22,6 +23,7 @@ public class AdminTransactionEntry extends DbEntry {
     private static final String TRIGGER_DEPTH_FIELD = "triggerDepth";
     private static final String VERSIONS_FIELD = "versions";
 
+    public static final String OBJECTS_FIELD = "objects";
     public static final String OP_TYPE_SAVE = "SAVE";
     public static final String OP_TYPE_BULK_SAVE = "BULK_SAVE";
     public static final String OP_TYPE_DELETE = "DELETE";
@@ -207,6 +209,19 @@ public class AdminTransactionEntry extends DbEntry {
 
     public JsonObject getPayload() {
         return payload;
+    }
+
+    public List<JsonObject> savedObjects() {
+        return switch (opType) {
+            case OP_TYPE_SAVE -> List.of(payload);
+            case OP_TYPE_BULK_SAVE ->
+                payload.get(OBJECTS_FIELD).asJsonArray().asList().stream().map(JsonBaseElement::asJsonObject).toList();
+            default -> List.of();
+        };
+    }
+
+    public String targetId() {
+        return payload.get(Globals.PK_FIELD).asJsonString().getValue();
     }
 
     public String consumedTriggerRunId() {

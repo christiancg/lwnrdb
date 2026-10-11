@@ -231,35 +231,21 @@ public final class JsonUtils {
         if (path.indexOf('.') < 0) {
             return obj.get(path);
         }
-        var limit = path.length();
-        while (limit > 0 && path.charAt(limit - 1) == '.') {
-            limit--;
-        }
-        if (limit == 0) {
+        final var segments = pathSegments(path);
+        if (segments.isEmpty()) {
             return JsonNull.INSTANCE;
         }
-        var currentPart = obj;
-        JsonBaseElement result = JsonNull.INSTANCE;
-        var start = 0;
-        while (start <= limit) {
-            var dot = path.indexOf('.', start);
-            if (dot < 0 || dot > limit) {
-                dot = limit;
-            }
-            final var step = currentPart.get(path.substring(start, dot));
-            if (step == null) {
+        JsonBaseElement current = obj;
+        for (final var segment : segments) {
+            if (!current.isJsonObject()) {
                 return null;
             }
-            result = step;
-            start = dot + 1;
-            if (start <= limit) {
-                if (!step.isJsonObject()) {
-                    return null;
-                }
-                currentPart = step.asJsonObject();
+            current = current.asJsonObject().get(segment);
+            if (current == null) {
+                return null;
             }
         }
-        return result;
+        return current;
     }
 
     public static void setPath(JsonObject obj, String path, JsonBaseElement value) {
@@ -301,14 +287,8 @@ public final class JsonUtils {
         if (path.indexOf('.') < 0) {
             return List.of(path);
         }
-        var limit = path.length();
-        while (limit > 0 && path.charAt(limit - 1) == '.') {
-            limit--;
-        }
-        if (limit == 0) {
-            return List.of();
-        }
-        return List.of(path.substring(0, limit).split("\\.", -1));
+        final var stripped = stripTrailingDots(path);
+        return stripped.isEmpty() ? List.of() : List.of(stripped.split("\\.", -1));
     }
 
     public static boolean hasInPath(JsonObject obj, String path) {

@@ -95,11 +95,11 @@ public class IndexOperationsCoverageTest {
     }
 
     private boolean isMarkedDirty() {
-        return fs.listDirtyIndexCollections().contains(COLLECTION_IDENTIFIER);
+        return TestUtils.dirtyIndexCollections().contains(COLLECTION_IDENTIFIER);
     }
 
     private void markDirty() {
-        fs.markIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().markDirty(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(isMarkedDirty());
     }
 
@@ -219,7 +219,7 @@ public class IndexOperationsCoverageTest {
         } finally {
             TestUtils.deleteFolder(blocker);
         }
-        assertTrue(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertTrue(fs.indexMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
         assertTrue(cache.hasNoIndex(TestGlobals.DB, TestGlobals.COLL, "s"));
 
         seed("d4", "a", 40);
@@ -230,7 +230,7 @@ public class IndexOperationsCoverageTest {
 
         assertEquals(OperationStatus.OK, processor
                 .processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("s"))).getStatus());
-        assertFalse(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertFalse(fs.indexMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
         assertFalse(cache.hasNoIndex(TestGlobals.DB, TestGlobals.COLL, "s"));
         assertEquals(List.of("d1", "d3", "d4"), idsWhereSIsA());
     }
@@ -238,11 +238,11 @@ public class IndexOperationsCoverageTest {
     @Test
     public void test_create_and_drop_index_leave_no_build_marker() {
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "s"));
-        assertFalse(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertFalse(fs.indexMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
 
         processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "s"));
 
-        assertFalse(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertFalse(fs.indexMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
         assertTrue(cache.hasNoIndex(TestGlobals.DB, TestGlobals.COLL, "s"));
     }
 }

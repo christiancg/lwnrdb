@@ -159,7 +159,7 @@ public class TriggerConsumingSliceTest {
         crashPrepared(RUN_ID);
         final var startupRuns = TriggerRunRecovery.startupRunIds();
 
-        TwoPhaseParticipant.commitPreparedFromDurable(txId, collections(), 0L);
+        TwoPhaseParticipant.resolveFromDurable(txId, true, 0L);
         TriggerRunRecovery.recoverLocal(startupRuns);
 
         assertFalse(TriggerRunLog.pendingRunIds().contains(RUN_ID));
@@ -173,7 +173,7 @@ public class TriggerConsumingSliceTest {
         final var startupRuns = TriggerRunRecovery.startupRunIds();
 
         TriggerRunRecovery.recoverLocal(startupRuns);
-        TwoPhaseParticipant.abortFromDurable(txId, 0L);
+        TwoPhaseParticipant.resolveFromDurable(txId, false, 0L);
 
         assertEquals(List.of(RUN_ID), queuedRunIds(),
                 "the aborted slice was the run's only submitter, so the abort must hand it back exactly once");
@@ -186,7 +186,7 @@ public class TriggerConsumingSliceTest {
         crashPrepared(RUN_ID);
         TriggerDispatcher.consumeQuietly(RUN_ID, "audit");
 
-        TwoPhaseParticipant.abortFromDurable(txId, 0L);
+        TwoPhaseParticipant.resolveFromDurable(txId, false, 0L);
 
         assertTrue(queuedRunIds().isEmpty());
     }
@@ -196,7 +196,7 @@ public class TriggerConsumingSliceTest {
         recordRun("another-node");
         crashPrepared(RUN_ID);
 
-        TwoPhaseParticipant.abortFromDurable(txId, 0L);
+        TwoPhaseParticipant.resolveFromDurable(txId, false, 0L);
 
         assertTrue(queuedRunIds().isEmpty());
         TriggerDispatcher.consumeQuietly(RUN_ID, "audit");

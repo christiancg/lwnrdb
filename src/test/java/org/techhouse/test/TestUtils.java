@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -293,5 +295,19 @@ public class TestUtils {
             }
         }
         locks.clear();
+    }
+
+    public static List<String> dirtyIndexCollections() {
+        final var result = new ArrayList<String>();
+        final var databases = new File(TestGlobals.PATH).listFiles(File::isDirectory);
+        for (final var database : databases == null ? new File[0] : databases) {
+            final var collections = database.listFiles(File::isDirectory);
+            for (final var collection : collections == null ? new File[0] : collections) {
+                if (new File(collection, collection.getName() + "-indexes.dirty").exists()) {
+                    result.add(database.getName() + "|" + collection.getName());
+                }
+            }
+        }
+        return result;
     }
 }

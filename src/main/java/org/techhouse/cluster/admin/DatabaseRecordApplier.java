@@ -1,7 +1,6 @@
 package org.techhouse.cluster.admin;
 
 import java.util.ArrayList;
-import java.util.Map;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.concurrency.ResourceLocking;
@@ -29,14 +28,8 @@ final class DatabaseRecordApplier {
     private DatabaseRecordApplier() {
     }
 
-    static boolean install(AdminRecord record, boolean live, Map<String, Long> tombstones) throws Exception {
+    static boolean install(AdminRecord record) throws Exception {
         final var dbName = record.key().dbName();
-        final var sibling = caseVariantOf(dbName);
-        final var resolution = CaseVariant.resolve(record, sibling, tombstones,
-                variant -> remove(variant.dbName(), live));
-        if (resolution != CaseVariant.Resolution.INSTALL) {
-            return resolution == CaseVariant.Resolution.BURIED;
-        }
         final var waitMillis = clusterConfig.replicationAckTimeoutMs();
         if (!locks.tryLockDatabaseExclusive(dbName, waitMillis)) {
             logger.warning(skipping(dbName, "it stayed locked"));
@@ -84,9 +77,9 @@ final class DatabaseRecordApplier {
         return true;
     }
 
-    private static AdminRecordKey caseVariantOf(String dbName) {
+    static AdminRecordKey caseVariantOf(String dbName) {
         final var sibling = OnDiskNameRegistry.collidingDatabase(dbName);
-        if (sibling == null || sibling.equals(dbName) || cache.getAdminDbEntry(sibling) == null) {
+        if (sibling == null || cache.getAdminDbEntry(sibling) == null) {
             return null;
         }
         return AdminRecordKey.database(sibling);

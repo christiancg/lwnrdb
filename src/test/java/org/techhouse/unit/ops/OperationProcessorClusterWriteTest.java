@@ -178,13 +178,13 @@ public class OperationProcessorClusterWriteTest {
         configureMembership(2, node("self", 9990), node("other", 9991));
         final var halts = new CopyOnWriteArrayList<Integer>();
         armHalt(halts::add);
-        final var refused = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, TestGlobals.DB,
+        final var refused = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, TestGlobals.DB,
                 collectionOwnedByOther());
         assertNotNull(refused);
         assertEquals("421-1", refused.getErrorCode());
         assertTrue(halts.isEmpty(), "a refused write must not reach the point");
         configureMembership(1, node("self", 9990));
-        assertNull(ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, TestGlobals.DB, TestGlobals.COLL));
+        assertNull(ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, TestGlobals.DB, TestGlobals.COLL));
         assertEquals(List.of(137), halts);
     }
 

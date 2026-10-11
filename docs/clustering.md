@@ -88,8 +88,8 @@ written by an older build is not carried forward.
   probe arrives first carries a fresher heartbeat, so the receiver restores the sender and its reply
   restores the receiver.
 
-Gossip also carries per-node telemetry — script load, script capacity, and two admin
-catch-up signals — used for script placement. Adopting a peer's new telemetry deliberately
+Gossip also carries per-node telemetry — script load and script capacity, used for script
+placement, and the admin catch-up signal `adminSyncing`. Adopting a peer's new telemetry deliberately
 does **not** count as a membership change: firing the membership listeners every round
 would rebuild the ownership ring and re-run anti-entropy for nothing.
 
@@ -635,8 +635,8 @@ suite turns it on for its throwaway nodes. See the
 
 ## Anti-entropy and versioning
 
-Every document write is stamped with a **version** — a node-global monotonic epoch-millis
-value assigned by the coordinating owner and persisted as an extra trailing column of the
+Every document write is stamped with a **version** — a hybrid logical clock value
+(`cluster/HybridClock`) assigned by the coordinating owner and persisted as an extra trailing column of the
 PK index (`id<US>position<US>length<US>page<US>version`, where `<US>` is U+001F, the delimiter every
 `.idx` file uses). It ships in the `REPLICATE` payload so
 replicas store the *owner's* version rather than assigning their own, and a node advances

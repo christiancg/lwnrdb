@@ -80,21 +80,6 @@ public final class TwoPhaseParticipant {
                 || ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode());
     }
 
-    public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
-            throws Exception {
-        if (resolvedThroughLiveSession(dtxId, true, timeoutMillis)) {
-            return;
-        }
-        TransactionRecovery.commitPreparedFromDurable(dtxId, collections, timeoutMillis);
-    }
-
-    public static void abortFromDurable(String dtxId, long timeoutMillis) throws Exception {
-        if (resolvedThroughLiveSession(dtxId, false, timeoutMillis)) {
-            return;
-        }
-        TransactionRecovery.abortFromDurable(dtxId);
-    }
-
     public static void resolveFromDurable(String dtxId, boolean commit, long timeoutMillis) throws Exception {
         if (resolvedThroughLiveSession(dtxId, commit, timeoutMillis)) {
             return;

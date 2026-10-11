@@ -163,13 +163,12 @@ public class EventProcessorHelperPendingWritesTest {
 
     @Test
     public void test_clear_collection_leaves_the_dirty_marker_for_reindex_to_retire() {
-        final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "marked");
-        Assertions.assertFalse(fs.listDirtyIndexCollections().isEmpty());
+        Assertions.assertFalse(TestUtils.dirtyIndexCollections().isEmpty());
 
         pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
 
-        Assertions.assertFalse(fs.listDirtyIndexCollections().isEmpty(),
+        Assertions.assertFalse(TestUtils.dirtyIndexCollections().isEmpty(),
                 "clearCollection drops the in-memory marks; REINDEX is what clears the on-disk marker beside them");
     }
 

@@ -71,12 +71,36 @@ public final class AdminRecordMerge {
         if (parent != Parent.LIVE) {
             return parent == Parent.DEAD;
         }
+        final var sibling = caseVariantOf(key);
+        if (sibling != null) {
+            final var siblingRecord = AdminRecords.live(sibling);
+            if (siblingRecord != null && !record.outranks(siblingRecord)) {
+                bury(key, siblingRecord.version(), tombstones);
+                return true;
+            }
+            if (!remove(AdminRecord.tombstone(sibling, record.version()), live, tombstones)) {
+                return false;
+            }
+        }
         return switch (key.kind()) {
-            case DATABASE -> DatabaseRecordApplier.install(record, live, tombstones);
-            case COLLECTION -> CollectionRecordApplier.install(record, live, tombstones);
+            case DATABASE -> DatabaseRecordApplier.install(record);
+            case COLLECTION -> CollectionRecordApplier.install(record);
             case USER -> installUser(record);
             case SCHEMA, TRIGGERS, PROCEDURE, SCHEDULE -> DefinitionRecordApplier.install(record);
         };
+    }
+
+    private static AdminRecordKey caseVariantOf(AdminRecordKey key) {
+        return switch (key.kind()) {
+            case DATABASE -> DatabaseRecordApplier.caseVariantOf(key.dbName());
+            case COLLECTION -> CollectionRecordApplier.caseVariantOf(key.dbName(), key.name());
+            default -> null;
+        };
+    }
+
+    private static void bury(AdminRecordKey key, long version, Map<String, Long> tombstones) throws IOException {
+        AdminStamp.tombstoneAt(key, version);
+        tombstones.put(key.id(), version);
     }
 
     private static boolean installUser(AdminRecord record) throws IOException, InterruptedException {
@@ -95,8 +119,7 @@ public final class AdminRecordMerge {
             case SCHEMA, TRIGGERS, PROCEDURE, SCHEDULE -> DefinitionRecordApplier.remove(key);
         };
         if (removed) {
-            AdminStamp.tombstoneAt(key, record.version());
-            tombstones.put(key.id(), record.version());
+            bury(key, record.version(), tombstones);
         }
         return removed;
     }

@@ -162,7 +162,7 @@ public class TriggerStartupReplayTest {
         assertTrue(startupRuns.stream().noneMatch(staged::contains),
                 "a run of a still-prepared slice belongs to its replay, not to startup recovery");
 
-        TwoPhaseParticipant.commitPreparedFromDurable(txId, collections(), 0L);
+        TwoPhaseParticipant.resolveFromDurable(txId, true, 0L);
         TriggerRunRecovery.recoverLocal(startupRuns);
 
         final var queued = queuedRunIds();
@@ -178,7 +178,7 @@ public class TriggerStartupReplayTest {
         TriggerRunRecovery.recoverLocal(TriggerRunRecovery.startupRunIds());
         assertTrue(queuedRunIds().isEmpty(), "startup recovery must leave an unresolved slice's run to its replay");
 
-        TwoPhaseParticipant.commitPreparedFromDurable(txId, collections(), 0L);
+        TwoPhaseParticipant.resolveFromDurable(txId, true, 0L);
         assertEquals(staged, new HashSet<>(queuedRunIds()), "the replay must queue the run once");
         assertEquals(staged.size(), captured.size());
     }

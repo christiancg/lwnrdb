@@ -58,7 +58,6 @@ public final class VersionedApply {
 
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
-    private static final String OBJECTS_FIELD = "objects";
 
     private final Map<String, Map<String, Long>> tombstonesByCollection = new HashMap<>();
     private final Map<String, ApplyOutcome> outcomes = new HashMap<>();
@@ -77,8 +76,7 @@ public final class VersionedApply {
         switch (op.getOpType()) {
             case AdminTransactionEntry.OP_TYPE_SAVE -> applySave(dbName, collName, op.getPayload(), op.versionAt(0));
             case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> applyBulkSave(op);
-            case AdminTransactionEntry.OP_TYPE_DELETE ->
-                applyDelete(dbName, collName, idOf(op.getPayload()), op.versionAt(0));
+            case AdminTransactionEntry.OP_TYPE_DELETE -> applyDelete(dbName, collName, op.targetId(), op.versionAt(0));
             case AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN ->
                 AdminOperationHelper.deleteTriggerRuns(TriggerRunLog.recordIdsFor(op.consumedTriggerRunId()));
             default -> throw new IllegalStateException("Unknown transaction op type: " + op.getOpType());
@@ -101,9 +99,9 @@ public final class VersionedApply {
         final var collName = op.getTargetColl();
         final var objects = new ArrayList<JsonObject>();
         final var versions = new ArrayList<Long>();
-        final var elements = op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList();
+        final var elements = op.savedObjects();
         for (var i = 0; i < elements.size(); i++) {
-            final var object = elements.get(i).asJsonObject();
+            final var object = elements.get(i);
             final var id = idOf(object);
             final var version = op.versionAt(i);
             if (record(dbName, collName, id, saveOutcome(dbName, collName, id, version)) == ApplyOutcome.APPLIED) {

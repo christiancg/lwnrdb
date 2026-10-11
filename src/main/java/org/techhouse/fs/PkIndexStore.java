@@ -1,10 +1,7 @@
 package org.techhouse.fs;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -12,15 +9,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
-import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.fs.FileLocks.Parsed;
 import org.techhouse.log.Logger;
 
 final class PkIndexStore {
     private static final Logger logger = Logger.logFor(PkIndexStore.class);
     private static final String PK_INDEX_ROLLBACK_FAILURE = "Could not roll back a failed pk index append;"
             + " the pk index may list ids whose records are not on any page, and nothing rebuilds it";
-    private static final ParsedPkIndex EMPTY_PARSED = new ParsedPkIndex(List.of(), List.of(), false, false);
+    private static final Parsed<List<PkIndexEntry>> EMPTY_PARSED = new Parsed<>(List.of(), List.of(), false, false);
 
     private final FilePaths paths;
 
@@ -29,45 +26,14 @@ final class PkIndexStore {
     }
 
     void bulkIndexNewPKValues(String dbName, String collName, List<PkIndexEntry> pkEntries) throws IOException {
-        appendEntries(paths.pkIndexFile(dbName, collName), pkEntries);
-    }
-
-    private void appendEntries(File indexFile, List<PkIndexEntry> pkEntries) throws IOException {
-        final var lock = FileLocks.lockFor(indexFile).writeLock();
-        lock.lock();
-        try {
-            appendOrTruncateBack(indexFile, pkEntries);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private void appendOrTruncateBack(File indexFile, List<PkIndexEntry> pkEntries) throws IOException {
-        final var lengthBeforeAppend = indexFile.length();
-        var appended = false;
-        try {
-            try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
-                    Globals.BUFFER_SIZE)) {
-                if (FileLocks.endsMidLine(indexFile)) {
-                    writer.newLine();
-                }
-                for (var pkEntry : pkEntries) {
-                    writer.append(pkEntry.toFileEntry());
-                    writer.newLine();
-                }
-            }
-            appended = true;
-        } finally {
-            if (!appended) {
-                FileLocks.truncateTo(indexFile, lengthBeforeAppend, PK_INDEX_ROLLBACK_FAILURE);
-            }
-        }
+        FileLocks.appendLines(paths.pkIndexFile(dbName, collName), pkEntries, PkIndexEntry::toFileEntry,
+                PK_INDEX_ROLLBACK_FAILURE);
     }
 
     PkIndexEntry indexNewPKValue(String dbName, String collectionName, String value, long position, int length,
             long page, long version) throws IOException {
         final var indexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page, version);
-        appendEntries(paths.pkIndexFile(dbName, collectionName), List.of(indexEntry));
+        bulkIndexNewPKValues(dbName, collectionName, List.of(indexEntry));
         return indexEntry;
     }
 
@@ -85,29 +51,10 @@ final class PkIndexStore {
 
     void internalUpdatePKIndex(String dbName, String collectionName, String value, PkIndexEntry newPkIndexEntry)
             throws IOException {
-        final var indexFile = paths.pkIndexFile(dbName, collectionName);
-        final var lock = FileLocks.lockFor(indexFile).writeLock();
-        lock.lock();
-        try {
-            final var parsed = indexFile.exists() ? parsePkIndex(dbName, collectionName, indexFile) : EMPTY_PARSED;
-            if (parsed.unrecognised()) {
-                throw new IOException("No line in " + indexFile.getName() + " could be read as a PK index entry, so"
-                        + " it is not the file this write expects; refusing to rewrite it");
-            }
-            PkIndexEntry oldEntry = null;
-            final var others = new ArrayList<PkIndexEntry>(parsed.entries().size());
-            for (final var entry : parsed.entries()) {
-                if (entry.getValue().equals(value)) {
-                    oldEntry = entry;
-                } else {
-                    others.add(entry);
-                }
-            }
-            final var reIndexedEntries = reindexPks(oldEntry, newPkIndexEntry, others);
-            final var lines = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry).toList();
-            FileLocks.rewriteFileAtomically(indexFile.toPath(), lines);
-        } finally {
-            lock.unlock();
+        if (!rewriteRows(dbName, collectionName, rows -> reindexPks(value, newPkIndexEntry, rows))) {
+            throw new IOException("No line in " + paths.pkIndexFile(dbName, collectionName).getName()
+                    + " could be read as a PK index entry, so it is not the file this write expects; refusing to"
+                    + " rewrite it");
         }
     }
 
@@ -136,7 +83,16 @@ final class PkIndexStore {
      * page. {@code newPkIndexEntry} arrives carrying the page-file length as its position, so
      * subtracting the old row's length yields where the relocated row actually starts.
      */
-    List<PkIndexEntry> reindexPks(PkIndexEntry oldEntry, PkIndexEntry newPkIndexEntry, List<PkIndexEntry> others) {
+    private List<PkIndexEntry> reindexPks(String value, PkIndexEntry newPkIndexEntry, List<PkIndexEntry> rows) {
+        PkIndexEntry oldEntry = null;
+        final var others = new ArrayList<PkIndexEntry>(rows.size());
+        for (final var entry : rows) {
+            if (entry.getValue().equals(value)) {
+                oldEntry = entry;
+            } else {
+                others.add(entry);
+            }
+        }
         if (oldEntry != null) {
             for (final var entry : others) {
                 if (entry.getPage() == oldEntry.getPage() && entry.getPosition() > oldEntry.getPosition()) {
@@ -150,12 +106,7 @@ final class PkIndexStore {
             }
             others.add(newPkIndexEntry);
         }
-        others.sort(Comparator.comparing(PkIndexEntry::getValue));
         return others;
-    }
-
-    private record ParsedPkIndex(List<PkIndexEntry> entries, List<String> lines, boolean dropped,
-            boolean unrecognised) {
     }
 
     List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
@@ -173,42 +124,22 @@ final class PkIndexStore {
         return parsed.unrecognised() ? Optional.empty() : Optional.of(parsed.entries());
     }
 
-    private ParsedPkIndex readHealed(String dbName, String collectionName) throws IOException {
+    private Parsed<List<PkIndexEntry>> readHealed(String dbName, String collectionName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
         if (!indexFile.exists()) {
-            return new ParsedPkIndex(new ArrayList<>(), List.of(), false, false);
+            return new Parsed<>(new ArrayList<>(), List.of(), false, false);
         }
-        final var readLock = FileLocks.lockFor(indexFile).readLock();
-        readLock.lock();
-        final ParsedPkIndex parsed;
-        try {
-            parsed = parsePkIndex(dbName, collectionName, indexFile);
-        } finally {
-            readLock.unlock();
-        }
+        final var parsed = FileLocks.readHealing(indexFile, file -> parsePkIndex(dbName, collectionName, file));
         if (parsed.unrecognised()) {
             logger.error("No line in " + indexFile.getName() + " could be read as a PK index entry, so it is not"
                     + " the file this loader expects; leaving it untouched. Nothing rebuilds the PK index, so it"
                     + " must never be rewritten from a read that understood none of it.");
-            return parsed;
         }
-        if (!parsed.dropped()) {
-            return parsed;
-        }
-        final var writeLock = FileLocks.lockFor(indexFile).writeLock();
-        writeLock.lock();
-        try {
-            final var reparsed = parsePkIndex(dbName, collectionName, indexFile);
-            if (reparsed.dropped()) {
-                FileLocks.rewriteFileAtomically(indexFile.toPath(), reparsed.lines());
-            }
-            return reparsed;
-        } finally {
-            writeLock.unlock();
-        }
+        return parsed;
     }
 
-    private ParsedPkIndex parsePkIndex(String dbName, String collectionName, File indexFile) throws IOException {
+    private Parsed<List<PkIndexEntry>> parsePkIndex(String dbName, String collectionName, File indexFile)
+            throws IOException {
         final var byValue = new LinkedHashMap<String, PkIndexEntry>();
         final var lineByValue = new LinkedHashMap<String, String>();
         boolean dropped = false;
@@ -230,7 +161,7 @@ final class PkIndexStore {
         }
         final var entries = new ArrayList<>(byValue.values());
         entries.sort(Comparator.comparing(PkIndexEntry::getValue));
-        return new ParsedPkIndex(entries, new ArrayList<>(lineByValue.values()), dropped, dropped && entries.isEmpty());
+        return new Parsed<>(entries, new ArrayList<>(lineByValue.values()), dropped, dropped && entries.isEmpty());
     }
 
 }

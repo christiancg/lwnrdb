@@ -24,7 +24,7 @@ src/main/java/org/techhouse/cluster/membership/MembershipService.java 2
 src/main/java/org/techhouse/cluster/msg/ForwardBody.java 1
 src/main/java/org/techhouse/cluster/msg/ReplicationPayload.java 1
 src/main/java/org/techhouse/cluster/msg/TxReplicationPayload.java 1
-src/main/java/org/techhouse/concurrency/ResourceLocking.java 8
+src/main/java/org/techhouse/concurrency/ResourceLocking.java 7
 src/main/java/org/techhouse/config/Configuration.java 1
 src/main/java/org/techhouse/config/Rule.java 1
 src/main/java/org/techhouse/conn/ClientTracker.java 1

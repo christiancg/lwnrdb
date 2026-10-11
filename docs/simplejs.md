@@ -607,7 +607,7 @@ whatever id that node ran under when it wrote it, so switching `clusterEnabled` 
 orphan a pending run. `LIST_TRIGGER_RUNS`/`RESOLVE_TRIGGER_RUN` are the admin-only operator surface,
 fanned out cluster-wide because `admin/trigger_runs` is not replicated.
 
-Two outcomes are neither ordinary retries nor terminal consumes, and both used to be misfiled.
+Two outcomes are neither ordinary retries nor terminal consumes.
 
 **A definition that cannot be *read* is not a definition that was deleted.** `findTrigger` answered
 `null` for both, and the caller consumes the pending run on `null` — so a transient I/O failure
@@ -634,13 +634,13 @@ script transaction that committed through a single remote owner, which answered 
 dead-lettering is the safe direction: the outcome is unknown, and a retry could apply the body
 twice.
 
-Triggers are **queued** from `OperationProcessor`'s write handlers and `TransactionOperationHelper.commit`
+Triggers are **staged** from `OperationProcessor`'s write handlers and `tx/CommittedOpTriggers`
 — never from the write helpers, since a replicated apply reaches those directly and would fire
 once per replica. Enqueueing is one map lookup and a queue offer, so it is safe inside the write
 lock. `bckg_ops/TriggerExecutor` runs them on **its own** bounded queue and workers, deliberately
 not the background index queue: a trigger runs arbitrary user code, and sharing that queue would
 let one slow trigger stall field-index maintenance for every collection. On overflow the oldest
-event is dropped and counted. Cascades carry `triggerDepth + 1` on the request itself — a field,
+queued run is dead-lettered and counted. Cascades carry `triggerDepth + 1` on the request itself — a field,
 not a `ThreadLocal`, so the bound survives a cluster forward — zeroed for client requests;
 `allowCascade` defaults to false.
 

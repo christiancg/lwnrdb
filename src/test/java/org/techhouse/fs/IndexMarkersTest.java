@@ -9,7 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-public class IndexBuildMarkersTest {
+public class IndexMarkersTest {
     private static final String DB = "markerDb";
     private static final String COLL = "markerColl";
 
@@ -17,14 +17,14 @@ public class IndexBuildMarkersTest {
     File tmp;
 
     private FilePaths paths;
-    private IndexBuildMarkers markers;
+    private IndexMarkers markers;
 
     @BeforeEach
     public void setUp() {
         paths = new FilePaths();
         paths.useDbPath(tmp.getAbsolutePath());
         assertTrue(paths.collectionFolder(DB, COLL).mkdirs());
-        markers = new IndexBuildMarkers(paths);
+        markers = new IndexMarkers(paths);
     }
 
     @Test
@@ -45,7 +45,7 @@ public class IndexBuildMarkersTest {
         markers.mark(DB, COLL, "a.building");
         markers.mark(DB, COLL, "name");
 
-        final var reloaded = new IndexBuildMarkers(paths);
+        final var reloaded = new IndexMarkers(paths);
 
         assertTrue(reloaded.isMarked(DB, COLL, "a.building"));
         assertTrue(reloaded.isMarked(DB, COLL, "name"));
@@ -67,7 +67,7 @@ public class IndexBuildMarkersTest {
         assertTrue(paths.collectionFolder(DB, hyphenated).mkdirs());
         markers.mark(DB, COLL, "name");
 
-        final var reloaded = new IndexBuildMarkers(paths);
+        final var reloaded = new IndexMarkers(paths);
 
         assertFalse(reloaded.isMarked(DB, hyphenated, "building"));
         assertTrue(reloaded.isMarked(DB, COLL, "name"));

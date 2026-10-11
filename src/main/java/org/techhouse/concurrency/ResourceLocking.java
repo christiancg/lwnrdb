@@ -19,6 +19,7 @@ import org.techhouse.ex.CollectionBusyException;
  */
 public class ResourceLocking {
     private static final Map<String, ReentrantReadWriteLock> locks = new ConcurrentHashMap<>();
+    private static final long NO_DEADLINE = Long.MAX_VALUE;
 
     private ReentrantReadWriteLock lockFor(String lockName) {
         return locks.computeIfAbsent(lockName, _ -> new ReentrantReadWriteLock());
@@ -40,16 +41,6 @@ public class ResourceLocking {
         return false;
     }
 
-    private void acquire(String lockName, Mode mode) throws InterruptedException {
-        while (true) {
-            final var lock = lockFor(lockName);
-            side(lock, mode).lockInterruptibly();
-            if (isStillMapped(lockName, lock, mode)) {
-                return;
-            }
-        }
-    }
-
     private boolean tryAcquireNow(String lockName, Mode mode) {
         while (true) {
             final var lock = lockFor(lockName);
@@ -65,8 +56,10 @@ public class ResourceLocking {
     private boolean tryAcquireBy(String lockName, Mode mode, long deadlineMillis) throws InterruptedException {
         while (true) {
             final var lock = lockFor(lockName);
-            final var remaining = Math.max(deadlineMillis - System.currentTimeMillis(), 0);
-            if (!side(lock, mode).tryLock(remaining, TimeUnit.MILLISECONDS)) {
+            if (deadlineMillis == NO_DEADLINE) {
+                side(lock, mode).lockInterruptibly();
+            } else if (!side(lock, mode).tryLock(Math.max(deadlineMillis - System.currentTimeMillis(), 0),
+                    TimeUnit.MILLISECONDS)) {
                 return false;
             }
             if (isStillMapped(lockName, lock, mode)) {
@@ -75,12 +68,20 @@ public class ResourceLocking {
         }
     }
 
+    private static long deadlineFor(long timeoutMillis) {
+        return timeoutMillis > 0 ? System.currentTimeMillis() + timeoutMillis : NO_DEADLINE;
+    }
+
+    private static boolean expired(long deadlineMillis) {
+        return deadlineMillis != NO_DEADLINE && deadlineMillis <= System.currentTimeMillis();
+    }
+
     private boolean tryAcquireWithin(String lockName, Mode mode, long timeoutMillis) throws InterruptedException {
         return tryAcquireBy(lockName, mode, System.currentTimeMillis() + timeoutMillis);
     }
 
     public void lockWrite(String lockName) throws InterruptedException {
-        acquire(lockName, Mode.WRITE);
+        tryAcquireBy(lockName, Mode.WRITE, NO_DEADLINE);
     }
 
     public boolean holdsCollectionLock(String dbName, String collName) {
@@ -98,7 +99,7 @@ public class ResourceLocking {
     }
 
     public void lockReadByName(String lockName) throws InterruptedException {
-        acquire(lockName, Mode.READ);
+        tryAcquireBy(lockName, Mode.READ, NO_DEADLINE);
     }
 
     public void releaseReadByName(String lockName) {
@@ -134,15 +135,6 @@ public class ResourceLocking {
 
     // Sorted order, so two callers with overlapping sets cannot deadlock. Write locks are thread-owned:
     // the action must complete on this thread, or releaseWrite silently no-ops and strands the lock.
-    public <T> T withWriteLocks(Collection<String> collectionIds, LockedAction<T> action) throws Exception {
-        final var acquired = acquireWriteLocks(collectionIds);
-        try {
-            return action.run();
-        } finally {
-            releaseWriteLocks(acquired);
-        }
-    }
-
     public <T> T withWriteLocks(Collection<String> collectionIds, long timeoutMillis, LockedAction<T> action)
             throws Exception {
         final var acquired = acquireWriteLocks(collectionIds, timeoutMillis);
@@ -153,28 +145,13 @@ public class ResourceLocking {
         }
     }
 
-    public List<String> acquireWriteLocks(Collection<String> collectionIds) throws InterruptedException {
-        final var acquired = new ArrayList<String>();
-        try {
-            for (final var collId : new TreeSet<>(collectionIds)) {
-                lockWrite(collId);
-                acquired.add(collId);
-            }
-            return acquired;
-        } catch (InterruptedException e) {
-            releaseWriteLocks(acquired);
-            throw e;
-        }
-    }
-
-    public List<String> acquireWriteLocks(Collection<String> collectionIds, long timeoutMillis)
+    private List<String> acquireWriteLocks(Collection<String> collectionIds, long timeoutMillis)
             throws InterruptedException {
         final var acquired = new ArrayList<String>();
-        final var deadline = System.currentTimeMillis() + timeoutMillis;
+        final var deadline = deadlineFor(timeoutMillis);
         try {
             for (final var collId : new TreeSet<>(collectionIds)) {
-                final var remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0 || !tryAcquireBy(collId, Mode.WRITE, deadline)) {
+                if (expired(deadline) || !tryAcquireBy(collId, Mode.WRITE, deadline)) {
                     releaseWriteLocks(acquired);
                     throw new CollectionBusyException(collId, timeoutMillis);
                 }
@@ -185,10 +162,6 @@ public class ResourceLocking {
             releaseWriteLocks(acquired);
             throw e;
         }
-    }
-
-    public List<String> acquireWriteLocksNotHeld(Collection<String> collectionIds) throws InterruptedException {
-        return acquireWriteLocks(notHeldByCurrentThread(collectionIds));
     }
 
     public List<String> acquireWriteLocksNotHeld(Collection<String> collectionIds, long timeoutMillis)
@@ -208,7 +181,7 @@ public class ResourceLocking {
         }
     }
 
-    public void releaseWriteLocks(List<String> acquired) {
+    private void releaseWriteLocks(List<String> acquired) {
         for (final var collId : acquired) {
             releaseWrite(collId);
         }
@@ -234,25 +207,6 @@ public class ResourceLocking {
 
     // Sorted order, so two overlapping multi-collection reads cannot deadlock. A dirty read takes no
     // lock at all and relies on FileSystem's per-file locks for read validity.
-    public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers) throws InterruptedException {
-        if (dirtyRead) {
-            return List.of();
-        }
-        final var sorted = identifiers.stream().distinct().sorted().toList();
-        final var acquired = new ArrayList<String>();
-        try {
-            for (var identifier : sorted) {
-                lockReadByName(identifier);
-                acquired.add(identifier);
-            }
-        } catch (InterruptedException e) {
-            // The caller only releases the returned list, so a partial acquisition must undo itself.
-            releaseReadLocks(acquired);
-            throw e;
-        }
-        return acquired;
-    }
-
     public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers, long timeoutMillis)
             throws InterruptedException {
         if (dirtyRead) {
@@ -260,11 +214,10 @@ public class ResourceLocking {
         }
         final var sorted = identifiers.stream().distinct().sorted().toList();
         final var acquired = new ArrayList<String>();
-        final var deadline = System.currentTimeMillis() + timeoutMillis;
+        final var deadline = deadlineFor(timeoutMillis);
         try {
             for (var identifier : sorted) {
-                final var remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0 || !tryAcquireBy(identifier, Mode.READ, deadline)) {
+                if (expired(deadline) || !tryAcquireBy(identifier, Mode.READ, deadline)) {
                     releaseReadLocks(acquired);
                     return null;
                 }

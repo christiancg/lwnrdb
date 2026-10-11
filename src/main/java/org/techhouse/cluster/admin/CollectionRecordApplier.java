@@ -2,7 +2,6 @@ package org.techhouse.cluster.admin;
 
 import java.io.IOException;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
@@ -34,15 +33,9 @@ final class CollectionRecordApplier {
     private CollectionRecordApplier() {
     }
 
-    static boolean install(AdminRecord record, boolean live, Map<String, Long> tombstones) throws Exception {
+    static boolean install(AdminRecord record) throws Exception {
         final var dbName = record.key().dbName();
         final var collName = record.key().name();
-        final var sibling = caseVariantOf(dbName, collName);
-        final var resolution = CaseVariant.resolve(record, sibling, tombstones,
-                variant -> remove(dbName, variant.name(), live));
-        if (resolution != CaseVariant.Resolution.INSTALL) {
-            return resolution == CaseVariant.Resolution.BURIED;
-        }
         final var waitMillis = clusterConfig.replicationAckTimeoutMs();
         if (!locks.tryLockDatabaseShared(dbName, waitMillis)) {
             logger.warning(skipping(dbName, collName, "its database stayed locked by a drop"));
@@ -123,21 +116,21 @@ final class CollectionRecordApplier {
     private static void markAll(String dbName, String collName, Set<String> added, Set<String> removed)
             throws IOException {
         for (final var field : added) {
-            fs.indexBuildMarkers().mark(dbName, collName, field);
+            fs.indexMarkers().mark(dbName, collName, field);
         }
         for (final var field : removed) {
-            fs.indexBuildMarkers().mark(dbName, collName, field);
+            fs.indexMarkers().mark(dbName, collName, field);
         }
     }
 
     private static void clearAll(String dbName, String collName, Set<String> added, Set<String> removed) {
-        added.forEach(field -> fs.indexBuildMarkers().clear(dbName, collName, field));
-        removed.forEach(field -> fs.indexBuildMarkers().clear(dbName, collName, field));
+        added.forEach(field -> fs.indexMarkers().clear(dbName, collName, field));
+        removed.forEach(field -> fs.indexMarkers().clear(dbName, collName, field));
     }
 
-    private static AdminRecordKey caseVariantOf(String dbName, String collName) {
+    static AdminRecordKey caseVariantOf(String dbName, String collName) {
         final var sibling = OnDiskNameRegistry.collidingCollection(dbName, collName);
-        if (sibling == null || sibling.equals(collName) || cache.getAdminCollectionEntry(dbName, sibling) == null) {
+        if (sibling == null || cache.getAdminCollectionEntry(dbName, sibling) == null) {
             return null;
         }
         return AdminRecordKey.collection(dbName, sibling);

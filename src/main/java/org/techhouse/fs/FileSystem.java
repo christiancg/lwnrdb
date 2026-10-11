@@ -23,8 +23,7 @@ import org.techhouse.ex.DirectoryNotFoundException;
 
 public class FileSystem {
     private final FilePaths paths = new FilePaths();
-    private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
-    private final IndexBuildMarkers indexBuildMarkers = new IndexBuildMarkers(paths);
+    private final IndexMarkers indexMarkers = new IndexMarkers(paths);
     private final TombstoneStore tombstones = new TombstoneStore(paths);
     private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
@@ -181,28 +180,8 @@ public class FileSystem {
         return MetadataFileStore.delete(paths.triggersFile(dbName, collName));
     }
 
-    public void markIndexesDirty(String dbName, String collName) {
-        dirtyIndexMarkers.mark(dbName, collName);
-    }
-
-    public void clearIndexesDirty(String dbName, String collName) {
-        dirtyIndexMarkers.clear(dbName, collName);
-    }
-
-    public List<String> listDirtyIndexCollections() {
-        return dirtyIndexMarkers.listMarked();
-    }
-
-    public List<String> retainUncleanStopMarkers() {
-        return dirtyIndexMarkers.retainUncleanStops();
-    }
-
-    public void retireUncleanStopMarker(String dbName, String collName) {
-        dirtyIndexMarkers.clearUncleanStop(dbName, collName);
-    }
-
-    public IndexBuildMarkers indexBuildMarkers() {
-        return indexBuildMarkers;
+    public IndexMarkers indexMarkers() {
+        return indexMarkers;
     }
 
     public FolderQuarantine folderQuarantine() {
@@ -342,15 +321,7 @@ public class FileSystem {
     }
 
     public List<PkIndexEntry> recoverInterruptedCompactions() throws IOException {
-        return compactionRecovery.recoverAll().completedDeletes();
-    }
-
-    public List<String> listCompactionMarkers() {
-        try {
-            return compactionJournal.findMarkerFiles().stream().map(File::getPath).toList();
-        } catch (IOException e) {
-            return List.of(paths.dbPath() + " (could not be searched: " + e.getMessage() + ")");
-        }
+        return compactionRecovery.recoverAll();
     }
 
     public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)

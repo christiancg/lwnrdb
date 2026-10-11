@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 import static org.techhouse.fs.CompactionFixture.NEW_VERSION;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.CompactionJournal.Kind;
+import org.techhouse.log.LogWriter;
 
 public class CompactionJournalTest {
     private static final String DB = "journalDb";
@@ -47,10 +49,9 @@ public class CompactionJournalTest {
         fx.begin(Kind.DELETE, "b");
         fx.shiftAndCut("b");
 
-        final var outcome = fx.recovery.recoverAll();
+        final var completed = fx.recovery.recoverAll();
 
-        assertEquals(List.of(), outcome.refused());
-        assertEquals(List.of("b"), outcome.completedDeletes().stream().map(PkIndexEntry::getValue).toList());
+        assertEquals(List.of("b"), completed.stream().map(PkIndexEntry::getValue).toList());
         assertEquals(originalWithoutB(), fx.pageText(0));
         assertNull(fx.indexed("b"));
         assertEquals(List.of("a", "c", "d", "e"), fx.indexedRows().stream().map(PkIndexEntry::getValue).toList());
@@ -77,9 +78,9 @@ public class CompactionJournalTest {
         fx.store.deleteIndexValue(removed);
         final var rowsAfterTheDelete = fx.indexedRows().stream().map(PkIndexEntry::toFileEntry).toList();
 
-        final var outcome = fx.recovery.recoverAll();
+        final var completed = fx.recovery.recoverAll();
 
-        assertEquals(List.of("b"), outcome.completedDeletes().stream().map(PkIndexEntry::getValue).toList(),
+        assertEquals(List.of("b"), completed.stream().map(PkIndexEntry::getValue).toList(),
                 "the kill still landed before the pending mark, so the index cleanup is still owed");
 
         assertEquals(originalWithoutB(), fx.pageText(0));
@@ -94,7 +95,7 @@ public class CompactionJournalTest {
         fx.shiftAndCut("b");
         fx.appendUpdatedCopy("b", 0);
 
-        assertEquals(List.of(), fx.recovery.recoverAll().completedDeletes());
+        assertEquals(List.of(), fx.recovery.recoverAll());
 
         assertEquals(original, fx.pageText(0));
         assertEquals(before.toFileEntry(), fx.indexed("b").toFileEntry());
@@ -181,10 +182,11 @@ public class CompactionJournalTest {
         final var pkFile = fx.paths.pkIndexFile(DB, COLL);
         Files.writeString(pkFile.toPath(), "garbage\nmore garbage\n", StandardCharsets.UTF_8);
 
-        final var outcome = fx.recovery.recoverAll();
-
-        assertEquals(1, outcome.refused().size());
-        assertEquals(List.of(), outcome.completedDeletes(), "a refused delete was not completed");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            assertEquals(List.of(), fx.recovery.recoverAll(), "a refused delete was not completed");
+            logWriter.verify(() -> LogWriter.writeLogEntry(argThat(
+                    entry -> entry.contains(DB + "|" + COLL + " page 0") && entry.contains("Repair or restore"))));
+        }
         assertEquals(shifted, fx.pageText(0));
         assertEquals("garbage\nmore garbage\n", Files.readString(pkFile.toPath(), StandardCharsets.UTF_8));
         assertEquals(1, fx.markers().length);
@@ -195,7 +197,7 @@ public class CompactionJournalTest {
         fx.begin(Kind.DELETE, "b");
         assertTrue(fx.page(0).delete());
 
-        assertEquals(List.of(), fx.recovery.recoverAll().refused());
+        fx.recovery.recoverAll();
 
         assertEquals(0, fx.markers().length);
     }
@@ -241,7 +243,7 @@ public class CompactionJournalTest {
         fx.seed(0, "f");
         final var pageBeforeRestart = fx.pageText(0);
 
-        assertEquals(List.of(), fx.recovery.recoverAll().refused());
+        fx.recovery.recoverAll();
 
         assertEquals(pageBeforeRestart, fx.pageText(0), "a completed compaction must not be replayed at startup");
         assertEquals(NEW_VERSION, fx.indexed("b").getVersion(), "the acknowledged update must survive");

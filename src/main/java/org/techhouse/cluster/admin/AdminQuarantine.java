@@ -13,6 +13,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.admin.CollectionIncarnation;
 
 final class AdminQuarantine {
     private final Logger logger = Logger.logFor(AdminQuarantine.class);
@@ -73,8 +74,7 @@ final class AdminQuarantine {
             return false;
         }
         try {
-            final var entry = cache.getAdminCollectionEntry(dbName, collName);
-            final var moved = unregisterAndMoveAside(dbName, collName, entry != null ? entry.getIncarnation() : 0);
+            final var moved = unregisterAndMoveAside(dbName, collName, CollectionIncarnation.current(dbName, collName));
             logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
                     + ": the cluster dropped it while this node held it. Its documents were " + movedOrLeft(moved)
                     + " and it no longer serves reads or writes until an operator reinstates or removes it.");

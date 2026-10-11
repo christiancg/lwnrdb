@@ -87,10 +87,8 @@ public final class ReadPathHelper {
                 : null;
         try {
             final var lockSet = AggregationOperationHelper.aggregateLockSet(aggregateRequest);
-            final var acquired = activeTransaction != null
-                    ? locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet,
-                            configuration.getTransactionLockTimeoutMs())
-                    : locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet);
+            final var acquired = locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet,
+                    activeTransaction != null ? configuration.getTransactionLockTimeoutMs() : 0L);
             if (acquired == null) {
                 return new OperationResponse(OperationType.AGGREGATE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
             }

@@ -58,7 +58,7 @@ public class PendingMarkBeforeWriteTest {
         writer.shutdownNow();
         TestUtils.setPrivateStaticField(SaveOperationHelper.class, "taskManager", originalSaveTaskManager);
         pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
-        fs.clearIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().clearDirty(TestGlobals.DB, TestGlobals.COLL);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -97,7 +97,7 @@ public class PendingMarkBeforeWriteTest {
             waitUntilPending();
             assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(ID),
                     "the id must be pending before its page write can land");
-            assertTrue(fs.listDirtyIndexCollections().contains(DIRTY_KEY),
+            assertTrue(TestUtils.dirtyIndexCollections().contains(DIRTY_KEY),
                     "a kill during the page write must leave the index-dirty marker behind");
             assertFalse(running.isDone(), "the write must still be blocked on the page");
         } finally {
@@ -147,7 +147,7 @@ public class PendingMarkBeforeWriteTest {
         assertThrows(Exception.class, () -> SaveOperationHelper.executeSave(saveOf(ID, "new")));
 
         assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(ID));
-        assertFalse(fs.listDirtyIndexCollections().contains(DIRTY_KEY),
+        assertFalse(TestUtils.dirtyIndexCollections().contains(DIRTY_KEY),
                 "a write that never landed must not leave a REINDEX warning behind");
     }
 
@@ -155,7 +155,7 @@ public class PendingMarkBeforeWriteTest {
     public void test_a_failed_delete_leaves_nothing_pending() throws Exception {
         SaveOperationHelper.executeSave(saveOf(ID, "old"));
         pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
-        fs.clearIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().clearDirty(TestGlobals.DB, TestGlobals.COLL);
         cache.evictCollection(TestGlobals.DB, TestGlobals.COLL);
         replacePageZeroWithADirectory();
 

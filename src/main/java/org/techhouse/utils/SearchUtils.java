@@ -17,7 +17,7 @@ public final class SearchUtils {
             T value) {
         return switch (operatorType) {
             case EQUALS -> findingEquals(entries, value);
-            case NOT_EQUALS -> findingNotEquals(entries, value);
+            case NOT_EQUALS -> findingMembership(entries, List.of(value), false);
             case GREATER_THAN -> findingRange(entries, value, GreaterSmallerEqualsType.GREATER_THAN);
             case GREATER_THAN_EQUALS -> findingRange(entries, value, GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
             case SMALLER_THAN -> findingRange(entries, value, GreaterSmallerEqualsType.SMALLER_THAN);
@@ -30,16 +30,6 @@ public final class SearchUtils {
     private static <T> Set<String> findingEquals(List<FieldIndexEntry<T>> entries, T value) {
         final var run = equalRun(entries, value);
         return run == null ? Set.of() : toIdSet(entries, run[0], run[1]);
-    }
-
-    private static <T> Set<String> findingNotEquals(List<FieldIndexEntry<T>> entries, T value) {
-        final var run = equalRun(entries, value);
-        if (run == null) {
-            return toIdSet(entries, 0, entries.size());
-        }
-        final var ids = toIdSet(entries, 0, run[0]);
-        ids.addAll(toIdSet(entries, run[1], entries.size()));
-        return ids;
     }
 
     private static <T> int[] equalRun(List<FieldIndexEntry<T>> entries, T value) {

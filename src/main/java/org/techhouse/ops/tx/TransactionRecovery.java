@@ -24,13 +24,12 @@ public final class TransactionRecovery {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
-    private static final String OBJECTS_FIELD = "objects";
     private static final String OPS_NOT_APPLIED = "its ops did not all apply";
 
     private TransactionRecovery() {
     }
 
-    public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
+    private static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
             throws Exception {
         SliceCommit.beginFromDurable(dtxId);
         if (!replayDurableSlice(dtxId, collections, timeoutMillis)) {
@@ -40,11 +39,7 @@ public final class TransactionRecovery {
 
     private static boolean replayDurableSlice(String txId, List<String> collections, long timeoutMillis)
             throws Exception {
-        if (timeoutMillis > 0) {
-            locks.acquireWriteLocksNotHeld(collections, timeoutMillis);
-        } else {
-            locks.acquireWriteLocksNotHeld(collections);
-        }
+        locks.acquireWriteLocksNotHeld(collections, timeoutMillis);
         var finished = false;
         try {
             final var ops = AdminOperationHelper.readTransactionOps(Tx2pcLog.sliceOpIds(txId));
@@ -98,7 +93,7 @@ public final class TransactionRecovery {
                 + " committed but some of its buffered op records were not deleted; the startup orphan sweep removes them";
     }
 
-    public static void abortFromDurable(String dtxId) throws Exception {
+    private static void abortFromDurable(String dtxId) throws Exception {
         final var orphanedRuns = TriggerRunRecovery.consumedBySlice(dtxId);
         AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
         recordAborted(dtxId);
@@ -142,18 +137,16 @@ public final class TransactionRecovery {
             transaction.recordInserts(op.getSeq(), op.getInsertedIds());
         }
         switch (op.getOpType()) {
-            case AdminTransactionEntry.OP_TYPE_SAVE -> transaction.recordSave(collId,
-                    op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.getPayload(), op.versionAt(0));
-            case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
-                final var elements = op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList();
-                for (var i = 0; i < elements.size(); i++) {
-                    final var obj = elements.get(i).asJsonObject();
+            case AdminTransactionEntry.OP_TYPE_SAVE, AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
+                final var objects = op.savedObjects();
+                for (var i = 0; i < objects.size(); i++) {
+                    final var obj = objects.get(i);
                     transaction.recordSave(collId, obj.get(Globals.PK_FIELD).asJsonString().getValue(), obj,
                             op.versionAt(i));
                 }
             }
-            case AdminTransactionEntry.OP_TYPE_DELETE -> transaction.recordDelete(collId,
-                    op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.versionAt(0));
+            case AdminTransactionEntry.OP_TYPE_DELETE ->
+                transaction.recordDelete(collId, op.targetId(), op.versionAt(0));
             default -> {
                 // markers never appear in the slice op id list
             }

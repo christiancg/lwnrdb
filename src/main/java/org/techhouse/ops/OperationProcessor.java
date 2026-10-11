@@ -305,15 +305,10 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING,
                 () -> {
-                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.BULK_SAVE, dbName,
+                    final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.BULK_SAVE, dbName,
                             collName);
                     if (ownershipError != null) {
                         return ownershipError;
-                    }
-                    final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName,
-                            collName);
-                    if (readinessError != null) {
-                        return readinessError;
                     }
                     final var schemaError = SchemaValidationHelper.check(bulkSaveRequest);
                     if (schemaError != null) {
@@ -348,13 +343,9 @@ public class OperationProcessor {
             return guardError;
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
-            final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, dbName, collName);
+            final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName, collName);
             if (ownershipError != null) {
                 return ownershipError;
-            }
-            final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
-            if (readinessError != null) {
-                return readinessError;
             }
             final var schemaError = SchemaValidationHelper.check(saveRequest);
             if (schemaError != null) {
@@ -384,14 +375,10 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
                 () -> {
-                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.DELETE, dbName,
+                    final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.DELETE, dbName,
                             collName);
                     if (ownershipError != null) {
                         return ownershipError;
-                    }
-                    final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
-                    if (readinessError != null) {
-                        return readinessError;
                     }
                     // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),

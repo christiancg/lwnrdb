@@ -27,7 +27,7 @@ public class VersionedPreparedReplayTest extends VersionedReplaySupport {
     private static final String LATE_COLL = "late-coll";
 
     private void commitPrepared(String dtxId) throws Exception {
-        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L);
+        TransactionRecovery.resolveFromDurable(dtxId, true, 0L);
     }
 
     @Test
@@ -146,12 +146,12 @@ public class VersionedPreparedReplayTest extends VersionedReplaySupport {
         markPrepared(dtxId);
 
         assertThrows(DurableReplayIncompleteException.class,
-                () -> TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 1000L));
+                () -> TransactionRecovery.resolveFromDurable(dtxId, true, 1000L));
         assertTrue(locks.isWriteLockedByCurrentThread(collId), "the failed attempt keeps its lock by design");
 
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, LATE_COLL));
         fs.createCollectionFile(TestGlobals.DB, LATE_COLL);
-        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 1000L);
+        TransactionRecovery.resolveFromDurable(dtxId, true, 1000L);
 
         assertFalse(Tx2pcLog.isPrepared(dtxId));
         assertFalse(locks.isWriteLockedByCurrentThread(collId),

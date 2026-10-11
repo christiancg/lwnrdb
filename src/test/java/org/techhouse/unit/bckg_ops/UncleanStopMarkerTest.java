@@ -51,8 +51,8 @@ public class UncleanStopMarkerTest {
     }
 
     private List<String> stopUncleanlyAndRestart() {
-        fs.markIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
-        return fs.retainUncleanStopMarkers();
+        fs.indexMarkers().markDirty(TestGlobals.DB, TestGlobals.COLL);
+        return fs.indexMarkers().retainUncleanStops();
     }
 
     private void writeAndDrain(String id) {
@@ -65,7 +65,7 @@ public class UncleanStopMarkerTest {
         assertEquals(List.of(identifier()), stopUncleanlyAndRestart());
 
         assertTrue(uncleanStopMarker().isFile());
-        assertFalse(fs.listDirtyIndexCollections().contains(identifier()),
+        assertFalse(TestUtils.dirtyIndexCollections().contains(identifier()),
                 "the drain owns the dirty marker, so the inherited one must not stay under that name");
     }
 
@@ -83,7 +83,7 @@ public class UncleanStopMarkerTest {
     public void test_a_second_restart_without_reindex_still_reports_the_collection() {
         stopUncleanlyAndRestart();
 
-        assertEquals(List.of(identifier()), fs.retainUncleanStopMarkers());
+        assertEquals(List.of(identifier()), fs.indexMarkers().retainUncleanStops());
     }
 
     @Test
@@ -97,13 +97,13 @@ public class UncleanStopMarkerTest {
         assertEquals(OperationStatus.OK,
                 processor.processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of())).getStatus());
         assertFalse(uncleanStopMarker().exists());
-        assertTrue(fs.retainUncleanStopMarkers().isEmpty());
+        assertTrue(fs.indexMarkers().retainUncleanStops().isEmpty());
     }
 
     @Test
     public void test_a_collection_whose_work_drained_before_the_stop_is_not_reported() {
         writeAndDrain("doc-1");
 
-        assertTrue(fs.retainUncleanStopMarkers().isEmpty());
+        assertTrue(fs.indexMarkers().retainUncleanStops().isEmpty());
     }
 }

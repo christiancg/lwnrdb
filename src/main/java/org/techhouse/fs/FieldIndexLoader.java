@@ -9,6 +9,7 @@ import java.util.function.Function;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.fs.FileLocks.Parsed;
 import org.techhouse.log.Logger;
 import org.techhouse.utils.CaseFolding;
 
@@ -44,14 +45,7 @@ final class FieldIndexLoader {
         if (indexFile == null || !indexFile.exists()) {
             return null;
         }
-        final var readLock = FileLocks.lockFor(indexFile).readLock();
-        readLock.lock();
-        final ParsedIndex<T> parsed;
-        try {
-            parsed = parseIndex(indexFile, label, parser);
-        } finally {
-            readLock.unlock();
-        }
+        final var parsed = FileLocks.readHealing(indexFile, file -> parseIndex(file, label, parser));
         if (parsed == null) {
             return null;
         }
@@ -61,33 +55,12 @@ final class FieldIndexLoader {
                     + " Run REINDEX on this collection to rebuild it from the stored documents.");
             return null;
         }
-        if (!parsed.dropped()) {
-            parsed.entries().sort(order);
-            return parsed.entries();
-        }
-        final var writeLock = FileLocks.lockFor(indexFile).writeLock();
-        writeLock.lock();
-        try {
-            final var reparsed = parseIndex(indexFile, label, parser);
-            if (reparsed == null) {
-                return null;
-            }
-            if (reparsed.dropped()) {
-                FileLocks.rewriteFileAtomically(indexFile.toPath(), reparsed.lines());
-            }
-            reparsed.entries().sort(order);
-            return reparsed.entries();
-        } finally {
-            writeLock.unlock();
-        }
+        parsed.entries().sort(order);
+        return parsed.entries();
     }
 
-    private record ParsedIndex<T>(List<FieldIndexEntry<T>> entries, List<String> lines, boolean dropped,
-            boolean unrecognised) {
-    }
-
-    private <T> ParsedIndex<T> parseIndex(File indexFile, String label, Function<String, FieldIndexEntry<T>> parser)
-            throws IOException {
+    private <T> Parsed<List<FieldIndexEntry<T>>> parseIndex(File indexFile, String label,
+            Function<String, FieldIndexEntry<T>> parser) throws IOException {
         final List<String> lines;
         try {
             lines = FileLocks.decodeLines(java.nio.file.Files.readAllBytes(indexFile.toPath()));
@@ -111,7 +84,7 @@ final class FieldIndexLoader {
                         + ". Run REINDEX on this collection to rebuild it from the stored documents.");
             }
         }
-        return new ParsedIndex<>(entries, keepLines, dropped, dropped && entries.isEmpty());
+        return new Parsed<>(entries, keepLines, dropped, dropped && entries.isEmpty());
     }
 
     private static <T> Comparator<FieldIndexEntry<T>> byIndexedValue() {

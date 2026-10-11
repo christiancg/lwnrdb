@@ -86,7 +86,6 @@ public class Main {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         final var recoveredDeletes = fs.recoverInterruptedCompactions();
-        StartupWarnings.warnIfCompactionsLeftUnrecovered();
         cache.loadAdminData();
         seedHybridClock();
         AdminRecords.stampUnversioned();

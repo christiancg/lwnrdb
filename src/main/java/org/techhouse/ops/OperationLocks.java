@@ -78,10 +78,8 @@ public final class OperationLocks {
         final var readLocks = new ArrayList<String>();
         try {
             return OperationResponse.respondOrError(type, errorCode, () -> {
-                final var acquired = bounded
-                        ? locks.acquireReadLocks(dirtyRead, collectionIds,
-                                Configuration.getInstance().getTransactionLockTimeoutMs())
-                        : locks.acquireReadLocks(dirtyRead, collectionIds);
+                final var acquired = locks.acquireReadLocks(dirtyRead, collectionIds,
+                        bounded ? Configuration.getInstance().getTransactionLockTimeoutMs() : 0L);
                 if (acquired == null) {
                     return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
                 }

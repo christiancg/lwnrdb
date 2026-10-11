@@ -35,12 +35,8 @@ public final class FieldPredicateFactory {
                 return primitiveOperandMatches(operatorElement, toTestElement, operation,
                         JsonUtils.isPrimaryKeyPath(fieldName));
             }
-            if (operatorElement.isJsonArray()) {
-                return arrayOperandMatches(operatorElement, toTestElement, operation,
-                        JsonUtils.isPrimaryKeyPath(fieldName));
-            }
-            if (operatorElement.isJsonObject()) {
-                return objectOperandMatches(operatorElement, toTestElement, operation,
+            if (operatorElement.isJsonArray() || operatorElement.isJsonObject()) {
+                return containerOperandMatches(operatorElement, toTestElement, operation,
                         JsonUtils.isPrimaryKeyPath(fieldName));
             }
             return false;
@@ -136,16 +132,19 @@ public final class FieldPredicateFactory {
         return exactStrings ? operand.equals(stored) : CaseFolding.equal(operand, stored);
     }
 
-    private static boolean arrayOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
+    private static boolean containerOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
             FieldOperatorType operation, boolean exactStrings) {
         if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
-            if (toTestElement == null || !toTestElement.isJsonArray()) {
+            final var sameKind = operatorElement.isJsonArray()
+                    ? toTestElement.isJsonArray()
+                    : toTestElement.isJsonObject();
+            if (!sameKind) {
                 return kindMismatchMatches(operation, exactStrings);
             }
-            final var equal = arraysMatch(operatorElement.asJsonArray(), toTestElement.asJsonArray());
-            return (operation == FieldOperatorType.EQUALS) == equal;
+            return (operation == FieldOperatorType.EQUALS) == elementsMatch(operatorElement, toTestElement, true);
         }
-        if (operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN) {
+        if (operatorElement.isJsonArray()
+                && (operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN)) {
             return (operation == FieldOperatorType.IN) == containsEquivalent(operatorElement.asJsonArray(),
                     toTestElement, exactStrings);
         }
@@ -205,17 +204,5 @@ public final class FieldPredicateFactory {
             }
         }
         return true;
-    }
-
-    private static boolean objectOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
-            FieldOperatorType operation, boolean exactStrings) {
-        if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
-            if (toTestElement == null || !toTestElement.isJsonObject()) {
-                return kindMismatchMatches(operation, exactStrings);
-            }
-            final var equal = objectsMatch(operatorElement.asJsonObject(), toTestElement.asJsonObject());
-            return (operation == FieldOperatorType.EQUALS) == equal;
-        }
-        return false;
     }
 }

@@ -14,7 +14,6 @@ import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 
 public final class CommittedOpTriggers {
-    private static final String OBJECTS_FIELD = "objects";
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
 
     private CommittedOpTriggers() {
@@ -28,17 +27,10 @@ public final class CommittedOpTriggers {
             final var target = new TargetKey(op.getTargetDb(), op.getTargetColl());
             final var inserted = transaction.insertedIdsFor(op.getSeq());
             switch (op.getOpType()) {
-                case AdminTransactionEntry.OP_TYPE_SAVE -> {
-                    final var id = op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue();
-                    recordSaveWrite(saveWrites, target, id, inserted.contains(id), outcomes);
-                }
-                case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
-                    for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
-                        final var object = element.asJsonObject();
-                        if (object.has(Globals.PK_FIELD)) {
-                            final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                            recordSaveWrite(saveWrites, target, id, inserted.contains(id), outcomes);
-                        }
+                case AdminTransactionEntry.OP_TYPE_SAVE, AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
+                    for (final var object : op.savedObjects()) {
+                        final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
+                        recordSaveWrite(saveWrites, target, id, inserted.contains(id), outcomes);
                     }
                 }
                 case AdminTransactionEntry.OP_TYPE_DELETE -> {
@@ -82,7 +74,7 @@ public final class CommittedOpTriggers {
     private static DbEntry deletedEntryOf(AdminTransactionEntry op, TargetKey target,
             Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, Map<String, ApplyOutcome> outcomes) {
         final var payload = op.getPayload();
-        final var id = payload.get(Globals.PK_FIELD).asJsonString().getValue();
+        final var id = op.targetId();
         final var writesToTarget = saveWrites.get(target);
         final var createdInThisTransaction = writesToTarget != null && Boolean.TRUE.equals(writesToTarget.remove(id));
         if (createdInThisTransaction || !payload.has(DELETED_DOCUMENT_FIELD) || skippedByReplay(outcomes, target, id)) {

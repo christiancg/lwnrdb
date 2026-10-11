@@ -196,7 +196,7 @@ public class TransactionCrashAtomicityTest {
         Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
 
         assertThrows(DurableReplayIncompleteException.class,
-                () -> TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L));
+                () -> TransactionRecovery.resolveFromDurable(dtxId, true, 0L));
 
         final var locks = IocContainer.get(ResourceLocking.class);
         try {

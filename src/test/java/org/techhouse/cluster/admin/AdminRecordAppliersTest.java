@@ -90,7 +90,7 @@ public class AdminRecordAppliersTest extends AdminRecordTestBase {
         AdminRecordMerge.apply(List.of(collection(TestGlobals.DB, TestGlobals.COLL, clock.next(), "added")), true);
 
         assertEquals(Set.of("added"), cache.getIndexesForCollection(TestGlobals.DB, TestGlobals.COLL));
-        assertFalse(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "added"));
+        assertFalse(fs.indexMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "added"));
     }
 
     @Test

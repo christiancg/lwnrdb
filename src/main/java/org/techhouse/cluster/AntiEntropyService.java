@@ -24,6 +24,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ReplicatedApplyHelper;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.utils.JsonUtils;
 
 public class AntiEntropyService implements MembershipListener {
@@ -99,15 +100,6 @@ public class AntiEntropyService implements MembershipListener {
         return buildDigest(dbName, collName, null, 0L);
     }
 
-    private long localIncarnation(String dbName, String collName) {
-        final var entry = cache.getAdminCollectionEntry(dbName, collName);
-        return entry == null ? 0L : entry.getIncarnation();
-    }
-
-    private static boolean incarnationsDiffer(long local, long peer) {
-        return local != 0L && peer != 0L && local != peer;
-    }
-
     private AntiEntropyPayload staleIncarnationAnswer(String dbName, String collName, long local, long peer) {
         logger.warning("Refusing to describe " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
                 + " to a peer: its documents belong to incarnation " + local + " and the peer asked for incarnation "
@@ -120,8 +112,8 @@ public class AntiEntropyService implements MembershipListener {
 
     public AntiEntropyPayload buildDigest(String dbName, String collName, String peerSummary, long peerIncarnation)
             throws Exception {
-        final var incarnation = localIncarnation(dbName, collName);
-        if (incarnationsDiffer(incarnation, peerIncarnation)) {
+        final var incarnation = CollectionIncarnation.current(dbName, collName);
+        if (!CollectionIncarnation.sameLife(incarnation, peerIncarnation)) {
             return staleIncarnationAnswer(dbName, collName, incarnation, peerIncarnation);
         }
         final var payload = new AntiEntropyPayload(dbName, collName);
@@ -165,8 +157,8 @@ public class AntiEntropyService implements MembershipListener {
 
     public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids, long peerIncarnation)
             throws Exception {
-        final var incarnation = localIncarnation(dbName, collName);
-        if (incarnationsDiffer(incarnation, peerIncarnation)) {
+        final var incarnation = CollectionIncarnation.current(dbName, collName);
+        if (!CollectionIncarnation.sameLife(incarnation, peerIncarnation)) {
             return staleIncarnationAnswer(dbName, collName, incarnation, peerIncarnation);
         }
         final var payload = new AntiEntropyPayload(dbName, collName);
@@ -202,7 +194,7 @@ public class AntiEntropyService implements MembershipListener {
                 localLive.put(entry.getValue(), new LocalEntry(entry.getVersion(), entry.getLength()));
             }
             localTombstones = fs.tombstones().read(dbName, collName);
-            selfIncarnation = localIncarnation(dbName, collName);
+            selfIncarnation = CollectionIncarnation.current(dbName, collName);
         } finally {
             locks.releaseRead(dbName, collName);
         }
@@ -228,7 +220,8 @@ public class AntiEntropyService implements MembershipListener {
                 everyPeerAnswered = false;
                 continue;
             }
-            if (response.isStaleIncarnation() || incarnationsDiffer(selfIncarnation, response.incarnationValue())) {
+            if (response.isStaleIncarnation()
+                    || !CollectionIncarnation.sameLife(selfIncarnation, response.incarnationValue())) {
                 everyPeerAnswered = false;
                 continue;
             }

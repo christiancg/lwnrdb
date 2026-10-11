@@ -163,7 +163,7 @@ public class IndexHelper {
 
     private static List<String> maintainedIndexes(String dbName, String collName) {
         return cache.getIndexesForCollection(dbName, collName).stream()
-                .filter(fieldName -> !fs.indexBuildMarkers().isMarked(dbName, collName, fieldName)).toList();
+                .filter(fieldName -> !fs.indexMarkers().isMarked(dbName, collName, fieldName)).toList();
     }
 
     private static void lockCollectionForMaintenance(String dbName, String collName) throws InterruptedException {

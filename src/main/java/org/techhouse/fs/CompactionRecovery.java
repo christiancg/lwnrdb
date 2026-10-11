@@ -25,11 +25,7 @@ final class CompactionRecovery {
         this.journal = journal;
     }
 
-    record Outcome(List<String> refused, List<PkIndexEntry> completedDeletes) {
-    }
-
-    Outcome recoverAll() throws IOException {
-        final var refused = new ArrayList<String>();
+    List<PkIndexEntry> recoverAll() throws IOException {
         final var completedDeletes = new ArrayList<PkIndexEntry>();
         for (final var file : journal.findMarkerFiles()) {
             final var marker = CompactionJournal.decode(Files.readAllBytes(file.toPath()));
@@ -40,11 +36,9 @@ final class CompactionRecovery {
                 if (marker.kind() == Kind.DELETE) {
                     completedDeletes.add(marker.preOpEntry());
                 }
-            } else {
-                refused.add(file.getPath());
             }
         }
-        return new Outcome(refused, completedDeletes);
+        return completedDeletes;
     }
 
     private static void discardTornMarker(File file) throws IOException {
@@ -65,7 +59,8 @@ final class CompactionRecovery {
                 rows -> marker.kind() == Kind.DELETE ? completeDelete(marker, rows) : undoRemoval(marker, rows));
         if (!pkRecognised) {
             logger.error("Leaving the interrupted " + marker.kind() + " of " + marker.id() + " in " + label
-                    + " unrecovered: no line of its pk index could be read, and nothing rebuilds the pk index");
+                    + " unrecovered: no line of its pk index could be read, and nothing rebuilds the pk index. Repair or"
+                    + " restore the pk index; the marker is replayed at the next startup");
             return false;
         }
         if (marker.kind() == Kind.RELOCATE) {

@@ -142,7 +142,7 @@ public class CompactionRelocationRecoveryTest {
 
         assertEquals(List.of(0L, 1L), List.copyOf(new DocumentPageStore(fx.paths).pageFileLengths(DB, COLL).keySet()));
         assertEquals(2L, new DocumentPageStore(fx.paths).pageFileCount(DB, COLL));
-        assertTrue(new IndexBuildMarkers(fx.paths).listMarked().isEmpty());
+        assertTrue(new IndexMarkers(fx.paths).listMarked().isEmpty());
         new FieldIndexStore(fx.paths).dropIndex(DB, COLL, "b");
         new FieldIndexStore(fx.paths).dropIndex(DB, COLL, "0");
         assertEquals(1, fx.markers().length);

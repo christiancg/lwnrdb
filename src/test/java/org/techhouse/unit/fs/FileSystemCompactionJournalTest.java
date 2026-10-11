@@ -3,8 +3,11 @@ package org.techhouse.unit.fs;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.Objects;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +33,12 @@ public class FileSystemCompactionJournalTest {
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
         fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+    }
+
+    private static List<Path> compactionMarkers() throws IOException {
+        try (var files = Files.walk(Path.of(TestGlobals.PATH))) {
+            return files.filter(path -> path.getFileName().toString().endsWith(".compacting")).toList();
+        }
     }
 
     @AfterEach
@@ -78,7 +87,7 @@ public class FileSystemCompactionJournalTest {
 
         fs.deleteFromCollection(first);
 
-        assertTrue(fs.listCompactionMarkers().isEmpty());
+        assertTrue(compactionMarkers().isEmpty());
     }
 
     @Test
@@ -91,7 +100,7 @@ public class FileSystemCompactionJournalTest {
         assertThrows(RuntimeException.class, () -> fs.deleteFromCollection(first));
 
         assertEquals(before, Files.readString(page0().toPath()));
-        assertTrue(fs.listCompactionMarkers().isEmpty());
+        assertTrue(compactionMarkers().isEmpty());
     }
 
     @Test
@@ -101,7 +110,7 @@ public class FileSystemCompactionJournalTest {
 
         fs.updateFromCollection(updated(first), first);
 
-        assertTrue(fs.listCompactionMarkers().isEmpty());
+        assertTrue(compactionMarkers().isEmpty());
     }
 
     @Test
@@ -114,7 +123,7 @@ public class FileSystemCompactionJournalTest {
         assertThrows(Exception.class, () -> fs.updateFromCollection(updated(first), first));
 
         assertEquals(before, Files.readString(page0().toPath()));
-        assertTrue(fs.listCompactionMarkers().isEmpty());
+        assertTrue(compactionMarkers().isEmpty());
     }
 
     @Test
@@ -123,13 +132,13 @@ public class FileSystemCompactionJournalTest {
         insert("2", "two");
 
         fs.deleteForRelocation(first);
-        assertEquals(1, fs.listCompactionMarkers().size());
+        assertEquals(1, compactionMarkers().size());
         final var moved = updated(first);
         moved.setPage(1);
         fs.insertRelocated(moved, first);
         fs.endRelocation(first);
 
-        assertTrue(fs.listCompactionMarkers().isEmpty());
+        assertTrue(compactionMarkers().isEmpty());
     }
 
     @Test
@@ -146,7 +155,7 @@ public class FileSystemCompactionJournalTest {
                 fs.getById(fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
                         .filter(row -> row.getValue().equals("1")).findFirst().orElseThrow()).getData().get("v")
                         .asJsonString().getValue());
-        assertTrue(fs.listCompactionMarkers().isEmpty());
+        assertTrue(compactionMarkers().isEmpty());
     }
 
     @Test
@@ -157,6 +166,6 @@ public class FileSystemCompactionJournalTest {
         final var moved = updated(first);
         fs.insertRelocated(moved, first);
 
-        assertTrue(fs.listCompactionMarkers().isEmpty());
+        assertTrue(compactionMarkers().isEmpty());
     }
 }

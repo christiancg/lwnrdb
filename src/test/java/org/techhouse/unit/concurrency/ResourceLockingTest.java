@@ -284,7 +284,7 @@ public class ResourceLockingTest {
         });
         interrupter.start();
 
-        assertThrows(InterruptedException.class, () -> rl.acquireReadLocks(false, List.of(second, first)));
+        assertThrows(InterruptedException.class, () -> rl.acquireReadLocks(false, List.of(second, first), 0L));
         assertFalse(Thread.interrupted());
         assertEquals(0, locks(rl).get(first).getReadLockCount());
 
@@ -387,7 +387,7 @@ public class ResourceLockingTest {
         final var id = Cache.getCollectionIdentifier("db", "reentrant");
         rl.lockWrite(id);
         rl.lockWrite(id);
-        rl.acquireWriteLocksNotHeld(List.of(id));
+        rl.acquireWriteLocksNotHeld(List.of(id), 0L);
 
         rl.releaseWriteLocksHeldByCurrentThread(List.of(id));
 

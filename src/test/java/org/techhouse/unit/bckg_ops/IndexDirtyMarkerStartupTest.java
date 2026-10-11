@@ -28,7 +28,7 @@ public class IndexDirtyMarkerStartupTest {
 
     @AfterEach
     public void tearDown() throws Exception {
-        fs.clearIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().clearDirty(TestGlobals.DB, TestGlobals.COLL);
         TestUtils.standardTearDown();
     }
 
@@ -38,32 +38,32 @@ public class IndexDirtyMarkerStartupTest {
 
     @Test
     public void test_startup_warns_for_a_collection_left_marked() {
-        fs.markIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().markDirty(TestGlobals.DB, TestGlobals.COLL);
 
-        assertTrue(fs.listDirtyIndexCollections().contains(identifier()),
+        assertTrue(TestUtils.dirtyIndexCollections().contains(identifier()),
                 "an unclean stop leaves the marker behind, and startup is where an operator can act on it");
         assertDoesNotThrow(StartupWarnings::retainAndReportUncleanStops);
     }
 
     @Test
     public void test_a_drained_collection_is_not_reported_at_startup() {
-        fs.markIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
-        fs.clearIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().markDirty(TestGlobals.DB, TestGlobals.COLL);
+        fs.indexMarkers().clearDirty(TestGlobals.DB, TestGlobals.COLL);
 
-        assertFalse(fs.listDirtyIndexCollections().contains(identifier()));
+        assertFalse(TestUtils.dirtyIndexCollections().contains(identifier()));
         assertDoesNotThrow(StartupWarnings::retainAndReportUncleanStops);
     }
 
     @Test
     public void test_startup_warns_for_an_index_left_half_built() throws Exception {
-        fs.indexBuildMarkers().mark(TestGlobals.DB, TestGlobals.COLL, "name");
+        fs.indexMarkers().mark(TestGlobals.DB, TestGlobals.COLL, "name");
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.retainAndReportUncleanStops();
 
             logWriter.verify(() -> LogWriter.writeLogEntry(
                     argThat(entry -> entry.contains(identifier() + "|name") && entry.contains("REINDEX"))));
         } finally {
-            fs.indexBuildMarkers().clear(TestGlobals.DB, TestGlobals.COLL, "name");
+            fs.indexMarkers().clear(TestGlobals.DB, TestGlobals.COLL, "name");
         }
     }
 }

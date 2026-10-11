@@ -1,10 +1,7 @@
 package org.techhouse.fs;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.fs.FileLocks.Parsed;
 import org.techhouse.log.Logger;
 
 public final class TombstoneStore {
@@ -53,68 +51,22 @@ public final class TombstoneStore {
     }
 
     static void append(File file, String id, long version) throws IOException {
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
-        try {
-            appendOrTruncateBack(file, id, version);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private static void appendOrTruncateBack(File file, String id, long version) throws IOException {
-        final var lengthBeforeAppend = file.length();
-        var appended = false;
-        try {
-            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
-                    Globals.BUFFER_SIZE)) {
-                if (FileLocks.endsMidLine(file)) {
-                    writer.newLine();
-                }
-                writer.append(FieldIndexEntry.escapeIndexToken(id)).append(Globals.ID_SEPARATOR)
-                        .append(String.valueOf(version));
-                writer.newLine();
-            }
-            appended = true;
-        } finally {
-            if (!appended) {
-                FileLocks.truncateTo(file, lengthBeforeAppend, TOMBSTONE_ROLLBACK_FAILURE);
-            }
-        }
+        FileLocks.appendLines(file, List.of(id),
+                tombstoned -> FieldIndexEntry.escapeIndexToken(tombstoned) + Globals.ID_SEPARATOR + version,
+                TOMBSTONE_ROLLBACK_FAILURE);
     }
 
     static Map<String, Long> read(File file) throws IOException {
         if (!file.exists()) {
             return new HashMap<>();
         }
-        final var readLock = FileLocks.lockFor(file).readLock();
-        readLock.lock();
-        final ParsedTombstones parsed;
-        try {
-            parsed = parseTombstones(file);
-        } finally {
-            readLock.unlock();
-        }
+        final var parsed = FileLocks.readHealing(file, TombstoneStore::parseTombstones);
         if (parsed.unrecognised()) {
             logger.error("No line in " + file.getName() + " could be read as a tombstone entry, so it is not the"
                     + " file this loader expects; leaving it untouched. Nothing rebuilds the tombstone file, so it"
                     + " must never be rewritten from a read that understood none of it.");
-            return parsed.entries();
         }
-        if (!parsed.dropped()) {
-            return parsed.entries();
-        }
-        final var writeLock = FileLocks.lockFor(file).writeLock();
-        writeLock.lock();
-        try {
-            final var reparsed = parseTombstones(file);
-            if (reparsed.dropped()) {
-                FileLocks.rewriteFileAtomically(file.toPath(), reparsed.lines());
-            }
-            return reparsed.entries();
-        } finally {
-            writeLock.unlock();
-        }
+        return parsed.entries();
     }
 
     static void compact(File file, long minVersionToKeep) throws IOException {
@@ -169,7 +121,7 @@ public final class TombstoneStore {
         }
     }
 
-    private static ParsedTombstones parseTombstones(File file) throws IOException {
+    private static Parsed<Map<String, Long>> parseTombstones(File file) throws IOException {
         final var entries = new HashMap<String, Long>();
         final var lines = new ArrayList<String>();
         var dropped = false;
@@ -194,10 +146,6 @@ public final class TombstoneStore {
                 logger.warning("Removing malformed tombstone entry in " + file.getName() + ": " + e.getMessage());
             }
         }
-        return new ParsedTombstones(entries, lines, dropped, dropped && entries.isEmpty());
-    }
-
-    private record ParsedTombstones(Map<String, Long> entries, List<String> lines, boolean dropped,
-            boolean unrecognised) {
+        return new Parsed<>(entries, lines, dropped, dropped && entries.isEmpty());
     }
 }

@@ -1,7 +1,9 @@
 package org.techhouse.fs;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.StringReader;
@@ -15,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Function;
 import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
 
@@ -27,6 +30,67 @@ final class FileLocks {
     private static final byte LINE_FEED = '\n';
 
     private FileLocks() {
+    }
+
+    record Parsed<E>(E entries, List<String> lines, boolean dropped, boolean unrecognised) {
+    }
+
+    interface Parser<E> {
+        Parsed<E> parse(File file) throws IOException;
+    }
+
+    static <E> Parsed<E> readHealing(File file, Parser<E> parser) throws IOException {
+        final var readLock = lockFor(file).readLock();
+        readLock.lock();
+        final Parsed<E> parsed;
+        try {
+            parsed = parser.parse(file);
+        } finally {
+            readLock.unlock();
+        }
+        if (parsed == null || parsed.unrecognised() || !parsed.dropped()) {
+            return parsed;
+        }
+        final var writeLock = lockFor(file).writeLock();
+        writeLock.lock();
+        try {
+            final var reparsed = parser.parse(file);
+            if (reparsed != null && reparsed.dropped() && !reparsed.unrecognised()) {
+                rewriteFileAtomically(file.toPath(), reparsed.lines());
+            }
+            return reparsed;
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    static <T> void appendLines(File file, List<T> rows, Function<T, String> toLine, String rollbackFailure)
+            throws IOException {
+        final var lock = lockFor(file).writeLock();
+        lock.lock();
+        try {
+            final var lengthBeforeAppend = file.length();
+            var appended = false;
+            try {
+                try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
+                        Globals.BUFFER_SIZE)) {
+                    if (endsMidLine(file)) {
+                        writer.newLine();
+                    }
+                    for (final var row : rows) {
+                        writer.append(toLine.apply(row));
+                        writer.newLine();
+                    }
+                }
+                appended = true;
+            } finally {
+                if (!appended) {
+                    truncateTo(file, lengthBeforeAppend, rollbackFailure);
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
     }
 
     static ReentrantReadWriteLock lockFor(File file) {

@@ -7,7 +7,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
@@ -22,7 +21,6 @@ public class DropClearsPendingWritesTest {
     private static final String COLL = "pendingdropcoll";
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final PendingIndexWrites pending = IocContainer.get(PendingIndexWrites.class);
-    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -51,7 +49,7 @@ public class DropClearsPendingWritesTest {
 
         assertEquals(OperationStatus.OK, processor.processMessage(new CreateCollectionRequest(DB, COLL)).getStatus());
         pending.mark(DB, COLL, "new_life");
-        assertTrue(fs.listDirtyIndexCollections().contains(DB + "|" + COLL),
+        assertTrue(TestUtils.dirtyIndexCollections().contains(DB + "|" + COLL),
                 "the re-created collection's first pending write must write its own dirty marker");
     }
 
@@ -65,6 +63,6 @@ public class DropClearsPendingWritesTest {
         createCollection();
         pending.mark(DB, COLL, "new_life");
         assertEquals(List.of("new_life"), List.copyOf(pending.idsFor(DB, COLL)));
-        assertTrue(fs.listDirtyIndexCollections().contains(DB + "|" + COLL));
+        assertTrue(TestUtils.dirtyIndexCollections().contains(DB + "|" + COLL));
     }
 }

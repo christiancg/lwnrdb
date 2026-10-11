@@ -24,10 +24,10 @@ public final class PrimaryKeyIndexResolver {
     public static Set<String> resolve(FieldOperator operator, String dbName, String collName) throws IOException {
         final var operand = operator.getValue();
         final var resolved = switch (operator.getFieldOperatorType()) {
-            case EQUALS -> idsEqualTo(operand, dbName, collName);
+            case EQUALS -> idsAmong(Collections.singletonList(operand), dbName, collName);
             case NOT_EQUALS -> isNotPlainString(operand)
                     ? null
-                    : complementOf(idsEqualTo(operand, dbName, collName), dbName, collName);
+                    : complementOf(idsAmong(List.of(operand), dbName, collName), dbName, collName);
             case IN -> idsIn(operand, dbName, collName);
             case NOT_IN -> complementOf(idsIn(operand, dbName, collName), dbName, collName);
             case CONTAINS -> idsContaining(operand, dbName, collName);
@@ -39,23 +39,15 @@ public final class PrimaryKeyIndexResolver {
         return resolved;
     }
 
-    private static Set<String> idsEqualTo(JsonBaseElement operand, String dbName, String collName) throws IOException {
-        if (isNotPlainString(operand)) {
-            return Set.of();
-        }
-        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        return Collections.binarySearch(pkIndex, operand.asJsonString().getValue()) >= 0
-                ? Set.of(operand.asJsonString().getValue())
-                : Set.of();
+    private static Set<String> idsIn(JsonBaseElement operand, String dbName, String collName) throws IOException {
+        return operand instanceof JsonArray operands ? idsAmong(operands.asList(), dbName, collName) : Set.of();
     }
 
-    private static Set<String> idsIn(JsonBaseElement operand, String dbName, String collName) throws IOException {
-        if (!(operand instanceof JsonArray operands)) {
-            return Set.of();
-        }
+    private static Set<String> idsAmong(List<JsonBaseElement> candidates, String dbName, String collName)
+            throws IOException {
         final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         final var matched = new HashSet<String>();
-        for (final var candidate : operands.asList()) {
+        for (final var candidate : candidates) {
             if (isNotPlainString(candidate)) {
                 continue;
             }

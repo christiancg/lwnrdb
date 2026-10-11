@@ -29,7 +29,7 @@ public class PendingIndexWrites {
             final var wasEmpty = byId.isEmpty();
             byId.merge(id, 1, Integer::sum);
             if (wasEmpty) {
-                fs.markIndexesDirty(dbName, collName);
+                fs.indexMarkers().markDirty(dbName, collName);
             }
             return currentGeneration(dbName, collName);
         } finally {
@@ -73,7 +73,7 @@ public class PendingIndexWrites {
             }
             byId.computeIfPresent(id, (_, current) -> current - 1 <= 0 ? null : current - 1);
             if (byId.isEmpty()) {
-                fs.clearIndexesDirty(dbName, collName);
+                fs.indexMarkers().clearDirty(dbName, collName);
             }
         } finally {
             markerLock.unlock();

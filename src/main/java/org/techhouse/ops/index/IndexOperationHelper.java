@@ -50,10 +50,10 @@ public final class IndexOperationHelper {
                         return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.NAME_COLLIDES_ON_DISK,
                                 colliding);
                     }
-                    fs.indexBuildMarkers().mark(dbName, collName, fieldName);
+                    fs.indexMarkers().mark(dbName, collName, fieldName);
                     IndexHelper.createIndex(dbName, collName, fieldName);
                     AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
-                    fs.indexBuildMarkers().clear(dbName, collName, fieldName);
+                    fs.indexMarkers().clear(dbName, collName, fieldName);
                     return OperationResponse.ok(OperationType.CREATE_INDEX, "Created index for field: " + fieldName);
                 });
     }
@@ -67,12 +67,12 @@ public final class IndexOperationHelper {
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DROP_INDEX,
                 ErrorCode.ERROR_DROPPING_INDEX, () -> {
                     if (cache.getIndexesForCollection(dbName, collName).contains(fieldName)) {
-                        fs.indexBuildMarkers().mark(dbName, collName, fieldName);
+                        fs.indexMarkers().mark(dbName, collName, fieldName);
                     }
                     final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
                     if (result) {
                         AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
-                        fs.indexBuildMarkers().clear(dbName, collName, fieldName);
+                        fs.indexMarkers().clear(dbName, collName, fieldName);
                         return OperationResponse.ok(OperationType.DROP_INDEX,
                                 "Successfully dropped index: " + fieldName);
                     } else {
@@ -104,10 +104,10 @@ public final class IndexOperationHelper {
                         targets = request.getFieldNames();
                     }
                     for (var fieldName : targets) {
-                        fs.indexBuildMarkers().mark(dbName, collName, fieldName);
+                        fs.indexMarkers().mark(dbName, collName, fieldName);
                         IndexHelper.dropIndex(dbName, collName, fieldName);
                         IndexHelper.createIndex(dbName, collName, fieldName);
-                        fs.indexBuildMarkers().clear(dbName, collName, fieldName);
+                        fs.indexMarkers().clear(dbName, collName, fieldName);
                     }
                     clearDirtyMarkerIfFullyRebuilt(dbName, collName, targets, registeredIndexes);
                     if (targets.isEmpty()) {
@@ -121,8 +121,8 @@ public final class IndexOperationHelper {
             Set<String> registeredIndexes) {
         if (Set.copyOf(rebuiltFields).containsAll(registeredIndexes)) {
             pendingIndexWrites.clearCollection(dbName, collName);
-            fs.clearIndexesDirty(dbName, collName);
-            fs.retireUncleanStopMarker(dbName, collName);
+            fs.indexMarkers().clearDirty(dbName, collName);
+            fs.indexMarkers().clearUncleanStop(dbName, collName);
         }
     }
 }

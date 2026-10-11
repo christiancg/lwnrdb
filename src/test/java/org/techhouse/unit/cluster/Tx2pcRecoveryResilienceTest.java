@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mockStatic;
@@ -118,7 +119,7 @@ public class Tx2pcRecoveryResilienceTest {
         Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         try (var mocked = mockStatic(TwoPhaseParticipant.class)) {
-            mocked.when(() -> TwoPhaseParticipant.commitPreparedFromDurable(anyString(), any(), anyLong()))
+            mocked.when(() -> TwoPhaseParticipant.resolveFromDurable(anyString(), anyBoolean(), anyLong()))
                     .thenThrow(new StackOverflowError("script blew the stack"));
 
             assertDoesNotThrow(recovery::recover,
@@ -197,8 +198,7 @@ public class Tx2pcRecoveryResilienceTest {
         final var dtxId = "99999999-9999-9999-9999-999999999999";
         seedPreparedSlice(dtxId, "startup-doc");
 
-        TwoPhaseParticipant.commitPreparedFromDurable(dtxId,
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)), 0L);
+        TwoPhaseParticipant.resolveFromDurable(dtxId, true, 0L);
 
         final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("startup-doc");
@@ -229,8 +229,8 @@ public class Tx2pcRecoveryResilienceTest {
         final var stuck = openStuckSession("stuck-commit");
         try {
             final var started = System.currentTimeMillis();
-            assertThrows(TimeoutException.class, () -> TwoPhaseParticipant.commitPreparedFromDurable(stuck.dtxId(),
-                    List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)), 200L));
+            assertThrows(TimeoutException.class,
+                    () -> TwoPhaseParticipant.resolveFromDurable(stuck.dtxId(), true, 200L));
             assertTrue(System.currentTimeMillis() - started < 5000, "the budget bounds the wait on the session");
         } finally {
             unstick(stuck);
@@ -242,7 +242,8 @@ public class Tx2pcRecoveryResilienceTest {
         final var stuck = openStuckSession("stuck-abort");
         try {
             final var started = System.currentTimeMillis();
-            assertThrows(TimeoutException.class, () -> TwoPhaseParticipant.abortFromDurable(stuck.dtxId(), 200L));
+            assertThrows(TimeoutException.class,
+                    () -> TwoPhaseParticipant.resolveFromDurable(stuck.dtxId(), false, 200L));
             assertTrue(System.currentTimeMillis() - started < 5000, "the budget bounds the wait on the session");
         } finally {
             unstick(stuck);

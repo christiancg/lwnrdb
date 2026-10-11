@@ -35,7 +35,6 @@ public final class TransactionBuffer {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
-    private static final String OBJECTS_FIELD = "objects";
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
 
     private TransactionBuffer() {
@@ -52,13 +51,9 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var lockResult = ensureLock(transaction, OperationType.SAVE, dbName, collName, onLockTimeout);
+            final var lockResult = lockedRefusal(transaction, OperationType.SAVE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
-            }
-            final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
-            if (readinessError != null) {
-                return readinessError;
             }
             final var schemaError = SchemaValidationHelper.check(request);
             if (schemaError != null) {
@@ -96,13 +91,9 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var lockResult = ensureLock(transaction, OperationType.BULK_SAVE, dbName, collName, onLockTimeout);
+            final var lockResult = lockedRefusal(transaction, OperationType.BULK_SAVE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
-            }
-            final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName, collName);
-            if (readinessError != null) {
-                return readinessError;
             }
             final var schemaError = SchemaValidationHelper.check(request);
             if (schemaError != null) {
@@ -143,7 +134,7 @@ public final class TransactionBuffer {
                     overlayUpdates.put(id, effective);
                 }
             }
-            payload.add(OBJECTS_FIELD, array);
+            payload.add(AdminTransactionEntry.OBJECTS_FIELD, array);
             final var versions = new ArrayList<Long>();
             for (var i = 0; i < overlayUpdates.size(); i++) {
                 versions.add(hybridClock.next());
@@ -163,13 +154,9 @@ public final class TransactionBuffer {
         final var collName = request.getCollectionName();
         final var id = request.get_id();
         return OperationResponse.respondOrError(OperationType.DELETE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var lockResult = ensureLock(transaction, OperationType.DELETE, dbName, collName, onLockTimeout);
+            final var lockResult = lockedRefusal(transaction, OperationType.DELETE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
-            }
-            final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
-            if (readinessError != null) {
-                return readinessError;
             }
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
@@ -221,17 +208,16 @@ public final class TransactionBuffer {
         return null;
     }
 
-    public static OperationResponse ensureLock(Transaction transaction, OperationType type, String dbName,
+    private static OperationResponse lockedRefusal(Transaction transaction, OperationType type, String dbName,
             String collName, Runnable onTimeout) throws InterruptedException {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        if (transaction.holdsLock(collId)) {
-            return null;
-        }
-        if (locks.tryLockWrite(dbName, collName, configuration.getTransactionLockTimeoutMs())) {
+        if (!transaction.holdsLock(collId)) {
+            if (!locks.tryLockWrite(dbName, collName, configuration.getTransactionLockTimeoutMs())) {
+                onTimeout.run();
+                return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+            }
             transaction.addHeldLock(collId);
-            return null;
         }
-        onTimeout.run();
-        return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+        return CollectionReadinessGuard.check(type, dbName, collName);
     }
 }

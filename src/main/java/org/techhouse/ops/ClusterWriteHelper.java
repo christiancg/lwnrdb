@@ -97,11 +97,11 @@ public final class ClusterWriteHelper {
         };
     }
 
-    public static OperationResponse stillOwnsOrError(OperationType type, String dbName, String collName) {
+    public static OperationResponse refusalUnderLock(OperationType type, String dbName, String collName) {
         if (!coordinator.stillOwns(dbName, collName)) {
             return new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
         }
         faultInjector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, Cache.getCollectionIdentifier(dbName, collName));
-        return null;
+        return CollectionReadinessGuard.check(type, dbName, collName);
     }
 }

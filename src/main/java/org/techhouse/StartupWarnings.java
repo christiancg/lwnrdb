@@ -16,25 +16,16 @@ public final class StartupWarnings {
     }
 
     public static void retainAndReportUncleanStops() {
-        final var dirty = IocContainer.get(FileSystem.class).retainUncleanStopMarkers();
+        final var dirty = IocContainer.get(FileSystem.class).indexMarkers().retainUncleanStops();
         if (!dirty.isEmpty()) {
             logger.warning("These collections stopped with field-index work outstanding, so their indexes may be"
                     + " missing entries: " + String.join(", ", dirty) + ". Run REINDEX on each of them.");
         }
-        final var unbuilt = IocContainer.get(FileSystem.class).indexBuildMarkers().listMarked();
+        final var unbuilt = IocContainer.get(FileSystem.class).indexMarkers().listMarked();
         if (!unbuilt.isEmpty()) {
             logger.warning("These field indexes were left half-built or half-dropped, so they are answered by a"
                     + " full scan until rebuilt: " + String.join(", ", unbuilt)
                     + ". Run REINDEX (or DROP_INDEX) on each of them.");
-        }
-    }
-
-    public static void warnIfCompactionsLeftUnrecovered() {
-        final var unrecovered = IocContainer.get(FileSystem.class).listCompactionMarkers();
-        if (!unrecovered.isEmpty()) {
-            logger.warning("These pages hold an interrupted compaction that startup could not recover, because"
-                    + " their pk index could not be read: " + String.join(", ", unrecovered)
-                    + ". Repair or restore the pk index; the marker is replayed at the next startup.");
         }
     }
 

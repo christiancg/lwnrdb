@@ -144,7 +144,7 @@ public class DurableReplayIncompleteTest {
         final var dtxId = seedUnappliablePreparedSlice();
 
         final var thrown = assertThrows(DurableReplayIncompleteException.class,
-                () -> TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collectionId()), 0L));
+                () -> TransactionRecovery.resolveFromDurable(dtxId, true, 0L));
 
         assertTrue(thrown.getMessage().contains(dtxId));
         assertTrue(TxCommitLog.isLocallyCommitted(dtxId), "the decided slice is kept for the next attempt");

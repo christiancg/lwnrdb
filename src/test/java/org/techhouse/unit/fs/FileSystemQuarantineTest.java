@@ -100,8 +100,8 @@ public class FileSystemQuarantineTest {
         Files.writeString(new File(collection, "c1-indexes.dirty").toPath(), "1");
         Files.writeString(new File(collection, "c1-name.building").toPath(), "");
 
-        assertTrue(fileSystem.listDirtyIndexCollections().isEmpty(),
+        assertTrue(fileSystem.indexMarkers().retainUncleanStops().isEmpty(),
                 "a moved-aside database must not ask the operator to REINDEX a collection that does not exist");
-        assertTrue(fileSystem.indexBuildMarkers().listMarked().isEmpty());
+        assertTrue(fileSystem.indexMarkers().listMarked().isEmpty());
     }
 }

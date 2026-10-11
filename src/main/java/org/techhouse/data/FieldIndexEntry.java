@@ -8,13 +8,13 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
+import org.techhouse.ejson.internal.JsonStrings;
 import org.techhouse.utils.CaseFolding;
 
 public class FieldIndexEntry<T> extends CollectionScopedEntry implements Comparable<T> {
     private static final char ESCAPE_CHAR = '\\';
     private static final char SEPARATOR_CHAR = Globals.ID_SEPARATOR.charAt(0);
     private static final int ESCAPE_HEADROOM = 8;
-    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
     private static final int UNICODE_ESCAPE_DIGITS = 4;
     private T value;
     private Set<String> ids;
@@ -55,8 +55,8 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
                 builder.append(ESCAPE_CHAR).append('s');
                 continue;
             }
-            if (isUnpairedSurrogate(raw, i)) {
-                appendUnicodeEscape(builder, current);
+            if (JsonStrings.isLoneSurrogate(raw, i)) {
+                JsonStrings.appendUnicodeEscape(builder, current);
                 continue;
             }
             switch (current) {
@@ -72,22 +72,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     private static boolean needsEscaping(String raw, int index) {
         final var current = raw.charAt(index);
         return current == ESCAPE_CHAR || current == '\n' || current == '\r' || current == SEPARATOR_CHAR
-                || isUnpairedSurrogate(raw, index);
-    }
-
-    private static boolean isUnpairedSurrogate(String raw, int index) {
-        final var current = raw.charAt(index);
-        if (Character.isHighSurrogate(current)) {
-            return index + 1 >= raw.length() || !Character.isLowSurrogate(raw.charAt(index + 1));
-        }
-        return Character.isLowSurrogate(current) && (index == 0 || !Character.isHighSurrogate(raw.charAt(index - 1)));
-    }
-
-    private static void appendUnicodeEscape(StringBuilder builder, char codeUnit) {
-        builder.append(ESCAPE_CHAR).append('u');
-        for (var shift = 12; shift >= 0; shift -= 4) {
-            builder.append(HEX_DIGITS[(codeUnit >> shift) & 0xF]);
-        }
+                || JsonStrings.isLoneSurrogate(raw, index);
     }
 
     public static String unescapeIndexToken(String escaped) {
