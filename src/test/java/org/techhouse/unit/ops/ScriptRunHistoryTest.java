@@ -332,6 +332,7 @@ public class ScriptRunHistoryTest {
     public void test_the_sweep_thread_does_not_start_when_history_is_disabled() throws Exception {
         setConfig("scriptRunHistoryEnabled", false);
         final var history = IocContainer.get(ScriptRunHistory.class);
+        history.stopSweep();
         history.startSweep();
         assertNull(TestUtils.getPrivateField(history, "sweeper", java.util.concurrent.ScheduledExecutorService.class));
     }

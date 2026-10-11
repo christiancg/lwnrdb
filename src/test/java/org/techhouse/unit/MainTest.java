@@ -16,6 +16,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -31,6 +32,7 @@ public class MainTest {
         IocContainer.get(ListenManager.class).stopWorkers();
         IocContainer.get(TriggerExecutor.class).stop();
         IocContainer.get(ScheduleExecutor.class).stop();
+        IocContainer.get(ScriptRunHistory.class).stopSweep();
         final var dbPath = new File(TestGlobals.PATH);
         if (dbPath.exists()) {
             TestUtils.deleteFolder(dbPath);
