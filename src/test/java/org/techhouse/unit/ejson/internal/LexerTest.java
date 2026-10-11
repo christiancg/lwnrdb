@@ -10,7 +10,7 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ejson.exceptions.NonFiniteNumberException;
+import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.internal.Lexer;
 
 public class LexerTest {
@@ -99,8 +99,8 @@ public class LexerTest {
 
     @Test
     public void test_overflowing_number_token_aborts_the_lex() {
-        assertThrows(NonFiniteNumberException.class, () -> Lexer.lex("{\"x\":1e400}"));
-        assertThrows(NonFiniteNumberException.class, () -> Lexer.lex("{\"x\":-1e400}"));
+        assertThrows(MalformedJsonException.class, () -> Lexer.lex("{\"x\":1e400}"));
+        assertThrows(MalformedJsonException.class, () -> Lexer.lex("{\"x\":-1e400}"));
     }
 
     @Test

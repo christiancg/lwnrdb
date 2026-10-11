@@ -65,7 +65,6 @@ TIMEOUT_MS = 1_000
 MAX_SOURCE_BYTES = 512
 
 
-
 # ── connection / protocol ────────────────────────────────────────────────────
 
 class Conn(bu.Conn):

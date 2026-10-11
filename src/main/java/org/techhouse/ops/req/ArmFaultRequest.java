@@ -6,7 +6,6 @@ public class ArmFaultRequest extends OperationRequest {
     private String point;
     private String action;
     private String match;
-    private Long delayMs;
 
     public ArmFaultRequest() {
         super(OperationType.ARM_FAULT, null, null);
@@ -34,13 +33,5 @@ public class ArmFaultRequest extends OperationRequest {
 
     public void setMatch(String match) {
         this.match = match;
-    }
-
-    public Long getDelayMs() {
-        return delayMs;
-    }
-
-    public void setDelayMs(Long delayMs) {
-        this.delayMs = delayMs;
     }
 }

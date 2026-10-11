@@ -31,10 +31,6 @@ public final class ReplicatedApplyHelper {
     private ReplicatedApplyHelper() {
     }
 
-    public static boolean apply(ReplicationPayload payload) {
-        return apply(payload, 0L);
-    }
-
     public static boolean apply(ReplicationPayload payload, long timeoutMillis) {
         if (payload == null || payload.getOp() == null) {
             return false;
@@ -43,16 +39,11 @@ public final class ReplicatedApplyHelper {
         final var collName = payload.getCollName();
         var locked = false;
         try {
-            if (timeoutMillis > 0) {
-                locked = locks.tryLockWrite(dbName, collName, timeoutMillis);
-                if (!locked) {
-                    logger.warning("Skipping the replicated apply to " + dbName + "|" + collName
-                            + ": its write lock stayed held for " + timeoutMillis + "ms");
-                    return false;
-                }
-            } else {
-                locks.lock(dbName, collName);
-                locked = true;
+            locked = locks.tryLockWrite(dbName, collName, timeoutMillis);
+            if (!locked) {
+                logger.warning("Skipping the replicated apply to " + dbName + "|" + collName
+                        + ": its write lock stayed held for " + timeoutMillis + "ms");
+                return false;
             }
             return applyLocked(payload);
         } catch (InterruptedException e) {

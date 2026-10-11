@@ -102,7 +102,7 @@ public final class CollectionOperationHelper {
         if (dropped.getStatus() == OperationStatus.OK) {
             return OperationResponse.respondOrError(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION,
                     () -> {
-                        AdminTombstone.record(AdminRecordKey.collection(dbName, collName));
+                        AdminStamp.tombstone(AdminRecordKey.collection(dbName, collName));
                         return dropped;
                     });
         }

@@ -1,53 +1,3 @@
-"""End-to-end regression tests for the storage-layer consistency fixes.
-
-This suite is **self-contained**: it starts its own LWNRDB instance on a dedicated port and
-working directory, because both features it pins need something the shared CI server cannot
-give them — a deliberately tiny `maxPageSize` so a small collection really spans several page
-files, and a restart of that same data directory partway through.
-
-What is covered:
-
-  * page-occupancy metadata is persisted for user collections, and a full scan after a restart
-    still returns every document. Before the fix, `admin/pages/<db>_<coll>` stayed empty for
-    user collections, so a restart left the page list empty; the first write after that restart
-    repopulated exactly one page entry, and `Cache.streamCollectionFromDisk` then treated that
-    partial list as authoritative and silently skipped every other page. A 40-document
-    collection answered a full scan with 13 documents and status OK.
-
-  * `maxPageSize` is still enforced after a restart, which is the same defect seen from the
-    write side: with no page list, first-fit had nothing to fit against.
-
-  * dropping a database while other connections are writing to it does not strand a collection
-    lock. `ResourceLocking.removeLock` used to evict a lock that was still held, so the holder's
-    release became a silent no-op: every thread already queued on that lock blocked for the
-    life of the process, and the next caller minted a fresh lock object for the same key and so
-    lost mutual exclusion entirely. This case is inherently timing-dependent — it can miss the
-    window, but it can never fail when the engine is correct, so it is safe in CI. The
-    deterministic proof lives in ResourceLockingTest.
-
-  * page-occupancy metadata keeps up with an admin row that grows on update. The update branch of
-    `AdminOperationHelper.writeAdminEntry` emitted no `UPDATED` delta while its insert and erase
-    branches always did, so the recorded size in `admin/pages/admin_<coll>` drifted below the real
-    page file, first-fit kept packing rows into a page it believed still had room, and the page
-    grew past `maxPageSize`. Nothing recomputes page sizes except a restart.
-
-  * a PK-index self-heal never erases a write that committed while it was reading.
-    `PkIndexStore.readWholePkIndexFile` rewrote `{coll}-pk.idx` in full from a snapshot
-    taken before it released the read lock, so an append that landed in between was dropped — and
-    the loss is permanent, because `REINDEX` rebuilds field indexes only and nothing rebuilds the
-    PK index from the document store. The last phase restarts with the cache disabled so that every
-    read really reaches the file rather than the one cached copy. Like the lock case above, this is
-    timing-dependent: it can miss the window, but it can never fail when the engine is correct. The
-    deterministic proof lives in FileSystemPkIndexTest.
-
-  * a blocking aggregation step over a collection with no page-occupancy metadata does not exhaust
-    the server's file descriptors. `Cache.streamCollectionFromDisk` falls back to a full folder scan
-    there, and that source used to hold an open directory handle that `SORT`, `GROUP_BY`, `JOIN` and
-    `REDUCE` dropped on the floor: two descriptors per query, never reclaimed, until the node stopped
-    accepting connections. The iteration count here stays well under any sane `ulimit -n`, so a
-    correct engine can never fail it; the deterministic proof lives in AggregationStreamLifetimeTest.
-"""
-
 import json
 import os
 import shutil
@@ -111,16 +61,12 @@ REPO_ROOT = bu.REPO_ROOT
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
-# Small enough that a few dozen small documents span several pages, so a partial page list is
-# observable at all. maxEntrySize must stay strictly below it.
 MAX_PAGE_SIZE = "4kb"
 MAX_PAGE_BYTES = 4096
 MAX_ENTRY_SIZE = "1kb"
 SEEDED_DOCS = 40
 PAD = "p" * 300
 
-# -1 disables the user cache outright, which is what makes every read in the last phase reach
-# the PK index file instead of the single copy the first read would otherwise cache.
 CACHE_DISABLED = "-1"
 
 HEAL_SEEDED = 1000
@@ -149,12 +95,6 @@ class Conn(bu.Conn):
         return self.send({"type": "RUN_SCRIPT", "databaseName": db, "script": script})
 
     def send_raw_strict(self, line: str) -> dict:
-        """Send a pre-serialised line and refuse a non-RFC constant in the reply.
-
-        json.dumps cannot express 1e400 (a Python float overflows to inf, which serialises as the
-        Infinity token the lexer refuses for a different reason), and a plain json.loads would
-        accept Infinity/NaN coming back as a Python extension.
-        """
         try:
             self.s.sendall((line + "\n").encode())
             raw = self.f.readline().decode().strip()
@@ -215,9 +155,7 @@ def page_metadata_bytes(work_dir: str, db=DB, coll=COLL) -> int:
 
 
 def recorded_pages(work_dir: str, db=DB, coll=COLL) -> dict:
-    """What the engine believes each page of `db|coll` holds, keyed by page number."""
     folder = os.path.join(work_dir, "db", "admin", "pages", f"{db}_{coll}")
-    # The folder name is ambiguous (names admit "_"), so rows are identified by their own id.
     prefix = f"{db}|{coll}|"
     rows = {}
     if not os.path.isdir(folder):
@@ -283,8 +221,6 @@ def append_torn_pk_line(work_dir: str, db=DB, coll=COLL) -> None:
         fp.write("torn pk index line\n")
 
 
-# ── phase 1: seed ────────────────────────────────────────────────────────────
-
 def seed(conn: Conn, work_dir: str):
     section("Seeding a collection that spans several pages")
     check_status("create the database", conn.send({"type": "CREATE_DATABASE", "databaseName": DB}), "OK")
@@ -342,8 +278,6 @@ def seed_collections_spanning_several_admin_pages(conn: Conn, work_dir: str):
     check("admin/collections spans several pages", len(actual_pages(work_dir, "admin", "collections")) > 1,
           f"pages: {sorted(actual_pages(work_dir, 'admin', 'collections'))}")
 
-
-# ── phase 2: after a restart ─────────────────────────────────────────────────
 
 SCRIPT_WRITTEN = {
     "sw_geo": '{ _id: "sw_geo", loc: "#geo(3.0,4.0)", pad: "x" }',
@@ -449,8 +383,6 @@ def test_scan_is_complete_after_the_first_write(conn: Conn):
 
 def test_page_cap_is_enforced_after_restart(conn: Conn, work_dir: str):
     section("Page cap after a restart")
-    # Delete across several pages first: the DELETE path used to charge every decrement to page 0, whose
-    # recorded size then went negative and made first-fit pile every later insert into it.
     for i in range(0, SEEDED_DOCS, 3):
         conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": f"id{i:03d}"})
     for i in range(SEEDED_DOCS):
@@ -1358,9 +1290,6 @@ def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
 
 def test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn: Conn):
     section("DROP_DATABASE then CREATE_DATABASE with the same ids")
-    # Seeded before the restart, so nothing about this collection is cached now. The COUNT below is
-    # an index-only read: it loads the pk index without ever populating the document cache, which is
-    # the state evictDatabase used to leave behind for a recreated collection to inherit.
     conn.count_via_pk(db=RECREATE_DB)
 
     check_status("drop the database", conn.send({"type": "DROP_DATABASE", "databaseName": RECREATE_DB}), "OK")
@@ -1395,9 +1324,6 @@ TXN_COLL = "txn_durability_coll"
 
 
 def test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn: Conn):
-    """bulkInsertIntoCollection appended across pages and then wrote the pk index with no rollback,
-    so a failed index write orphaned every record: visible to a scan, invisible to FIND_BY_ID, and a
-    later re-save of the same id appended a second copy."""
     section("bulk insert: scan and the pk index agree")
     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": BULK_COLL})
     objects = [{"_id": f"bulk_{i:04d}", "pad": PAD} for i in range(60)]
@@ -1426,10 +1352,6 @@ def test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn: Conn):
 
 
 def test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn: Conn):
-    """A bulk update's per-entry loop had no rollback of its own publish step: a mid-batch failure
-    left the entries updated before it durable on disk but never reflected in the cache or the field
-    index. This is the ordinary-path regression guard around that same code, run across many entries
-    so a multi-page batch is exercised the way the real failure mode requires."""
     section("bulk update of many entries: scan, FIND_BY_ID and the field index all agree")
     objects = [{"_id": f"bulk_{i:04d}", "pad": "updated-" + PAD} for i in range(60)]
     check_status("bulk update across several pages",
@@ -1463,9 +1385,6 @@ def test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn: Co
 
 
 def test_a_committed_transaction_survives_a_restart_whole(conn: Conn):
-    """A commit that cannot finish applying keeps its locks and its marker so recovery can finish
-    the slice. Teardown used to delete the ops the marker pointed at, after which startup recovery
-    replayed an empty slice and logged that it had finished the transaction."""
     section("transaction durability across a restart")
     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": TXN_COLL})
     check_status("start transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
@@ -1557,7 +1476,6 @@ def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
                       conn.send(request), "NOT_FOUND", "404-11")
 
 
-
 def test_reads_of_an_unknown_collection_are_refused_cleanly(conn: Conn):
     section("reads naming a collection that does not exist")
     mis_cased = COLL.upper() if COLL != COLL.upper() else COLL.lower()
@@ -1614,10 +1532,6 @@ def test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(
 
 def test_index_operations_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
     section("CREATE_INDEX / DROP_INDEX never take the pk index or the tombstones with them")
-    # Index files are selected by name. An unanchored match on "-<field>-" also matched
-    # <coll>-pk.idx and <coll>-tombstones.idx, and collection names admit '-', so an ordinary
-    # CREATE_INDEX on field "data" in collection "user-data" deleted both. Losing pk.idx is
-    # unrecoverable in-product: REINDEX rebuilds field indexes, never the pk index.
     coll = "user-data"
     bu.check_status("create a hyphenated collection",
                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -1643,15 +1557,12 @@ def test_index_operations_cannot_destroy_the_pk_index(conn: Conn, work_dir: str)
                         conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
                                    "_id": f"d{i}"}), "OK")
 
-    # With pk.idx gone the re-save is classified as an insert, which appends a second physical
-    # document for one _id; the scan then returns the id twice while FIND_BY_ID answers 404.
     conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
                "object": {"_id": "d0", "data": 99}})
     scanned = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
                          "aggregationSteps": []})
     ids = [d.get("_id") for d in (scanned.get("results") or [])]
     bu.check("a re-save does not duplicate the _id", len(ids) == len(set(ids)) == 3, detail=f"ids={ids}")
-
 
 
 def aggregate_ids(conn: Conn, coll: str, steps: list) -> list:
@@ -1662,10 +1573,6 @@ def aggregate_ids(conn: Conn, coll: str, steps: list) -> list:
 
 def test_a_filter_on_id_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
     section("A FILTER on _id is answered by the pk index and never rewrites it")
-    # The pk index used to be written as <coll>-_id-String.idx, byte-for-byte the field-index naming
-    # scheme, and rawIndexMatchingIds was the one index-read entry point with no hasNoIndex gate. A
-    # FILTER on _id therefore parsed the pk index as a string field index, failed on every line, and
-    # the torn-line self-heal rewrote it empty. REINDEX never rebuilds pk.idx, so that was permanent.
     coll = "id_filter"
     bu.check_status("create the collection",
                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -1709,9 +1616,6 @@ def test_a_filter_on_id_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
 
 def test_a_filter_on_id_agrees_with_find_by_id_on_case(conn: Conn):
     section("FILTER _id and FIND_BY_ID name the same document")
-    # FieldPredicateFactory routed _id through the generic string branch, whose EQUALS is
-    # equalsIgnoreCase, while FIND_BY_ID/SAVE/DELETE binary-search a case-sensitively sorted list. A
-    # document was findable by a filter and unaddressable by everything else.
     coll = "id_case"
     bu.check_status("create the collection",
                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -1757,10 +1661,6 @@ def aggregate_count(conn: Conn, coll: str, steps: list) -> int:
 
 def test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn: Conn):
     section("An index-only COUNT agrees with the rows the same FILTER returns")
-    # PrimaryKeyIndexResolver answered Set.of() both for a string absent from pk.idx and for an
-    # operand it could not read as a primary key at all, and complementOf turned the second into
-    # every document. FILTER hid it by re-testing each fetched document; tryIndexOnlyCount has no
-    # re-test by design, so [FILTER, COUNT] reported the collection size against zero rows.
     coll = "id_count"
     bu.check_status("create the collection",
                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -1768,9 +1668,6 @@ def test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn: Conn):
         conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
                    "object": {"_id": doc_id, "n": 1}})
 
-    # A type-mismatched comparison matches nothing, here as everywhere else in the engine, so the
-    # complement the pk index would have taken is wrong. null is the exception and is not a type
-    # mismatch: no _id is ever null, so NOT_EQUALS null legitimately names every document.
     for label, value, expected in (("a number", 5, []), ("an object", {}, []), ("an array", [], []),
                                    ("null", None, ["k1", "k2", "k3"])):
         steps = [{"type": "FILTER", "operator": {
@@ -1799,10 +1696,6 @@ def test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn: Conn):
 
 def test_not_equals_null_returns_the_documents_that_are_not_null(conn: Conn):
     section("A null operand respects the operator it was given")
-    # JsonNull is not a JsonPrimitive, so a null operand fell past every typed branch of
-    # FieldPredicateFactory.getTester into a tail that answered isJsonNull() && isJsonNull()
-    # without looking at the operator: NOT_EQUALS, the four range operators and CONTAINS against
-    # null all returned exactly the null-valued documents.
     coll = "null_operand"
     bu.check_status("create the collection",
                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -1857,8 +1750,6 @@ def test_in_and_not_in_treat_null_as_a_member(conn: Conn):
                  ids("NOT_IN", [None]) == ids("NOT_EQUALS", None))
 
 
-# ── phase 3: an unclean stop, then a restart with the cache disabled ─────────
-
 def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
     folder = os.path.join(work_dir, "db", db, coll)
     if not os.path.isdir(folder):
@@ -1867,13 +1758,6 @@ def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
 
 
 def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
-    """Kill the server with field-index work still queued, and report whether it really was.
-
-    The marker only exists while the background worker is behind, and it drains up to 256 events at
-    a time, so a burst that stops to look at the marker has usually let it clear again before the
-    kill lands. A writer thread keeps the queue backed up until the moment of the kill, and the
-    marker is re-read afterwards, where SIGKILL makes the answer authoritative.
-    """
     check_status("create the collection whose indexes will be left dirty",
                  conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DIRTY_COLL}), "OK")
     check_status("index a field on it",
@@ -2045,7 +1929,6 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
         try:
             with admin_conn() as reader_conn:
                 while not stop.is_set():
-                    # Dirty, so it takes no collection lock and really overlaps the writers above.
                     reader_conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": HEAL_COLL,
                                       "dirtyRead": True, "aggregationSteps": [{"type": "COUNT"}]})
         except Exception as exc:
@@ -2073,7 +1956,6 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
     check("the race committed enough writes to be worth asserting on", len(committed) > 100,
           f"only {len(committed)} writes committed in {RACE_SECONDS}s")
 
-    # Without this the suite could pass by never entering the window it is here to guard.
     with open(log_path, "rb") as fp:
         fp.seek(log_offset)
         heals = fp.read().decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-pk")
@@ -2103,8 +1985,6 @@ def save_raw_number(conn: Conn, coll: str, doc_id: str, literal: str) -> dict:
 
 def test_non_finite_numbers_are_refused(conn: Conn):
     section("A number the serializer cannot spell is refused instead of stored as null")
-    # The wire parser was the one unguarded producer: 1e400 parsed to Infinity, the cache held it
-    # and NumberTypeAdapter wrote null, so the same FILTER answered differently warm and cold.
     coll = NON_FINITE_COLL
     bu.check_status("create the collection",
                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")

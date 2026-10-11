@@ -85,7 +85,7 @@ public class DanglingPkEntriesTest {
         truncateFirstPage(neighbourEnd);
         final var pageBytes = Files.readAllBytes(page(0).toPath());
 
-        final var retired = DanglingPkEntries.retireAll(store, DB, COLL, pageLengths(0));
+        final var retired = OrphanedPageRecords.retireDangling(store, DB, COLL, pageLengths(0));
 
         assertEquals(List.of("x"), retiredIds(retired));
         assertEquals(List.of("w"), indexedIds());
@@ -99,7 +99,7 @@ public class DanglingPkEntriesTest {
         appendIndexed(0, "x");
         truncateFirstPage(neighbourEnd + 5);
 
-        final var retired = DanglingPkEntries.retireAll(store, DB, COLL, pageLengths(0));
+        final var retired = OrphanedPageRecords.retireDangling(store, DB, COLL, pageLengths(0));
         TornPageTail.healAll(paths, DB, COLL, List.of(0L), () -> store.readWholePkIndexFile(DB, COLL));
 
         assertEquals(List.of("x"), retiredIds(retired));
@@ -112,7 +112,7 @@ public class DanglingPkEntriesTest {
         appendIndexed(1, "y");
         Files.delete(page(1).toPath());
 
-        final var retired = DanglingPkEntries.retireAll(store, DB, COLL, pageLengths(0, 1));
+        final var retired = OrphanedPageRecords.retireDangling(store, DB, COLL, pageLengths(0, 1));
 
         assertEquals(List.of("y"), retiredIds(retired));
         assertEquals(List.of("w"), indexedIds());
@@ -124,7 +124,7 @@ public class DanglingPkEntriesTest {
         appendIndexed(0, "x");
         final var pkBytes = Files.readAllBytes(paths.pkIndexFile(DB, COLL).toPath());
 
-        assertTrue(DanglingPkEntries.retireAll(store, DB, COLL, pageLengths(0)).isEmpty());
+        assertTrue(OrphanedPageRecords.retireDangling(store, DB, COLL, pageLengths(0)).isEmpty());
 
         assertArrayEquals(pkBytes, Files.readAllBytes(paths.pkIndexFile(DB, COLL).toPath()));
     }
@@ -135,7 +135,7 @@ public class DanglingPkEntriesTest {
         final var pkFile = paths.pkIndexFile(DB, COLL);
         Files.writeString(pkFile.toPath(), "garbage\nmore garbage\n", StandardCharsets.UTF_8);
 
-        assertTrue(DanglingPkEntries.retireAll(store, DB, COLL, Map.of()).isEmpty());
+        assertTrue(OrphanedPageRecords.retireDangling(store, DB, COLL, Map.of()).isEmpty());
 
         assertEquals("garbage\nmore garbage\n", Files.readString(pkFile.toPath(), StandardCharsets.UTF_8));
     }
@@ -148,7 +148,7 @@ public class DanglingPkEntriesTest {
         truncateFirstPage(fullLength - 1);
 
         TornPageTail.healAll(paths, DB, COLL, List.of(0L), () -> store.readWholePkIndexFile(DB, COLL));
-        final var retired = DanglingPkEntries.retireAll(store, DB, COLL, pageLengths(0));
+        final var retired = OrphanedPageRecords.retireDangling(store, DB, COLL, pageLengths(0));
 
         assertTrue(retired.isEmpty());
         assertEquals(fullLength, page(0).length());

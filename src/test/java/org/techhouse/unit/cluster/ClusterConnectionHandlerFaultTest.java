@@ -32,7 +32,7 @@ public class ClusterConnectionHandlerFaultTest extends ClusterConnectionHandlerT
     @Test
     public void test_a_dropped_reply_writes_nothing_and_the_next_reply_is_written() throws Exception {
         final var address = cluster.serverAddress();
-        faultInjector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, "GOSSIP", 0);
+        faultInjector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, "GOSSIP");
 
         assertThrows(Exception.class,
                 () -> pool.request(address, envelope(ClusterMessageType.GOSSIP), DROPPED_REPLY_WAIT_MS));

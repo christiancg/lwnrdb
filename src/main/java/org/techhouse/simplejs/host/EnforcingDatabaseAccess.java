@@ -42,7 +42,7 @@ import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
-import org.techhouse.ops.tx.SliceStates;
+import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.values.JsObject;
@@ -253,7 +253,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         try {
             response = dispatch(request);
         } finally {
-            final var fenced = txId != null && (SliceStates.isFenced(txId) || keptAfterFinishing(response));
+            final var fenced = txId != null && (SliceStateMachine.isFenced(txId) || keptAfterFinishing(response));
             lastCommitFenced = fenced;
             if (response == null && !fenced) {
                 TransactionOperationHelper.rollback(sessionClientId);

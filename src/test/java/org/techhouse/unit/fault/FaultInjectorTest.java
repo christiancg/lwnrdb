@@ -55,8 +55,8 @@ public class FaultInjectorTest {
     @Test
     public void test_a_disabled_injector_never_fires_an_armed_point() throws Exception {
         TestUtils.setPrivateField(injector, "enabled", false);
-        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, null, 0);
-        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, null, 0);
+        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, null);
+        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, null);
         injector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, SUBJECT);
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));
         assertTrue(halts.isEmpty());
@@ -72,7 +72,7 @@ public class FaultInjectorTest {
 
     @Test
     public void test_a_match_fires_only_for_its_subject() {
-        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, SUBJECT, 0);
+        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, SUBJECT);
         injector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, "db|other");
         assertTrue(halts.isEmpty());
         injector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, SUBJECT);
@@ -81,14 +81,14 @@ public class FaultInjectorTest {
 
     @Test
     public void test_no_match_fires_for_any_subject() {
-        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, null, 0);
+        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, null);
         injector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, "anything|else");
         assertEquals(List.of(137), halts);
     }
 
     @Test
     public void test_an_arm_fires_once() {
-        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, null, 0);
+        injector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT, null);
         injector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, SUBJECT);
         injector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, SUBJECT);
         assertEquals(1, halts.size());
@@ -96,7 +96,7 @@ public class FaultInjectorTest {
 
     @Test
     public void test_pause_parks_until_released_and_reports_reached() throws Exception {
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, SUBJECT, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, SUBJECT);
         final var thread = hitInBackground(() -> injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT));
         assertTrue(injector.awaitReached(FaultPoint.WRITE_OWNERSHIP_RECHECKED, WAIT_MS));
         thread.join(200);
@@ -109,7 +109,7 @@ public class FaultInjectorTest {
     @Test
     public void test_pause_gives_up_after_its_limit() throws Exception {
         TestUtils.setPrivateField(injector, "pauseLimitMs", 50L);
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null);
         final var started = System.nanoTime();
         injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT);
         final var elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
@@ -117,34 +117,15 @@ public class FaultInjectorTest {
     }
 
     @Test
-    public void test_delay_sleeps_at_least_its_delay() {
-        injector.arm(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, FaultAction.DELAY, null, 50);
-        final var started = System.nanoTime();
-        injector.at(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, SUBJECT);
-        final var elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-        assertTrue(elapsedMs >= 50 && elapsedMs < WAIT_MS, "elapsed=" + elapsedMs);
-    }
-
-    @Test
-    public void test_a_delay_ends_early_when_released() throws Exception {
-        injector.arm(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, FaultAction.DELAY, null, 60_000);
-        final var thread = hitInBackground(() -> injector.at(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, SUBJECT));
-        assertTrue(injector.awaitReached(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, WAIT_MS));
-        injector.release(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED);
-        thread.join(WAIT_MS);
-        assertFalse(thread.isAlive());
-    }
-
-    @Test
     public void test_halt_calls_the_halt_function_with_137() {
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.HALT, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.HALT, null);
         injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT);
         assertEquals(List.of(137), halts);
     }
 
     @Test
     public void test_drop_answers_true_once() {
-        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, "COMMIT_TX", 0);
+        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, "COMMIT_TX");
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "PREPARE_TX"));
         assertTrue(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));
@@ -152,7 +133,7 @@ public class FaultInjectorTest {
 
     @Test
     public void test_at_ignores_a_drop() {
-        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, null, 0);
+        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, null);
         injector.at(FaultPoint.PEER_REPLY, "COMMIT_TX");
         assertTrue(injector.awaitReached(FaultPoint.PEER_REPLY, 0));
         assertTrue(halts.isEmpty());
@@ -160,17 +141,17 @@ public class FaultInjectorTest {
 
     @Test
     public void test_a_message_point_can_also_halt() {
-        injector.arm(FaultPoint.PEER_REPLY, FaultAction.HALT, null, 0);
+        injector.arm(FaultPoint.PEER_REPLY, FaultAction.HALT, null);
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));
         assertEquals(List.of(137), halts);
     }
 
     @Test
     public void test_rearming_releases_the_previous_pause() throws Exception {
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null);
         final var thread = hitInBackground(() -> injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT));
         assertTrue(injector.awaitReached(FaultPoint.WRITE_OWNERSHIP_RECHECKED, WAIT_MS));
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null);
         thread.join(WAIT_MS);
         assertFalse(thread.isAlive());
         assertFalse(injector.awaitReached(FaultPoint.WRITE_OWNERSHIP_RECHECKED, 0), "the new arm has not fired");
@@ -178,8 +159,8 @@ public class FaultInjectorTest {
 
     @Test
     public void test_release_all_frees_every_paused_thread() throws Exception {
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null, 0);
-        injector.arm(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, FaultAction.PAUSE, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null);
+        injector.arm(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, FaultAction.PAUSE, null);
         final var first = hitInBackground(() -> injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT));
         final var second = hitInBackground(() -> injector.at(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, SUBJECT));
         assertTrue(injector.awaitReached(FaultPoint.WRITE_OWNERSHIP_RECHECKED, WAIT_MS));
@@ -193,7 +174,7 @@ public class FaultInjectorTest {
 
     @Test
     public void test_await_times_out_when_never_reached() {
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null);
         assertFalse(injector.awaitReached(FaultPoint.WRITE_OWNERSHIP_RECHECKED, 50));
     }
 
@@ -204,7 +185,7 @@ public class FaultInjectorTest {
 
     @Test
     public void test_concurrent_hits_fire_the_arm_exactly_once() throws Exception {
-        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, null, 0);
+        injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, null);
         final var start = new CountDownLatch(1);
         final var drops = new AtomicInteger();
         final var threads = new Thread[8];
@@ -230,7 +211,7 @@ public class FaultInjectorTest {
 
     @Test
     public void test_an_interrupted_pause_returns_with_its_interrupt_flag_set() throws Exception {
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null);
         final var interrupted = new AtomicBoolean();
         final var thread = hitInBackground(() -> {
             injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT);
@@ -245,7 +226,7 @@ public class FaultInjectorTest {
 
     @Test
     public void test_an_interrupted_await_answers_not_reached() throws Exception {
-        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null, 0);
+        injector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.PAUSE, null);
         final var reached = new AtomicBoolean(true);
         final var thread = hitInBackground(
                 () -> reached.set(injector.awaitReached(FaultPoint.WRITE_OWNERSHIP_RECHECKED, WAIT_MS)));
@@ -255,16 +236,11 @@ public class FaultInjectorTest {
     }
 
     @Test
-    public void test_the_collection_subject_joins_database_and_collection() {
-        assertEquals(SUBJECT, FaultInjector.collectionSubject("db", "coll"));
-    }
-
-    @Test
     public void test_names_parse_case_insensitively_and_unknown_names_parse_to_null() {
-        assertEquals(FaultPoint.PEER_REPLY, FaultPoint.parse("peer_reply"));
-        assertEquals(FaultAction.DROP, FaultAction.parse("Drop"));
-        assertNull(FaultPoint.parse("NOPE"));
-        assertNull(FaultAction.parse(null));
+        assertEquals(FaultPoint.PEER_REPLY, FaultInjector.parse(FaultPoint.class, "peer_reply"));
+        assertEquals(FaultAction.DROP, FaultInjector.parse(FaultAction.class, "Drop"));
+        assertNull(FaultInjector.parse(FaultPoint.class, "NOPE"));
+        assertNull(FaultInjector.parse(FaultAction.class, null));
         assertTrue(FaultPoint.PEER_REPLY.isDroppable());
         assertFalse(FaultPoint.WRITE_OWNERSHIP_RECHECKED.isDroppable());
     }

@@ -23,7 +23,7 @@ import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
-import org.techhouse.ops.tx.SliceStates;
+import org.techhouse.ops.tx.SliceStateMachine;
 
 public class Tx2pcRecovery implements MembershipListener {
     private final Logger logger = Logger.logFor(Tx2pcRecovery.class);
@@ -309,7 +309,7 @@ public class Tx2pcRecovery implements MembershipListener {
             return;
         }
         final var dtxId = transaction.getTransactionId().toString();
-        if (SliceStates.isFenced(dtxId)) {
+        if (SliceStateMachine.isFenced(dtxId)) {
             return;
         }
         final var edge = session.edgeNodeId() != null ? view.find(session.edgeNodeId()) : null;

@@ -24,8 +24,10 @@ import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
@@ -131,12 +133,12 @@ public class ClusterConnectionHandler implements Runnable {
             error.setErrorMessage("Invalid cluster secret");
             return error;
         }
-        if (!PeerShutdownGate.carriesWrite(request)) {
+        if (!carriesWrite(request)) {
             return dispatch(request);
         }
         inFlightRequests.enter();
         try {
-            return refusingWrites.getAsBoolean() ? PeerShutdownGate.refusal(request) : dispatch(request);
+            return refusingWrites.getAsBoolean() ? refusal(request) : dispatch(request);
         } finally {
             inFlightRequests.exit();
         }
@@ -301,5 +303,40 @@ public class ClusterConnectionHandler implements Runnable {
             response.setAntiEntropy(antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds(),
                     query.incarnationValue()));
         });
+    }
+
+    private static boolean carriesWrite(ClusterMessage request) {
+        return switch (request.getType()) {
+            case REPLICATE, REPLICATE_TX, REPLICATE_ADMIN, REINDEX_BROADCAST, FORWARD_REQUEST, PREPARE_TX, COMMIT_TX ->
+                true;
+            case FORWARD_TX_REQUEST -> forwardedType(request) != OperationType.ROLLBACK_TRANSACTION;
+            default -> false;
+        };
+    }
+
+    private ClusterMessage refusal(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        final var forwardedType = isForward(request.getType()) ? forwardedType(request) : null;
+        if (forwardedType == null) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Refused " + request.getType() + ": this node is shutting down");
+            return response;
+        }
+        response.setType(ClusterMessageType.FORWARD_RESPONSE);
+        response.setForwardBody(
+                ForwardBody.encode(eJson.toJson(new OperationResponse(forwardedType, ErrorCode.SERVER_SHUTTING_DOWN))));
+        return response;
+    }
+
+    private static boolean isForward(ClusterMessageType type) {
+        return type == ClusterMessageType.FORWARD_REQUEST || type == ClusterMessageType.FORWARD_TX_REQUEST;
+    }
+
+    private static OperationType forwardedType(ClusterMessage request) {
+        try {
+            return RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody())).getType();
+        } catch (RuntimeException unparseable) {
+            return null;
+        }
     }
 }

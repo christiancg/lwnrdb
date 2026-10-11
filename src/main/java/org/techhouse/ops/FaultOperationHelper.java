@@ -19,9 +19,8 @@ public final class FaultOperationHelper {
         if (!faultInjector.isEnabled()) {
             return disabled(OperationType.ARM_FAULT);
         }
-        final var point = FaultPoint.parse(request.getPoint());
-        final var delayMs = request.getDelayMs() == null ? 0L : request.getDelayMs();
-        faultInjector.arm(point, FaultAction.parse(request.getAction()), request.getMatch(), delayMs);
+        final var point = FaultInjector.parse(FaultPoint.class, request.getPoint());
+        faultInjector.arm(point, FaultInjector.parse(FaultAction.class, request.getAction()), request.getMatch());
         return OperationResponse.ok(OperationType.ARM_FAULT, "Fault armed at " + point);
     }
 
@@ -29,7 +28,7 @@ public final class FaultOperationHelper {
         if (!faultInjector.isEnabled()) {
             return disabled(OperationType.AWAIT_FAULT);
         }
-        final var point = FaultPoint.parse(request.getPoint());
+        final var point = FaultInjector.parse(FaultPoint.class, request.getPoint());
         return faultInjector.awaitReached(point, request.getTimeoutMs())
                 ? OperationResponse.ok(OperationType.AWAIT_FAULT, "Fault reached at " + point)
                 : new OperationResponse(OperationType.AWAIT_FAULT, ErrorCode.FAULT_NOT_REACHED);
@@ -43,7 +42,7 @@ public final class FaultOperationHelper {
             faultInjector.releaseAll();
             return OperationResponse.ok(OperationType.RELEASE_FAULT, "Every fault released");
         }
-        final var point = FaultPoint.parse(request.getPoint());
+        final var point = FaultInjector.parse(FaultPoint.class, request.getPoint());
         faultInjector.release(point);
         return OperationResponse.ok(OperationType.RELEASE_FAULT, "Fault released at " + point);
     }

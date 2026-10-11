@@ -164,7 +164,7 @@ public class Tx2pcRecoveryTest {
         seedPreparedSlice(dtxId, "rec-elsewhere", "127.0.0.1:1");
 
         assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, SELF_ADDRESS));
-        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId));
+        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, null));
     }
 
     @Test

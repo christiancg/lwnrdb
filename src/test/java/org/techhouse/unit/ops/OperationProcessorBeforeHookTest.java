@@ -260,7 +260,7 @@ public class OperationProcessorBeforeHookTest {
                 EventType.UPDATED);
         final var payload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
                 List.of(document("r1")), List.of(), List.of("1"));
-        ReplicatedApplyHelper.apply(payload);
+        ReplicatedApplyHelper.apply(payload, TestGlobals.APPLY_BUDGET_MS);
         final var stored = find("r1");
         assertNotNull(stored);
         assertFalse(stored.has("total"), "a replicated apply must store the owner's document verbatim");

@@ -17,13 +17,4 @@ public enum FaultPoint {
     public boolean isDroppable() {
         return droppable;
     }
-
-    public static FaultPoint parse(String name) {
-        for (final var point : values()) {
-            if (point.name().equalsIgnoreCase(name)) {
-                return point;
-            }
-        }
-        return null;
-    }
 }

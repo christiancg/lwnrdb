@@ -60,7 +60,7 @@ public class ReplicatedApplyHelperTest {
     public void test_apply_upsert_stores_documents() {
         final var payload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
                 List.of(doc("r1"), doc("r2")), null);
-        assertTrue(ReplicatedApplyHelper.apply(payload));
+        assertTrue(ReplicatedApplyHelper.apply(payload, TestGlobals.APPLY_BUDGET_MS));
         assertEquals(OperationStatus.OK, findStatus("r1"));
         assertEquals(OperationStatus.OK, findStatus("r2"));
     }
@@ -68,23 +68,24 @@ public class ReplicatedApplyHelperTest {
     @Test
     public void test_apply_delete_removes_document() {
         ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("r3")), null));
+                List.of(doc("r3")), null), TestGlobals.APPLY_BUDGET_MS);
         assertEquals(OperationStatus.OK, findStatus("r3"));
         assertTrue(ReplicatedApplyHelper.apply(
-                new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null, List.of("r3"))));
+                new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null, List.of("r3")),
+                TestGlobals.APPLY_BUDGET_MS));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("r3"));
     }
 
     @Test
     public void test_apply_delete_of_missing_id_is_idempotent() {
         assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.DELETE, null, List.of("does-not-exist"))));
+                ReplicationOp.DELETE, null, List.of("does-not-exist")), TestGlobals.APPLY_BUDGET_MS));
     }
 
     @Test
     public void test_apply_null_or_opless_payload_returns_false() {
-        assertFalse(ReplicatedApplyHelper.apply(null));
-        assertFalse(ReplicatedApplyHelper.apply(new ReplicationPayload()));
+        assertFalse(ReplicatedApplyHelper.apply(null, TestGlobals.APPLY_BUDGET_MS));
+        assertFalse(ReplicatedApplyHelper.apply(new ReplicationPayload(), TestGlobals.APPLY_BUDGET_MS));
     }
 
     private static int dirtyQueueSize() throws Exception {
@@ -114,7 +115,7 @@ public class ReplicatedApplyHelperTest {
                 return null;
             });
             assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                    ReplicationOp.DELETE, null, List.of("n1", "n2", "n3"))));
+                    ReplicationOp.DELETE, null, List.of("n1", "n2", "n3")), TestGlobals.APPLY_BUDGET_MS));
         } finally {
             listenManager.unregister(listenId);
         }
@@ -129,7 +130,8 @@ public class ReplicatedApplyHelperTest {
         try {
             final var before = dirtyQueueSize();
             assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                    ReplicationOp.UPSERT, List.of(doc("u1"), doc("u2"), doc("u3")), null)));
+                    ReplicationOp.UPSERT, List.of(doc("u1"), doc("u2"), doc("u3")), null),
+                    TestGlobals.APPLY_BUDGET_MS));
             assertEquals(1, dirtyQueueSize() - before);
         } finally {
             listenManager.unregister(listenId);
@@ -144,8 +146,9 @@ public class ReplicatedApplyHelperTest {
                 throw new java.io.IOException("disk full");
             });
             final var before = dirtyQueueSize();
-            assertFalse(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                    ReplicationOp.DELETE, null, List.of("f1"))));
+            assertFalse(ReplicatedApplyHelper.apply(
+                    new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null, List.of("f1")),
+                    TestGlobals.APPLY_BUDGET_MS));
             assertEquals(1, dirtyQueueSize() - before,
                     "a failed apply must not leave the deferral armed on this thread");
         } finally {

@@ -26,10 +26,15 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.ReindexRequest;
-import org.techhouse.ops.tx.ApplyOutcome;
 import org.techhouse.ops.tx.VersionedApply;
+import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 
 public class ClusterCoordinator {
+    public record DeleteReservation(boolean ownerLost, Long version) {
+        private static final DeleteReservation NOT_CLUSTERED = new DeleteReservation(false, null);
+        private static final DeleteReservation OWNER_LOST = new DeleteReservation(true, null);
+    }
+
     private final Logger logger = Logger.logFor(ClusterCoordinator.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
@@ -75,10 +80,10 @@ public class ClusterCoordinator {
             throws java.io.IOException {
         final var applicability = documentReplicationOutcome(dbName, collName);
         if (applicability == ReplicationOutcome.NOT_OWNER) {
-            return DeleteReservation.lostOwnership();
+            return DeleteReservation.OWNER_LOST;
         }
         if (applicability != null) {
-            return DeleteReservation.notClustered();
+            return DeleteReservation.NOT_CLUSTERED;
         }
         final var version = hybridClock.next();
         final var present = cache.getPkIndexAndLoadIfNecessary(dbName, collName).stream().map(PkIndexEntry::getValue)
@@ -88,8 +93,8 @@ public class ClusterCoordinator {
                 fs.tombstones().append(dbName, collName, id, version);
             }
         }
-        faultInjector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultInjector.collectionSubject(dbName, collName));
-        return DeleteReservation.reserved(version);
+        faultInjector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, Cache.getCollectionIdentifier(dbName, collName));
+        return new DeleteReservation(false, version);
     }
 
     public void retractDelete(String dbName, String collName, List<String> ids, Long reservedVersion)

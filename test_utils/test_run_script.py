@@ -943,9 +943,6 @@ def test_db_module_arity(conn: Conn):
 
 def test_db_save_rejects_a_non_string_id(conn: Conn):
     section("Host interface - db.save with an _id that is not a string")
-    # The wire path leaves a non-string _id unset and lets DataRequestValidator answer "_id must be a
-    # string". db.save used to read it with an unchecked cast before dispatching, so the identical
-    # document died on a ClassCastException reported as an InternalError and logged as an engine fault.
     for label, literal in (("a number", "123"), ("a boolean", "true"), ("an object", "{ a: 1 }"),
                            ("an array", "[1]"), ("null", "null")):
         check_failed_script(f"{label} _id is a validation error, not an InternalError",

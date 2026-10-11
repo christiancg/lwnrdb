@@ -16,10 +16,13 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.config.Globals;
+import org.techhouse.log.Logger;
 
 // The finer tier below ResourceLocking's collection locks, and what makes dirty reads safe: a
 // dirty read skips the collection lock but still serializes against each file's physical write.
 final class FileLocks {
+    private static final Logger logger = Logger.logFor(FileLocks.class);
+
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
     private static final byte LINE_FEED = '\n';
 
@@ -92,6 +95,19 @@ final class FileLocks {
         try (var raf = new RandomAccessFile(file, "r")) {
             raf.seek(raf.length() - 1);
             return raf.readByte() != LINE_FEED;
+        }
+    }
+
+    static void truncateTo(File file, long length) {
+        truncateTo(file, length, "Could not roll back the page append for " + file.getAbsolutePath()
+                + " after its index write failed; run REINDEX on this collection");
+    }
+
+    static void truncateTo(File file, long length, String failureMessage) {
+        try (var channel = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+            channel.setLength(length);
+        } catch (IOException e) {
+            logger.error(failureMessage, e);
         }
     }
 }

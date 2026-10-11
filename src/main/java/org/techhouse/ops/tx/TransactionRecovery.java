@@ -99,14 +99,14 @@ public final class TransactionRecovery {
     }
 
     public static void abortFromDurable(String dtxId) throws Exception {
-        final var orphanedRuns = FencedTriggerRuns.consumedBySlice(dtxId);
+        final var orphanedRuns = TriggerRunRecovery.consumedBySlice(dtxId);
         AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
         recordAborted(dtxId);
         TriggerRunRecovery.requeueRuns(orphanedRuns);
     }
 
     public static void resolveFromDurable(String dtxId, boolean commit, long timeoutMillis) throws Exception {
-        final var state = SliceStates.stateOf(dtxId, null);
+        final var state = SliceStateMachine.stateOf(dtxId, null);
         if (state == SliceStateMachine.State.COMMITTING && !commit) {
             throw new DurableReplayIncompleteException(dtxId, "its commit was already decided");
         }

@@ -7,11 +7,11 @@ import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
-import org.techhouse.cluster.admin.AdminRecordKeys;
 import org.techhouse.cluster.admin.AdminRecords;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.resp.OperationResponse;
@@ -65,7 +65,7 @@ public final class ClusterAdminHelper {
         try {
             outcome = type == OperationType.REINDEX
                     ? coordinator.broadcastReindex((ReindexRequest) request)
-                    : coordinator.replicateAdminRecords(AdminRecords.of(AdminRecordKeys.touchedBy(request)));
+                    : coordinator.replicateAdminRecords(AdminRecords.of(AdminRecordKey.touchedBy(request)));
         } catch (IOException unreadable) {
             logger.warning("The " + type + " committed here, but its admin records could not be read to replicate"
                     + " them; the admin anti-entropy sweep carries it: " + unreadable.getMessage());

@@ -31,7 +31,6 @@ VEC_FAR = "#vector(0.0,0.0,1.0)"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-
 def save_doc(conn: Conn, doc: dict) -> dict:
     return conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": doc})
 
@@ -782,9 +781,6 @@ def test_dropping_a_joined_collection_ends_the_listen(writer: Conn, listener: Co
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def test_listener_survives_a_concurrent_bulk_save(writer_conn: Conn, listener_conn: Conn):
-    """A re-run reads the PK index while a bulk save reshapes it in place: removeIf, two addAlls,
-    and only then a re-sort. Binary-searching that list mid-flight returned wrong rows or threw,
-    and processListen swallowed it as a dropped notification."""
     section("A re-run during a bulk save still answers correctly")
     started = listen(listener_conn, [{"type": "FILTER",
                                       "operator": {"fieldOperatorType": "EQUALS",

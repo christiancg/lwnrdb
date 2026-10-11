@@ -154,7 +154,7 @@ public final class DatabaseOperationHelper {
         if (dropped.getStatus() == OperationStatus.OK) {
             return OperationResponse.respondOrError(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE,
                     () -> {
-                        AdminTombstone.record(AdminRecordKey.database(dbName));
+                        AdminStamp.tombstone(AdminRecordKey.database(dbName));
                         return dropped;
                     });
         }

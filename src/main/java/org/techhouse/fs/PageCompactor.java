@@ -14,8 +14,11 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.CompactionJournal.Kind;
 import org.techhouse.fs.CompactionJournal.Marker;
+import org.techhouse.log.Logger;
 
 final class PageCompactor {
+    private static final Logger logger = Logger.logFor(PageCompactor.class);
+
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
     private final CompactionJournal journal;
@@ -79,11 +82,11 @@ final class PageCompactor {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
-            PageRegions.requireWithinPage(pkIndexEntry, totalFileLength);
-            final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
+            requireWithinPage(pkIndexEntry, totalFileLength);
+            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             final var marker = journal.begin(kind, pkIndexEntry, totalFileLength, tail);
             try {
-                final var compacted = PageRegions.shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+                final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
                 writer.setLength(totalFileLength - pkIndexEntry.getLength());
                 pkIndexStore.deleteIndexValue(pkIndexEntry);
                 return new Compacted(marker, compacted ? compactionFor(pkIndexEntry) : null);
@@ -98,7 +101,7 @@ final class PageCompactor {
 
     private void restoreAndEnd(RandomAccessFile writer, Marker marker, PkIndexEntry pkIndexEntry, byte[] tail,
             long totalFileLength) {
-        PageRegions.restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
+        restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
         journal.end(marker);
     }
 
@@ -161,11 +164,11 @@ final class PageCompactor {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
-            PageRegions.requireWithinPage(pkIndexEntry, totalFileLength);
-            final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
+            requireWithinPage(pkIndexEntry, totalFileLength);
+            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             final var marker = journal.begin(Kind.UPDATE, pkIndexEntry, totalFileLength, tail);
             try {
-                final var compacted = PageRegions.shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+                final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
                 writer.seek(totalFileLength - pkIndexEntry.getLength());
                 final var bytes = (entry.toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8);
                 final var length = bytes.length;
@@ -183,5 +186,51 @@ final class PageCompactor {
         } finally {
             lock.unlock();
         }
+    }
+
+    static void requireWithinPage(PkIndexEntry entry, long pageLength) throws IOException {
+        if (entry.getPosition() + entry.getLength() > pageLength) {
+            throw new IOException("The PK index places '" + entry.getValue() + "' at " + entry.getPosition() + "+"
+                    + entry.getLength() + " on page " + entry.getPage() + ", past its " + pageLength
+                    + "-byte end; refusing to shift the page around a record that is not there");
+        }
+    }
+
+    static byte[] readRegion(RandomAccessFile writer, long from, long to) throws IOException {
+        final var length = (int) (to - from);
+        if (length <= 0) {
+            return new byte[0];
+        }
+        final var buffer = new byte[length];
+        writer.seek(from);
+        writer.readFully(buffer, 0, length);
+        return buffer;
+    }
+
+    static void restoreRegion(RandomAccessFile writer, long from, byte[] region, long originalLength) {
+        try {
+            if (region.length > 0) {
+                writer.seek(from);
+                writer.write(region, 0, region.length);
+            }
+            writer.setLength(originalLength);
+        } catch (IOException restoreFailure) {
+            logger.error("Could not restore the page after a failed page or index write; run REINDEX on this"
+                    + " collection", restoreFailure);
+        }
+    }
+
+    static boolean shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
+            throws IOException {
+        final int otherEntriesLength = (int) (totalFileLength - pkIndexEntry.getPosition() - pkIndexEntry.getLength());
+        if (otherEntriesLength <= 0) {
+            return false;
+        }
+        writer.seek(pkIndexEntry.getPosition() + pkIndexEntry.getLength());
+        byte[] buffer = new byte[otherEntriesLength];
+        writer.readFully(buffer, 0, otherEntriesLength);
+        writer.seek(pkIndexEntry.getPosition());
+        writer.write(buffer, 0, otherEntriesLength);
+        return true;
     }
 }

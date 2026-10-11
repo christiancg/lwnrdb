@@ -21,8 +21,8 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.TriggerHelper;
-import org.techhouse.ops.tx.ApplyOutcome;
 import org.techhouse.ops.tx.CommittedOpTriggers;
+import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TriggerStagingMocks;
 

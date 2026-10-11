@@ -13,7 +13,7 @@ import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
@@ -157,7 +157,7 @@ public final class ProcedureOperationHelper {
                         ErrorCode.INVALID_SCHEDULE);
             }
             if (fs.deleteProcedure(dbName, request.getName())) {
-                AdminTombstone.record(AdminRecordKey.procedure(dbName, request.getName()));
+                AdminStamp.tombstone(AdminRecordKey.procedure(dbName, request.getName()));
             }
             cache.removeProcedure(dbName, request.getName());
             compiledProcedures.invalidateProcedure(dbName, request.getName());

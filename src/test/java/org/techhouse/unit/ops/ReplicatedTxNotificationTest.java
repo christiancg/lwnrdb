@@ -83,9 +83,10 @@ public class ReplicatedTxNotificationTest {
     public void test_a_multi_op_batch_still_notifies_its_listener() {
         final var listenId = listenOn(TestGlobals.COLL);
 
-        assertTrue(
-                ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert(TestGlobals.COLL, "n-a", "100"),
-                        upsert(TestGlobals.COLL, "n-b", "101"), upsert(TestGlobals.COLL, "n-c", "102")))));
+        assertTrue(ReplicatedTxApplyHelper.apply(
+                new TxReplicationPayload(List.of(upsert(TestGlobals.COLL, "n-a", "100"),
+                        upsert(TestGlobals.COLL, "n-b", "101"), upsert(TestGlobals.COLL, "n-c", "102"))),
+                TestGlobals.APPLY_BUDGET_MS));
 
         assertTrue(queuedListenIds().contains(listenId), "deferring must not swallow the batch's notification");
     }
@@ -94,8 +95,10 @@ public class ReplicatedTxNotificationTest {
     public void test_the_batch_produces_one_notification_rather_than_one_per_op() {
         final var listenId = listenOn(TestGlobals.COLL);
 
-        ReplicatedTxApplyHelper.apply(new TxReplicationPayload(
-                List.of(upsert(TestGlobals.COLL, "one-a", "110"), upsert(TestGlobals.COLL, "one-b", "111"))));
+        ReplicatedTxApplyHelper.apply(
+                new TxReplicationPayload(
+                        List.of(upsert(TestGlobals.COLL, "one-a", "110"), upsert(TestGlobals.COLL, "one-b", "111"))),
+                TestGlobals.APPLY_BUDGET_MS);
 
         assertEquals(Set.of(listenId), queuedListenIds());
     }
@@ -105,8 +108,10 @@ public class ReplicatedTxNotificationTest {
         final var first = listenOn(TestGlobals.COLL);
         final var second = listenOn(SECOND_COLL);
 
-        assertTrue(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(
-                List.of(upsert(TestGlobals.COLL, "multi-a", "120"), upsert(SECOND_COLL, "multi-b", "121")))));
+        assertTrue(ReplicatedTxApplyHelper.apply(
+                new TxReplicationPayload(
+                        List.of(upsert(TestGlobals.COLL, "multi-a", "120"), upsert(SECOND_COLL, "multi-b", "121"))),
+                TestGlobals.APPLY_BUDGET_MS));
 
         assertEquals(Set.of(first, second), queuedListenIds(),
                 "the flush must cover every collection the batch wrote, not only the last one");
@@ -115,7 +120,8 @@ public class ReplicatedTxNotificationTest {
     @Test
     public void test_the_deferral_does_not_leak_onto_the_applying_thread() throws Exception {
         listenOn(TestGlobals.COLL);
-        ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert(TestGlobals.COLL, "leak", "130"))));
+        ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert(TestGlobals.COLL, "leak", "130"))),
+                TestGlobals.APPLY_BUDGET_MS);
 
         final var deferred = TestUtils.getPrivateField(listenManager, "deferred", ThreadLocal.class);
 
@@ -125,7 +131,7 @@ public class ReplicatedTxNotificationTest {
 
     @Test
     public void test_an_empty_batch_opens_no_window() throws Exception {
-        assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of())));
+        assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of()), TestGlobals.APPLY_BUDGET_MS));
 
         final var deferred = TestUtils.getPrivateField(listenManager, "deferred", ThreadLocal.class);
 

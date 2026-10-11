@@ -17,7 +17,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
-import org.techhouse.ops.admin.AdminTombstone;
 import org.techhouse.test.TestUtils;
 
 public class AdminRecordPrimitivesTest {
@@ -120,9 +119,9 @@ public class AdminRecordPrimitivesTest {
     public void test_a_standalone_node_keeps_no_admin_tombstones() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", false);
 
-        AdminTombstone.record(AdminRecordKey.user("u"));
+        AdminStamp.tombstone(AdminRecordKey.user("u"));
 
-        assertTrue(AdminTombstone.all().isEmpty());
+        assertTrue(AdminStamp.tombstones().isEmpty());
     }
 
     @Test
@@ -130,9 +129,9 @@ public class AdminRecordPrimitivesTest {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         final var before = clock.current();
 
-        AdminTombstone.record(AdminRecordKey.user("u"));
-        AdminTombstone.recordAt(AdminRecordKey.user("u"), 3L);
+        AdminStamp.tombstone(AdminRecordKey.user("u"));
+        AdminStamp.tombstoneAt(AdminRecordKey.user("u"), 3L);
 
-        assertTrue(AdminTombstone.all().get(AdminRecordKey.user("u").id()) > before);
+        assertTrue(AdminStamp.tombstones().get(AdminRecordKey.user("u").id()) > before);
     }
 }

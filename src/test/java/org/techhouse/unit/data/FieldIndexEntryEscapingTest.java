@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
-import org.techhouse.ejson.exceptions.NonFiniteNumberException;
+import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class FieldIndexEntryEscapingTest {
     private static final String SEPARATOR = Globals.ID_SEPARATOR;
@@ -145,9 +145,9 @@ public class FieldIndexEntryEscapingTest {
 
     @Test
     public void test_non_finite_numeric_key_is_refused() {
-        assertThrows(NonFiniteNumberException.class,
+        assertThrows(MalformedJsonException.class,
                 () -> FieldIndexEntry.fromIndexFileEntry("db", "coll", "Infinity" + SEPARATOR + "id1", Number.class));
-        assertThrows(NonFiniteNumberException.class,
+        assertThrows(MalformedJsonException.class,
                 () -> FieldIndexEntry.fromIndexFileEntry("db", "coll", "-Infinity" + SEPARATOR + "id1", Number.class));
     }
 

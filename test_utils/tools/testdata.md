@@ -2449,7 +2449,7 @@ An unknown point → `400-1`
 {"type": "ARM_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "action": "DROP"}
 ```
 
-`DELAY` without a `delayMs` between 1 and 60000 → `400-1`
+An unknown action (anything but `PAUSE`, `HALT` or `DROP`) → `400-1`
 
 ```json
 {"type": "ARM_FAULT", "point": "ANTI_ENTROPY_SNAPSHOTTED", "action": "DELAY"}

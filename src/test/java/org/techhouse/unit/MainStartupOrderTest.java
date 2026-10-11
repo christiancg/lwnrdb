@@ -119,7 +119,7 @@ public class MainStartupOrderTest {
         assertTrue(positionOf(body, "cache.loadAdminData();") < seed, "the seed reads the admin records it loaded");
         assertTrue(seed < positionOf(body, "bootstrapDefaultAdmin();"),
                 "an admin write stamped by an unseeded clock could land below the version it replaces");
-        final var stamping = positionOf(body, "UnversionedRecords.stampAll();");
+        final var stamping = positionOf(body, "AdminRecords.stampUnversioned();");
         assertTrue(seed < stamping && stamping < positionOf(body, "bootstrapDefaultAdmin();"),
                 "records written before versioning must outrank a fresh peer's bootstrap admin before this node"
                         + " writes its own");

@@ -11,7 +11,7 @@ import java.nio.file.Files;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-public class PageRegionsTest {
+public class FileLocksTruncateTest {
 
     @Test
     public void test_truncate_to_restores_the_recorded_length(@TempDir File tmp) throws IOException {
@@ -20,7 +20,7 @@ public class PageRegionsTest {
         final var lengthBeforeAppend = file.length();
         Files.writeString(file.toPath(), "kept-and-appended", StandardCharsets.UTF_8);
 
-        PageRegions.truncateTo(file, lengthBeforeAppend);
+        FileLocks.truncateTo(file, lengthBeforeAppend);
 
         assertEquals(lengthBeforeAppend, file.length());
         assertEquals("kept", Files.readString(file.toPath(), StandardCharsets.UTF_8));
@@ -31,7 +31,7 @@ public class PageRegionsTest {
         final var unwritable = new File(tmp, "not-a-file");
         assertTrue(unwritable.mkdirs(), "the test needs a path that cannot be opened as a file");
 
-        assertDoesNotThrow(() -> PageRegions.truncateTo(unwritable, 0L, "rolling back a pk index append"),
+        assertDoesNotThrow(() -> FileLocks.truncateTo(unwritable, 0L, "rolling back a pk index append"),
                 "the rollback is best effort; throwing here would mask the failure that triggered it");
     }
 }

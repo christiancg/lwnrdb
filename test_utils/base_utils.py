@@ -32,9 +32,6 @@ from typing import Callable, Optional
 
 # ── report format ────────────────────────────────────────────────────────────
 
-# CI merges stdout and stderr into one pipe, where stdout is block-buffered and stderr is not, so a
-# server-log dump written to stderr used to surface thousands of lines into the middle of the check
-# report - ahead of checks that had already printed. Line buffering keeps the merged stream ordered.
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 

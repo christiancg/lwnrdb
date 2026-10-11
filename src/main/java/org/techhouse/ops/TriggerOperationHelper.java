@@ -14,7 +14,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.ListTriggersRequest;
@@ -270,7 +270,7 @@ public final class TriggerOperationHelper {
             throws IOException {
         if (definitions.isEmpty()) {
             if (fs.deleteTriggers(dbName, collName)) {
-                AdminTombstone.record(AdminRecordKey.triggers(dbName, collName));
+                AdminStamp.tombstone(AdminRecordKey.triggers(dbName, collName));
             }
             cache.removeTriggers(dbName, collName);
             return;

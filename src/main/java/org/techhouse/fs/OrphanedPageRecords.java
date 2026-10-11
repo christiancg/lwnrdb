@@ -66,6 +66,35 @@ final class OrphanedPageRecords {
         return adopted;
     }
 
+    static List<PkIndexEntry> retireDangling(PkIndexStore pkIndexStore, String dbName, String collName,
+            Map<Long, Long> pageLengths) throws IOException {
+        final var recognised = pkIndexStore.readRecognisedPkIndex(dbName, collName);
+        if (recognised.isEmpty()) {
+            return List.of();
+        }
+        final var dangling = danglingIn(recognised.get(), pageLengths);
+        if (dangling.isEmpty()) {
+            return List.of();
+        }
+        final var rewritten = pkIndexStore.rewriteRows(dbName, collName, rows -> rows.stream()
+                .filter(row -> !isDangling(row, pageLengths)).collect(Collectors.toCollection(ArrayList::new)));
+        if (!rewritten) {
+            return List.of();
+        }
+        logger.error("Retired " + dangling.size() + " PK index entr" + (dangling.size() == 1 ? "y" : "ies") + " of "
+                + dbName + "|" + collName + " whose record reaches past the end of its page; the record was lost in"
+                + " an unclean stop: " + dangling.stream().map(PkIndexEntry::getValue).toList());
+        return dangling;
+    }
+
+    private static List<PkIndexEntry> danglingIn(List<PkIndexEntry> entries, Map<Long, Long> pageLengths) {
+        return entries.stream().filter(entry -> isDangling(entry, pageLengths)).toList();
+    }
+
+    private static boolean isDangling(PkIndexEntry entry, Map<Long, Long> pageLengths) {
+        return entry.getPosition() + entry.getLength() > pageLengths.getOrDefault(entry.getPage(), 0L);
+    }
+
     static long indexedEndOf(List<PkIndexEntry> entries, long page) {
         return entries.stream().filter(entry -> entry.getPage() == page)
                 .mapToLong(entry -> entry.getPosition() + entry.getLength()).max().orElse(0L);

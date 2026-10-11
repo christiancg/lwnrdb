@@ -17,7 +17,7 @@ public class SingleDefinitionTest {
             "src/main/java/org/techhouse/config/Configuration.java", OPS + "EntrySizeGuard.java",
             OPS + "TriggerRunLog.java");
     private static final Set<String> TRIGGER_STAGERS = Set.of(OPS + "OperationProcessor.java",
-            OPS + "BulkSaveEffects.java", OPS + "tx/CommittedOpTriggers.java");
+            OPS + "tx/CommittedOpTriggers.java");
     private static final Pattern MAX_ENTRY_SIZE_READ = Pattern.compile("\\bgetMaxEntrySize\\(");
     private static final Pattern TRIGGER_STAGING = Pattern.compile("\\bTriggerHelper\\.(stage\\w*|runStaged)\\(");
 

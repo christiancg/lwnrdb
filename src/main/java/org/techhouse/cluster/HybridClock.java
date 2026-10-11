@@ -31,10 +31,6 @@ public final class HybridClock {
         last.updateAndGet(previous -> Math.max(previous, version));
     }
 
-    public void seed(long version) {
-        observe(version);
-    }
-
     public long current() {
         return last.get();
     }

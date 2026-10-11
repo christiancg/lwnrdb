@@ -101,12 +101,9 @@ TRIGGER_TIMEOUT_MS = 4_000
 BEFORE_HOOK_BUDGET = 200_000
 BEFORE_HOOK_TIMEOUT_MS = 500
 
-# A retry backoff far beyond the shutdown budget, so a drain that waits for the retry has no choice
-# but to burn the whole budget - which is what phase 3 times.
 SHUTDOWN_BUDGET_MS = 15_000
 LONG_RETRY_BACKOFF_MS = 60_000
 SHUTDOWN_CEILING_SECONDS = 7.0
-
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
@@ -313,8 +310,6 @@ def test_procedure_lifecycle(conn: Conn):
 
 def test_procedure_name_case_collision(conn: Conn):
     section("Procedure name case collisions")
-    # .procedures/<name>.json puts the name straight into a file name, so MyProc and myproc are one
-    # file on a case-insensitive volume and the second save silently replaces the first.
     check_status("save MyProc", conn.save_procedure("MyProc", "return 1;"), "OK")
     check_code("saving myproc beside it -> 409-11", conn.save_procedure("myproc", "return 2;"), "ERROR", "409-11")
     resaved = conn.save_procedure("MyProc", "return 3;")
@@ -510,8 +505,6 @@ def install_the_trigger_whose_file_will_break(conn: Conn):
           await_doc(conn, "CREATED-ur-seed").get("status") == "OK",
           "the fixture never fired, so what phase 2 asserts about it would prove nothing")
 
-    # A second collection, because the unreadable case above ends with its trigger list warm in cache -
-    # corrupting that file again would never be read from disk.
     check_status("create the collection whose trigger file phase 2 corrupts", conn.send(
         {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CORRUPT_COLL}), "OK")
     check_status("install a trigger on it",
@@ -1486,10 +1479,6 @@ def test_run_history_failures(conn: Conn):
                             "name": "ghost_trigger"}), "OK")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 2 — an interrupted commit, an unreadable trigger file, retries
-# ══════════════════════════════════════════════════════════════════════════
-
 def test_a_custom_shaped_history_row_survives_the_restart(conn: Conn):
     section("A custom-shaped run history row is still readable after a restart")
     rows = history_rows(conn, kind="CALL_PROCEDURE", name="history_shaped")
@@ -1504,7 +1493,6 @@ def fenced_collection_folder(work_dir: str) -> str:
 
 
 def local_commit_markers(work_dir: str) -> int:
-    """Durable commit markers still on disk: `{txId}|localcommit` rows in admin/transactions."""
     folder = os.path.join(work_dir, "db", "admin", "transactions")
     if not os.path.isdir(folder):
         return 0
@@ -1536,7 +1524,6 @@ def arrange_a_commit_interrupted_past_its_commit_point(conn: Conn, work_dir: str
     check_status("buffer the audited save", conn.save_doc({"_id": "tx-recovered", "n": 1}, coll=RECOVERED_COLL), "OK")
     check_status("buffer a save into a second collection",
                  conn.save_doc({"_id": "tx-blocker", "n": 1}, coll=FENCED_COLL), "OK")
-    # Only now: buffering reads that collection's pk index, and the commit is what has to fail on it.
     os.chmod(fenced_collection_folder(work_dir), 0o000)
     check_code("the commit fences past its commit point",
                conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
@@ -1551,7 +1538,6 @@ def test_a_recovered_commit_fires_its_triggers(conn: Conn):
           conn.find("tx-blocker", coll=FENCED_COLL).get("status") == "OK",
           f"got {conn.find('tx-blocker', coll=FENCED_COLL)}")
 
-    # The durable run is re-queued at startup rather than fired inline, so this polls.
     row = await_doc(conn, "CREATED-tx-recovered", timeout=30.0)
     check("the recovered commit fired the after trigger the online commit would have",
           row.get("status") == "OK", f"got {row}")
@@ -1565,16 +1551,12 @@ def test_a_recovered_commit_fires_its_triggers(conn: Conn):
 
 def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
     section("A trigger file that cannot be read is not 'no triggers'")
-    # Nothing may have touched this collection since the restart, or the cached trigger list answers from
-    # memory and the file broken below is never read at all.
     trigger_file = os.path.join(work_dir, "db", DB, UNREADABLE_COLL, f"{UNREADABLE_COLL}-triggers.json")
     check("the trigger file survived the restart", os.path.isfile(trigger_file), trigger_file)
     with open(trigger_file, "rb") as fp:
         original = fp.read()
     check("and still names the trigger installed before it", b"audit_unreadable" in original, f"got {original!r}")
 
-    # Mode 000 rather than a directory of the same name: the read must fail while an *erasing* rewrite
-    # would still succeed, or the definitions surviving below would prove nothing about the fix.
     os.chmod(trigger_file, 0o000)
     try:
         refused = conn.save_doc({"_id": "ur1", "n": 1}, coll=UNREADABLE_COLL)
@@ -1601,9 +1583,6 @@ def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: st
 
 def test_a_corrupt_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
     section("A trigger file that cannot be parsed is not 'no triggers' either")
-    # The sibling above breaks the file by making it unreadable; this one leaves it perfectly readable and
-    # makes it fail to parse, which is what an unclean stop actually leaves behind - writes are not synced
-    # to the device, so a torn definition file is an ordinary crash artefact.
     trigger_file = os.path.join(work_dir, "db", DB, CORRUPT_COLL, f"{CORRUPT_COLL}-triggers.json")
     check("the trigger file survived the restart", os.path.isfile(trigger_file), trigger_file)
     with open(trigger_file, "rb") as fp:
@@ -1659,11 +1638,6 @@ def test_an_unparseable_definition_is_answered_not_dropped(conn: Conn, work_dir:
 
 def test_a_deleted_definition_stops_being_served(conn: Conn):
     section("A deleted procedure or schema stops applying immediately")
-    # The definition caches load from disk outside any lock while the DDL that removes them holds the
-    # collection lock, so a load that started before the delete used to reinstate the definition after
-    # it - and BoundedLruCache is access-ordered, so the stale entry was refreshed on every use and
-    # never aged out. The visible symptoms are a dropped procedure that still runs and a deleted
-    # schema that still rejects writes.
     coll = "definition_cache_coll"
     check_status("create the collection",
                  conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -1688,10 +1662,6 @@ def test_a_deleted_definition_stops_being_served(conn: Conn):
     check_status("a deleted schema stops rejecting writes at once",
                  conn.save_doc({"_id": "s2", "n": 7}, coll=coll), "OK")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 3 — a retry outliving the shutdown budget
-# ══════════════════════════════════════════════════════════════════════════
 
 def retries_scheduled(conn: Conn) -> int:
     return conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("triggers", {}).get("retried", 0)
@@ -2098,7 +2068,6 @@ def test_cascade_deletes(conn: Conn, work_dir: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Phase 4 — both switches off
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_switches_off(conn: Conn):
@@ -2203,8 +2172,6 @@ def main():
         write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=2, retry_backoff_ms=200)
         proc = bu.start_server(work_dir, log_path)
 
-        # The connection stays open until the process is gone: closing it first would let
-        # cleanupOnDisconnect roll the fenced transaction back, which is the state being preserved.
         interrupted = admin_conn()
         arrange_a_commit_interrupted_past_its_commit_point(interrupted, work_dir)
         print("\n  Killing the server without a drain ...")
@@ -2231,8 +2198,6 @@ def main():
             test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn)
             test_a_post_commit_error_applies_its_effects_once(conn)
 
-        # Phase 3: a retry backoff far beyond the shutdown budget, so the stop below is timed with a
-        # retry that cannot possibly come back before the budget expires.
         bu.stop_server(proc)
         proc = None
         write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=3,
@@ -2251,7 +2216,6 @@ def main():
         bu.stop_server(proc)
         proc = None
 
-        # Phase 4: same data directory, both switches off
         write_config(work_dir, scripts_enabled=False, triggers_enabled=False)
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:

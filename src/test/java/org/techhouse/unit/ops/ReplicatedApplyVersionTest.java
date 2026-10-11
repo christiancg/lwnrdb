@@ -45,12 +45,14 @@ public class ReplicatedApplyVersionTest {
 
     private boolean applyUpsert(String id, String value, long version) {
         return ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.UPSERT, List.of(doc(id, value)), null, List.of(Long.toString(version))));
+                ReplicationOp.UPSERT, List.of(doc(id, value)), null, List.of(Long.toString(version))),
+                TestGlobals.APPLY_BUDGET_MS);
     }
 
     private boolean applyDelete(long version) {
         return ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.DELETE, null, List.of("a"), List.of(Long.toString(version))));
+                ReplicationOp.DELETE, null, List.of("a"), List.of(Long.toString(version))),
+                TestGlobals.APPLY_BUDGET_MS);
     }
 
     private OperationResponse find(String id) {
@@ -88,16 +90,19 @@ public class ReplicatedApplyVersionTest {
         assertTrue(shipped > 100L, "a bulk update must ship the version it assigned, not a reset 0");
 
         assertTrue(applyUpsert("b", "old", 100L));
-        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.UPSERT, List.of(doc("b", "bulk")), null, List.of(Long.toString(shipped)))));
+        assertTrue(ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                        List.of(doc("b", "bulk")), null, List.of(Long.toString(shipped))),
+                TestGlobals.APPLY_BUDGET_MS));
         assertEquals("bulk", valueOf("b"));
     }
 
     @Test
     public void test_a_null_version_in_the_list_is_applied_as_unversioned() {
-        assertTrue(ReplicatedApplyHelper
-                .apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                        List.of(doc("n", "unversioned")), null, java.util.Collections.singletonList(null))));
+        assertTrue(ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                        List.of(doc("n", "unversioned")), null, java.util.Collections.singletonList(null)),
+                TestGlobals.APPLY_BUDGET_MS));
         assertEquals("unversioned", valueOf("n"));
     }
 
@@ -120,8 +125,10 @@ public class ReplicatedApplyVersionTest {
         assertTrue(applyUpsert("a", "newer", 200L));
         assertTrue(applyUpsert("b", "seed", 100L));
 
-        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.UPSERT, List.of(doc("a", "stale"), doc("b", "fresh")), null, List.of("150", "300"))));
+        assertTrue(ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                        List.of(doc("a", "stale"), doc("b", "fresh")), null, List.of("150", "300")),
+                TestGlobals.APPLY_BUDGET_MS));
 
         assertEquals("newer", valueOf("a"));
         assertEquals("fresh", valueOf("b"));
@@ -159,7 +166,7 @@ public class ReplicatedApplyVersionTest {
     public void test_an_upsert_older_than_a_local_tombstone_is_refused() {
         assertTrue(applyUpsert("t", "live", 100L));
         assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.DELETE, null, List.of("t"), List.of("200"))));
+                ReplicationOp.DELETE, null, List.of("t"), List.of("200")), TestGlobals.APPLY_BUDGET_MS));
         assertNull(valueOf("t"));
 
         assertTrue(applyUpsert("t", "resurrected", 150L),
@@ -174,7 +181,7 @@ public class ReplicatedApplyVersionTest {
     public void test_an_upsert_newer_than_a_local_tombstone_is_applied() {
         assertTrue(applyUpsert("u", "live", 100L));
         assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.DELETE, null, List.of("u"), List.of("200"))));
+                ReplicationOp.DELETE, null, List.of("u"), List.of("200")), TestGlobals.APPLY_BUDGET_MS));
 
         assertTrue(applyUpsert("u", "rewritten", 300L));
 

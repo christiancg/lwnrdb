@@ -80,14 +80,7 @@ public final class AdminPageHelper {
     public static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
             final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated)
             throws InterruptedException, IOException {
-        baseUpdateEntryCount(dbName, collName, type, insertedOrDeleted, skipMemoryDeltaForCreated, false);
-    }
-
-    public static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
-            final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated,
-            final boolean skipMemoryDeltaForUpdated) throws InterruptedException, IOException {
-        baseUpdateEntryCount(dbName, collName, type, insertedOrDeleted, skipMemoryDeltaForCreated,
-                skipMemoryDeltaForUpdated, 0L);
+        baseUpdateEntryCount(dbName, collName, type, insertedOrDeleted, skipMemoryDeltaForCreated, false, 0L);
     }
 
     private static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,

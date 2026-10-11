@@ -2,8 +2,9 @@ package org.techhouse.ops;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterCoordinator;
-import org.techhouse.cluster.DeleteReservation;
+import org.techhouse.cluster.ClusterCoordinator.DeleteReservation;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
 import org.techhouse.fault.FaultInjector;
@@ -100,7 +101,7 @@ public final class ClusterWriteHelper {
         if (!coordinator.stillOwns(dbName, collName)) {
             return new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
         }
-        faultInjector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultInjector.collectionSubject(dbName, collName));
+        faultInjector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, Cache.getCollectionIdentifier(dbName, collName));
         return null;
     }
 }

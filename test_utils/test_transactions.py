@@ -20,7 +20,6 @@ JOIN_COLL = "order_configs"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-
 def send_only(c, payload: dict):
     """Send a request without waiting for the response (used to observe blocking)."""
     c.s.sendall((json.dumps(payload) + "\n").encode())
@@ -363,11 +362,6 @@ def test_lock_timeout_aborts_and_refuses_retries(c):
 
 def test_crossed_read_and_write_sets_do_not_hang(c):
     section("Two transactions whose read and write sets cross time out instead of deadlocking")
-    # A transaction holds its write locks until commit, and a read taken inside one used to park with
-    # no timeout: T1 holding write(A) and reading B, against T2 holding write(B) and reading A, parked
-    # on each other forever - and a write lock is thread-owned, so nothing could ever recover them.
-    # Both transactions are aborted by the timeout, which tears their connections down, so this runs
-    # on two of its own rather than on the suite's shared connection.
     other = "orders_crossed"
     check_status("create the second collection",
                  c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": other}), "OK")
@@ -381,8 +375,6 @@ def test_crossed_read_and_write_sets_do_not_hang(c):
         check_status("T2: SAVE takes write(orders_crossed)",
                      save(t2, {"_id": "crossed-2", "v": 1}, coll=other), "OK")
 
-        # Each now reads the collection the other holds. The assertion is that neither request hangs:
-        # a timeout answer is a correct outcome, a socket that never comes back is not.
         started = time.time()
         t1_reads_other = aggregate(t1, [], coll=other)
         t2_reads_orders = aggregate(t2, [])
@@ -449,8 +441,6 @@ def test_a_non_admin_user_can_use_transactions(c):
 def test_entry_size_is_checked_after_the_id_is_assigned(c):
     section("An oversized-once-identified document is refused at buffer time")
 
-    # 1Mb is the shipped maxEntrySize. A document that fits only until the generated _id is
-    # injected used to pass the buffer check and then be dropped at commit, which reported OK.
     padding = "x" * (1024 * 1024 - 30)
     check_status("START_TRANSACTION", start_txn(c), "OK")
     buffered = save(c, {"pad": padding})
@@ -511,8 +501,6 @@ def test_a_committed_transaction_survives_the_disconnect():
 
 def test_join_reads_your_own_writes(c):
     section("A JOIN inside a transaction reads the transaction's own writes")
-    # The joined collection is read through the same overlay as the source: a document the
-    # transaction wrote there must join, and one it deleted there must not.
     save(c, {"_id": "jrw_left", "k": "shared"})
     save(c, {"_id": "jrw_committed", "k": "shared"}, coll=JOIN_COLL)
 
@@ -539,7 +527,6 @@ def test_join_reads_your_own_writes(c):
           attached == [], f"expected=[]  got={attached!r}")
     check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
 
-    # After the rollback the joined collection is back to its committed state.
     r = aggregate(c, join_steps)
     rows = r.get("results") or []
     attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []

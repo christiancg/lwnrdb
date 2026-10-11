@@ -15,12 +15,41 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.log.Logger;
 
-final class TombstoneStore {
+public final class TombstoneStore {
     private static final Logger logger = Logger.logFor(TombstoneStore.class);
     private static final String TOMBSTONE_ROLLBACK_FAILURE = "Could not roll back a failed tombstone append; the"
             + " tombstone file may hold a torn line, and nothing rebuilds it";
 
-    private TombstoneStore() {
+    private final FilePaths paths;
+
+    TombstoneStore(FilePaths paths) {
+        this.paths = paths;
+    }
+
+    public void append(String dbName, String collName, String id, long version) throws IOException {
+        append(paths.tombstoneFile(dbName, collName), id, version);
+    }
+
+    public void retract(String dbName, String collName, String id, long version) throws IOException {
+        retract(paths.tombstoneFile(dbName, collName), id, version);
+    }
+
+    public void appendAdmin(String key, long version) throws IOException {
+        final var file = paths.adminTombstoneFile();
+        MetadataFileStore.ensureFolder(file.getParentFile(), "cluster", "admin");
+        append(file, key, version);
+    }
+
+    public Map<String, Long> readAdmin() throws IOException {
+        return read(paths.adminTombstoneFile());
+    }
+
+    public Map<String, Long> read(String dbName, String collName) throws IOException {
+        return read(paths.tombstoneFile(dbName, collName));
+    }
+
+    public void compact(String dbName, String collName, long minVersionToKeep) throws IOException {
+        compact(paths.tombstoneFile(dbName, collName), minVersionToKeep);
     }
 
     static void append(File file, String id, long version) throws IOException {
@@ -49,7 +78,7 @@ final class TombstoneStore {
             appended = true;
         } finally {
             if (!appended) {
-                PageRegions.truncateTo(file, lengthBeforeAppend, TOMBSTONE_ROLLBACK_FAILURE);
+                FileLocks.truncateTo(file, lengthBeforeAppend, TOMBSTONE_ROLLBACK_FAILURE);
             }
         }
     }

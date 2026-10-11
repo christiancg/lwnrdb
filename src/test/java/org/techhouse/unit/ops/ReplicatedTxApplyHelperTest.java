@@ -55,14 +55,14 @@ public class ReplicatedTxApplyHelperTest {
 
     @Test
     public void test_null_or_empty_batch_returns_false() {
-        assertFalse(ReplicatedTxApplyHelper.apply(null));
-        assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload()));
+        assertFalse(ReplicatedTxApplyHelper.apply(null, TestGlobals.APPLY_BUDGET_MS));
+        assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(), TestGlobals.APPLY_BUDGET_MS));
     }
 
     @Test
     public void test_applies_upsert_and_delete_entries_atomically() throws Exception {
         ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("tx-del")), null, List.of("1")));
+                List.of(doc("tx-del")), null, List.of("1")), TestGlobals.APPLY_BUDGET_MS);
         assertEquals(OperationStatus.OK, findStatus("tx-del"));
 
         final var upsert = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
@@ -70,7 +70,8 @@ public class ReplicatedTxApplyHelperTest {
         final var delete = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null,
                 List.of("tx-del"), List.of("12"));
 
-        assertTrue(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert, delete))));
+        assertTrue(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert, delete)),
+                TestGlobals.APPLY_BUDGET_MS));
 
         assertEquals(OperationStatus.OK, findStatus("tx-a"));
         assertEquals(OperationStatus.OK, findStatus("tx-b"));
@@ -89,7 +90,8 @@ public class ReplicatedTxApplyHelperTest {
                 List.of(doc("tx-stale")), null, List.of("21"));
         stale.setIncarnationValue(CollectionIncarnation.current(TestGlobals.DB, "txIncarnated") + 1);
 
-        assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(current, stale))));
+        assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(current, stale)),
+                TestGlobals.APPLY_BUDGET_MS));
 
         assertEquals(OperationStatus.NOT_FOUND, findStatus("tx-current"),
                 "a replica must not keep half of a transaction batch whose other half is refused");

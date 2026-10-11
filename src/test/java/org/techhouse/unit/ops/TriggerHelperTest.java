@@ -108,13 +108,13 @@ public class TriggerHelperTest {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entry("a"), "alice", 0)).isEmpty());
+                List.of(entry("a")), "alice", 0)).isEmpty());
     }
 
     @Test
     public void test_fires_nothing_when_no_trigger_is_installed() {
         assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entry("a"), "alice", 0)).isEmpty());
+                List.of(entry("a")), "alice", 0)).isEmpty());
     }
 
     // A trigger installed on the history collection must never fire: an audit trigger would otherwise
@@ -124,8 +124,9 @@ public class TriggerHelperTest {
         cache.putTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME,
                 List.of(new TriggerDefinition("t", new LinkedHashSet<>(Set.of(EventType.CREATED)), "recalc",
                         TriggerDefinition.MODE_DOCUMENT, false, true, "owner", 1L, 1L, 1L, "owner")));
-        assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB,
-                org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME, EventType.CREATED, entry("a"), "alice", 0))
+        assertTrue(capture(
+                () -> TriggerHelper.afterWrite(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME,
+                        EventType.CREATED, List.of(entry("a")), "alice", 0))
                 .isEmpty());
         cache.removeTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME);
     }
@@ -149,11 +150,11 @@ public class TriggerHelperTest {
     public void test_fires_only_matching_event_type() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         assertEquals(1, capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entry("a"), "alice", 0)).size());
+                List.of(entry("a")), "alice", 0)).size());
         assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.UPDATED,
-                entry("a"), "alice", 0)).isEmpty());
+                List.of(entry("a")), "alice", 0)).isEmpty());
         assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED,
-                entry("a"), "alice", 0)).isEmpty());
+                List.of(entry("a")), "alice", 0)).isEmpty());
     }
 
     @Test
@@ -199,21 +200,21 @@ public class TriggerHelperTest {
     public void test_skips_disabled_trigger() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, false);
         assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entry("a"), "alice", 0)).isEmpty());
+                List.of(entry("a")), "alice", 0)).isEmpty());
     }
 
     @Test
     public void test_does_not_fire_when_allow_cascade_false_and_depth_positive() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entry("a"), "alice", 1)).isEmpty());
+                List.of(entry("a")), "alice", 1)).isEmpty());
     }
 
     @Test
     public void test_fires_at_depth_when_cascade_allowed() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, true, true);
         final var events = capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entry("a"), "alice", 2));
+                List.of(entry("a")), "alice", 2));
         assertEquals(1, events.size());
         assertEquals(2, events.getFirst().getDepth());
     }
@@ -222,7 +223,7 @@ public class TriggerHelperTest {
     public void test_event_carries_the_acting_user() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         final var events = capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entry("a"), "alice", 0));
+                List.of(entry("a")), "alice", 0));
         assertEquals("alice", events.getFirst().getActingUser());
         assertEquals("recalc", events.getFirst().getProcedureName());
         assertEquals("t", events.getFirst().getTriggerName());
@@ -232,8 +233,6 @@ public class TriggerHelperTest {
     @Test
     public void test_null_and_empty_entries_fire_nothing() {
         install(Set.of(EventType.DELETED), TriggerDefinition.MODE_DOCUMENT, false, true);
-        assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED,
-                (DbEntry) null, "alice", 0)).isEmpty());
         assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED,
                 List.of(), "alice", 0)).isEmpty());
     }
@@ -283,7 +282,7 @@ public class TriggerHelperTest {
         try {
             assertTrue(
                     capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                            entry("a"), "alice", 0)).isEmpty(),
+                            List.of(entry("a")), "alice", 0)).isEmpty(),
                     "the write has already committed, so an unreadable trigger file must not fail it");
         } finally {
             assertTrue(file.delete());

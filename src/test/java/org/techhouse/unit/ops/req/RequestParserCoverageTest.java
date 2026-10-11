@@ -53,12 +53,11 @@ public class RequestParserCoverageTest {
     public void test_parse_the_fault_operations() {
         final var arm = assertInstanceOf(ArmFaultRequest.class,
                 RequestParser.parseRequest(
-                        "{\"type\":\"ARM_FAULT\",\"point\":\"ANTI_ENTROPY_SNAPSHOTTED\",\"action\":\"DELAY\","
-                                + "\"match\":\"db|coll\",\"delayMs\":250}"));
+                        "{\"type\":\"ARM_FAULT\",\"point\":\"ANTI_ENTROPY_SNAPSHOTTED\",\"action\":\"PAUSE\","
+                                + "\"match\":\"db|coll\"}"));
         assertEquals("ANTI_ENTROPY_SNAPSHOTTED", arm.getPoint());
-        assertEquals("DELAY", arm.getAction());
+        assertEquals("PAUSE", arm.getAction());
         assertEquals("db|coll", arm.getMatch());
-        assertEquals(250L, arm.getDelayMs());
         final var await = assertInstanceOf(AwaitFaultRequest.class,
                 RequestParser.parseRequest("{\"type\":\"AWAIT_FAULT\",\"point\":\"PEER_REPLY\",\"timeoutMs\":1000}"));
         assertEquals("PEER_REPLY", await.getPoint());

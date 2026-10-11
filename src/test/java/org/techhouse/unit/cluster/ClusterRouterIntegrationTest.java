@@ -98,9 +98,11 @@ public class ClusterRouterIntegrationTest {
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         ReplicatedApplyHelper.apply(
-                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s1", 5)), null));
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s1", 5)), null),
+                TestGlobals.APPLY_BUDGET_MS);
         ReplicatedApplyHelper.apply(
-                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s2", 50)), null));
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s2", 50)), null),
+                TestGlobals.APPLY_BUDGET_MS);
 
         final var request = new AggregateRequest(TestGlobals.DB, coll);
         request.setAggregationSteps(
@@ -126,8 +128,9 @@ public class ClusterRouterIntegrationTest {
         cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
-        ReplicatedApplyHelper
-                .apply(new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(doc("f1")), null));
+        ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(doc("f1")), null),
+                TestGlobals.APPLY_BUDGET_MS);
 
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("f1");

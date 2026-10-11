@@ -72,7 +72,7 @@ public class ReplicatedApplyIncarnationTest {
         create("incCurrent");
         final var incarnation = CollectionIncarnation.current(TestGlobals.DB, "incCurrent");
 
-        assertTrue(ReplicatedApplyHelper.apply(upsert("incCurrent", incarnation, "a")));
+        assertTrue(ReplicatedApplyHelper.apply(upsert("incCurrent", incarnation, "a"), TestGlobals.APPLY_BUDGET_MS));
         assertEquals(OperationStatus.OK, findStatus("incCurrent", "a"));
     }
 
@@ -81,13 +81,13 @@ public class ReplicatedApplyIncarnationTest {
         create("incOther");
         final var incarnation = CollectionIncarnation.current(TestGlobals.DB, "incOther");
 
-        assertFalse(ReplicatedApplyHelper.apply(upsert("incOther", incarnation + 1, "a")));
+        assertFalse(ReplicatedApplyHelper.apply(upsert("incOther", incarnation + 1, "a"), TestGlobals.APPLY_BUDGET_MS));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("incOther", "a"));
     }
 
     @Test
     public void test_a_stamped_upsert_to_an_unregistered_collection_writes_nothing() {
-        assertFalse(ReplicatedApplyHelper.apply(upsert("incNeverCreated", 42L, "a")));
+        assertFalse(ReplicatedApplyHelper.apply(upsert("incNeverCreated", 42L, "a"), TestGlobals.APPLY_BUDGET_MS));
         assertFalse(new File(
                 TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + "incNeverCreated")
                 .exists());
@@ -97,7 +97,7 @@ public class ReplicatedApplyIncarnationTest {
     public void test_an_unstamped_upsert_applies_as_before() {
         create("incLegacy");
 
-        assertTrue(ReplicatedApplyHelper.apply(upsert("incLegacy", 0L, "a")));
+        assertTrue(ReplicatedApplyHelper.apply(upsert("incLegacy", 0L, "a"), TestGlobals.APPLY_BUDGET_MS));
         assertEquals(OperationStatus.OK, findStatus("incLegacy", "a"));
     }
 
@@ -105,13 +105,13 @@ public class ReplicatedApplyIncarnationTest {
     public void test_a_delete_of_another_incarnation_is_refused() throws Exception {
         create("incDelete");
         final var incarnation = CollectionIncarnation.current(TestGlobals.DB, "incDelete");
-        assertTrue(ReplicatedApplyHelper.apply(upsert("incDelete", incarnation, "kept")));
+        assertTrue(ReplicatedApplyHelper.apply(upsert("incDelete", incarnation, "kept"), TestGlobals.APPLY_BUDGET_MS));
 
         final var delete = new ReplicationPayload(TestGlobals.DB, "incDelete", ReplicationOp.DELETE, null,
                 List.of("kept"), List.of("200"));
         delete.setIncarnationValue(incarnation + 1);
 
-        assertFalse(ReplicatedApplyHelper.apply(delete));
+        assertFalse(ReplicatedApplyHelper.apply(delete, TestGlobals.APPLY_BUDGET_MS));
         assertEquals(OperationStatus.OK, findStatus("incDelete", "kept"));
         assertFalse(fs.tombstones().read(TestGlobals.DB, "incDelete").containsKey("kept"));
     }
@@ -127,7 +127,7 @@ public class ReplicatedApplyIncarnationTest {
         create("incRecreated");
 
         assertNotEquals(before, CollectionIncarnation.current(TestGlobals.DB, "incRecreated"));
-        assertFalse(ReplicatedApplyHelper.apply(stale));
+        assertFalse(ReplicatedApplyHelper.apply(stale, TestGlobals.APPLY_BUDGET_MS));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("incRecreated", "dead"),
                 "a pre-drop document applied into the new incarnation is replicated cluster-wide from there");
     }

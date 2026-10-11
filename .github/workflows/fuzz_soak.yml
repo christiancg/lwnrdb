@@ -50,8 +50,6 @@ jobs:
         with:
           name: lwnrdb-jar
           path: target
-      - name: Set admin credentials for integration tests
-        run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' lwnrdb.cfg
       - name: Soak on random seeds
         env:
           MINUTES: ${{ inputs.minutes || '45' }}

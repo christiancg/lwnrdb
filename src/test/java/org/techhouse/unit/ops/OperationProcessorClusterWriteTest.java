@@ -170,7 +170,7 @@ public class OperationProcessorClusterWriteTest {
     private void armHalt(IntConsumer onHalt) throws Exception {
         TestUtils.setPrivateField(faultInjector, "enabled", true);
         TestUtils.setPrivateField(faultInjector, "halt", onHalt);
-        faultInjector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.HALT, null, 0);
+        faultInjector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.HALT, null);
     }
 
     @Test

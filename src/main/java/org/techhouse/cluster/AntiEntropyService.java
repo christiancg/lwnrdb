@@ -206,7 +206,7 @@ public class AntiEntropyService implements MembershipListener {
         } finally {
             locks.releaseRead(dbName, collName);
         }
-        faultInjector.at(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, FaultInjector.collectionSubject(dbName, collName));
+        faultInjector.at(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, Cache.getCollectionIdentifier(dbName, collName));
 
         final var selfNodeId = selfNodeId();
         final var best = new HashMap<String, Best>();

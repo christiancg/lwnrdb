@@ -2,7 +2,7 @@ package org.techhouse.cluster.admin;
 
 import java.util.Map;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 
 final class CaseVariant {
     enum Resolution {
@@ -34,7 +34,7 @@ final class CaseVariant {
     }
 
     private static void bury(AdminRecordKey key, long version, Map<String, Long> tombstones) throws Exception {
-        AdminTombstone.recordAt(key, version);
+        AdminStamp.tombstoneAt(key, version);
         tombstones.put(key.id(), version);
     }
 }

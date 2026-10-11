@@ -4,7 +4,6 @@ import random
 import shutil
 import sys
 import tempfile
-import time
 
 import base_utils as bu
 from base_utils import check, section
@@ -12,7 +11,7 @@ from base_utils import check, section
 from fuzz import oracles, report, write_paths
 from fuzz.execute import Executor
 from fuzz.ops import generate_plan, plan_literal, repair
-from fuzz.shrink import Budget as ShrinkBudget
+from fuzz.shrink import Budget
 from fuzz.shrink import ddmin, matches_signature, signature_of
 from fuzz.regression_seeds import REGRESSION_SEEDS
 
@@ -25,14 +24,6 @@ DEFAULT_BUDGET_SECONDS = 180
 DEFAULT_SHRINK_SECONDS = 300.0
 
 bu.configure(host=HOST, port=PORT)
-
-
-class Budget:
-    def __init__(self, seconds: float):
-        self.deadline = time.time() + seconds
-
-    def remaining(self) -> bool:
-        return time.time() < self.deadline
 
 
 def query_rng(seed) -> random.Random:
@@ -95,14 +86,12 @@ class PersistentReplayer:
         self.namespace = namespace
         self.seed = seed
         self.signature = signature
-        self.replays = 0
         self.work_dir = tempfile.mkdtemp(prefix="lwnrdb-shrink-")
         self.executor = Executor(self.work_dir, PORT)
         self.executor.start()
 
     def __call__(self, plan: list) -> bool:
         self.executor.wipe()
-        self.replays += 1
         divergences, _ = evaluate(self.executor, plan, self.namespace, self.seed,
                                   oracles.Stats(), self.signature)
         return matches_signature(divergences, self.signature)
@@ -125,7 +114,7 @@ def fresh_replayer(namespace, seed, signature):
 
 def shrink_plan(plan, namespace, seed, divergences, seconds: float):
     signature = signature_of(divergences)
-    budget = ShrinkBudget(seconds)
+    budget = Budget(seconds)
     try:
         replayer = PersistentReplayer(namespace, seed, signature)
     except Exception as exc:

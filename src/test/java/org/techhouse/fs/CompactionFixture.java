@@ -73,7 +73,7 @@ final class CompactionFixture {
         final var entry = indexed(id);
         final var file = page(entry.getPage());
         try (var raf = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            final var tail = PageRegions.readRegion(raf, entry.getPosition(), file.length());
+            final var tail = PageCompactor.readRegion(raf, entry.getPosition(), file.length());
             return journal.begin(kind, entry, file.length(), tail);
         }
     }
@@ -83,7 +83,7 @@ final class CompactionFixture {
         final var file = page(entry.getPage());
         try (var raf = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final var total = file.length();
-            PageRegions.shiftOtherEntriesToStart(raf, entry, total);
+            PageCompactor.shiftOtherEntriesToStart(raf, entry, total);
             raf.setLength(total - entry.getLength());
         }
     }

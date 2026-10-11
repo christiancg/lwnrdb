@@ -235,6 +235,6 @@ public class TriggerStartupReplayTest {
 
     @Test
     public void test_unknown_transaction_id_is_not_fenced() {
-        assertFalse(org.techhouse.ops.tx.SliceStates.isFenced(UUID.randomUUID().toString()));
+        assertFalse(org.techhouse.ops.tx.SliceStateMachine.isFenced(UUID.randomUUID().toString()));
     }
 }

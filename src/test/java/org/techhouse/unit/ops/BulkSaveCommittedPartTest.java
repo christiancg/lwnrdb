@@ -2,7 +2,6 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -25,7 +24,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.PartialBulkSaveException;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.BulkSaveEffects;
 import org.techhouse.ops.ClusterWriteHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
@@ -38,8 +36,7 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-public class BulkSaveEffectsTest {
-    private static final String ACTING_USER = "bulk-writer";
+public class BulkSaveCommittedPartTest {
     private static final int DEPTH = 2;
     private static final List<String> COMMITTED_INSERTS = List.of("inserted");
     private static final List<String> COMMITTED_UPDATES = List.of("updated");
@@ -76,6 +73,13 @@ public class BulkSaveEffectsTest {
         return new PartialBulkSaveException(committed, new IOException("disk full"));
     }
 
+    private OperationResponse process(BulkSaveRequest request) {
+        try (var triggers = mockStatic(TriggerHelper.class, CALLS_REAL_METHODS)) {
+            triggers.when(() -> TriggerHelper.stageBulkSave(eq(request), any())).thenReturn(staged);
+            return IocContainer.get(OperationProcessor.class).processMessage(request);
+        }
+    }
+
     private static boolean isTheCommittedPart(OperationResponse response) {
         return response instanceof BulkSaveResponse bulk && bulk.getInserted().equals(COMMITTED_INSERTS)
                 && bulk.getUpdated().equals(COMMITTED_UPDATES);
@@ -88,10 +92,9 @@ public class BulkSaveEffectsTest {
                 var ignored = mockStatic(ClusterWriteHelper.class)) {
             save.when(() -> SaveOperationHelper.executeBulkSave(request)).thenThrow(partialFailure());
 
-            assertThrows(PartialBulkSaveException.class,
-                    () -> BulkSaveEffects.executeAndPublish(request, ACTING_USER, staged));
+            assertEquals(ErrorCode.ERROR_BULK_SAVING.getCode(), process(request).getErrorCode());
 
-            verify(staged).submitLanded(COMMITTED_IDS, TestGlobals.DB, TestGlobals.COLL, ACTING_USER, DEPTH);
+            verify(staged).submitLanded(eq(COMMITTED_IDS), eq(TestGlobals.DB), eq(TestGlobals.COLL), any(), eq(DEPTH));
         }
     }
 
@@ -102,16 +105,15 @@ public class BulkSaveEffectsTest {
                 var cluster = mockStatic(ClusterWriteHelper.class)) {
             save.when(() -> SaveOperationHelper.executeBulkSave(request)).thenThrow(partialFailure());
 
-            assertThrows(PartialBulkSaveException.class,
-                    () -> BulkSaveEffects.executeAndPublish(request, ACTING_USER, staged));
+            assertEquals(ErrorCode.ERROR_BULK_SAVING.getCode(), process(request).getErrorCode());
 
             cluster.verify(() -> ClusterWriteHelper.afterBulkSave(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    argThat(BulkSaveEffectsTest::isTheCommittedPart)));
+                    argThat(BulkSaveCommittedPartTest::isTheCommittedPart)));
         }
     }
 
     @Test
-    public void test_success_path_is_unchanged() throws Exception {
+    public void test_success_path_is_unchanged() {
         final var request = bulkRequest();
         final var replicated = new OperationResponse(null, ErrorCode.ERROR_BULK_SAVING);
         try (var save = mockStatic(SaveOperationHelper.class, CALLS_REAL_METHODS);
@@ -120,9 +122,9 @@ public class BulkSaveEffectsTest {
             cluster.when(() -> ClusterWriteHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL, committed))
                     .thenReturn(replicated);
 
-            assertSame(replicated, BulkSaveEffects.executeAndPublish(request, ACTING_USER, staged),
+            assertSame(replicated, process(request),
                     "a successful bulk save answers with whatever replication made of it");
-            verify(staged).submitLanded(COMMITTED_IDS, TestGlobals.DB, TestGlobals.COLL, ACTING_USER, DEPTH);
+            verify(staged).submitLanded(eq(COMMITTED_IDS), eq(TestGlobals.DB), eq(TestGlobals.COLL), any(), eq(DEPTH));
         }
     }
 

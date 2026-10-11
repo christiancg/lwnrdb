@@ -108,10 +108,10 @@ public class TransactionAbandonSessionTest {
     @Test
     public void test_is_fenced_conjoins_both_markers() throws Exception {
         final var txId = UUID.randomUUID().toString();
-        assertFalse(org.techhouse.ops.tx.SliceStates.isFenced(txId));
+        assertFalse(org.techhouse.ops.tx.SliceStateMachine.isFenced(txId));
         TxCommitLog.recordLocalCommit(txId, List.of(), List.of());
         try {
-            assertTrue(org.techhouse.ops.tx.SliceStates.isFenced(txId),
+            assertTrue(org.techhouse.ops.tx.SliceStateMachine.isFenced(txId),
                     "a single-owner forwarded transaction fences through the commit log and never prepares");
         } finally {
             TxCommitLog.clearLocalCommit(txId);

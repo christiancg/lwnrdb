@@ -16,7 +16,7 @@ import org.techhouse.ex.InvalidCronException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.ListSchedulesRequest;
@@ -157,7 +157,7 @@ public final class ScheduleOperationHelper {
         locks.lock(dbName, Globals.SCHEDULES_FOLDER);
         try {
             if (fs.deleteSchedule(dbName, request.getName())) {
-                AdminTombstone.record(AdminRecordKey.schedule(dbName, request.getName()));
+                AdminStamp.tombstone(AdminRecordKey.schedule(dbName, request.getName()));
             }
             cache.removeSchedule(dbName, request.getName());
             registry.reload(dbName);

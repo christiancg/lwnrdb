@@ -25,7 +25,7 @@ public class FileSystem {
     private final FilePaths paths = new FilePaths();
     private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
     private final IndexBuildMarkers indexBuildMarkers = new IndexBuildMarkers(paths);
-    private final Tombstones tombstones = new Tombstones(paths);
+    private final TombstoneStore tombstones = new TombstoneStore(paths);
     private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
@@ -209,7 +209,7 @@ public class FileSystem {
         return folderQuarantine;
     }
 
-    public Tombstones tombstones() {
+    public TombstoneStore tombstones() {
         return tombstones;
     }
 
@@ -285,7 +285,7 @@ public class FileSystem {
             final var lock = FileLocks.lockFor(appended.getKey()).writeLock();
             lock.lock();
             try {
-                PageRegions.truncateTo(appended.getKey(), appended.getValue());
+                FileLocks.truncateTo(appended.getKey(), appended.getValue());
             } finally {
                 lock.unlock();
             }
@@ -310,7 +310,7 @@ public class FileSystem {
                         totalFileLength + separator.getBytes(StandardCharsets.UTF_8).length, length, page,
                         entry.getVersion());
             } catch (IOException e) {
-                PageRegions.truncateTo(file, totalFileLength);
+                FileLocks.truncateTo(file, totalFileLength);
                 throw e;
             }
         } finally {
@@ -419,7 +419,7 @@ public class FileSystem {
     }
 
     public List<PkIndexEntry> retireDanglingPkEntries(String dbName, String collName) throws IOException {
-        return DanglingPkEntries.retireAll(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
+        return OrphanedPageRecords.retireDangling(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
     }
 
     public List<DbEntry> adoptOrphanedRecords(String dbName, String collName) throws IOException {

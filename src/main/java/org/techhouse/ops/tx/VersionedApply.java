@@ -10,7 +10,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ex.TransactionOpFailedException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
@@ -24,6 +23,39 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
 public final class VersionedApply {
+    public enum ApplyOutcome {
+        APPLIED, ALREADY_APPLIED, SUPERSEDED;
+
+        private static final long UNVERSIONED = 0L;
+
+        public static ApplyOutcome forSave(long storedVersion, long tombstoneVersion, long opVersion) {
+            if (opVersion <= UNVERSIONED) {
+                return APPLIED;
+            }
+            if (storedVersion == opVersion) {
+                return ALREADY_APPLIED;
+            }
+            if (storedVersion > opVersion || tombstoneVersion >= opVersion) {
+                return SUPERSEDED;
+            }
+            return APPLIED;
+        }
+
+        public static ApplyOutcome forDelete(long storedVersion, boolean present, long opVersion) {
+            if (!present) {
+                return ALREADY_APPLIED;
+            }
+            if (opVersion <= UNVERSIONED) {
+                return APPLIED;
+            }
+            return storedVersion > opVersion ? SUPERSEDED : APPLIED;
+        }
+
+        public boolean firesTriggers() {
+            return this != SUPERSEDED;
+        }
+    }
+
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final String OBJECTS_FIELD = "objects";
@@ -135,6 +167,7 @@ public final class VersionedApply {
         if (response == null || response.getStatus() == OperationStatus.OK) {
             return;
         }
-        throw new TransactionOpFailedException(opType, response.getErrorCode(), response.getMessage());
+        throw new IllegalStateException(
+                "A buffered " + opType + " operation failed while committing: " + response.getMessage());
     }
 }

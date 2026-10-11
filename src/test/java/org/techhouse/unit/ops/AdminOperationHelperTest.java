@@ -101,7 +101,7 @@ public class AdminOperationHelperTest {
 
         AdminOperationHelper.bulkUpdateEntryCount(org.techhouse.test.TestGlobals.DB,
                 org.techhouse.test.TestGlobals.COLL, org.techhouse.bckg_ops.events.EventType.CREATED,
-                java.util.List.of(entry));
+                java.util.List.of(entry), 0L);
 
         final var pageEntries = cache.getAdminPageEntries(org.techhouse.test.TestGlobals.DB,
                 org.techhouse.test.TestGlobals.COLL);
@@ -120,7 +120,7 @@ public class AdminOperationHelperTest {
         entry.set_id("entryLayout");
         entry.setPage(0L);
         AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                java.util.List.of(entry));
+                java.util.List.of(entry), 0L);
 
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, TestGlobals.DB,
                 TestGlobals.COLL);
@@ -322,7 +322,7 @@ public class AdminOperationHelperTest {
         entry.setPage(0L);
 
         AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                java.util.List.of(entry));
+                java.util.List.of(entry), 0L);
 
         final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
         assertNotNull(pageEntries);

@@ -59,7 +59,7 @@ final class PkIndexStore {
             appended = true;
         } finally {
             if (!appended) {
-                PageRegions.truncateTo(indexFile, lengthBeforeAppend, PK_INDEX_ROLLBACK_FAILURE);
+                FileLocks.truncateTo(indexFile, lengthBeforeAppend, PK_INDEX_ROLLBACK_FAILURE);
             }
         }
     }

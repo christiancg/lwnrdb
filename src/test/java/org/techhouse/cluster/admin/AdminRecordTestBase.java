@@ -21,7 +21,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -100,7 +100,7 @@ abstract class AdminRecordTestBase {
     }
 
     protected static Map<String, Long> tombstones() throws Exception {
-        return AdminTombstone.all();
+        return AdminStamp.tombstones();
     }
 
     protected static long liveVersion(AdminRecordKey key) {

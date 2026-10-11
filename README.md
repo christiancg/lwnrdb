@@ -1159,7 +1159,6 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 |---|---|
 | `PAUSE` | Parks the thread until `RELEASE_FAULT`, for at most 120 seconds |
 | `HALT` | Stops the process at that statement with exit status `137`, skipping shutdown hooks, like `kill -9` |
-| `DELAY` | Sleeps `delayMs` (1–60000), or until released |
 | `DROP` | Skips writing the reply (`PEER_REPLY` only) |
 
 #### `ARM_FAULT` (admin only, testing only)
@@ -1175,12 +1174,12 @@ Waits until the armed point has fired, up to `timeoutMs` (1–120000). Answers `
 ```
 
 #### `RELEASE_FAULT` (admin only, testing only)
-Lets a paused or delayed thread continue and disarms the point. Without `point` it does so for every point.
+Lets a paused thread continue and disarms the point. Without `point` it does so for every point.
 ```json
 {"type":"RELEASE_FAULT","point":"WRITE_OWNERSHIP_RECHECKED"}
 ```
 
-- **Errors**: `403-3` fault injection is disabled, `403-1` not an admin, `400-1` an unknown point or action, `DROP` on a point other than `PEER_REPLY`, or a `delayMs`/`timeoutMs` out of range, `408-3` the point was not reached in time.
+- **Errors**: `403-3` fault injection is disabled, `403-1` not an admin, `400-1` an unknown point or action, `DROP` on a point other than `PEER_REPLY`, or a `timeoutMs` out of range, `408-3` the point was not reached in time.
 
 ### Error codes
 

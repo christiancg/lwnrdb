@@ -35,7 +35,6 @@ import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
-import org.techhouse.ops.tx.FencedTriggerRuns;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -219,8 +218,8 @@ public class TriggerConsumingSliceTest {
     public void test_fenced_slices_name_only_the_runs_they_consume() throws Exception {
         crashPrepared(RUN_ID);
 
-        assertEquals(Set.of(RUN_ID), FencedTriggerRuns.consumedBySlice(txId));
-        assertTrue(FencedTriggerRuns.consumedByFencedSlices().contains(RUN_ID));
+        assertEquals(Set.of(RUN_ID), TriggerRunRecovery.consumedBySlice(txId));
+        assertFalse(TriggerRunRecovery.startupRunIds().contains(RUN_ID));
     }
 
     @Test

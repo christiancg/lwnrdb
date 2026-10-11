@@ -2,6 +2,9 @@ package org.techhouse.fault;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -17,8 +20,13 @@ public class FaultInjector {
     @SuppressWarnings("FieldMayBeFinal")
     private volatile IntConsumer halt = Runtime.getRuntime()::halt;
 
-    public static String collectionSubject(String dbName, String collName) {
-        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
+    public static <E extends Enum<E>> E parse(Class<E> type, String name) {
+        for (final var constant : type.getEnumConstants()) {
+            if (constant.name().equalsIgnoreCase(name)) {
+                return constant;
+            }
+        }
+        return null;
     }
 
     public boolean isEnabled() {
@@ -44,25 +52,25 @@ public class FaultInjector {
             return false;
         }
         perform(fired);
-        return fired.action() == FaultAction.DROP;
+        return fired.action == FaultAction.DROP;
     }
 
-    public void arm(FaultPoint point, FaultAction action, String match, long delayMs) {
-        final var previous = armed.put(point, new ArmedFault(action, match, delayMs));
+    public void arm(FaultPoint point, FaultAction action, String match) {
+        final var previous = armed.put(point, new ArmedFault(action, match));
         if (previous != null) {
-            previous.release();
+            previous.released.countDown();
         }
     }
 
     public boolean awaitReached(FaultPoint point, long timeoutMs) {
         final var fault = armed.get(point);
-        return fault != null && fault.awaitReached(timeoutMs);
+        return fault != null && awaitQuietly(fault.reached, timeoutMs);
     }
 
     public void release(FaultPoint point) {
         final var fault = armed.remove(point);
         if (fault != null) {
-            fault.release();
+            fault.released.countDown();
         }
     }
 
@@ -78,11 +86,41 @@ public class FaultInjector {
     }
 
     private void perform(ArmedFault fired) {
-        switch (fired.action()) {
+        switch (fired.action) {
             case HALT -> halt.accept(FAULT_HALT_STATUS);
-            case PAUSE, DELAY -> fired.hold(pauseLimitMs);
+            case PAUSE -> awaitQuietly(fired.released, pauseLimitMs);
             default -> {
             }
+        }
+    }
+
+    private static boolean awaitQuietly(CountDownLatch latch, long timeoutMs) {
+        try {
+            return latch.await(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private static final class ArmedFault {
+        private final FaultAction action;
+        private final String match;
+        private final CountDownLatch reached = new CountDownLatch(1);
+        private final CountDownLatch released = new CountDownLatch(1);
+        private final AtomicBoolean fired = new AtomicBoolean();
+
+        private ArmedFault(FaultAction action, String match) {
+            this.action = action;
+            this.match = match;
+        }
+
+        private boolean tryFire(String subject) {
+            if ((match != null && !match.equals(subject)) || !fired.compareAndSet(false, true)) {
+                return false;
+            }
+            reached.countDown();
+            return true;
         }
     }
 }

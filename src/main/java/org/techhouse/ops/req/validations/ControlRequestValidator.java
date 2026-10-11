@@ -5,6 +5,7 @@ import java.util.UUID;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.fault.FaultAction;
+import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.req.ArmFaultRequest;
@@ -20,7 +21,6 @@ import org.techhouse.ops.req.StopListenRequest;
 public final class ControlRequestValidator {
     private static final String TRIGGER_RUN_STATUS_RULE = "status must be 'PENDING' or 'DEAD'";
     private static final String FAULT_POINT_RULE = "point must name a fault point";
-    private static final long MAX_FAULT_DELAY_MS = 60_000L;
 
     private ControlRequestValidator() {
     }
@@ -104,40 +104,37 @@ public final class ControlRequestValidator {
     }
 
     static ValidationResult validateArmFault(ArmFaultRequest request) {
-        final var point = FaultPoint.parse(request.getPoint());
+        final var point = FaultInjector.parse(FaultPoint.class, request.getPoint());
         if (point == null) {
             return ValidationResult.fail(FAULT_POINT_RULE);
         }
-        final var action = FaultAction.parse(request.getAction());
+        final var action = FaultInjector.parse(FaultAction.class, request.getAction());
         if (action == null) {
-            return ValidationResult.fail("action must be PAUSE, HALT, DELAY or DROP");
+            return ValidationResult.fail("action must be PAUSE, HALT or DROP");
         }
         if (action == FaultAction.DROP && !point.isDroppable()) {
             return ValidationResult.fail("only a message fault point can drop");
-        }
-        if (action == FaultAction.DELAY && outOfRange(request.getDelayMs(), MAX_FAULT_DELAY_MS)) {
-            return ValidationResult.fail("delayMs must be between 1 and " + MAX_FAULT_DELAY_MS);
         }
         return ValidationResult.ok();
     }
 
     static ValidationResult validateAwaitFault(AwaitFaultRequest request) {
-        if (FaultPoint.parse(request.getPoint()) == null) {
+        if (FaultInjector.parse(FaultPoint.class, request.getPoint()) == null) {
             return ValidationResult.fail(FAULT_POINT_RULE);
         }
-        if (outOfRange(request.getTimeoutMs(), Globals.FAULT_PAUSE_LIMIT_MS)) {
+        if (outOfRange(request.getTimeoutMs())) {
             return ValidationResult.fail("timeoutMs must be between 1 and " + Globals.FAULT_PAUSE_LIMIT_MS);
         }
         return ValidationResult.ok();
     }
 
     static ValidationResult validateReleaseFault(ReleaseFaultRequest request) {
-        return request.getPoint() == null || FaultPoint.parse(request.getPoint()) != null
+        return request.getPoint() == null || FaultInjector.parse(FaultPoint.class, request.getPoint()) != null
                 ? ValidationResult.ok()
                 : ValidationResult.fail(FAULT_POINT_RULE);
     }
 
-    private static boolean outOfRange(Long value, long max) {
-        return value == null || value < 1 || value > max;
+    private static boolean outOfRange(Long value) {
+        return value == null || value < 1 || value > Globals.FAULT_PAUSE_LIMIT_MS;
     }
 }

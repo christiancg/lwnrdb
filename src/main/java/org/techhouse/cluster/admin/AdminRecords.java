@@ -8,6 +8,9 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -15,7 +18,6 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
-import org.techhouse.ops.admin.AdminTombstone;
 import org.techhouse.ops.admin.StoredDefinitions;
 
 public final class AdminRecords {
@@ -27,7 +29,7 @@ public final class AdminRecords {
     }
 
     public static List<AdminRecord> all() throws IOException {
-        final var tombstones = AdminTombstone.all();
+        final var tombstones = AdminStamp.tombstones();
         final var keys = new ArrayList<AdminRecordKey>();
         for (final var dbName : cache.getUserDatabaseNames()) {
             keys.add(AdminRecordKey.database(dbName));
@@ -56,7 +58,7 @@ public final class AdminRecords {
     }
 
     public static List<AdminRecord> of(List<AdminRecordKey> keys) throws IOException {
-        final var tombstones = AdminTombstone.all();
+        final var tombstones = AdminStamp.tombstones();
         final var records = new ArrayList<AdminRecord>();
         for (final var key : keys) {
             final var record = current(key, tombstones);
@@ -130,6 +132,35 @@ public final class AdminRecords {
             logger.warning("Leaving the " + folder + " of " + dbName + " out of the admin records: it could not be"
                     + " listed: " + unlistable.getMessage());
             return List.of();
+        }
+    }
+
+    public static void stampUnversioned() {
+        try {
+            for (final var record : all()) {
+                if (!record.isTombstone() && record.version() == 0) {
+                    stampUnversioned(record);
+                }
+            }
+        } catch (Exception failure) {
+            logger.error(
+                    "Could not version the admin records written before admin records were versioned; a peer's"
+                            + " newer-looking copy, such as a fresh node's bootstrap admin, would replace them",
+                    failure);
+        }
+    }
+
+    private static void stampUnversioned(AdminRecord record) throws Exception {
+        final var key = record.key();
+        final var body = record.body();
+        switch (key.kind()) {
+            case DATABASE -> AdminOperationHelper.saveDatabaseEntry(AdminDbEntry.fromJsonObject(body));
+            case COLLECTION -> AdminOperationHelper.saveCollectionEntry(AdminCollEntry.fromJsonObject(body));
+            case USER -> AdminOperationHelper.saveUserEntry(AdminUserEntry.fromJsonObject(body));
+            case SCHEMA -> StoredDefinitions.writeSchema(key.dbName(), key.name(), AdminStamp.unwrappedSchema(body));
+            case TRIGGERS -> StoredDefinitions.writeTriggers(key.dbName(), key.name(), body);
+            case PROCEDURE -> StoredDefinitions.writeProcedure(key.dbName(), key.name(), body);
+            default -> StoredDefinitions.writeSchedule(key.dbName(), key.name(), body);
         }
     }
 }

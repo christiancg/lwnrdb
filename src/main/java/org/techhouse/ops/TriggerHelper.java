@@ -10,9 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -36,7 +34,6 @@ public final class TriggerHelper {
 
     @SuppressWarnings("FieldMayBeFinal")
     private static Cache cache = IocContainer.get(Cache.class);
-    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TriggerHelper.class);
 
@@ -94,24 +91,8 @@ public final class TriggerHelper {
 
     public static void afterWrite(String dbName, String collName, EventType type, List<DbEntry> entries,
             String actingUser, int depth) {
-        if (entries == null || entries.isEmpty()) {
-            return;
-        }
-        for (final var trigger : matchingTriggers(dbName, collName, type, depth)) {
-            for (final var group : runGroups(trigger, entries)) {
-                final var descriptor = descriptor(dbName, collName, trigger, type, group, actingUser, depth);
-                final var runId = TriggerRunLog.record(descriptor);
-                triggerExecutor
-                        .submit(new TriggerEvent(type, dbName, collName, trigger.getName(), trigger.getProcedureName(),
-                                trigger.isBatchMode(), group, actingUser, depth, runId, 1, descriptor.firedAt()));
-            }
-        }
-    }
-
-    private static TriggerRunLog.TriggerRunDescriptor descriptor(String dbName, String collName,
-            TriggerDefinition trigger, EventType type, List<DbEntry> group, String actingUser, int depth) {
-        return new TriggerRunLog.TriggerRunDescriptor(dbName, collName, trigger.getName(), trigger.getProcedureName(),
-                type, trigger.isBatchMode(), actingUser, depth, System.currentTimeMillis(), group);
+        stageRuns(dbName, collName, type, entries, actingUser, depth,
+                (_, _, descriptor) -> TriggerRunLog.record(descriptor)).submitAll();
     }
 
     private interface RunRecorder {
@@ -126,7 +107,9 @@ public final class TriggerHelper {
         final var runs = new ArrayList<StagedTriggerRuns.StagedRun>();
         for (final var trigger : matchingTriggers(dbName, collName, type, depth)) {
             for (final var group : runGroups(trigger, entries)) {
-                final var descriptor = descriptor(dbName, collName, trigger, type, group, actingUser, depth);
+                final var descriptor = new TriggerRunLog.TriggerRunDescriptor(dbName, collName, trigger.getName(),
+                        trigger.getProcedureName(), type, trigger.isBatchMode(), actingUser, depth,
+                        System.currentTimeMillis(), group);
                 final var runId = recorder.record(trigger, group, descriptor);
                 runs.add(new StagedTriggerRuns.StagedRun(dbName, collName, trigger.getName(),
                         trigger.getProcedureName(), type, trigger.isBatchMode(), actingUser, depth,
@@ -218,16 +201,8 @@ public final class TriggerHelper {
 
     public static StagedTriggerRuns stageCommittedIds(String dbName, String collName, EventType type, List<String> ids,
             String actingUser, int depth, String txId) {
-        if (ids == null || ids.isEmpty() || hasNotTriggerFor(dbName, collName, type, depth)) {
-            return StagedTriggerRuns.none();
-        }
-        try {
-            return stageCommitted(dbName, collName, type, readEntriesWithRetry(dbName, collName, new HashSet<>(ids)),
-                    actingUser, depth, txId);
-        } catch (IOException e) {
-            logger.error("Could not read the committed documents to fire a trigger on " + dbName + "|" + collName, e);
-            return StagedTriggerRuns.none();
-        }
+        return stageCommitted(dbName, collName, type, committedEntries(dbName, collName, type, ids, depth), actingUser,
+                depth, txId);
     }
 
     public static StagedTriggerRuns stageCommitted(String dbName, String collName, EventType type,
@@ -278,21 +253,21 @@ public final class TriggerHelper {
         return ids == null ? Set.of() : new LinkedHashSet<>(ids);
     }
 
-    public static void afterWrite(String dbName, String collName, EventType type, DbEntry entry, String actingUser,
-            int depth) {
-        afterWrite(dbName, collName, type, entry == null ? List.of() : List.of(entry), actingUser, depth);
-    }
-
     public static void afterWriteIds(String dbName, String collName, EventType type, List<String> ids,
             String actingUser, int depth) {
+        afterWrite(dbName, collName, type, committedEntries(dbName, collName, type, ids, depth), actingUser, depth);
+    }
+
+    private static List<DbEntry> committedEntries(String dbName, String collName, EventType type, List<String> ids,
+            int depth) {
         if (ids == null || ids.isEmpty() || hasNotTriggerFor(dbName, collName, type, depth)) {
-            return;
+            return List.of();
         }
         try {
-            afterWrite(dbName, collName, type, readEntriesWithRetry(dbName, collName, new HashSet<>(ids)), actingUser,
-                    depth);
+            return readEntriesWithRetry(dbName, collName, new HashSet<>(ids));
         } catch (IOException e) {
             logger.error("Could not read the committed documents to fire a trigger on " + dbName + "|" + collName, e);
+            return List.of();
         }
     }
 

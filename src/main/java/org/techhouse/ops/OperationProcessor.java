@@ -6,6 +6,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Transaction;
+import org.techhouse.ex.PartialBulkSaveException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
@@ -322,8 +323,16 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
-                    return BulkSaveEffects.executeAndPublish(bulkSaveRequest, actingUser,
-                            TriggerHelper.stageBulkSave(bulkSaveRequest, actingUser));
+                    final var staged = TriggerHelper.stageBulkSave(bulkSaveRequest, actingUser);
+                    try {
+                        return ClusterWriteHelper.afterBulkSave(dbName, collName,
+                                TriggerHelper.runStaged(staged, dbName, collName, actingUser,
+                                        bulkSaveRequest.getTriggerDepth(),
+                                        () -> SaveOperationHelper.executeBulkSave(bulkSaveRequest)));
+                    } catch (PartialBulkSaveException e) {
+                        ClusterWriteHelper.afterBulkSave(dbName, collName, e.committed());
+                        throw e;
+                    }
                 });
     }
 

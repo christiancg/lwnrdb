@@ -1,6 +1,6 @@
 package org.techhouse.ejson.elements;
 
-import org.techhouse.ejson.exceptions.NonFiniteNumberException;
+import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class JsonNumber extends JsonPrimitive<Number> {
     private int strLength;
@@ -18,7 +18,8 @@ public class JsonNumber extends JsonPrimitive<Number> {
         if (value != null) {
             final var doubleNumber = Double.parseDouble(value);
             if (!Double.isFinite(doubleNumber)) {
-                throw new NonFiniteNumberException(value);
+                throw new MalformedJsonException(
+                        "The number " + value + " is outside the range a JSON number can represent");
             }
             if (doubleNumber % 1.0 == 0 && Math.abs(doubleNumber) <= Integer.MAX_VALUE) {
                 // Integer.valueOf would throw on "2.0"; values past the int range stay doubles because

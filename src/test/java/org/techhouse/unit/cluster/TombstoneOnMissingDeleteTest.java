@@ -168,7 +168,7 @@ public class TombstoneOnMissingDeleteTest {
         TestUtils.setPrivateField(faultInjector, "halt",
                 (IntConsumer) _ -> observed.add(presentIsTombstonedAndStillLive()));
         faultInjector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT,
-                FaultInjector.collectionSubject(TestGlobals.DB, TestGlobals.COLL), 0);
+                Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL));
 
         assertEquals(OperationStatus.OK, delete("present"));
 

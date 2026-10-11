@@ -11,6 +11,7 @@ import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ops.StagedTriggerRuns;
 import org.techhouse.ops.TriggerHelper;
+import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 
 public final class CommittedOpTriggers {
     private static final String OBJECTS_FIELD = "objects";

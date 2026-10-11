@@ -47,7 +47,7 @@ public class HybridClockTest {
     public void test_logical_counter_borrows_into_the_next_millisecond_when_exhausted() {
         final var clock = new HybridClock();
         final var future = System.currentTimeMillis() + 100_000L;
-        clock.seed(HybridClock.pack(future, 65_535L));
+        clock.observe(HybridClock.pack(future, 65_535L));
         final var next = clock.next();
         assertEquals(future + 1, HybridClock.physicalOf(next));
         assertEquals(0L, HybridClock.logicalOf(next));
@@ -73,8 +73,8 @@ public class HybridClockTest {
     public void test_seed_never_moves_the_clock_backwards() {
         final var clock = new HybridClock();
         final var high = HybridClock.pack(System.currentTimeMillis() + 500_000L, 0);
-        clock.seed(high);
-        clock.seed(1L);
+        clock.observe(high);
+        clock.observe(1L);
         assertEquals(high, clock.current());
     }
 
@@ -84,7 +84,7 @@ public class HybridClockTest {
         final var lastWritten = beforeRestart.next();
 
         final var afterRestart = new HybridClock();
-        afterRestart.seed(lastWritten);
+        afterRestart.observe(lastWritten);
         assertTrue(afterRestart.next() > lastWritten,
                 "a restarted node must not assign a version at or below what it already wrote");
     }

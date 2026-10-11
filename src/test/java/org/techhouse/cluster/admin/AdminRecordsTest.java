@@ -7,10 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
+import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.index.IndexOperationHelper;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
@@ -40,7 +42,7 @@ public class AdminRecordsTest extends AdminRecordTestBase {
     public void test_all_lists_every_live_record_and_every_tombstone() throws Exception {
         AdminRecordMerge.apply(List.of(procedure(TestGlobals.DB, "proc", clock.next()),
                 schema(TestGlobals.COLL, clock.next()), user("bob", clock.next())), true);
-        AdminTombstone.recordAt(AdminRecordKey.user("gone"), clock.next());
+        AdminStamp.tombstoneAt(AdminRecordKey.user("gone"), clock.next());
 
         final var ids = ids(AdminRecords.all());
 
@@ -97,7 +99,7 @@ public class AdminRecordsTest extends AdminRecordTestBase {
     }
 
     private static void assertTouches(OperationRequest request, AdminRecordKey key) {
-        assertEquals(List.of(key), AdminRecordKeys.touchedBy(request));
+        assertEquals(List.of(key), AdminRecordKey.touchedBy(request));
     }
 
     @Test
@@ -125,6 +127,41 @@ public class AdminRecordsTest extends AdminRecordTestBase {
         final var changePermissions = new ChangePermissionsRequest();
         changePermissions.setUsername("u");
         assertTouches(changePermissions, AdminRecordKey.user("u"));
-        assertTrue(AdminRecordKeys.touchedBy(new FindByIdRequest(db, coll)).isEmpty());
+        assertTrue(AdminRecordKey.touchedBy(new FindByIdRequest(db, coll)).isEmpty());
+    }
+
+    @Test
+    public void test_legacy_definitions_are_stamped_once_and_keep_their_content() throws Exception {
+        fs.writeProcedure(TestGlobals.DB, "legacy", "{\"name\":\"legacy\",\"source\":\"return 1;\"}");
+        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
+
+        AdminRecords.stampUnversioned();
+
+        final var procedure = Objects
+                .requireNonNull(AdminRecords.live(AdminRecordKey.procedure(TestGlobals.DB, "legacy")));
+        assertTrue(procedure.version() > AdminStamp.BOOTSTRAP_VERSION);
+        assertEquals("return 1;", procedure.body().get("source").asJsonString().getValue());
+        final var schema = StoredDefinitions.schema(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(AdminStamp.versionOf(schema) > AdminStamp.BOOTSTRAP_VERSION);
+        assertEquals("object", AdminStamp.unwrappedSchema(schema).get("type").asJsonString().getValue());
+        final var stamped = procedure.version();
+
+        AdminRecords.stampUnversioned();
+
+        assertEquals(stamped, liveVersion(AdminRecordKey.procedure(TestGlobals.DB, "legacy")));
+    }
+
+    @Test
+    public void test_a_legacy_row_outranks_a_fresh_nodes_bootstrap_admin_after_stamping() {
+        AdminRecordMerge.apply(List.of(user("legacyadmin", clock.next())), true);
+        cache.getPkIndexAdminUserEntry("legacyadmin").setVersion(0L);
+        cache.getPkIndexAdminDbEntry(TestGlobals.DB).setVersion(0L);
+
+        AdminRecords.stampUnversioned();
+
+        final var user = Objects.requireNonNull(AdminRecords.live(AdminRecordKey.user("legacyadmin")));
+        assertTrue(user.outranks(user("legacyadmin", AdminStamp.BOOTSTRAP_VERSION)));
+        assertEquals("hash-legacyadmin", cache.getAdminUserEntry("legacyadmin").getPasswordHash());
+        assertTrue(liveVersion(AdminRecordKey.database(TestGlobals.DB)) > 0);
     }
 }

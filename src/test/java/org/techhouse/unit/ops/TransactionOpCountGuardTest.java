@@ -66,10 +66,10 @@ public class TransactionOpCountGuardTest {
         TransactionOperationHelper.start(clientId);
         final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
 
-        assertEquals(Tx2pcLog.Status.UNKNOWN, Tx2pcLog.status(dtxId));
+        assertEquals(Tx2pcLog.Status.UNKNOWN, Tx2pcLog.status(dtxId, null));
 
         TransactionOperationHelper.rollback(clientId);
-        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(dtxId));
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(dtxId, null));
     }
 
     @Test

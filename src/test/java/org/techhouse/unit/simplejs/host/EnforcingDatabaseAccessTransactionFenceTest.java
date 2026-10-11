@@ -69,7 +69,7 @@ public class EnforcingDatabaseAccessTransactionFenceTest {
         final var transaction = clientTracker.getActiveTransaction(sessionClientId);
         assertNotNull(transaction, "the failed commit must not erase the Client that names the held locks");
         assertFalse(transaction.getHeldLocks().isEmpty(), "the collection stays fenced until recovery finishes");
-        assertTrue(org.techhouse.ops.tx.SliceStates.isFenced(transaction.getTransactionId().toString()));
+        assertTrue(org.techhouse.ops.tx.SliceStateMachine.isFenced(transaction.getTransactionId().toString()));
 
         AdminOperationHelper.deleteTransactionOps(List.copyOf(transaction.getBufferedOpIds()));
         TestUtils.releaseAllLocks();

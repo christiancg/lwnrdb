@@ -368,7 +368,8 @@ public class OperationProcessorWriteTest {
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id("singleSaveId1");
         entry.setPage(0L);
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry));
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry),
+                0L);
 
         final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(p -> p.getPage() == 0L).findFirst();
@@ -398,12 +399,11 @@ public class OperationProcessorWriteTest {
         final long sizeBefore = page0Before.get().getPageSize();
 
         final var e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj1);
-        e1.set_id("bulkSaveId1");
         e1.setPage(0L);
         final var e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
-        e2.set_id("bulkSaveId2");
         e2.setPage(0L);
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(e1, e2));
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(e1, e2),
+                0L);
 
         final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(p -> p.getPage() == 0L).findFirst();

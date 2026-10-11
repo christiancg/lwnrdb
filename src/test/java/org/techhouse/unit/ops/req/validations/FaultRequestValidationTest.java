@@ -11,11 +11,10 @@ import org.techhouse.ops.req.validations.RequestValidator;
 
 public class FaultRequestValidationTest {
 
-    private static ArmFaultRequest arm(String point, String action, Long delayMs) {
+    private static ArmFaultRequest arm(String point, String action) {
         final var request = new ArmFaultRequest();
         request.setPoint(point);
         request.setAction(action);
-        request.setDelayMs(delayMs);
         return request;
     }
 
@@ -34,35 +33,31 @@ public class FaultRequestValidationTest {
 
     @Test
     public void test_every_valid_arm_shape_passes() {
-        assertTrue(RequestValidator.validate(arm("WRITE_OWNERSHIP_RECHECKED", "PAUSE", null)).isValid());
-        assertTrue(RequestValidator.validate(arm("delete_tombstone_reserved", "halt", null)).isValid());
-        assertTrue(RequestValidator.validate(arm("ANTI_ENTROPY_SNAPSHOTTED", "DELAY", 1L)).isValid());
-        assertTrue(RequestValidator.validate(arm("ANTI_ENTROPY_SNAPSHOTTED", "DELAY", 60_000L)).isValid());
-        assertTrue(RequestValidator.validate(arm("PEER_REPLY", "DROP", null)).isValid());
+        assertTrue(RequestValidator.validate(arm("WRITE_OWNERSHIP_RECHECKED", "PAUSE")).isValid());
+        assertTrue(RequestValidator.validate(arm("delete_tombstone_reserved", "halt")).isValid());
+        assertTrue(RequestValidator.validate(arm("PEER_REPLY", "DROP")).isValid());
     }
 
     @Test
     public void test_an_unknown_or_missing_point_fails() {
-        assertFalse(RequestValidator.validate(arm("NOPE", "PAUSE", null)).isValid());
-        assertFalse(RequestValidator.validate(arm(null, "PAUSE", null)).isValid());
+        assertFalse(RequestValidator.validate(arm("NOPE", "PAUSE")).isValid());
+        assertFalse(RequestValidator.validate(arm(null, "PAUSE")).isValid());
     }
 
     @Test
     public void test_an_unknown_or_missing_action_fails() {
-        assertFalse(RequestValidator.validate(arm("PEER_REPLY", "EXPLODE", null)).isValid());
-        assertFalse(RequestValidator.validate(arm("PEER_REPLY", null, null)).isValid());
+        assertFalse(RequestValidator.validate(arm("PEER_REPLY", "EXPLODE")).isValid());
+        assertFalse(RequestValidator.validate(arm("PEER_REPLY", null)).isValid());
     }
 
     @Test
     public void test_drop_on_a_point_that_carries_no_message_fails() {
-        assertFalse(RequestValidator.validate(arm("WRITE_OWNERSHIP_RECHECKED", "DROP", null)).isValid());
+        assertFalse(RequestValidator.validate(arm("WRITE_OWNERSHIP_RECHECKED", "DROP")).isValid());
     }
 
     @Test
-    public void test_a_delay_needs_a_delay_in_range() {
-        assertFalse(RequestValidator.validate(arm("ANTI_ENTROPY_SNAPSHOTTED", "DELAY", null)).isValid());
-        assertFalse(RequestValidator.validate(arm("ANTI_ENTROPY_SNAPSHOTTED", "DELAY", 0L)).isValid());
-        assertFalse(RequestValidator.validate(arm("ANTI_ENTROPY_SNAPSHOTTED", "DELAY", 60_001L)).isValid());
+    public void test_the_removed_delay_action_fails() {
+        assertFalse(RequestValidator.validate(arm("ANTI_ENTROPY_SNAPSHOTTED", "DELAY")).isValid());
     }
 
     @Test

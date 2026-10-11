@@ -57,7 +57,7 @@ final class TornPageTail {
                 }
             }
             final var torn = page.length() - cut;
-            PageRegions.truncateTo(page, cut,
+            FileLocks.truncateTo(page, cut,
                     "Could not truncate the torn tail of " + page.getAbsolutePath() + "; the next write may be lost");
             logger.warning("Truncated a torn " + torn + "-byte tail from " + page.getName()
                     + ": it was left by an interrupted write and no index entry refers to it");
@@ -69,8 +69,7 @@ final class TornPageTail {
 
     private static boolean restoreMissingLineEnd(File page, long pageNumber, List<PkIndexEntry> entries)
             throws IOException {
-        final var indexedEnd = entries.stream().filter(entry -> entry.getPage() == pageNumber)
-                .mapToLong(entry -> entry.getPosition() + entry.getLength()).max().orElse(-1);
+        final var indexedEnd = OrphanedPageRecords.indexedEndOf(entries, pageNumber);
         final var lineEnd = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
         final var missing = indexedEnd - page.length();
         if (missing <= 0 || missing > lineEnd.length) {

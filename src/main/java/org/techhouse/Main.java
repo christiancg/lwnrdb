@@ -20,7 +20,6 @@ import org.techhouse.cluster.MetadataCachePruner;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.admin.AdminRecords;
-import org.techhouse.cluster.admin.UnversionedRecords;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
@@ -90,7 +89,7 @@ public class Main {
         StartupWarnings.warnIfCompactionsLeftUnrecovered();
         cache.loadAdminData();
         seedHybridClock();
-        UnversionedRecords.stampAll();
+        AdminRecords.stampUnversioned();
         StartupWarnings.retainAndReportUncleanStops();
         PageOccupancyReconciler.reconcileAll();
         relistUnlistedCollections();
@@ -189,7 +188,7 @@ public class Main {
             logger.error("Failed to seed the write clock from disk; versions could regress after this restart", e);
             return;
         }
-        hybridClock.seed(highest);
+        hybridClock.observe(highest);
         logger.info("Seeded the write clock from disk at version " + highest);
     }
 
@@ -253,7 +252,10 @@ public class Main {
 
     private static void cleanupOrphanedTransactions() {
         try {
-            TransactionOperationHelper.cleanupOrphansAtStartup();
+            tx2pcRecovery.onRecoveryThread(() -> {
+                TransactionOperationHelper.cleanupOrphansAtStartup();
+                return null;
+            }, 0L);
         } catch (Throwable failure) {
             logger.error("Failed to clean up orphaned transactions at startup", failure);
         }

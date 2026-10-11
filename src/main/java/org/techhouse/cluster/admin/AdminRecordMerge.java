@@ -11,7 +11,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.GrantPruner;
 
 public final class AdminRecordMerge {
@@ -34,7 +34,7 @@ public final class AdminRecordMerge {
     public static Result apply(List<AdminRecord> records, boolean live) {
         final Map<String, Long> tombstones;
         try {
-            tombstones = AdminTombstone.all();
+            tombstones = AdminStamp.tombstones();
         } catch (IOException unreadable) {
             logger.warning("Merging no admin records this round: the admin tombstones could not be read: "
                     + unreadable.getMessage());
@@ -95,7 +95,7 @@ public final class AdminRecordMerge {
             case SCHEMA, TRIGGERS, PROCEDURE, SCHEDULE -> DefinitionRecordApplier.remove(key);
         };
         if (removed) {
-            AdminTombstone.recordAt(key, record.version());
+            AdminStamp.tombstoneAt(key, record.version());
             tombstones.put(key.id(), record.version());
         }
         return removed;

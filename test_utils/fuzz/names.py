@@ -22,10 +22,6 @@ FIELD_COLLISION_PAIRS = [
     ("a", "a.b"),
 ]
 
-AMBIGUOUS_FOLDER_PAIRS = [
-    (("foo_bar", "baz"), ("foo", "bar_baz")),
-]
-
 RESERVED_FIELD_NAMES = ["_id", "tombstones"]
 
 

@@ -49,19 +49,9 @@ public final class AdminOperationHelper {
             cache::removePkIndexTriggerRun, AdminTriggerRunEntry::fromJsonObject,
             (_, collName, type, entries) -> applyAdminPageDelta(collName, type, entries));
 
-    public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted)
-            throws InterruptedException, IOException {
-        AdminPageHelper.bulkUpdateEntryCount(dbName, collName, type, inserted, 0L);
-    }
-
     public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted,
             long incarnation) throws InterruptedException, IOException {
         AdminPageHelper.bulkUpdateEntryCount(dbName, collName, type, inserted, incarnation);
-    }
-
-    public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry)
-            throws InterruptedException, IOException {
-        AdminPageHelper.updateEntryCount(dbName, collName, type, dbEntry, 0L);
     }
 
     public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry,

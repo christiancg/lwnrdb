@@ -18,8 +18,6 @@ import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
-import org.techhouse.ops.tx.FencedTriggerRuns;
-import org.techhouse.ops.tx.SliceStates;
 
 public final class TriggerRunRecovery {
     private static final Logger logger = Logger.logFor(TriggerRunRecovery.class);
@@ -32,17 +30,16 @@ public final class TriggerRunRecovery {
 
     public static Set<String> startupRunIds() {
         try {
+            final var fenced = new HashSet<>(Tx2pcLog.preparedDtxIds());
+            fenced.addAll(TxCommitLog.localCommitTxIds());
             final var ownedByReplay = new HashSet<String>();
+            for (final var txId : fenced) {
+                ownedByReplay.addAll(consumedBySlice(txId));
+            }
             final var startup = new HashSet<String>();
             for (final var entry : TriggerRunLog.pending()) {
-                final var txId = entry.getTxId();
-                if (txId != null && SliceStates.isFenced(txId)) {
-                    ownedByReplay.add(entry.getRunId());
-                } else {
-                    startup.add(entry.getRunId());
-                }
+                (fenced.contains(entry.getTxId()) ? ownedByReplay : startup).add(entry.getRunId());
             }
-            ownedByReplay.addAll(FencedTriggerRuns.consumedByFencedSlices());
             startup.removeAll(ownedByReplay);
             return startup;
         } catch (Exception e) {
@@ -52,38 +49,44 @@ public final class TriggerRunRecovery {
         }
     }
 
-    public static void recoverLocal(Set<String> startupRunIds) {
-        if (!configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
-            return;
+    public static Set<String> consumedBySlice(String txId) throws Exception {
+        final var runIds = new HashSet<String>();
+        for (final var op : AdminOperationHelper.readTransactionOps(Tx2pcLog.sliceOpIds(txId))) {
+            final var runId = op.consumedTriggerRunId();
+            if (runId != null) {
+                runIds.add(runId);
+            }
         }
-        try {
-            final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.ownNodeIds(), startupRunIds);
-            var requeued = 0;
-            for (final var chunks : byRun.values()) {
-                if (requeue(chunks)) {
-                    requeued++;
-                }
-            }
-            if (requeued > 0) {
-                logger.info("Re-queued " + requeued + " trigger run(s) left pending by the previous shutdown");
-            }
-        } catch (Exception e) {
-            logger.error("Failed to recover pending trigger runs at startup", e);
+        return runIds;
+    }
+
+    public static void recoverLocal(Set<String> startupRunIds) {
+        final var requeued = requeueRuns(startupRunIds, "Failed to recover pending trigger runs at startup");
+        if (requeued > 0) {
+            logger.info("Re-queued " + requeued + " trigger run(s) left pending by the previous shutdown");
         }
     }
 
     public static void requeueRuns(Set<String> runIds) {
+        requeueRuns(runIds, "Failed to requeue the trigger runs of a discarded transaction slice " + runIds
+                + "; they stay pending until the next restart");
+    }
+
+    private static int requeueRuns(Set<String> runIds, String failure) {
         if (runIds.isEmpty() || !configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
-            return;
+            return 0;
         }
+        var requeued = 0;
         try {
             for (final var chunks : groupByRun(TriggerRunLog.pending(), TriggerRunLog.ownNodeIds(), runIds).values()) {
-                requeue(chunks);
+                if (requeue(chunks)) {
+                    requeued++;
+                }
             }
         } catch (Exception e) {
-            logger.error("Failed to requeue the trigger runs of a discarded transaction slice " + runIds
-                    + "; they stay pending until the next restart", e);
+            logger.error(failure, e);
         }
+        return requeued;
     }
 
     private static boolean requeue(List<AdminTriggerRunEntry> stored) {

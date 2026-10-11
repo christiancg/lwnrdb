@@ -16,7 +16,6 @@ COLL = "people"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-
 # ── operation wrappers ───────────────────────────────────────────────────────
 
 def create_user(c, username, password, admin=False, global_perms=None, db_perms=None, coll_perms=None):

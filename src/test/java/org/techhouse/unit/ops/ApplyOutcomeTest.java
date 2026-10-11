@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
-import org.techhouse.ops.tx.ApplyOutcome;
+import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 
 public class ApplyOutcomeTest {
 

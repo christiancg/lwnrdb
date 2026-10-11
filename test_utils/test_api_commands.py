@@ -17,7 +17,6 @@ DB = "api_test_db"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-
 # ── operation wrappers ───────────────────────────────────────────────────────
 
 def create_user(c, username, password, admin=False, global_perms=None, db_perms=None, coll_perms=None):
@@ -321,9 +320,6 @@ def test_top_level_id(c):
     check_status("a top-level _id for a new document inserts under that id", r, "OK")
     check_field("the document is readable under that id", find_by_id(c, COLL_CRUD, "tl2"), "object.name", "gamma")
 
-    # When both ids are present on the wire the parser gives the object's _id precedence, so the two
-    # can never disagree by the time the write runs. What matters is that exactly one document is
-    # written, under the object's id, and no stray document appears under the top-level one.
     check_status("a top-level _id alongside an object _id is accepted",
                  c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
                          "_id": "outside", "object": {"_id": "inside", "name": "x"}}), "OK")
@@ -581,11 +577,6 @@ def test_map_conditions_and_number_casts(c):
 
 
 def raw_send(c, payload) -> str:
-    """The response line before json.loads sees it.
-
-    base_utils.Conn.send parses with plain json.loads, which accepts Infinity/-Infinity/NaN
-    as a Python extension; RFC 8259 does not, and neither does any other client's parser.
-    """
     c.s.sendall((json.dumps(payload) + "\n").encode())
     return c.f.readline().decode().strip()
 
@@ -1045,10 +1036,6 @@ def test_fault_operations_are_disabled_by_default(c):
 
 def test_name_case_collisions(c):
     section("A name that differs only by case is refused, on every filesystem")
-    # FilePaths uses the logical name verbatim as a path segment, so on a case-insensitive volume
-    # MyColl and mycoll share one folder: each collection then serves the other's documents after a
-    # restart and DROP_COLLECTION destroys both. The refusal is unconditional, so this section
-    # asserts the same codes on a case-sensitive host.
     check_status("CREATE_DATABASE CaseDb", create_db(c, "CaseDb"), "OK")
     check_code("CREATE_DATABASE casedb -> 409-11", create_db(c, "casedb"), "ERROR", "409-11")
     check_code("CREATE_DATABASE CaseDb again is still the duplicate code",

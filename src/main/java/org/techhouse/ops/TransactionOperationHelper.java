@@ -28,7 +28,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 import org.techhouse.ops.tx.SliceCommit;
-import org.techhouse.ops.tx.SliceStates;
+import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.ops.tx.TransactionBuffer;
 import org.techhouse.ops.tx.TransactionRecovery;
 
@@ -93,7 +93,7 @@ public final class TransactionOperationHelper {
     }
 
     private static boolean isFenced(Transaction transaction) {
-        return SliceStates.isFenced(transaction.getTransactionId().toString());
+        return SliceStateMachine.isFenced(transaction.getTransactionId().toString());
     }
 
     public static OperationResponse abort(UUID clientId) {

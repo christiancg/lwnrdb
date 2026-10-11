@@ -149,8 +149,9 @@ public class EnforcingDatabaseAccessRemoteFenceTest {
     }
 
     private static void commitOnAnEdgeSharingNoDiskWithTheOwner(EnforcingDatabaseAccess database) {
-        try (var edgeMarkers = Mockito.mockStatic(org.techhouse.ops.tx.SliceStates.class, Mockito.CALLS_REAL_METHODS)) {
-            edgeMarkers.when(() -> org.techhouse.ops.tx.SliceStates.isFenced(anyString())).thenReturn(false);
+        try (var edgeMarkers = Mockito.mockStatic(org.techhouse.ops.tx.SliceStateMachine.class,
+                Mockito.CALLS_REAL_METHODS)) {
+            edgeMarkers.when(() -> org.techhouse.ops.tx.SliceStateMachine.isFenced(anyString())).thenReturn(false);
             assertThrows(JsThrowException.class, database::commitTransaction);
         }
     }

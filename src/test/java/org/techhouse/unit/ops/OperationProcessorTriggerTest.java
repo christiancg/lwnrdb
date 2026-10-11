@@ -161,7 +161,7 @@ public class OperationProcessorTriggerTest {
     @Test
     public void test_replicated_apply_does_not_fire_triggers() {
         assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.UPSERT, List.of(document("r1", 1)), List.of("r1"))));
+                ReplicationOp.UPSERT, List.of(document("r1", 1)), List.of("r1")), TestGlobals.APPLY_BUDGET_MS));
         sleep(80);
         assertTrue(captured.isEmpty(), "a replicated apply must not fire a trigger");
     }
@@ -172,7 +172,7 @@ public class OperationProcessorTriggerTest {
         settle();
         captured.clear();
         assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.DELETE, List.of(), List.of("r2"))));
+                ReplicationOp.DELETE, List.of(), List.of("r2")), TestGlobals.APPLY_BUDGET_MS));
         sleep(80);
         assertTrue(captured.isEmpty(), "a replicated delete must not fire a trigger");
     }

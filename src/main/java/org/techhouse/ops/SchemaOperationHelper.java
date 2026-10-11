@@ -6,7 +6,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteSchemaRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
@@ -49,7 +49,7 @@ public final class SchemaOperationHelper {
                     ErrorCode.DATABASE_NOT_FOUND);
         }
         if (fs.deleteCollectionSchema(dbName, collName)) {
-            AdminTombstone.record(AdminRecordKey.schema(dbName, collName));
+            AdminStamp.tombstone(AdminRecordKey.schema(dbName, collName));
         }
         cache.removeCollectionSchema(dbName, collName);
         return OperationResponse.ok(OperationType.DELETE_SCHEMA, "Collection schema deleted successfully");

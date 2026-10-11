@@ -38,7 +38,7 @@ public class Tx2pcLogTest {
         assertEquals(List.of("127.0.0.1:9000", "127.0.0.1:9001"), marker.participants());
         assertEquals(List.of("db|collA", "db|collB"), marker.collections());
         assertTrue(marker.preparedAt() > 0);
-        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId));
+        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, null));
         Tx2pcLog.deleteParticipantMarker(dtxId);
         assertFalse(Tx2pcLog.isPrepared(dtxId));
     }
@@ -47,14 +47,14 @@ public class Tx2pcLogTest {
     public void test_outcome_marker_and_status() throws Exception {
         final var committed = "aaaa1111-0000-0000-0000-000000000000";
         final var aborted = "bbbb2222-0000-0000-0000-000000000000";
-        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed));
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed, null));
         Tx2pcLog.recordOutcome(committed, true, null);
         Tx2pcLog.recordOutcome(aborted, false, null);
-        assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(committed));
-        assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(aborted));
+        assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(committed, null));
+        assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(aborted, null));
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(committed));
         Tx2pcLog.deleteOutcomeMarker(committed);
-        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed));
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed, null));
     }
 
     @Test
@@ -101,7 +101,7 @@ public class Tx2pcLogTest {
         try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
             log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false, true);
 
-            assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(dtxId));
+            assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(dtxId, null));
         }
     }
 
@@ -112,7 +112,7 @@ public class Tx2pcLogTest {
             log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
             Tx2pcLog.recordOutcome(dtxId, false, null);
 
-            assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(dtxId));
+            assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(dtxId, null));
         }
     }
 
@@ -123,7 +123,7 @@ public class Tx2pcLogTest {
         try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
             log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
 
-            assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId));
+            assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, null));
         }
     }
 }

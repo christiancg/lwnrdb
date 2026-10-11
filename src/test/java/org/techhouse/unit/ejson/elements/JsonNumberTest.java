@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonNumber;
-import org.techhouse.ejson.exceptions.NonFiniteNumberException;
+import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class JsonNumberTest {
     @Test
@@ -119,17 +119,17 @@ public class JsonNumberTest {
 
     @Test
     public void test_overflowing_literal_is_refused() {
-        assertThrows(NonFiniteNumberException.class, () -> new JsonNumber("1e400"));
+        assertThrows(MalformedJsonException.class, () -> new JsonNumber("1e400"));
     }
 
     @Test
     public void test_negative_overflowing_literal_is_refused() {
-        assertThrows(NonFiniteNumberException.class, () -> new JsonNumber("-1e400"));
+        assertThrows(MalformedJsonException.class, () -> new JsonNumber("-1e400"));
     }
 
     @Test
     public void test_long_digit_string_overflowing_is_refused() {
-        assertThrows(NonFiniteNumberException.class, () -> new JsonNumber("1" + "0".repeat(400)));
+        assertThrows(MalformedJsonException.class, () -> new JsonNumber("1" + "0".repeat(400)));
     }
 
     @Test

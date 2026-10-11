@@ -15,7 +15,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.admin.AdminRecordKey;
-import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.test.TestGlobals;
 
 public class AdminRecordMergeTest extends AdminRecordTestBase {
@@ -58,7 +58,7 @@ public class AdminRecordMergeTest extends AdminRecordTestBase {
     public void test_a_live_record_at_a_tombstone_version_does_not_resurrect_it() throws Exception {
         final var key = AdminRecordKey.collection(TestGlobals.DB, "buried");
         final var version = clock.next();
-        AdminTombstone.recordAt(key, version);
+        AdminStamp.tombstoneAt(key, version);
 
         final var result = AdminRecordMerge.apply(List.of(collection(TestGlobals.DB, "buried", version)), true);
 
@@ -68,7 +68,7 @@ public class AdminRecordMergeTest extends AdminRecordTestBase {
 
     @Test
     public void test_a_newer_live_record_outranks_an_older_tombstone() throws Exception {
-        AdminTombstone.recordAt(AdminRecordKey.collection(TestGlobals.DB, "reborn"), clock.next());
+        AdminStamp.tombstoneAt(AdminRecordKey.collection(TestGlobals.DB, "reborn"), clock.next());
 
         AdminRecordMerge.apply(List.of(collection(TestGlobals.DB, "reborn", clock.next())), true);
 
@@ -86,7 +86,7 @@ public class AdminRecordMergeTest extends AdminRecordTestBase {
     @Test
     public void test_a_child_older_than_its_database_tombstone_is_dropped_as_complete() throws Exception {
         final var childVersion = clock.next();
-        AdminTombstone.recordAt(AdminRecordKey.database("gonedb"), clock.next());
+        AdminStamp.tombstoneAt(AdminRecordKey.database("gonedb"), clock.next());
 
         final var result = AdminRecordMerge.apply(List.of(collection("gonedb", "coll", childVersion)), true);
 
@@ -97,7 +97,7 @@ public class AdminRecordMergeTest extends AdminRecordTestBase {
     @Test
     public void test_a_schema_under_a_dropped_collection_is_dropped_as_complete() throws Exception {
         final var schemaVersion = clock.next();
-        AdminTombstone.recordAt(AdminRecordKey.collection(TestGlobals.DB, "gonecoll"), clock.next());
+        AdminStamp.tombstoneAt(AdminRecordKey.collection(TestGlobals.DB, "gonecoll"), clock.next());
 
         final var result = AdminRecordMerge.apply(List.of(schema("gonecoll", schemaVersion)), true);
 

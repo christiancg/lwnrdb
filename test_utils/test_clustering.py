@@ -95,7 +95,6 @@ bu.configure(host=HOST, port=BASE_CLIENT_PORT,
 nodes: list["Node"] = []
 
 
-
 # ── protocol helper ──────────────────────────────────────────────────────────
 
 def authed(port: int) -> Conn:
@@ -217,8 +216,6 @@ class BackgroundRun:
 
 
 class BackgroundOp:
-    """Sends one request on an already-open connection, from its own thread, so the suite can act on
-    the cluster while the server is still working on that request."""
 
     def __init__(self, conn: Conn, payload: dict):
         self.response = None
@@ -359,14 +356,6 @@ def all_nodes_see(db, coll, _id, expected_value, field="v", ports=None, timeout_
     return wait_until(_seen, timeout_s)
 
 
-# ── node-local introspection ─────────────────────────────────────────────────
-#
-# Neither collection ownership nor a transaction's 2PC phase is reported anywhere on the wire, and
-# a routed read answers from the owner rather than from the node it was sent to. Both are visible
-# in a node's own files, which is what the tests below reach for when they need to know *which*
-# node is a participant, or when one has reached a phase the harness has to act between.
-
-
 def _folder_contains(folder: str, token: str, suffixes: tuple) -> bool:
     if not os.path.isdir(folder):
         return False
@@ -383,19 +372,11 @@ def _folder_contains(folder: str, token: str, suffixes: tuple) -> bool:
 
 
 def holds_tx_record(node, tx_id, suffix="") -> bool:
-    """Whether this node's admin/transactions store holds a record of the transaction.
-
-    Buffered slice ops and the 2PC / local-commit markers are written on the node that owns the
-    collection, so a record under `{txId}|{suffix}` is how the suite tells that a node is a
-    participant and which phase it has durably reached. `suffix` is the marker name (`part`,
-    `coord`, `outcome`, `localcommit`); empty matches any record of the transaction."""
     return _folder_contains(os.path.join(node.work_dir, "db", "admin", "transactions"),
                             f"{tx_id}|{suffix}", (".idx", ".dat"))
 
 
 def stored_documents(node, db, coll) -> dict:
-    """Every document this node physically holds in the collection, by _id, read from its page
-    files: a FIND_BY_ID routes to the owner, so it cannot answer what one specific node holds."""
     result = {}
     folder = os.path.join(node.work_dir, "db", db, coll)
     if not os.path.isdir(folder):
@@ -421,12 +402,6 @@ def stored_documents(node, db, coll) -> dict:
 
 
 def owner_of(port, db, coll, attempts=20):
-    """The node that owns the collection, or None.
-
-    A transactional write is buffered on the owner, so opening a transaction, buffering one save
-    and looking for its slice record names the owner without writing anything: the rollback
-    discards the buffered op. The retry absorbs a CREATE_COLLECTION that has not reached the owner
-    yet, which refuses the buffered write rather than answering with the wrong node."""
     for _ in range(attempts):
         conn = authed(port)
         try:
@@ -445,7 +420,6 @@ def owner_of(port, db, coll, attempts=20):
 
 
 def collections_by_owner(port, db, prefix, count=24) -> dict:
-    """Create `count` collections and group them by the index of the node that owns each."""
     names = [f"{prefix}{i}" for i in range(count)]
 
     def _created():
@@ -469,10 +443,6 @@ _CANARY_COUNTER = {"n": 0}
 
 
 def _canary_write_converges() -> bool:
-    """One round of the canary: a SAVE that commits and that every alive node reads back.
-
-    The write is sent to the first alive node rather than nodes[0], because the tests that need
-    this most are the ones that have just killed a node - and nodes[0] is sometimes the victim."""
     live = next((n for n in nodes if n.alive), None)
     if live is None:
         return False
@@ -501,24 +471,10 @@ def wait_for_cluster(timeout_s: float = 60.0):
 
 
 def wait_until_cluster_is_healthy(timeout_s: float = 60.0) -> bool:
-    """The soft form of wait_for_cluster: answers whether the ring routes and replicates again.
-
-    A suspended node stops gossiping, so any freeze that outlasts deadTimeoutMs (4000, against the
-    5000 a write waits for its acks) leaves the frozen peers DEAD in every other node's view.
-    Resuming them does not restore that view instantly, and a test that opens its convergence
-    deadline while the ring is still healing is timing the healing rather than the behaviour it
-    means to pin - which is what makes the checks after a freeze fail on a loaded runner and pass
-    everywhere else. Counts only alive nodes, so it is equally valid while a victim stays killed."""
     return wait_until(_canary_write_converges, timeout_s, interval_s=1.0)
 
 
 def seed_documents(port, db, coll, objs, timeout_s: float = 30.0) -> bool:
-    """Write setup documents, retrying each one until it actually commits.
-
-    A fire-and-forget save is lost silently whenever the write momentarily lacks a quorum - which is
-    the state a preceding test can leave behind - and the convergence check that follows then waits
-    out its whole budget for a document nothing ever wrote, reporting a replication failure that
-    never happened."""
     for obj in objs:
         if not wait_until(lambda o=obj: save(port, db, coll, o).get("status") == "OK", timeout_s):
             return False
@@ -545,9 +501,6 @@ class Node:
             f"port={self.client_port}\n"
             "filePath=db\n"
             "logPath=logs\n"
-            # The three nodes share one runner, so each gets a cache budget that actually fits its heap:
-            # at 256mb against -Xmx512m a warm node overran the heap and died with an OutOfMemoryError,
-            # which reads downstream as a node that stopped answering.
             "maxMemory=96mb\n"
             f"defaultAdminUsername={ADMIN_USERNAME}\n"
             f"defaultAdminPassword={ADMIN_PASSWORD}\n"
@@ -636,9 +589,6 @@ class Node:
         return True
 
     def suspend(self):
-        """Freeze the process (SIGSTOP). Its sockets stay open and unanswered, which is what opens a
-        bounded, observable window inside a peer's replicationAckTimeoutMs wait; a killed peer fails
-        fast instead and closes that window."""
         if self.proc is not None:
             self.proc.send_signal(signal.SIGSTOP)
 
@@ -692,10 +642,6 @@ def test_formation_and_quorum_writes():
                  op_with_retry(lambda: save(p0, DB, "docs", {"_id": "q1", "v": 1})), "OK")
 
 
-# Refusals a settling cluster is entitled to give: the admin-coordinator ring slot is still moving
-# (503-2/503-5/503-9), or a write reached the collection's owner before the CREATE_COLLECTION did
-# (503-10). Retry those, and only those — anything else must fail the assertion immediately, since
-# an unreplicated DDL acknowledged as OK is exactly the divergence this suite exists to catch.
 RETRYABLE_CODES = {"503-2", "503-5", "503-9", "503-10"}
 
 
@@ -781,9 +727,6 @@ def test_bulk_delete_and_upsert():
     check_status("upsert b1 via node-2", save(nodes[2].client_port, DB, "bulk", {"_id": "b1", "v": 99}), "OK")
     check("upserted value is visible on every node", all_nodes_see(DB, "bulk", "b1", 99))
 
-    # A bulk UPDATE must ship the version it assigned. When it shipped 0 instead, every replica
-    # dropped the document as superseded while the owner still answered OK, and the next
-    # anti-entropy sweep pulled the stale copy back over the acknowledged write.
     check_status("bulk-update every doc via node-1",
                  bulk_save(nodes[1].client_port, DB, "bulk",
                            [{"_id": "b1", "v": 111}, {"_id": "b3", "v": 333}]), "OK")
@@ -1318,9 +1261,6 @@ def test_a_replica_listener_never_sees_a_partial_transaction():
 def test_lock_timeout_aborts_the_whole_transaction():
     section("A participant that timed out on a collection lock votes no (5b)")
 
-    # The bug is a participant that aborted its slice in place still voting yes to PREPARE_TX, so the
-    # transaction has to be a real 2PC and the blocked collection has to belong to a node other than
-    # the client's edge -- otherwise the timeout lands on the coordinator's own slice instead.
     owners = collections_by_owner(nodes[0].client_port, DB, "locktimeout")
     remote = [index for index in owners if index != 0]
     if not check("found collections owned by two nodes other than the edge", len(remote) >= 2, f"owners={owners}"):
@@ -1342,10 +1282,6 @@ def test_lock_timeout_aborts_the_whole_transaction():
                                      "object": {"_id": "contender", "v": 1}}), "OK")
         timed_out = contender.send({"type": "SAVE", "databaseName": DB, "collectionName": blocked,
                                     "object": {"_id": "contender", "v": 1}}, timeout=30.0)
-        # transactionLockTimeoutMs and replicationAckTimeoutMs are both 5000, so the edge usually gives
-        # up on the forward (503-8) a hair before the participant answers its own lock timeout (409-5).
-        # Either way the participant ran its timeout to the end and aborted its slice in place, which is
-        # what the commit below has to observe.
         check("its write to the locked collection does not succeed",
               timed_out.get("errorCode") in ("409-5", "503-8"), f"got {timed_out}")
 
@@ -1572,7 +1508,6 @@ def test_long_forwarded_script_is_not_cut_off():
                    detail=f"responses={[(r.get('status'), r.get('result'), r.get('message')) for r in out][:3]}")
         return out
 
-    # Wait out the admin-sync window on cheap runs first. until_forwarded's rounds cost 6s each here,
     # so a cold start burns most of its budget proving nothing about the long-script path.
     check("forwarding is live before the long runs",
                wait_until_forwarding_is_live(driver, timeout_s=60.0))
@@ -1599,8 +1534,6 @@ def test_script_control_is_cluster_wide():
 
     expected_node = f"{HOST}:{runner_node.cluster_port}"
 
-    # Earlier tests leave short scripts and schedule runs draining. Identify this run by its kind and
-    # the node executing it rather than by being the only row.
     def _row_on_the_runner(port):
         for candidate in list_scripts(port):
             if candidate.get("node") == expected_node and candidate.get("kind") == "RUN_SCRIPT":
@@ -1664,8 +1597,6 @@ def test_script_placement_falls_back_when_the_target_dies():
     # the load-only node, which makes every peer a fair candidate and the crash below observable.
     driver = nodes[1].client_port
 
-    # Precondition, not decoration: a peer is skipped while it gossips that its admin metadata is still
-    # syncing, so straight after the preceding tests' restarts every peer can be ineligible and every run
     # stays local. Killing node-2 in that state produces no failed forward to count, however long we
     # wait. Gate on forwarding being live rather than on catching node-2 in the listing: which peer a
     # given run lands on is random, and a 2s run is easy to miss between two polls.
@@ -2018,10 +1949,6 @@ def test_permission_changes_and_dropped_indexes_replicate():
 def test_a_restarted_participant_does_not_commit_half_a_transaction():
     section("A participant that restarted mid-transaction refuses to continue the slice it lost")
 
-    # The edge never learns that a participant restarted: its client transaction stays open and the
-    # participant stays in its list. The participant used to start a fresh slice under the same
-    # transaction id for the next forwarded op, so COMMIT reported the whole transaction committed
-    # while the write buffered before the restart was gone.
     owners = collections_by_owner(nodes[0].client_port, DB, "slicelost")
     participant = nodes[1]
     if not check(f"found a collection owned by node-{participant.index}", participant.index in owners,
@@ -2063,13 +1990,8 @@ def test_a_restarted_participant_does_not_commit_half_a_transaction():
 def test_restart_does_not_regress_write_versions():
     section("Write versions do not regress across a restart")
 
-    # The write clock lives in memory. Before it was seeded at startup a restarted node assigned
-    # versions below ones it had already replicated, and anti-entropy then pulled the older
-    # document back over the acknowledged write.
     coll = "version_regression"
 
-    # CREATE_COLLECTION is a coordinated admin op and reaches the owner asynchronously, so a write
-    # fired immediately after it can land on a node that has not seen the collection yet.
     def _seeded():
         if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
             return False
@@ -2092,9 +2014,6 @@ def test_restart_does_not_regress_write_versions():
     check("the newer write survives anti-entropy rather than being pulled back",
           all_nodes_see(DB, coll, "r1", 2, ports=all_ports(), timeout_s=30.0))
 
-    # A burst inside one millisecond only differs in the version's logical counter. That counter used
-    # to be rounded away in transit, so distinct writes arrived at the replicas as equal versions --
-    # and equal versions have no repair path, leaving the nodes permanently divergent.
     burst_ids = [f"burst{i}" for i in range(12)]
     for index, doc_id in enumerate(burst_ids):
         check_status(f"burst write {doc_id}", save(nodes[0].client_port, DB, coll, {"_id": doc_id, "v": index}), "OK")
@@ -2109,21 +2028,11 @@ def test_restart_does_not_regress_write_versions():
     check_a_mid_commit_restart_keeps_the_newer_values()
 
 
-# The apply between the local-commit marker and its clearing costs about a millisecond per buffered
-# op and almost nothing per document, so it is the op count -- not the data volume -- that widens the
-# window the harness has to see the marker in and kill the node inside.
 MID_COMMIT_FILLER_OPS = 2000
 MID_COMMIT_FILLER_SIZE = 2
 
 
 def pad_the_commit(conn, coll, prefix):
-    """Buffer MID_COMMIT_FILLER_OPS throwaway ops into `coll` on an open transaction.
-
-    The padding is what holds the commit's apply window open, so a silently refused filler op narrows
-    the very gap the kill has to land in -- which reads downstream as the commit outrunning the
-    harness and skips the case under test rather than reporting that the setup never took. The first
-    refusal is reported with the check: the reason is the whole diagnosis, and the count alone is not.
-    """
     refused = []
     for filler in range(MID_COMMIT_FILLER_OPS):
         response = conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
@@ -2136,15 +2045,11 @@ def pad_the_commit(conn, coll, prefix):
 
 
 def _commit_and_kill_mid_apply(victim, coll, ids):
-    """Commit a deliberately slow transaction on `victim` and kill it while its local-commit marker
-    is still on disk. Answers the transaction id, or None when the commit outran the harness."""
     conn = authed(nodes[0].client_port)
     try:
         tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
         if tx_id is None:
             return None
-        # First op, so it is applied well before the kill: the replay's version check only has
-        # something to skip once the interrupted commit itself wrote these ids.
         check_status("the ids the replay must skip were buffered", conn.send({
             "type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
             "objects": [{"_id": doc_id, "v": 2} for doc_id in ids]}), "OK")
@@ -2166,12 +2071,7 @@ def _commit_and_kill_mid_apply(victim, coll, ids):
 def check_a_mid_commit_restart_keeps_the_newer_values():
     section("A commit interrupted mid-apply does not replay over newer writes")
 
-    # Every buffered op carries the version it was minted at. Without that the restart's replay
-    # reapplied the transaction's own values over everything the new owner had written while the node
-    # was down -- at a fresh version, which then won cluster-wide.
     owners = collections_by_owner(nodes[0].client_port, DB, "midcommit")
-    # node-0 is the seed and the only node with no clusterSeeds of its own: once the others mark it
-    # dead they stop gossiping to it and it can never rejoin, so it is never the one killed here.
     victim = next((nodes[i] for i in (1, 2) if i in owners), None)
     if not check("found a collection owned by a node that can rejoin", victim is not None, f"owners={owners}"):
         return
@@ -2205,8 +2105,6 @@ def check_a_mid_commit_restart_keeps_the_newer_values():
     for doc_id in ids:
         check(f"{doc_id} keeps the value written while the node was down",
               all_nodes_see(DB, coll, doc_id, 3, ports=all_ports(), timeout_s=45.0))
-    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps: a replayed stale value would
-    # have been assigned a fresh version and pulled the whole cluster back inside this window.
     time.sleep(12)
     for doc_id in ids:
         check(f"{doc_id} still does after several anti-entropy sweeps",
@@ -2288,9 +2186,6 @@ def tombstone_ids(node, db, coll):
 def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
     section("Tombstones inside the retention window are not collected")
 
-    # The GC cutoff is a version, not a wall-clock instant. When the two were compared in different
-    # units a just-written tombstone was collected on the first sweep, after which any peer still
-    # holding the document resurrected it.
     coll = "tombstone_retention"
 
     def _written():
@@ -2308,7 +2203,6 @@ def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
     check("the delete wrote a tombstone", owner is not None,
           "no node recorded a tombstone for the deleted document")
 
-    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps.
     time.sleep(10)
 
     if owner is not None:
@@ -2323,9 +2217,6 @@ def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
 def test_delete_of_an_unreplicated_id_does_not_destroy_it():
     section("A DELETE for an id this node does not hold writes no tombstone")
 
-    # The tombstone used to be reserved before the existence check, so a DELETE that answered
-    # 404 still buried the id at a fresh version -- and anti-entropy then propagated that
-    # tombstone over the live copy every other node still held.
     coll = "spurious_tombstone"
     candidates = [f"{coll}_w{i}" for i in range(6)]
 
@@ -2346,9 +2237,6 @@ def test_delete_of_an_unreplicated_id_does_not_destroy_it():
     check("a refused DELETE wrote no tombstone anywhere", not holders,
           f"node(s) {holders} buried an id they never held")
 
-    # The rejoin window: a node that owns the collection again before anti-entropy has caught it up
-    # does not hold the document yet, which is when this fired in practice. The collection has to be
-    # one whose owner is still alive while the node is down, or the write itself cannot commit.
     absent = nodes[2]
     print(f"  Stopping node-{absent.index} ...")
     absent.stop()
@@ -2407,14 +2295,6 @@ def test_a_rejoining_node_repairs_one_change_among_many_documents():
 
 
 def drive_to_prepared(edge, watched, frozen, buffered, victim, timeout_s=20.0):
-    """Leave a cross-owner transaction durably PREPARED on `watched`, then kill `victim`.
-
-    Suspending `frozen` before COMMIT is what makes the window bounded and observable rather than a
-    race: the coordinator blocks for the whole replicationAckTimeoutMs inside its PREPARE round, so
-    the kill lands while the decision is still pending — and only once `watched` has actually written
-    its participant marker, which is waited for rather than assumed. `buffered` runs the
-    transaction's writes on the open connection. Answers the transaction id, or None when `watched`
-    never prepared, in which case nothing is killed."""
     conn = authed(edge.client_port)
     try:
         tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
@@ -2432,12 +2312,6 @@ def drive_to_prepared(edge, watched, frozen, buffered, victim, timeout_s=20.0):
         pending.join(60.0)
         if not prepared:
             conn.send({"type": "ROLLBACK_TRANSACTION"})
-        # `frozen` was suspended for longer than deadTimeoutMs, so it is DEAD in every peer's view by
-        # the time it resumes, and killing `victim` moves ownership around again on top of that.
-        # Both have to settle before the caller starts timing anything, or its deadlines measure the
-        # healing rather than the recovery they mean to pin. Only alive nodes count, so the killed
-        # victim never holds this open - and the ring is rebuilt from the alive set, so a canary
-        # collection the victim owned simply moves to a survivor.
         wait_until_cluster_is_healthy()
         return tx_id if prepared else None
     finally:
@@ -2453,21 +2327,13 @@ def in_doubt_row(port, tx_id):
 def test_a_prepared_participant_resolves_without_its_coordinator():
     section("A prepared participant resolves after its coordinator dies")
 
-    # Recovery used to drive the durable replay on its own thread, taking collection write locks the
-    # still-live prepared session holds on the session's own thread. That wedged the resolving thread
-    # for the life of the process and left the transaction half-applied and the collections fenced.
     owners = collections_by_owner(nodes[0].client_port, DB, "deadcoord")
     if not check("found a collection owned by each node", all(i in owners for i in range(NODE_COUNT)),
                  f"owners={owners}"):
         return
-    # node-0 is the seed and the only node configured with no clusterSeeds: once the others declare it
-    # dead they stop gossiping to it and it can never rejoin, so it is never the node killed here.
     coordinator, watched, frozen = nodes[1], nodes[0], nodes[2]
     slices = [owners[watched.index][0], owners[frozen.index][0]]
 
-    # The kill/rejoin tests run before this one, so the ring can still be settling when it starts.
-    # Without this the transaction's own buffered SAVEs are refused for lack of a quorum, and the
-    # slice they never joined then fails every assertion downstream as a recovery defect.
     if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
         return
 
@@ -2512,14 +2378,6 @@ def test_a_prepared_participant_resolves_without_its_coordinator():
 
 
 def prepare_then_kill_behind_a_slow_commit(edge, victim, buffered, padding, timeout_s=60.0):
-    """Leave a cross-owner transaction PREPARED on `victim`, then kill it, with the coordinator's
-    decision already recorded but not yet delivered.
-
-    The coordinator records the commit and applies its own slice before it sends COMMIT to the remote
-    participants, so padding that slice with a few thousand buffered ops turns the gap into a window
-    of seconds. The kill is entered only once `victim` has durably written its participant marker,
-    which is waited for rather than assumed. Answers the transaction id, or None when `victim` never
-    prepared, in which case nothing is killed."""
     conn = authed(edge.client_port)
     try:
         tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
@@ -2534,8 +2392,6 @@ def prepare_then_kill_behind_a_slow_commit(edge, victim, buffered, padding, time
             print(f"  Killing prepared participant node-{victim.index} before the commit reaches it ...")
             victim.kill()
         pending.join(180.0)
-        # Killing the participant moves ownership off it, and the caller times its rewrite against a
-        # deadline that would otherwise be spent waiting for the ring to notice.
         wait_until_cluster_is_healthy()
         return tx_id if prepared else None
     finally:
@@ -2545,22 +2401,15 @@ def prepare_then_kill_behind_a_slow_commit(edge, victim, buffered, padding, time
 def test_a_post_prepare_write_survives_2pc_recovery():
     section("A 2PC replay reserves no tombstone for a delete it skips")
 
-    # The replay deliberately skips a delete whose id was written after the transaction prepared, but
-    # the tombstone reservation ran over the whole slice regardless. That tombstone carried a fresh
-    # version, outranked the surviving document everywhere, and anti-entropy deleted it cluster-wide.
     owners = collections_by_owner(nodes[0].client_port, DB, "postprepare")
     if not check("found a collection owned by each node", all(i in owners for i in range(NODE_COUNT)),
                  f"owners={owners}"):
         return
-    # node-0 is the seed and the only node with no clusterSeeds of its own, so it is the one node that
-    # could never rejoin and is therefore the one that stays up throughout.
     edge, victim, survivor = nodes[2], nodes[1], nodes[0]
     coll = owners[victim.index][0]
     padding = owners[edge.index][0]
     ids = [f"pp{i}" for i in range(4)]
 
-    # The test before this one kills and restarts a node, so the ring can still be settling here.
-    # The buffered DELETEs below take collection write locks and are not retried, unlike the seeding.
     if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
         return
 
@@ -2593,9 +2442,6 @@ def test_a_post_prepare_write_survives_2pc_recovery():
     check("the surviving nodes rewrite the ids while the participant is down",
           wait_until(_rewritten, timeout_s=90.0, interval_s=1.0))
 
-    # The coordinator has to be gone before the participant comes back: otherwise it re-drives the
-    # decision within a sweep, and the replay would run before anti-entropy had brought the newer
-    # values in -- in which case applying the delete is the correct answer and proves nothing.
     print(f"  Killing coordinator node-{edge.index} so the participant stays in-doubt ...")
     edge.kill()
     print(f"  Restarting node-{victim.index} ...")
@@ -2625,8 +2471,6 @@ def test_a_post_prepare_write_survives_2pc_recovery():
 
     print(f"  Restarting node-{edge.index} ...")
     edge.start()
-    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps: a tombstone reserved at a fresh
-    # version would have outranked the surviving document and removed it everywhere inside this window.
     for doc_id in ids:
         check(f"{doc_id} still holds the value written after the prepare",
               all_nodes_see(DB, coll, doc_id, 2, ports=all_ports(), timeout_s=60.0))
@@ -2639,30 +2483,20 @@ def test_a_post_prepare_write_survives_2pc_recovery():
 def test_a_trigger_fires_once_despite_a_replication_timeout():
     section("A trigger runs exactly once when its commit's replication quorum times out")
 
-    # The local commit stands on a replication timeout and the durable run record it consumed is
-    # already gone, so reporting 503-3 as a failed commit re-ran the whole body of a trigger whose
-    # effects had landed. Freezing both peers is what reaches it: they stay ALIVE in the membership
-    # view for deadTimeoutMs, so the commit passes its quorum check and then waits out the ack.
     owners = collections_by_owner(nodes[0].client_port, DB, "repltimeout")
     host_index = next((index for index, names in owners.items() if len(names) >= 2), None)
     if not check("found two collections owned by one node", host_index is not None, f"owners={owners}"):
         return
     host = nodes[host_index]
-    # Both collections belong to the same node: the trigger's own write is routed like any other, and a
-    # forward to a frozen peer would stall the body instead of the commit this is about.
     watched, marks = owners[host_index][0], owners[host_index][1]
 
     conn = authed(host.client_port)
     try:
         check_status("store the marking procedure", conn.send({
             "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "repltimeout_mark",
-            # A fresh uuid per run, stamped with the id that fired it: counting the rows counts runs
-            # exactly, where a read-modify-write counter would hide a second run as a lost update.
             "script": "import db from 'db'; import args from 'args';"
                       f" db.save(db.name, '{marks}', {{ _id: crypto.randomUUID(), src: args.id }});"
                       " return 1;"}), "OK")
-        # CREATE_COLLECTION above only waited for quorum (2 of 3), so `host` - possibly the node that
-        # did not ack - may not have `watched` registered yet; retry until it catches up.
         trigger_result = {}
 
         def _trigger_installed():
@@ -2687,15 +2521,8 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
         finally:
             for node in frozen:
                 node.resume()
-            # The freeze has to outlast replicationAckTimeoutMs to reach the case under test, and
-            # that is longer than deadTimeoutMs - so both peers are DEAD in the host's view by the
-            # time it ends, and the host is alone. The trigger's own write needs the ring back
-            # before it can commit, and so does the next attempt of this loop.
             wait_until_cluster_is_healthy()
 
-    # The write is enqueued for the trigger before it replicates, so the trigger's own commit runs
-    # inside the same frozen window; the client's 503-3 is the evidence that the quorum really was
-    # unreachable while it did. A fresh id per attempt keeps each attempt a CREATED event of its own.
     fired_id = None
     for attempt in range(5):
         doc_id = f"rt{attempt}"
@@ -2705,9 +2532,6 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
     if not check("a write's replication quorum timed out, so the case under test was reached",
                  fired_id is not None, "the peers kept acknowledging within replicationAckTimeoutMs"):
         return
-    # The trigger retries without consuming an attempt while the cluster is unavailable, so this
-    # does not weaken the count below - it separates "the trigger never ran" from "the ring was
-    # still healing", which are the same symptom at the 60s deadline.
     if not check("the frozen peers rejoined, so the trigger's own write can commit",
                  wait_until_cluster_is_healthy()):
         return
@@ -2717,8 +2541,6 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
         return len(ids_of(response))
 
     check(f"the trigger for {fired_id} ran", wait_until(lambda: _runs() >= 1, timeout_s=60.0))
-    # triggerRetryBackoffMs is 1000 and doubles over triggerMaxAttempts=3, so a retried body would
-    # have fired again well inside this window.
     time.sleep(15)
     ran = _runs()
     check("and exactly once, rather than being retried after a commit that had stood", ran == 1,
@@ -2796,7 +2618,6 @@ def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
 
     coll = "depth_guard"
 
-    # Sent to every node so at least one of them is forwarding rather than owning the collection.
     def _all_accepted():
         if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
             return False
@@ -2812,15 +2633,8 @@ def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
           wait_until(_all_accepted, timeout_s=30.0, interval_s=1.0))
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Scheduled procedures
-# ══════════════════════════════════════════════════════════════════════════
-
 SCHEDULE_DB = DB
 SCHEDULE_PROC = "sched_marker"
-# Each run inserts a document with a fresh uuid, so counting the collection counts firings exactly.
-# A read-modify-write counter would hide a double fire as a lost update, which is the one thing
-# these tests exist to detect.
 SCHEDULE_SOURCE = (
     "import db from 'db'; import args from 'args';"
     " db.save(db.name, args.coll, { _id: crypto.randomUUID(), at: Date.now() });"
@@ -2855,9 +2669,6 @@ def fire_count(port, coll, db=SCHEDULE_DB) -> int:
 def test_before_hook_runs_on_the_owner():
     section("Before hooks — a write forwarded to the owner still runs the hook")
 
-    # The case that cannot be caught on one node: ClusterRouter forwards the raw request JSON, so a hook
-    # wired at the edge instead of the owner would ship an unmodified document and pass every
-    # single-node test. Writing through a node that does not own the collection is what proves it.
     check_status("CREATE_COLLECTION for the hooked data", create_coll(nodes[0].client_port, DB, "hooked"), "OK")
 
     conn = authed(nodes[0].client_port)
@@ -2871,8 +2682,6 @@ def test_before_hook_runs_on_the_owner():
     finally:
         conn.close()
 
-    # Write the same collection through every node in turn: at most one of them owns it, so the rest
-    # exercise the forward.
     for i in range(NODE_COUNT):
         _id = f"h{i}"
         r = save(nodes[i].client_port, DB, "hooked", {"_id": _id, "v": 5})
@@ -2881,7 +2690,6 @@ def test_before_hook_runs_on_the_owner():
                    all_nodes_see(DB, "hooked", _id, 10),
                    detail=f"_id={_id} should have been doubled by the owner's before hook")
 
-    # A veto must travel back to the edge as the owner's own error, not be swallowed by the forward.
     conn = authed(nodes[0].client_port)
     try:
         check_status("install a vetoing hook", conn.send({
@@ -2899,8 +2707,6 @@ def test_before_hook_runs_on_the_owner():
                    r.get("errorCode") == "400-21",
                    detail=f"got {r}")
 
-    # The acting user rides beside the forwarded request JSON rather than in it, so dropping it made the
-    # same logical write persist different bytes depending on which node the client happened to reach.
     conn = authed(nodes[0].client_port)
     try:
         check_status("install a hook that stamps the acting user", conn.send({
@@ -3080,10 +2886,6 @@ def test_schedule_rejoin_catch_up():
 
 def test_drop_and_recreate_does_not_resurrect_documents():
     section("DROP_COLLECTION + CREATE_COLLECTION while one node is down")
-    # A drop deletes the whole collection folder, tombstones included, so it leaves no per-document
-    # evidence. A node outside the drop's replication keeps both its admin entry and its documents,
-    # and anti-entropy then sees ids the survivors lack and seeds the dead collection back
-    # cluster-wide. The collection incarnation is what tells that node its documents are dead.
     coll = "incarnation_coll"
     check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
     check("the pre-drop documents all committed",
@@ -3117,8 +2919,6 @@ def test_drop_and_recreate_does_not_resurrect_documents():
 
     assert_no_resurrection(DB, coll, {"live0", "live1", "live2"}, victim)
 
-    # The re-created collection is still usable: quarantining the dead incarnation must not take
-    # the live one down with it.
     check_status("a write to the re-created collection succeeds",
                  save(nodes[0].client_port, DB, coll, {"_id": "after", "v": 1}), "OK")
     check("the write converges on every node",
@@ -3318,13 +3118,6 @@ def _node_log_mentions_quarantine(node, coll, db: str = DB) -> bool:
 
 def test_rapid_collection_creates_are_not_quarantined():
     section("CREATE_COLLECTION bursts replicate and converge")
-    # A convergence guard for concurrent DDL, not an incarnation-rounding reproduction. The rounding
-    # defect needs the HLC's logical counter to be non-zero, which takes two next() calls inside one
-    # millisecond; with a counter of zero the packed value is ms<<16, whose low 16 bits are zero and
-    # which a double therefore represents exactly. A network round trip per create never collides
-    # that tightly - concurrent creates, and a bulk-save warm-up, were both tried and neither moved
-    # the counter - so a wire-level version passes whether or not the defect is present. The exact
-    # round trip is pinned deterministically by CollectionIncarnationTest instead.
     colls = [f"burst_coll_{i}" for i in range(8)]
     unseeded = []
     for coll in colls:
@@ -3340,8 +3133,6 @@ def test_rapid_collection_creates_are_not_quarantined():
                     return False
         return True
 
-    # Spans several antiEntropyIntervalMs sweeps: a quarantine fires from the admin anti-entropy merge, so if a
-    # rounded incarnation were going to strip one of these it would have done so inside this window.
     ok = wait_until(_all_nodes_hold_every_burst_collection, timeout_s=90.0, interval_s=1.0)
     missing = {}
     if not ok:
@@ -3358,10 +3149,6 @@ def test_rapid_collection_creates_are_not_quarantined():
 
 def test_recreating_an_existing_collection_keeps_its_documents():
     section("CREATE_COLLECTION on a populated collection is a safe no-op")
-    # Pins the user-visible behaviour: a duplicate create must never cost documents. It does not
-    # reproduce the mint-locally defect, which needs a node that is up, still lacks the collection,
-    # and receives the duplicate create before its first admin anti-entropy round hands it the real incarnation
-    # - a window this harness cannot hold open. CollectionIncarnationTest covers that deterministically.
     coll = "recreate_coll"
     check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
     check("the documents all committed",
@@ -3396,8 +3183,6 @@ def test_recreating_an_existing_collection_keeps_its_documents():
                  save(nodes[0].client_port, DB, coll, {"_id": "after", "v": 9}), "OK")
     check("the later write converges", all_nodes_see(DB, coll, "after", 9, ports=all_ports(), timeout_s=30.0))
 
-
-# ── standalone node switched to clustered ────────────────────────────────────
 
 MIGRATION_NODE_OFFSET = 10
 ADMIN_COORDINATOR_KEY = "admin|__admin_coordinator__"
@@ -3506,12 +3291,10 @@ def test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins():
 FAULT_HALT_STATUS = 137
 
 
-def arm_fault(node, point, action, match=None, delay_ms=None) -> dict:
+def arm_fault(node, point, action, match=None) -> dict:
     payload = {"type": "ARM_FAULT", "point": point, "action": action}
     if match is not None:
         payload["match"] = match
-    if delay_ms is not None:
-        payload["delayMs"] = delay_ms
     return op(node.client_port, payload)
 
 

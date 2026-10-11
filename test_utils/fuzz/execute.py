@@ -39,8 +39,6 @@ class Outcome:
     def __init__(self):
         self.collections = set()
         self.indexed = {}
-        self.restarts = 0
-        self.refusals = 0
 
     def note_index(self, db: str, coll: str, field: str) -> None:
         self.indexed.setdefault((db, coll), set()).add(field)
@@ -122,7 +120,6 @@ class Executor:
     def _apply_one(self, op, outcome: Outcome) -> None:
         if op.kind == op_kinds.RESTART:
             self.restart()
-            outcome.restarts += 1
             return
         if op.kind == op_kinds.TRANSACTION:
             self._apply_transaction(op, outcome)
@@ -133,17 +130,14 @@ class Executor:
     def _apply_transaction(self, op, outcome: Outcome) -> None:
         conn = self.conn()
         if not accepted(conn.send({"type": "START_TRANSACTION"})):
-            outcome.refusals += 1
             return
         for nested in op.nested:
             self.request(self._payload(nested))
-        if not accepted(conn.send({"type": "COMMIT_TRANSACTION"})):
-            outcome.refusals += 1
+        conn.send({"type": "COMMIT_TRANSACTION"})
 
     @staticmethod
     def _record(op, response: dict, outcome: Outcome) -> None:
         if not accepted(response):
-            outcome.refusals += 1
             return
         if op.kind == op_kinds.CREATE_COLLECTION:
             outcome.collections.add((op.db, op.coll))

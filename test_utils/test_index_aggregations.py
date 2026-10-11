@@ -61,7 +61,6 @@ GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-
 def stats(c) -> dict:
     return c.send({"type": "GET_DATABASE_STATS"})
 
@@ -753,17 +752,6 @@ def geo_suite(c):
     probe_geo_pending_write(c)
 
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Index / scan agreement
-#
-# An index-backed answer must equal the answer the same query gives against a full scan. Each case
-# runs the query with no index, builds the index, and runs it again: the two answers must match.
-# These are the shapes where an index used to answer differently — a scalar index answering a
-# type-agnostic operator, a complement taken from one index of a mixed-type field, a join key the
-# index cannot look up, and an ordering the index computed with its own comparator.
-# ══════════════════════════════════════════════════════════════════════════
-
 AGREE_CONTAINS_NUM = "idxagg_agree_contains_num"
 AGREE_CONTAINS_BOOL = "idxagg_agree_contains_bool"
 AGREE_NOT_IN_OBJ = "idxagg_agree_notin_obj"
@@ -811,7 +799,6 @@ AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, 
 
 
 def agree_ids(r):
-    """Sorted ids, or a marker for a real error so it can never look like an empty answer."""
     status = r.get("status")
     if status not in ("OK", "NOT_FOUND"):
         return f"<{status}/{r.get('errorCode')}>"
@@ -826,7 +813,6 @@ def agree_ordered_ids(r):
 
 
 def agree_joined(r):
-    """Each row as (id, how many documents were attached) — a dropped join shows up as 0."""
     status = r.get("status")
     if status not in ("OK", "NOT_FOUND"):
         return f"<{status}/{r.get('errorCode')}>"
@@ -869,26 +855,20 @@ def agree(c, label, query_coll, steps, index_coll, index_field, extract=agree_id
 def setup_agreement(c):
     for coll in AGREE_COLLECTIONS:
         c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
-    # CONTAINS is type-agnostic on the scan side: it matches an array-valued document holding the
-    # operand, which a scalar index of that field cannot see.
     save_doc(c, AGREE_CONTAINS_NUM, {"_id": "scalar", "tags": 5})
     save_doc(c, AGREE_CONTAINS_NUM, {"_id": "inArray", "tags": [5, 7]})
     save_doc(c, AGREE_CONTAINS_BOOL, {"_id": "scalar", "flags": True})
     save_doc(c, AGREE_CONTAINS_BOOL, {"_id": "inArray", "flags": [True]})
-    # NOT_IN is a complement: taken from one index of a mixed-type field it silently omits every
-    # document held only by another index of the same field.
     save_doc(c, AGREE_NOT_IN_OBJ, {"_id": "obj1", "tag": {"a": 1}})
     save_doc(c, AGREE_NOT_IN_OBJ, {"_id": "str1", "tag": "x"})
     save_doc(c, AGREE_NOT_IN_OBJ, {"_id": "obj2", "tag": {"b": 2}})
     save_doc(c, AGREE_NOT_IN_ARR, {"_id": "arr1", "tag": [1]})
     save_doc(c, AGREE_NOT_IN_ARR, {"_id": "str1", "tag": "x"})
     save_doc(c, AGREE_NOT_IN_ARR, {"_id": "arr2", "tag": [2]})
-    # A join key the index cannot be looked up by: an object, and an explicit JSON null.
     save_doc(c, AGREE_JOIN_REMOTE, {"_id": "cfg1", "key": {"region": "eu"}})
     save_doc(c, AGREE_JOIN_LEFT, {"_id": "row1", "key": {"region": "eu"}})
     save_doc(c, AGREE_JOIN_NULL_REMOTE, {"_id": "cfg1", "key": None})
     save_doc(c, AGREE_JOIN_NULL_LEFT, {"_id": "row1", "key": None})
-    # Ordering: booleans, and values of different types that must rank the same way either path.
     save_doc(c, AGREE_SORT_BOOL, {"_id": "isFalse", "active": False})
     save_doc(c, AGREE_SORT_BOOL, {"_id": "isTrue", "active": True})
     save_doc(c, AGREE_SORT_BOOL_DESC, {"_id": "isFalse", "active": False})
@@ -900,12 +880,8 @@ def setup_agreement(c):
     save_doc(c, AGREE_SORT_TIES, {"_id": "tieA", "score": 5})
     save_doc(c, AGREE_SORT_TIES, {"_id": "tieB", "score": 5})
     save_doc(c, AGREE_SORT_TIES, {"_id": "high", "score": 9})
-    # A point 99.96 km from the target: inside a 100 km radius, but outside a candidate box sized
-    # with a rounded metres-per-degree constant rather than the sphere the distance itself uses.
     save_doc(c, AGREE_GEO, {"_id": "onTheRim", "location": "#geo(0.899000,0.000000)"})
     save_doc(c, AGREE_GEO, {"_id": "farAway", "location": "#geo(-40.000000,100.000000)"})
-    # Membership must use the equality EQUALS uses: case-insensitive for strings, semantic for
-    # custom types. Index and scan agreed with each other before, and disagreed with EQUALS.
     for coll in (AGREE_IN_CASE, AGREE_NOT_IN_CASE):
         save_doc(c, coll, {"_id": "upper", "tag": "Alpha"})
         save_doc(c, coll, {"_id": "lower", "tag": "alpha"})
@@ -960,7 +936,6 @@ def probe_sort_agrees_with_scan(c):
 
 
 def probe_sort_limit_is_deterministic(c):
-    """Two documents tied on the sort key: SORT + LIMIT 1 must not pick a different one per run."""
     steps = [{"type": "SORT", "fieldName": "score", "ascending": True}, {"type": "LIMIT", "limit": 1}]
     scanned = agree_ordered_ids(agg(c, AGREE_SORT_TIES, steps))
     c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SORT_TIES,
@@ -969,8 +944,6 @@ def probe_sort_limit_is_deterministic(c):
     picks = {tuple(agree_ordered_ids(agg(c, AGREE_SORT_TIES, steps))) for _ in range(10)}
     check("SORT + LIMIT over tied keys picks the same document every run", len(picks) == 1,
           f"scan={scanned!r}  indexed picks across 10 runs={sorted(picks)!r}")
-    # Perturb the tied bucket so its backing set rehashes, then delete the additions again: an
-    # order that depends on set iteration moves, a deterministic one does not.
     for i in range(30):
         save_doc(c, AGREE_SORT_TIES, {"_id": f"churn{i}", "score": 5})
     for i in range(30):
@@ -988,8 +961,6 @@ def probe_geo_distance_agrees_with_scan_at_the_rim(c):
 
 
 def probe_dropping_an_index_spares_a_sibling_field(c):
-    """CREATE_INDEX on `first` used to delete every `first-name` index file: the anchored prefix
-    still matched a longer field, and hyphens are legal in field names."""
     save_doc(c, AGREE_SIBLING, {"_id": "s1", "first": "ada", "first-name": "ada lovelace"})
     save_doc(c, AGREE_SIBLING, {"_id": "s2", "first": "alan", "first-name": "alan turing"})
     c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SIBLING,
@@ -1009,8 +980,6 @@ def probe_dropping_an_index_spares_a_sibling_field(c):
 
 
 def probe_object_sort_keys_break_ties_on_id(c):
-    """Every object-valued sort key compares equal, so the index path must still order ties by _id
-    the way the scan does - otherwise SORT + LIMIT returns a different page."""
     for doc_id, inner in (("z", 1), ("a", 2), ("m", 3)):
         save_doc(c, AGREE_OBJ_SORT, {"_id": doc_id, "meta": {"x": inner}})
     steps = [{"type": "SORT", "fieldName": "meta", "ascending": True}, {"type": "LIMIT", "limit": 2}]
@@ -1019,8 +988,6 @@ def probe_object_sort_keys_break_ties_on_id(c):
 
 
 def probe_custom_values_bucket_the_same_either_way(c):
-    """The build path buckets custom values by raw wire text while incremental maintenance used to
-    match them semantically, so DISTINCT disagreed with the scan and with itself."""
     save_doc(c, AGREE_CUSTOM, {"_id": "d1", "when": "#datetime(2024-01-01T10:00)"})
     save_doc(c, AGREE_CUSTOM, {"_id": "d2", "when": "#datetime(2024-01-01T10:00:00)"})
     steps = [{"type": "DISTINCT", "fieldName": "when"}]
@@ -1035,8 +1002,6 @@ def probe_custom_values_bucket_the_same_either_way(c):
 
 
 def probe_custom_sort_keys_order_by_the_type_comparator(c):
-    """SORT compared custom values by their raw wire text, so #geo(10.0,5.0) sorted before
-    #geo(9.0,5.0) - the opposite of the geohash order the range operators and the index use."""
     for doc_id, location in (("x", "#geo(10.0,5.0)"), ("y", "#geo(9.0,5.0)"), ("z", "#geo(8.0,5.0)")):
         save_doc(c, AGREE_CUSTOM_SORT, {"_id": doc_id, "location": location})
     agree(c, "SORT over geo values", AGREE_CUSTOM_SORT,
@@ -1071,9 +1036,6 @@ def probe_membership_uses_the_same_equality_as_equals(c):
 
 
 def probe_array_equals_uses_the_same_equality_as_scalar_equals(c):
-    """A custom value inside an array or object used to compare by wire text on the scan and hash by
-    wire text in the index, while the same value as a scalar compared by meaning. Both sides now
-    compare by meaning, and a document saved after the index exists must join the same bucket."""
     long_spelling = "#datetime(2024-01-01T10:00:00)"
     short_spelling = "#datetime(2024-01-01T10:00)"
     for coll in (AGREE_ARRAY_CUSTOM, AGREE_CONTAINS_CUSTOM):
@@ -1105,8 +1067,6 @@ def probe_array_equals_uses_the_same_equality_as_scalar_equals(c):
 
 
 def probe_a_scalar_membership_operand_is_refused(c):
-    """IN with a non-array operand reached SearchUtils and threw, so the same query answered 500
-    with an index and NO_RESULTS without one. It must now be refused before either path."""
     steps = [{"type": "FILTER",
               "operator": {"fieldOperatorType": "IN", "field": "score", "value": 2}}]
     r = agg(c, AGREE_MIXED_BOX, steps)
@@ -1116,8 +1076,6 @@ def probe_a_scalar_membership_operand_is_refused(c):
 
 
 def probe_mixed_number_boxes_group_the_same_either_way(c):
-    """equals compares numbers by double value while hashCode returned the boxed hash, so a
-    hash-based GROUP_BY split one logical value across two buckets on the scan path."""
     save_doc(c, AGREE_MIXED_BOX, {"_id": "w1", "score": 2})
     save_doc(c, AGREE_MIXED_BOX, {"_id": "w2", "score": 2.0})
     save_doc(c, AGREE_MIXED_BOX, {"_id": "w3", "score": 3})
@@ -1127,9 +1085,6 @@ def probe_mixed_number_boxes_group_the_same_either_way(c):
 
 
 def probe_lone_surrogate_values_index_the_same_as_they_scan(c):
-    """escapeIndexToken left an unpaired surrogate raw, so the UTF-8 writer substituted '?' and two
-    distinct values collapsed onto one file key: an index-backed EQUALS missed its own document, and
-    the next update made removeIndexLine delete an unrelated document's line."""
     values = {"hi": "a\ud800b", "lo": "a\udc00b", "plain": "a?b", "emoji": "a\U0001f600b"}
     for doc_id, value in values.items():
         save_doc(c, AGREE_SURROGATE, {"_id": doc_id, "v": value})
@@ -1184,9 +1139,6 @@ def probe_lone_surrogates_inside_containers_index_the_same_as_they_scan(c):
 
 
 def probe_lone_surrogate_before_a_pair_orders_the_index_consistently(c):
-    """compareToIgnoreCase merges a surrogate pair into one code point only when the chars differ, so a
-    lone high surrogate right before a pair broke transitivity: the loader sorted the String index into
-    an order binary search could not walk, and an index-backed EQUALS missed a document the scan found."""
     values = {"emoji": "\U0001f600", "fullwidth": "\uff21", "prefixed": "aa\uff21", "lone": "\ud83d\U0001f600"}
     for doc_id, value in values.items():
         save_doc(c, AGREE_SURROGATE_FOLD, {"_id": doc_id, "v": value})
@@ -1344,8 +1296,6 @@ def probe_non_ascii_indexed_values(c):
     check("re-pointed document no longer answers under its old non-ASCII value",
           "u3" not in reg_filter(c, REG_UNICODE, "city", "plain"))
 
-    # A rebuild from the documents must leave multi-byte sequences and paired surrogates exactly as
-    # they were: only an *unpaired* surrogate is escaped, and escaping an emoji would churn the file.
     check_status("REINDEX the non-ASCII collection",
                  c.send({"type": "REINDEX", "databaseName": DB, "collectionName": REG_UNICODE}), "OK")
     wait_for_background()
@@ -1463,7 +1413,6 @@ def probe_conjunction_after_a_filter_step(c):
     got = sorted(d.get("_id") for d in (nested.get("results") or []))
     check("nested conjunction runs on an already-filtered stream", got == ["a", "c"],
           detail=f"expected ['a', 'c'], got {got}")
-
 
 
 def probe_low_cardinality_numeric_index(c):
@@ -1620,9 +1569,6 @@ def probe_numeric_in_agrees_between_index_and_scan(c):
     for i, score in enumerate((1, 2, 3, 5, 9)):
         save_doc(c, REG_IN, {"_id": f"n{i}", "score": score})
 
-    # The operands arrive through the real parser, which narrows an integral value inside the int
-    # range to an Integer, while a number index entry is always a Double. Boxed set membership then
-    # matched nothing and every numeric IN on an indexed field silently returned no rows.
     scan_in = _in_filter(c, REG_IN, "score", [2, 9])
     scan_mixed = _in_filter(c, REG_IN, "score", [5, 2.5])
     scan_count = ((agg(c, REG_IN, [
@@ -1655,10 +1601,6 @@ def probe_not_in_then_equals_on_a_scalar_only_field(c):
     wait_for_indexes(c, [(REG_NOTIN, "score")])
     wait_for_background()
 
-    # NOT_IN probes whether another index covers the field. Probing the scalar kinds through the hash
-    # loader parsed the same .idx file into String values and cached them under the typed key, so the
-    # next EQUALS threw a ClassCastException and the following write replaced the line instead of
-    # merging into it, permanently dropping ids.
     not_in = _in_filter(c, REG_NOTIN, "score", [1], op="NOT_IN")
     equals = _ids(agg(c, REG_NOTIN, [
         {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "score", "value": 2}}]))
@@ -1686,8 +1628,6 @@ def probe_group_by_integer_min_value(c):
     wait_for_background()
     indexed = agg(c, REG_MINVALUE, [{"type": "GROUP_BY", "fieldName": "n"}])
 
-    # The codec admitted Integer.MIN_VALUE where the parser does not, so the same value hashed two
-    # ways and the index-backed grouping emitted two groups under one key.
     check("an indexed GROUP_BY on Integer.MIN_VALUE emits one group, as the scan does",
           len(indexed.get("results") or []) == len(scanned.get("results") or []) == 1,
           detail=f"scan={scanned.get('results')} indexed={indexed.get('results')}")
@@ -1710,8 +1650,6 @@ def probe_geo_distance_across_the_antimeridian(c):
     wait_for_background()
     indexed = _within()
 
-    # clampLng truncates at +/-180 and contains() cannot express a wrapped interval, so the pre-filter
-    # dropped every true match on the far side - and FILTER re-tests candidates but never adds one back.
     check("a geo radius spanning the antimeridian returns both sides", scanned == ["east", "west"],
           detail=f"scan={scanned}")
     check("the indexed geo radius returns what the scan returns", indexed == scanned,
@@ -2037,8 +1975,6 @@ def probe_indexing_a_field_written_as_null_is_consistent(c):
 
 
 def probe_custom_sort_agrees_with_the_range_filter(c):
-    """SORT ordered custom values by wire text while GREATER_THAN used the type's own comparator, so
-    the two disagreed about which of two geo points comes first."""
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CUSTOM_ORDER})
     for doc_id, location in (("x", "#geo(10.0,5.0)"), ("y", "#geo(9.0,5.0)"), ("z", "#geo(8.0,5.0)")):
         save_doc(c, REG_CUSTOM_ORDER, {"_id": doc_id, "location": location})
@@ -2208,7 +2144,6 @@ def main():
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         regression_suite(c)
 
-    # Phase 6 — an index-backed answer must equal the full-scan answer.
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         agreement_suite(c)

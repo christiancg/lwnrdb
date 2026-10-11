@@ -380,7 +380,7 @@ membership machinery — serializes them:
    authenticated acting username, which the coordinator applies through a short-lived
    synthetic client so `CREATE_DATABASE` records the creator as owner.
 2. The coordinator **executes it locally**, then ships the **admin records** the op touched
-   (`AdminRecordKeys.touchedBy`) to every peer in one `REPLICATE_ADMIN` and waits for a
+   (`AdminRecordKey.touchedBy`) to every peer in one `REPLICATE_ADMIN` and waits for a
    majority of acknowledgements. `REINDEX` is the one exception: it touches no record, so the
    coordinator broadcasts the request itself (`REINDEX_BROADCAST`) and every peer rebuilds its
    own indexes from its own documents.
@@ -628,7 +628,7 @@ then, drain the node's traffic at the load balancer first if that window matters
 **Testing failures between two statements.** Killing a process can only land *somewhere* in a
 critical section. To stop a node at one exact statement, the engine has a test-only fault seam:
 named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_ENTROPY_SNAPSHOTTED`,
-`PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, delay, or drop one peer reply. It is
+`PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
 inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
 suite turns it on for its throwaway nodes. See the
 [README](../README.md#fault-injection-testing-and-debugging-only) for the operations.
@@ -808,7 +808,7 @@ A populated node switched from standalone to clustered needs no special case eit
 already carry versions above the bootstrap admin's `1` and above zero, and a fresh peer's merge
 installs them, so whichever of the two coordinates, the populated node's databases and users
 survive. Admin records written by a build from before versioning carry no version, so the first
-start of a newer build stamps each of them once (`UnversionedRecords`) before writing anything
+start of a newer build stamps each of them once (`AdminRecords.stampUnversioned`) before writing anything
 else; without that, a fresh peer's bootstrap admin at `1` would outrank the upgraded node's own
 admin and reset its password. Two populated standalone nodes merged into one cluster keep the newer of each colliding
 record — merging two populated nodes is still not a supported migration.

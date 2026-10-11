@@ -64,10 +64,6 @@ public final class Tx2pcLog {
         AdminOperationHelper.deleteTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
     }
 
-    public static Status status(String dtxId) throws Exception {
-        return status(dtxId, null);
-    }
-
     public static Status status(String dtxId, String selfAddress) throws Exception {
         if (isCommitted(dtxId) || TxCommitLog.isLocallyCommitted(dtxId)) {
             return Status.COMMITTED;

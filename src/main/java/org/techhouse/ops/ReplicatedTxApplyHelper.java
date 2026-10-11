@@ -16,10 +16,6 @@ public final class ReplicatedTxApplyHelper {
     private ReplicatedTxApplyHelper() {
     }
 
-    public static boolean apply(TxReplicationPayload payload) {
-        return apply(payload, 0);
-    }
-
     public static boolean apply(TxReplicationPayload payload, long timeoutMillis) {
         if (payload == null || payload.getEntries().isEmpty()) {
             return false;
@@ -55,8 +51,6 @@ public final class ReplicatedTxApplyHelper {
                 listenManager.flushDeferredNotifications();
             }
         };
-        return timeoutMillis > 0
-                ? locks.withWriteLocks(collIds, timeoutMillis, applyEntries)
-                : locks.withWriteLocks(collIds, applyEntries);
+        return locks.withWriteLocks(collIds, timeoutMillis, applyEntries);
     }
 }

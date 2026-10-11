@@ -97,7 +97,7 @@ public class ClusterReplicationCoverageTest {
     @Test
     public void test_replicate_upsert_reads_committed_doc_and_meets_quorum() {
         ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("u1")), null));
+                List.of(doc("u1")), null), TestGlobals.APPLY_BUDGET_MS);
         assertEquals(ReplicationOutcome.QUORUM_MET,
                 coordinator.replicateUpsert(TestGlobals.DB, TestGlobals.COLL, List.of("u1")));
     }

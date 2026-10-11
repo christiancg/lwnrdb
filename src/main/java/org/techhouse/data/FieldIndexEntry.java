@@ -7,7 +7,7 @@ import java.util.Set;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
-import org.techhouse.ejson.exceptions.NonFiniteNumberException;
+import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.utils.CaseFolding;
 
 public class FieldIndexEntry<T> extends CollectionScopedEntry implements Comparable<T> {
@@ -182,7 +182,8 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     private static double parseFiniteIndexedNumber(String strValue) {
         final var parsed = Double.parseDouble(strValue);
         if (!Double.isFinite(parsed)) {
-            throw new NonFiniteNumberException(strValue);
+            throw new MalformedJsonException(
+                    "The number " + strValue + " is outside the range a JSON number can represent");
         }
         return parsed;
     }

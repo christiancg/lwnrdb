@@ -9,6 +9,7 @@ import java.util.function.IntConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
@@ -50,7 +51,7 @@ public class AntiEntropyFaultPointTest extends AntiEntropyTestBase {
         TestUtils.setPrivateField(faultInjector, "halt",
                 (IntConsumer) _ -> unlockedWhenFired.add(collectionIsUnlocked()));
         faultInjector.arm(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, FaultAction.HALT,
-                FaultInjector.collectionSubject(TestGlobals.DB, TestGlobals.COLL), 0);
+                Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL));
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 

@@ -176,8 +176,6 @@ def label_of(leaves: list) -> str:
                      f"{values.to_json_text(leaf['value'])}" for leaf in leaves)
 
 
-# The index resolves a conjunction with set algebra and the scan with per-document grouping, so the two
-# are independent implementations of one answer. Duplicate children separate them the hardest.
 def conjunction_queries(rng, fields: list) -> list:
     queries = []
     for kind in CONJUNCTION_TYPES:
@@ -229,8 +227,6 @@ def join_queries(fields: list, partners: list) -> list:
     return queries
 
 
-# nearest is an approximate neighbourhood search unless exact is set, so only the exact form may be
-# compared against a full scan.
 def custom_operator_queries(fields: list) -> list:
     queries = []
     for field in fields:
