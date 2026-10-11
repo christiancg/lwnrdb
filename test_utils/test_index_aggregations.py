@@ -67,15 +67,32 @@ def forced_scan(steps) -> list:
     return [{"type": "SKIP", "skip": 0}] + steps
 
 
-def timed_agg(c, coll, steps):
-    best = None
-    last = None
-    for _ in range(REPEATS):
-        t0 = time.perf_counter()
-        last = agg(c, coll, steps)
-        dt = time.perf_counter() - t0
-        best = dt if best is None else min(best, dt)
-    return best, last
+def timed_once(c, coll, steps):
+    t0 = time.perf_counter()
+    resp = agg(c, coll, steps)
+    return time.perf_counter() - t0, resp
+
+
+def index_used(c, coll, steps):
+    r = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "aggregationSteps": steps,
+                "analyze": True})
+    return bool((r.get("analyzeResult") or {}).get("indexUsed"))
+
+
+def timed_scan_and_index(c, coll, steps, scan_steps):
+    scan_best = None
+    index_best = None
+    index_resp = None
+    for round_no in range(REPEATS):
+        if round_no % 2 == 0:
+            scan_dt, _ = timed_once(c, coll, scan_steps)
+            index_dt, index_resp = timed_once(c, coll, steps)
+        else:
+            index_dt, index_resp = timed_once(c, coll, steps)
+            scan_dt, _ = timed_once(c, coll, scan_steps)
+        scan_best = scan_dt if scan_best is None else min(scan_best, scan_dt)
+        index_best = index_dt if index_best is None else min(index_best, index_dt)
+    return scan_best, index_best, index_resp
 
 
 def rand_payload(size: int) -> str:
@@ -136,6 +153,7 @@ def setup_fixtures(c):
     bulk_load(c, JOIN_BIG, ({
         "_id": f"big_{v:06d}",
         "joinKey": "shared" if v == 0 else f"key_{v}",
+        "joinKeyPlain": "shared" if v == 0 else f"key_{v}",
         "label": "the-one" if v == 0 else f"label_{v}",
         "payload": rand_payload(PAYLOAD_BYTES),
     } for v in range(NUM_DOCS)))
@@ -189,6 +207,7 @@ DISTINCT_STEPS = [{"type": "DISTINCT", "fieldName": "category"}]
 SORT_STEPS = [{"type": "SORT", "fieldName": "score", "ascending": True}, {"type": "LIMIT", "limit": 10}]
 JOIN_STEPS = [{"type": "JOIN", "joinCollection": JOIN_BIG, "localField": "joinKey",
                "remoteField": "joinKey", "asField": "joined"}]
+JOIN_SCAN_STEPS = [dict(JOIN_STEPS[0], remoteField="joinKeyPlain")]
 
 TARGET_OBJECT = {"n": 0, "category": category_for(0)}
 TARGET_ARRAY = ["t", "0"]
@@ -220,7 +239,7 @@ def join_signature(r):
     return (len(rows), sorted(labels))
 
 
-def compare(label, unindexed_time, unindexed_resp, indexed_time, indexed_resp, signature, strict_speed):
+def compare(label, scan_time, unindexed_resp, indexed_time, indexed_resp, signature, strict_speed):
     section(label)
     sig_unindexed = signature(unindexed_resp)
     sig_indexed = signature(indexed_resp)
@@ -229,15 +248,15 @@ def compare(label, unindexed_time, unindexed_resp, indexed_time, indexed_resp, s
         sig_unindexed == sig_indexed,
         detail=f"signature={sig_indexed!r}",
     )
-    ratio = (indexed_time / unindexed_time) if unindexed_time > 0 else 0.0
-    detail = (f"unindexed_best={unindexed_time * 1000:.2f}ms  indexed_best={indexed_time * 1000:.2f}ms  "
+    ratio = (indexed_time / scan_time) if scan_time > 0 else 0.0
+    detail = (f"scan_best={scan_time * 1000:.2f}ms  indexed_best={indexed_time * 1000:.2f}ms  "
               f"ratio={ratio:.2f} (lower is better)")
     if strict_speed:
-        check("index path is faster than the full scan", indexed_time < unindexed_time, detail=detail)
+        check("index path is faster than the full scan", indexed_time < scan_time, detail=detail)
     else:
         check(
             f"index path is not slower than the full scan (within {SPEED_TOLERANCE:.2f}x)",
-            indexed_time <= unindexed_time * SPEED_TOLERANCE,
+            indexed_time <= scan_time * SPEED_TOLERANCE,
             detail=detail,
         )
 
@@ -1824,8 +1843,9 @@ def main():
     bu.banner("index-backed aggregation performance test suite", HOST, PORT)
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
           f"meta + array tags), {LEFT_DOCS} left + {NUM_DOCS} right docs for JOIN.")
-    print(f"        Measure JOIN/SORT/DISTINCT and object/array element-match FILTER unindexed, "
-          f"then create indexes and re-measure.")
+    print(f"        Run JOIN/SORT/DISTINCT and object/array element-match FILTER unindexed, then create indexes "
+          f"and time each against a scan baseline (the query behind a SKIP 0, or for JOIN the same join on an "
+          f"unindexed copy of the key), alternating which goes first.")
 
     with Conn() as c:
         r = c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
@@ -1837,23 +1857,28 @@ def main():
         setup_fixtures(c)
 
     cases = [
-        ("DISTINCT on category", COLL, DISTINCT_STEPS, distinct_signature, True),
-        ("SORT on score (+LIMIT 10)", COLL, SORT_STEPS, sort_signature, False),
-        ("JOIN against a large remote collection", JOIN_LEFT, JOIN_STEPS, join_signature, True),
-        ("FILTER element-match on object field", COLL, FILTER_OBJECT_STEPS, bu.ids_of, True),
-        ("FILTER element-match on array field", COLL, FILTER_ARRAY_STEPS, bu.ids_of, True),
-        ("FILTER IN over a list of objects", COLL, FILTER_OBJECT_IN_STEPS, bu.ids_of, True),
-        ("FILTER geo distance (within radius)", COLL, FILTER_GEO_DISTANCE_STEPS, bu.ids_of, False),
-        ("FILTER geo within polygon", COLL, FILTER_GEO_WITHIN_STEPS, bu.ids_of, False),
+        ("DISTINCT on category", COLL, DISTINCT_STEPS, forced_scan(DISTINCT_STEPS), distinct_signature, True),
+        ("SORT on score (+LIMIT 10)", COLL, SORT_STEPS, forced_scan(SORT_STEPS), sort_signature, False),
+        ("JOIN against a large remote collection", JOIN_LEFT, JOIN_STEPS, JOIN_SCAN_STEPS, join_signature, True),
+        ("FILTER element-match on object field", COLL, FILTER_OBJECT_STEPS, forced_scan(FILTER_OBJECT_STEPS),
+         bu.ids_of, True),
+        ("FILTER element-match on array field", COLL, FILTER_ARRAY_STEPS, forced_scan(FILTER_ARRAY_STEPS),
+         bu.ids_of, True),
+        ("FILTER IN over a list of objects", COLL, FILTER_OBJECT_IN_STEPS, forced_scan(FILTER_OBJECT_IN_STEPS),
+         bu.ids_of, True),
+        ("FILTER geo distance (within radius)", COLL, FILTER_GEO_DISTANCE_STEPS,
+         forced_scan(FILTER_GEO_DISTANCE_STEPS), bu.ids_of, False),
+        ("FILTER geo within polygon", COLL, FILTER_GEO_WITHIN_STEPS, forced_scan(FILTER_GEO_WITHIN_STEPS),
+         bu.ids_of, False),
     ]
 
     unindexed = {}
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
-        for name, coll, steps, _sig, _strict in cases:
-            best, resp = timed_agg(c, coll, steps)
+        for name, coll, steps, _scan_steps, _sig, _strict in cases:
+            resp = agg(c, coll, steps)
             check_status(f"[unindexed] {name} (OK)", resp, "OK")
-            unindexed[name] = (best, resp)
+            unindexed[name] = resp
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
@@ -1863,15 +1888,16 @@ def main():
     indexed = {}
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
-        for name, coll, steps, _sig, _strict in cases:
-            best, resp = timed_agg(c, coll, steps)
+        for name, coll, steps, scan_steps, _sig, _strict in cases:
+            check(f"[indexed] {name} uses an index", index_used(c, coll, steps))
+            check(f"[indexed] {name} scan baseline uses none", not index_used(c, coll, scan_steps))
+            scan_time, index_time, resp = timed_scan_and_index(c, coll, steps, scan_steps)
             check_status(f"[indexed] {name} (OK)", resp, "OK")
-            indexed[name] = (best, resp)
+            indexed[name] = (scan_time, index_time, resp)
 
-    for name, coll, steps, sig, strict in cases:
-        u_time, u_resp = unindexed[name]
-        i_time, i_resp = indexed[name]
-        compare(name, u_time, u_resp, i_time, i_resp, sig, strict)
+    for name, coll, steps, _scan_steps, sig, strict in cases:
+        scan_time, index_time, i_resp = indexed[name]
+        compare(name, scan_time, unindexed[name], index_time, i_resp, sig, strict)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
