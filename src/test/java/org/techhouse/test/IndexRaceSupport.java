@@ -2,12 +2,14 @@ package org.techhouse.test;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ioc.IocContainer;
 
 public final class IndexRaceSupport {
     private static final int READS = 500;
+    private static final long PAUSE_BETWEEN_CHURNS_NANOS = 100_000L;
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
 
@@ -20,6 +22,7 @@ public final class IndexRaceSupport {
 
     public static <T> void readWhileTheIndexerChurns(String dbName, String collName, String fieldName,
             Class<T> indexType, Read read) throws Exception {
+        shareTheCachedIndex(dbName, collName, fieldName, indexType);
         final var stop = new AtomicBoolean();
         final var writerFailure = new AtomicReference<Throwable>();
         final var writer = new Thread(() -> churn(dbName, collName, fieldName, indexType, stop, writerFailure),
@@ -35,6 +38,16 @@ public final class IndexRaceSupport {
         }
         if (writerFailure.get() != null) {
             throw new AssertionError("the background indexer failed", writerFailure.get());
+        }
+    }
+
+    private static <T> void shareTheCachedIndex(String dbName, String collName, String fieldName, Class<T> indexType)
+            throws Exception {
+        rl.lockRead(dbName, collName);
+        try {
+            cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, indexType);
+        } finally {
+            rl.releaseRead(dbName, collName);
         }
     }
 
@@ -56,6 +69,7 @@ public final class IndexRaceSupport {
                 } finally {
                     rl.releaseIndex(dbName, collName, fieldName);
                 }
+                LockSupport.parkNanos(PAUSE_BETWEEN_CHURNS_NANOS);
             } catch (Exception e) {
                 failure.compareAndSet(null, e);
                 return;

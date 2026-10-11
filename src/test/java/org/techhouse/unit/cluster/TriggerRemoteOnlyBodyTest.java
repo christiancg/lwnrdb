@@ -64,7 +64,7 @@ public class TriggerRemoteOnlyBodyTest {
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(coordinator, "pool", coordinatorPool);
         TestUtils.setPrivateField(router, "pool", routerPool);
-        TestUtils.setPrivateField(config, "triggerRunLogEnabled", false);
+        TestUtils.setPrivateField(config, "triggerRunLogEnabled", true);
         cluster.disable();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();

@@ -2,9 +2,10 @@ package org.techhouse.unit.ejson.custom_types;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
@@ -15,9 +16,18 @@ import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public class CustomTypeFactoryTest {
+    private final Map<String, Class<? extends JsonCustom<?>>> registeredBefore = new HashMap<>();
+
     @BeforeEach
     public void setUp() {
+        registeredBefore.putAll(CustomTypeFactory.getCustomTypes());
         CustomTypeFactory.getCustomTypes().clear();
+    }
+
+    @AfterEach
+    public void restoreTheRegistry() {
+        CustomTypeFactory.getCustomTypes().clear();
+        CustomTypeFactory.getCustomTypes().putAll(registeredBefore);
     }
 
     @Test
@@ -32,6 +42,7 @@ public class CustomTypeFactoryTest {
     }
 
     public static class ValidCustomType extends JsonCustom<Locale> {
+        @SuppressWarnings("unused")
         public ValidCustomType() {
             super();
         }
@@ -56,18 +67,8 @@ public class CustomTypeFactoryTest {
         }
 
         @Override
-        public Set<String> customOperatorNames() {
-            return Set.of();
-        }
-
-        @Override
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Set<String> customRankingOperatorNames() {
-            return Set.of();
         }
 
         @Override
@@ -103,18 +104,8 @@ public class CustomTypeFactoryTest {
         }
 
         @Override
-        public Set<String> customOperatorNames() {
-            return Set.of();
-        }
-
-        @Override
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Set<String> customRankingOperatorNames() {
-            return Set.of();
         }
 
         @Override
@@ -150,10 +141,12 @@ public class CustomTypeFactoryTest {
     }
 
     public static class TestCustomType extends JsonCustom<Locale> {
+        @SuppressWarnings("unused")
         public TestCustomType() {
             super();
         }
 
+        @SuppressWarnings("unused")
         public TestCustomType(String value) {
             super(value);
         }
@@ -174,18 +167,8 @@ public class CustomTypeFactoryTest {
         }
 
         @Override
-        public Set<String> customOperatorNames() {
-            return Set.of();
-        }
-
-        @Override
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Set<String> customRankingOperatorNames() {
-            return Set.of();
         }
 
         @Override

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.EJson;
@@ -34,6 +35,7 @@ public class TriggerUnreadableDefinitionTest {
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
+        TestUtils.setPrivateField(Configuration.getInstance(), "triggerRunLogEnabled", true);
         TestUtils.createTestDatabaseAndCollection();
     }
 

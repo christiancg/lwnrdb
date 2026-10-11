@@ -50,7 +50,7 @@ public class VectorSimilarityIndexHelperTest {
             object.add("embedding", new JsonVector("#vector(" + (i / 40.0) + ",1.0)"));
             final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, object);
             entry.set_id("v" + i);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "embedding");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("embedding"));

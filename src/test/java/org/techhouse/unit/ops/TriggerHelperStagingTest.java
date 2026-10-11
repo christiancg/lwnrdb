@@ -67,6 +67,7 @@ public class TriggerHelperStagingTest {
         IocContainer.get(TriggerExecutor.class).stop();
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.setPrivateField(configuration, "triggerThreads", 2);
+        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
