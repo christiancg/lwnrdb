@@ -52,6 +52,8 @@ def check_all(executor, outcome, namespace, seed, stats, signature=None) -> list
         divergences.extend(oracles.trailing_dot_refused(executor, matrices, stats))
     if wants(signature, "warm-vs-cold"):
         divergences.extend(oracles.warm_vs_cold(executor, matrices, stats))
+    if wants(signature, "join-vs-scan"):
+        divergences.extend(oracles.join_vs_scan(executor, matrices, outcome, stats))
     return divergences
 
 
@@ -207,8 +209,9 @@ def parse_args():
                     "compares the engine against itself: an index-backed read against the "
                     "same read forced down the scan path, a warm answer against the same "
                     "answer after a restart, an index-only COUNT against the rows it counts, "
-                    "and one corpus written as single SAVEs, as BULK_SAVEs and in one "
-                    "transaction.",
+                    "one corpus written as single SAVEs, as BULK_SAVEs and in one "
+                    "transaction, and every JOIN against the same JOIN once the remote "
+                    "field's index is dropped.",
         epilog="examples: --self-test | --seeds regression --budget 240 "
                "| --seed 12345 --ops 120 | --seed random --minutes 30 "
                "| --seed random --minutes 45 --report $GITHUB_STEP_SUMMARY")

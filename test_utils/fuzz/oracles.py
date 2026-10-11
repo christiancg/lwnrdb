@@ -3,6 +3,7 @@ import random
 from collections import Counter, namedtuple
 
 from . import values
+from .execute import accepted
 
 SCALAR_OPERATORS = [
     "EQUALS",
@@ -316,12 +317,16 @@ def build_matrices(outcome, rng, operands_per_operator: int = 2) -> dict:
     return matrices
 
 
+def is_join(query) -> bool:
+    return query.steps[0].get("type") == "JOIN"
+
+
 def index_vs_scan(executor, matrices: dict, stats: Stats) -> list:
     divergences = []
     for (db, coll), queries in sorted(matrices.items()):
         stats.bump("indexed_collections")
         for query in queries:
-            if query.kind == REDUCE_QUERY:
+            if query.kind == REDUCE_QUERY or is_join(query):
                 continue
             stats.bump("index_vs_scan_queries")
             indexed = answer_of(aggregate(executor, db, coll, query.steps), query.ordered)
@@ -330,6 +335,32 @@ def index_vs_scan(executor, matrices: dict, stats: Stats) -> list:
             if indexed != scanned:
                 divergences.append(
                     Divergence("index-vs-scan", db, coll, query.label, indexed, scanned))
+    return divergences
+
+
+def join_vs_scan(executor, matrices: dict, outcome, stats: Stats) -> list:
+    joins = []
+    for (db, coll), queries in sorted(matrices.items()):
+        for query in queries:
+            step = query.steps[0] if is_join(query) else None
+            if step and step["remoteField"] in outcome.indexed_fields(db, step["joinCollection"]):
+                joins.append((db, coll, query, step["joinCollection"], step["remoteField"]))
+    indexed = [answer_of(aggregate(executor, db, coll, query.steps), query.ordered)
+               for db, coll, query, _partner, _field in joins]
+    divergences = []
+    for db, partner, field in sorted({(db, partner, field) for db, _coll, _query, partner, field in joins}):
+        response = executor.request({"type": "DROP_INDEX", "databaseName": db, "collectionName": partner,
+                                     "fieldName": field})
+        if not accepted(response):
+            divergences.append(Divergence("join-vs-scan", db, partner, f"DROP_INDEX {field} for the scan baseline",
+                                          "OK", response.get("errorCode") or response.get("status")))
+    if divergences:
+        return divergences
+    for (db, coll, query, _partner, _field), indexed_answer in zip(joins, indexed):
+        stats.bump("join_vs_scan_queries")
+        scanned = answer_of(aggregate(executor, db, coll, query.steps), query.ordered)
+        if indexed_answer != scanned:
+            divergences.append(Divergence("join-vs-scan", db, coll, query.label, indexed_answer, scanned))
     return divergences
 
 
