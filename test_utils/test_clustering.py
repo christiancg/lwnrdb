@@ -352,9 +352,11 @@ def _canary_write_converges() -> bool:
 
 def wait_for_cluster(timeout_s: float = 60.0):
     print(f"  Waiting for the {NODE_COUNT}-node cluster to converge ...")
-    op(nodes[0].client_port, {"type": "CREATE_DATABASE", "databaseName": CANARY_DB})
-    op(nodes[0].client_port, {"type": "CREATE_COLLECTION",
-                              "databaseName": CANARY_DB, "collectionName": CANARY_COLL})
+    op_with_retry(lambda: op(nodes[0].client_port, {"type": "CREATE_DATABASE", "databaseName": CANARY_DB}),
+                  timeout_s)
+    op_with_retry(lambda: op(nodes[0].client_port, {"type": "CREATE_COLLECTION",
+                                                    "databaseName": CANARY_DB, "collectionName": CANARY_COLL}),
+                  timeout_s)
     if not wait_until(_canary_write_converges, timeout_s, interval_s=1.0):
         for n in nodes:
             n.dump_log()
