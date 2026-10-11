@@ -62,7 +62,7 @@ public class TriggerRunDirectoryTest {
 
     @AfterAll
     static void tearDownAll() throws Exception {
-        TestUtils.setPrivateField(Configuration.getInstance(), "triggerRunLogEnabled", false);
+        TestUtils.setPrivateField(Configuration.getInstance(), "triggerRunLogEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
