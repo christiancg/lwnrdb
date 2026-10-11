@@ -511,7 +511,8 @@ def worker_command():
     override = os.environ.get("TEST262_WORKER_CMD")
     if override:
         return override.split()
-    return ["java", "-XX:+UseSerialGC", "-Xss8m", "-cp", CLASSPATH, WORKER_CLASS]
+    return ["java", "-Xlog:disable", "-Xlog:all=warning:stderr", "-XX:+UseSerialGC", "-Xss8m", "-cp", CLASSPATH,
+            WORKER_CLASS]
 
 
 def run_batch(jobs, timeout, command, max_consecutive_crashes=MAX_CONSECUTIVE_CRASHES):
@@ -538,7 +539,7 @@ def run_batch(jobs, timeout, command, max_consecutive_crashes=MAX_CONSECUTIVE_CR
                     outcome = json.loads(line)
             except (WorkerDied, json.JSONDecodeError) as died:
                 crashed = isinstance(died, WorkerDied)
-                note = f"crash: {died}" if crashed else f"unparseable result: {died}"
+                note = f"crash: {died}" if crashed else f"unparseable result: {died} in {line[:200]!r}"
             if outcome is None:
                 results[job["id"]] = {"status": "HANG", "errorName": "", "message": note}
                 worker.kill()
