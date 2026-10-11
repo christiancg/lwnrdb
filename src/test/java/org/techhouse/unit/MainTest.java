@@ -9,20 +9,28 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.Main;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.ScheduleExecutor;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class MainTest {
+    private static final long KEYSTORE_WAIT_MS = 10_000L;
+
     @AfterEach
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         // Stop them here, or a leaked worker writing admin/collection_usage corrupts later tests in the
         // same JVM fork.
         IocContainer.get(BackgroundTaskManager.class).stopBackgroundWorkers();
         IocContainer.get(MemoryManagement.class).stopSweepThread();
+        IocContainer.get(ListenManager.class).stopWorkers();
+        IocContainer.get(TriggerExecutor.class).stop();
+        IocContainer.get(ScheduleExecutor.class).stop();
         final var dbPath = new File(TestGlobals.PATH);
         if (dbPath.exists()) {
             TestUtils.deleteFolder(dbPath);
@@ -81,15 +89,26 @@ public class MainTest {
                 }
             });
             thread.start();
-            Thread.sleep(1000);
+            assertTrue(awaitFile(new File(TestGlobals.PATH + "/lwnrdb.p12")), "the keystore was never generated");
             assertTrue(thread.isAlive());
-            assertTrue(new File(TestGlobals.PATH + "/lwnrdb.p12").exists());
         } finally {
             if (thread != null) {
                 thread.interrupt();
             }
             TestUtils.setPrivateField(config, "tlsEnabled", false);
         }
+    }
+
+    @SuppressWarnings("BusyWait")
+    private static boolean awaitFile(File file) throws InterruptedException {
+        final var deadline = System.currentTimeMillis() + KEYSTORE_WAIT_MS;
+        while (!file.exists()) {
+            if (System.currentTimeMillis() >= deadline) {
+                return false;
+            }
+            Thread.sleep(20);
+        }
+        return true;
     }
 
     @Test

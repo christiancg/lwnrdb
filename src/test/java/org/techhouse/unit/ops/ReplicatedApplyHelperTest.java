@@ -35,6 +35,7 @@ public class ReplicatedApplyHelperTest {
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
+        listenManager.stopWorkers();
         TestUtils.createTestDatabaseAndCollection();
     }
 
