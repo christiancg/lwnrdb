@@ -4,6 +4,7 @@ import java.util.Objects;
 import org.techhouse.config.Globals;
 
 public class PkIndexEntry extends CollectionScopedEntry implements Comparable<String> {
+    private static final int FIELD_COUNT = 5;
     private String value;
     private long position;
     private long length;
@@ -13,6 +14,10 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
     public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length,
             long page) {
         this(databaseName, collectionName, value, position, length, page, 0L);
+    }
+
+    public PkIndexEntry detachedCopy() {
+        return new PkIndexEntry(databaseName, collectionName, value, position, length, page, version);
     }
 
     public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length, long page,
@@ -26,23 +31,19 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
     }
 
     public String toFileEntry() {
-        return value + Globals.INDEX_ENTRY_SEPARATOR + position + Globals.INDEX_ENTRY_SEPARATOR + length
-                + Globals.INDEX_ENTRY_SEPARATOR + page + Globals.INDEX_ENTRY_SEPARATOR + version;
+        return FieldIndexEntry.escapeIndexToken(value) + Globals.ID_SEPARATOR + position + Globals.ID_SEPARATOR + length
+                + Globals.ID_SEPARATOR + page + Globals.ID_SEPARATOR + version;
     }
 
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
-        final var cleaned = line.trim().replace("\r", "").replace("\n", "");
-        final var sep = Globals.INDEX_ENTRY_SEPARATOR;
-        // A document id may itself contain the separator, so the four fixed fields are parsed from the end.
-        final var lastPipe = cleaned.lastIndexOf(sep);
-        final var secondLastPipe = cleaned.lastIndexOf(sep, lastPipe - 1);
-        final var thirdLastPipe = cleaned.lastIndexOf(sep, secondLastPipe - 1);
-        final var fourthLastPipe = cleaned.lastIndexOf(sep, thirdLastPipe - 1);
-        return new PkIndexEntry(databaseName, collectionName, cleaned.substring(0, fourthLastPipe),
-                Long.parseLong(cleaned.substring(fourthLastPipe + sep.length(), thirdLastPipe)),
-                Long.parseLong(cleaned.substring(thirdLastPipe + sep.length(), secondLastPipe)),
-                Long.parseLong(cleaned.substring(secondLastPipe + sep.length(), lastPipe)),
-                Long.parseLong(cleaned.substring(lastPipe + sep.length())));
+        final var cleaned = line.replace("\r", "").replace("\n", "");
+        final var fields = cleaned.split(Globals.ID_SEPARATOR, -1);
+        if (fields.length != FIELD_COUNT) {
+            throw new IllegalArgumentException("A PK index line must hold " + FIELD_COUNT + " separated fields");
+        }
+        return new PkIndexEntry(databaseName, collectionName, FieldIndexEntry.unescapeIndexToken(fields[0]),
+                Long.parseLong(fields[1]), Long.parseLong(fields[2]), Long.parseLong(fields[3]),
+                Long.parseLong(fields[4]));
     }
 
     public String getValue() {

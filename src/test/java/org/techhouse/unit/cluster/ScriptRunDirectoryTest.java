@@ -2,7 +2,7 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -19,7 +19,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.ScriptRunDirectory;
 import org.techhouse.cluster.membership.MembershipService;
@@ -28,9 +27,11 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.RunningScript;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRegistry;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestUtils;
 
 public class ScriptRunDirectoryTest {
@@ -44,11 +45,11 @@ public class ScriptRunDirectoryTest {
     private PeerConnectionPool origPool;
 
     private static NodeInfo self() {
-        return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node("self", 5000);
     }
 
     private static NodeInfo other() {
-        return new NodeInfo("other", "127.0.0.1", 5001, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node("other", 5001);
     }
 
     @BeforeEach
@@ -188,7 +189,7 @@ public class ScriptRunDirectoryTest {
         registry.register(ScriptRunKind.RUN_SCRIPT, "shop", null, "alice", null);
         final var row = directory.listClusterWide().getFirst();
         assertEquals("RUN_SCRIPT", row.get("kind").asJsonString().getValue());
-        assertNull(row.get("name").asJsonString().getValue());
+        assertSame(JsonNull.INSTANCE, row.get("name"));
     }
 
     @Test

@@ -83,6 +83,10 @@ interface AdminCacheDelegate {
         adminCache().updatePageSizeInMemory(dbName, collName, page, bytesDelta);
     }
 
+    default void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
+        adminCache().updatePageSizeForUpdateInMemory(dbName, collName, page, bytesDelta);
+    }
+
     default List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
         return adminCache().getAdminPagePkIndexes(dbName, collName);
     }

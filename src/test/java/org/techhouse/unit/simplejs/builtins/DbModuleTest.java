@@ -20,6 +20,7 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -126,6 +127,53 @@ public class DbModuleTest {
     }
 
     @Test
+    public void test_save_without_a_document_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "save", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_save_without_any_argument_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "save"));
+    }
+
+    @Test
+    public void test_save_rejects_a_non_object_document() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class,
+                () -> call(db, "save", new JsString("d"), new JsString("c"), new JsNumber(5)));
+    }
+
+    @Test
+    public void test_aggregate_without_a_pipeline_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "aggregate", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_aggregate_rejects_a_non_array_pipeline() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class,
+                () -> call(db, "aggregate", new JsString("d"), new JsString("c"), new JsObject()));
+    }
+
+    @Test
+    public void test_bulk_save_without_documents_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "bulkSave", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_bulk_save_accepts_an_empty_array() {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        final var result = (JsObject) call(db, "bulkSave", new JsString("d"), new JsString("c"), new JsArray());
+        assertEquals("bulkSave:d/c/0", fake.calls.getFirst());
+        assertInstanceOf(JsArray.class, result.get("inserted"));
+    }
+
+    @Test
     public void test_module_exposes_new_members() {
         final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
         assertInstanceOf(JsNativeFunction.class, db.get("bulkSave"));
@@ -183,6 +231,21 @@ public class DbModuleTest {
     }
 
     @Test
+    public void test_an_error_thrown_by_the_callback_still_rolls_back() {
+        final var fake = new FakeDatabaseAccess();
+        final var ops = org.mockito.Mockito.mock(org.techhouse.simplejs.builtins.InterpreterOps.class);
+        org.mockito.Mockito.when(ops.call(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenThrow(new StackOverflowError("simulated"));
+        final var db = DbModule.create(fake, ops, null, null);
+        final var callback = new JsNativeFunction("cb", (_, _) -> JsUndefined.getInstance());
+
+        assertThrows(StackOverflowError.class, () -> call(db, "transaction", callback));
+
+        assertEquals(List.of("beginTransaction", "rollbackTransaction"), fake.calls,
+                "an Error out of the callback must still release the transaction's write locks");
+    }
+
+    @Test
     public void test_nested_transaction_is_rejected() {
         final var fake = new FakeDatabaseAccess();
         fake.rejectNestedTransaction = true;
@@ -192,5 +255,79 @@ public class DbModuleTest {
                 """);
         assertTrue(result.isError());
         assertEquals(List.of("beginTransaction", "beginTransaction", "rollbackTransaction"), fake.calls);
+    }
+
+    private static void assertRefused(String expectedMessage, String method, JsValue... args) {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        final var refusal = assertThrows(TypeErrorException.class, () -> call(db, method, args));
+        assertTrue(refusal.getMessage().contains(expectedMessage), refusal.getMessage());
+        assertTrue(fake.calls.isEmpty(), fake.calls.toString());
+    }
+
+    @Test
+    public void test_delete_without_an_id_is_a_type_error_and_reaches_no_database_call() {
+        assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"));
+    }
+
+    @Test
+    public void test_delete_with_a_number_id_is_a_type_error() {
+        assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"), new JsNumber(5));
+    }
+
+    @Test
+    public void test_delete_with_a_null_id_is_a_type_error() {
+        assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"),
+                JsNull.getInstance());
+    }
+
+    @Test
+    public void test_find_by_id_with_an_object_id_is_a_type_error() {
+        assertRefused("db.findById expects a string id", "findById", new JsString("d"), new JsString("c"),
+                new JsObject());
+    }
+
+    @Test
+    public void test_find_by_id_with_a_non_string_database_is_a_type_error() {
+        assertRefused("db.findById expects a string database name", "findById", new JsNumber(1), new JsString("c"),
+                new JsString("x"));
+    }
+
+    @Test
+    public void test_save_with_a_non_string_collection_is_refused_before_the_payload_is_converted() {
+        assertRefused("db.save expects a string collection name", "save", new JsString("d"), new JsNumber(7),
+                new JsNumber(5));
+    }
+
+    @Test
+    public void test_aggregate_with_a_missing_collection_is_a_type_error() {
+        assertRefused("db.aggregate expects a string collection name", "aggregate", new JsString("d"));
+    }
+
+    @Test
+    public void test_bulk_save_with_a_non_string_database_is_a_type_error() {
+        assertRefused("db.bulkSave expects a string database name", "bulkSave", JsUndefined.getInstance(),
+                new JsString("c"), new JsArray());
+    }
+
+    @Test
+    public void test_list_collections_without_a_database_is_a_type_error() {
+        assertRefused("db.listCollections expects a string database name", "listCollections");
+    }
+
+    @Test
+    public void test_cursor_with_a_non_string_database_is_a_type_error() {
+        assertRefused("db.cursor expects a string database name", "cursor", new JsObject(), new JsString("c"),
+                new JsArray());
+    }
+
+    @Test
+    public void test_string_arguments_still_reach_the_database_unchanged() {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        call(db, "delete", new JsString("d"), new JsString("c"), new JsString("undefined"));
+        call(db, "findById", new JsString("d"), new JsString("c"), new JsString("5"));
+        call(db, "listCollections", new JsString("d"));
+        assertEquals(List.of("delete:d/c/undefined", "findById:d/c/5", "listCollections:d"), fake.calls);
     }
 }

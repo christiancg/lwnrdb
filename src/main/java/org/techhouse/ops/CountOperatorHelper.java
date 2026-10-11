@@ -13,6 +13,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.validations.AggregationStepValidator;
 
 public final class CountOperatorHelper {
     private CountOperatorHelper() {
@@ -27,19 +28,19 @@ public final class CountOperatorHelper {
     public static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName, String collName) {
         final var result = new JsonObject();
         if (resultStream != null) {
-            result.addProperty(COUNT_FIELD_NAME, resultStream.count());
+            try (var documents = resultStream) {
+                result.addProperty(COUNT_FIELD_NAME, documents.mapToLong(_ -> 1L).sum());
+            }
         } else {
             result.addProperty(COUNT_FIELD_NAME, wholeCollectionCount(dbName, collName));
         }
         return Stream.of(result);
     }
 
-    // A FILTER is only index-resolvable while it still sees the stored documents, so no FILTER after a
-    // MAP/JOIN may use its index. Skipping JOIN is safe: its permissions are checked before execution.
     public static FastCount tryIndexOnlyCount(List<BaseAggregationStep> steps, String dbName, String collName)
             throws IOException {
         final var countIndex = indexOfFirstCount(steps);
-        if (countIndex < 1) {
+        if (countIndex < 1 || AggregationStepValidator.containsScript(steps.subList(0, countIndex))) {
             return null;
         }
         final var filterSets = new ArrayList<Set<String>>();
@@ -60,7 +61,6 @@ public final class CountOperatorHelper {
                 }
                 case MAP, JOIN -> documentsModified = true;
                 case SORT -> {
-                    // count-preserving and non-modifying: nothing to do
                 }
                 default -> {
                     return null;

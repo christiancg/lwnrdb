@@ -177,6 +177,14 @@ public final class Configuration {
         return longValue(ConfigKey.DEAD_TIMEOUT_MS);
     }
 
+    public long getDeadEvictionMs() {
+        return longValue(ConfigKey.DEAD_EVICTION_MS);
+    }
+
+    public long getDeadProbeIntervalMs() {
+        return longValue(ConfigKey.DEAD_PROBE_INTERVAL_MS);
+    }
+
     public long getReplicationAckTimeoutMs() {
         return longValue(ConfigKey.REPLICATION_ACK_TIMEOUT_MS);
     }
@@ -438,6 +446,10 @@ public final class Configuration {
 
     public int getScheduleMaxPerDatabase() {
         return intValue(ConfigKey.SCHEDULE_MAX_PER_DATABASE);
+    }
+
+    public boolean isFaultInjectionEnabled() {
+        return booleanValue(ConfigKey.FAULT_INJECTION_ENABLED);
     }
 
 }

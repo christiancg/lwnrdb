@@ -1,35 +1,3 @@
-"""End-to-end tests for scheduled procedures.
-
-Like the RUN_SCRIPT and procedures/triggers suites this script is **self-contained**: it
-starts its own LWNRDB instance on a dedicated port and working directory, because the
-feature needs both `scriptsEnabled=true` and `schedulesEnabled=true`, which the shared CI
-server does not have. It runs in two phases:
-
-  phase 1 — scripts and schedules enabled, with a one-second tick so an interval schedule
-            is observable inside a test rather than only in theory;
-  phase 2 — the same data directory restarted with `schedulesEnabled=false`, proving the
-            master switch refuses all three operations and stops anything from firing.
-
-What is covered:
-
-  * an interval schedule fires repeatedly against a live counter document, and deleting it
-    stops the firing;
-  * a cron schedule for the next minute fires, and fires exactly once within that minute;
-  * LIST_SCHEDULES round-trips the definition and reports a nextRunAt in the future;
-  * validation: a malformed cron and both/neither of cron and intervalMs answer 400-16, an
-    unknown procedure answers 404-8, and the per-database cap answers 400-17;
-  * referential integrity: deleting a procedure a schedule still references is refused;
-  * permissions: a non-MANAGE user may not install a schedule but a READ user may list;
-  * definer rights: the job writes a collection its installer owns;
-  * storage placement: the record lands in {db}/.schedules/{name}.json, nothing under admin/;
-  * cascade delete: DROP_DATABASE removes the schedules and the scheduler stops firing them;
-  * stats: GET_DATABASE_STATS reports the schedule counters;
-  * the schedulesEnabled master switch.
-
-The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping it
-never touches an unrelated LWNRDB process.
-"""
-
 import json
 import os
 import sys
@@ -51,18 +19,12 @@ USER_PASSWORD = "password123"
 MANAGER = "sched_manager"
 READER = "sched_reader"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 TICK_MS = 200
 SCHEDULE_TIMEOUT_MS = 10_000
 MAX_PER_DATABASE = 3
 
-
-
-# ── connection / protocol ────────────────────────────────────────────────────
 
 class Conn(bu.Conn):
     def save_procedure(self, name, script, db=DB, **extra) -> dict:
@@ -88,15 +50,11 @@ class Conn(bu.Conn):
         return self.send({"type": "FIND_BY_ID", "databaseName": db, "collectionName": coll, "_id": doc_id})
 
 def admin_conn() -> Conn:
-    conn = Conn()
-    conn.authenticate()
-    return conn
+    return Conn.authenticated()
 
 
 def user_conn(username: str) -> Conn:
-    conn = Conn()
-    conn.authenticate(username, USER_PASSWORD)
-    return conn
+    return Conn.authenticated(username, USER_PASSWORD)
 
 
 def counter_value(conn: Conn, doc_id: str) -> int:
@@ -107,63 +65,30 @@ def counter_value(conn: Conn, doc_id: str) -> int:
 
 
 def await_counter(conn: Conn, doc_id: str, at_least: int, timeout=30.0) -> int:
-    """Scheduled runs are asynchronous, so poll rather than sleep a fixed interval."""
-    deadline = time.time() + timeout
-    latest = 0
-    while time.time() < deadline:
-        latest = counter_value(conn, doc_id)
-        if latest >= at_least:
-            return latest
-        time.sleep(0.2)
-    return latest
+    latest = [0]
 
+    def reached() -> bool:
+        latest[0] = counter_value(conn, doc_id)
+        return latest[0] >= at_least
 
-# ── server lifecycle ─────────────────────────────────────────────────────────
+    bu.wait_until(reached, timeout, 0.2)
+    return latest[0]
+
 
 def write_config(work_dir: str, scripts_enabled: bool, schedules_enabled: bool):
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-        f"scriptsEnabled={'true' if scripts_enabled else 'false'}\n"
-        "scriptInstructionBudget=2000000\n"
-        "scriptTimeoutMs=5000\n"
-        "scriptMaxDepth=64\n"
-        "scriptMaxSourceBytes=8192\n"
-        "scriptMaxLogLines=50\n"
-        "scriptMaxLogLineChars=500\n"
-        "scriptMaxMemoryBytes=4194304\n"
-        "scriptMaxResultBytes=65536\n"
-        "scriptTextImportEnabled=false\n"
-        "scriptTimeZone=UTC\n"
-        "scriptLocale=en-US\n"
-        "procedureCacheSize=16\n"
-        "triggersEnabled=false\n"
-        f"schedulesEnabled={'true' if schedules_enabled else 'false'}\n"
-        "scheduleThreads=2\n"
-        "scheduleQueueSize=100\n"
-        f"scheduleTickMs={TICK_MS}\n"
-        "scheduleRefreshMs=1000\n"
-        f"scheduleTimeoutMs={SCHEDULE_TIMEOUT_MS}\n"
-        f"scheduleMaxPerDatabase={MAX_PER_DATABASE}\n"
-        "scheduleCacheMaxBytes=8Mb\n"
-        "scriptRunHistoryEnabled=true\n"
-        "scriptRunHistoryKinds=CALL_PROCEDURE,TRIGGER,SCHEDULE\n"
-        "scriptRunHistoryRetentionMs=604800000\n"
-        "scriptRunHistoryIncludeLogs=false\n"
-        "scriptRunHistoryMaxErrorChars=2000\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+    bu.write_config(work_dir, PORT, scriptsEnabled=scripts_enabled, scriptInstructionBudget=2000000,
+                    scriptTimeoutMs=5000, scriptMaxDepth=64, scriptMaxSourceBytes=8192,
+                    scriptMaxLogLines=50, scriptMaxLogLineChars=500, scriptMaxMemoryBytes=4194304,
+                    scriptMaxResultBytes=65536, scriptTextImportEnabled=False, scriptTimeZone="UTC",
+                    scriptLocale="en-US", procedureCacheSize=16, triggersEnabled=False,
+                    schedulesEnabled=schedules_enabled, scheduleThreads=2, scheduleQueueSize=100,
+                    scheduleTickMs=TICK_MS, scheduleRefreshMs=1000, scheduleTimeoutMs=SCHEDULE_TIMEOUT_MS,
+                    scheduleMaxPerDatabase=MAX_PER_DATABASE, scheduleCacheMaxBytes="8Mb",
+                    scriptRunHistoryEnabled=True, scriptRunHistoryKinds="CALL_PROCEDURE,TRIGGER,SCHEDULE",
+                    scriptRunHistoryRetentionMs=604800000, scriptRunHistoryIncludeLogs=False,
+                    scriptRunHistoryMaxErrorChars=2000)
 
 
-# ── fixtures ─────────────────────────────────────────────────────────────────
-
-# The counter procedure is idempotent in shape but not in effect: each run reads the
-# document and writes it back one higher, which is exactly what makes "did it fire, and how
-# often" observable from the client side.
 COUNTER_SOURCE = (
     "import db from 'db'; import args from 'args';"
     " const id = args.id;"
@@ -195,8 +120,6 @@ def clear_schedules(conn: Conn):
         conn.delete_schedule(schedule["name"])
 
 
-# ── tests ────────────────────────────────────────────────────────────────────
-
 def test_interval_schedule(conn: Conn):
     section("Interval schedule")
     check_status("save an interval schedule", conn.save_schedule(
@@ -215,9 +138,59 @@ def test_interval_schedule(conn: Conn):
           f"counter advanced from {settled} to {after} after the delete")
 
 
+def test_interval_schedule_holds_its_rate(conn: Conn):
+    section("An interval schedule does not drift")
+    check_status("save a 1s schedule against the 1s tick", conn.save_schedule(
+        "rate", "counter", intervalMs=1000, args={"id": "rate"}), "OK")
+
+    await_counter(conn, "rate", 1)
+    start_value = counter_value(conn, "rate")
+    start_time = time.time()
+    await_counter(conn, "rate", start_value + 5, timeout=20.0)
+    elapsed = time.time() - start_time
+    fired = counter_value(conn, "rate") - start_value
+
+    conn.delete_schedule("rate")
+    check("five 1s occurrences take about five seconds", fired >= 5 and elapsed < 9.0,
+          f"{fired} fires in {elapsed:.1f}s")
+
+
+SLEEPER_SOURCE = (
+    "import db from 'db'; import args from 'args';"
+    " db.save(db.name, '" + COLL + "', { _id: args.id, n: 1 });"
+    " return new Promise(function (resolve) { setTimeout(function () { resolve(1); }, 4000); });"
+)
+
+
+def test_a_queued_run_does_not_outlive_its_delete(conn: Conn):
+    section("A run still queued when its schedule is deleted does not fire")
+    clear_schedules(conn)
+    check_status("store a procedure that holds a worker for four seconds",
+                 conn.save_procedure("sleeper", SLEEPER_SOURCE), "OK")
+    check_status("occupy the first worker",
+                 conn.save_schedule("sleeper_a", "sleeper", intervalMs=500, args={"id": "sleep-a"}), "OK")
+    check_status("occupy the second worker",
+                 conn.save_schedule("sleeper_b", "sleeper", intervalMs=500, args={"id": "sleep-b"}), "OK")
+    both_busy = await_counter(conn, "sleep-a", 1) >= 1 and await_counter(conn, "sleep-b", 1) >= 1
+    check("both workers are busy", both_busy, "a sleeper never started")
+
+    check_status("schedule the victim behind them",
+                 conn.save_schedule("victim", "counter", intervalMs=300, args={"id": "victim"}), "OK")
+    time.sleep(1.0)
+    check_status("delete the victim while its run is queued", conn.delete_schedule("victim"), "OK")
+    conn.delete_schedule("sleeper_a")
+    conn.delete_schedule("sleeper_b")
+    time.sleep(5.0)
+
+    check("the queued run did not fire after the delete", counter_value(conn, "victim") == 0,
+          f"counter reached {counter_value(conn, 'victim')}")
+    check("and left no run history", not history_rows(conn, kind="SCHEDULE", name="victim"),
+          f"rows={history_rows(conn, kind='SCHEDULE', name='victim')!r}")
+    check_status("delete the sleeper procedure", conn.delete_procedure("sleeper"), "OK")
+
+
 def test_cron_schedule(conn: Conn):
     section("Cron schedule")
-    # A cron for the minute after next, so the test never races the current minute rolling over.
     target = (datetime.now(timezone.utc) + timedelta(minutes=1)).replace(second=0, microsecond=0)
     cron = f"{target.minute} {target.hour} * * *"
     check_status("save a cron schedule for the next minute",
@@ -226,7 +199,6 @@ def test_cron_schedule(conn: Conn):
     wait = max(5.0, (target - datetime.now(timezone.utc)).total_seconds() + 20.0)
     value = await_counter(conn, "cron", 1, timeout=wait)
     check("the cron schedule fired", value >= 1, f"counter never advanced (last value {value})")
-    # Still within the same minute: a cron schedule must fire once per matching minute, not per tick.
     time.sleep(3.0)
     check("it fired exactly once in that minute", counter_value(conn, "cron") == value,
           f"counter advanced past {value} within the same minute")
@@ -258,6 +230,15 @@ def test_listing(conn: Conn):
     conn.delete_schedule("listed")
 
 
+def test_schedule_name_case_variants(conn: Conn):
+    section("Schedule name case variants")
+    check_status("save Rollup", conn.save_schedule("Rollup", "counter", cron="0 3 * * *"), "OK")
+    conn.delete_schedule("rollup")
+    names = [s["name"] for s in conn.list_schedules().get("schedules", [])]
+    check("deleting rollup leaves Rollup in place", "Rollup" in names, f"got {names}")
+    check_status("Rollup still deletes by its own spelling", conn.delete_schedule("Rollup"), "OK")
+
+
 def test_validation(conn: Conn):
     section("Validation")
     check_code("a malformed cron is refused", conn.save_schedule("bad", "counter", cron="not a cron"),
@@ -265,6 +246,11 @@ def test_validation(conn: Conn):
     check_code("both cron and intervalMs are refused",
                conn.save_schedule("bad", "counter", cron="0 3 * * *", intervalMs=1000), "ERROR", "400-16")
     check_code("neither cron nor intervalMs is refused", conn.save_schedule("bad", "counter"), "ERROR", "400-16")
+    check_code("a parsable but unsatisfiable cron is refused",
+               conn.save_schedule("bad", "counter", cron="0 0 31 4 *"), "ERROR", "400-16")
+    check_status("a distant but reachable cron is accepted",
+                 conn.save_schedule("leapday", "counter", cron="0 0 29 2 *"), "OK")
+    conn.delete_schedule("leapday")
     check_code("an unknown procedure is refused", conn.save_schedule("bad", "nosuchproc", intervalMs=1000),
                "NOT_FOUND", "404-8")
     check_code("an unknown database is refused",
@@ -299,12 +285,9 @@ def test_failure_logs_a_stack(conn: Conn, log_path: str):
     before = schedule_failures(conn)
     check_status("schedule it every 500ms",
                  conn.save_schedule("exploder", "scheduled_explodes", intervalMs=500), "OK")
-    deadline = time.time() + 20.0
-    while schedule_failures(conn) <= before and time.time() < deadline:
-        time.sleep(0.2)
+    bu.wait_until(lambda: schedule_failures(conn) > before, 20.0, 0.2)
     check("the failure is counted", schedule_failures(conn) > before, f"failures did not increase from {before}")
 
-    # Nobody is waiting on a response, so the server log is where the trace has to appear
     log = bu.read_log(log_path)
     line = next((entry for entry in log.splitlines()
                  if "SCHEDULE name=exploder" in entry and "schedule blew up" in entry), "")
@@ -325,12 +308,7 @@ def history_rows(conn: Conn, **filters) -> list:
 
 
 def await_history(conn: Conn, timeout: float = 20.0, **filters) -> list:
-    deadline = time.time() + timeout
-    rows = history_rows(conn, **filters)
-    while not rows and time.time() < deadline:
-        time.sleep(0.3)
-        rows = history_rows(conn, **filters)
-    return rows
+    return bu.wait_until(lambda: history_rows(conn, **filters), timeout, 0.3) or []
 
 
 def test_run_history(conn: Conn):
@@ -356,9 +334,6 @@ def test_run_history(conn: Conn):
 
     check_status("delete the schedule", conn.delete_schedule("historied"), "OK")
 
-    # A schedule that could not run at all is the outcome no other surface reports. Its procedure cannot
-    # be deleted while a schedule references it, so it is disabled instead - the state the dispatcher
-    # treats the same way.
     check_status("schedule the procedure again",
                  conn.save_schedule("orphaned", "historied_job", intervalMs=500), "OK")
     check_status("then disable the procedure",
@@ -376,8 +351,6 @@ def test_run_history(conn: Conn):
 
 def test_import_failure(conn: Conn):
     section("A scheduled procedure whose import cannot be resolved")
-    # Installing the procedure passes the save-time import check, so a schedule ends up broken only
-    # when the library is deleted from under it afterwards.
     check_status("install a library",
                  conn.save_procedure("lib_step", "export function step(n) { return n + 1; }"), "OK")
     check_status("install a procedure that imports it",
@@ -422,6 +395,23 @@ def test_referential_integrity(conn: Conn):
     check_status("delete the schedule", conn.delete_schedule("holder"), "OK")
     check_status("now the procedure may be deleted", conn.delete_procedure("counter"), "OK")
     check_status("restore the procedure", conn.save_procedure("counter", COUNTER_SOURCE), "OK")
+
+
+def test_a_client_cannot_forge_the_stamped_definer():
+    section("A client cannot forge the coordinator's stamp")
+    forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
+              "stampedUpdatedAt": 1, "stampedCreatedAt": 1}
+    with user_conn(MANAGER) as manager:
+        check_status("a MANAGE user installs a schedule carrying a forged stamp",
+                     manager.save_schedule("forgedStamp", "counter", cron="0 3 * * *", **forged), "OK")
+        with admin_conn() as admin:
+            stored = next((entry for entry in admin.list_schedules().get("schedules", [])
+                           if entry.get("name") == "forgedStamp"), {})
+            check("the definer is the caller, not the forged admin", stored.get("definer") == MANAGER,
+                  f"got {stored}")
+            check("so is updatedBy", stored.get("updatedBy") == MANAGER, f"got {stored}")
+            check("and the version was assigned by the server", stored.get("version") == 1, f"got {stored}")
+        check_status("clean up the schedule", manager.delete_schedule("forgedStamp"), "OK")
 
 
 def test_permissions():
@@ -478,7 +468,6 @@ def test_cascade_delete(conn: Conn, work_dir: str):
     check("the schedules folder is gone",
           not os.path.isdir(os.path.join(work_dir, "db", DB, ".schedules")),
           "the .schedules folder survived the drop")
-    # Nothing must keep firing against a database that no longer exists.
     time.sleep(2.0)
     check_code("the dropped database no longer answers LIST_SCHEDULES", conn.list_schedules(),
                "NOT_FOUND", "404-4")
@@ -496,15 +485,10 @@ def test_switch_off(conn: Conn):
           f"got {response.get('stats', {}).get('schedules')}")
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
-
 def main():
     bu.banner("Scheduled procedures test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"jar not found at {jar}; run `mvn clean package -DskipTests` first", file=sys.stderr)
-        sys.exit(1)
+    bu.require_jar()
     if bu.port_open():
         print(f"port {PORT} is already in use", file=sys.stderr)
         sys.exit(1)
@@ -520,20 +504,23 @@ def main():
         with admin_conn() as conn:
             setup_data(conn)
             test_interval_schedule(conn)
+            test_interval_schedule_holds_its_rate(conn)
+            test_a_queued_run_does_not_outlive_its_delete(conn)
             test_cron_schedule(conn)
             test_listing(conn)
+            test_schedule_name_case_variants(conn)
             test_validation(conn)
             test_import_failure(conn)
             test_failure_logs_a_stack(conn, log_path)
             test_run_history(conn)
             test_referential_integrity(conn)
         test_permissions()
+        test_a_client_cannot_forge_the_stamped_definer()
         with admin_conn() as conn:
             test_storage_placement(conn, work_dir)
             test_stats(conn)
             test_cascade_delete(conn, work_dir)
 
-        # Phase 2: same data directory, the master switch off
         bu.stop_server(proc)
         proc = None
         write_config(work_dir, scripts_enabled=True, schedules_enabled=False)

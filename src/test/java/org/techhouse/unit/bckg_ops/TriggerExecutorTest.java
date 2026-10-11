@@ -164,4 +164,20 @@ public class TriggerExecutorTest {
         executor.countDeadLetter();
         assertEquals(1L, executor.getDeadLettered());
     }
+
+    @Test
+    public void test_cancelling_retries_cannot_drive_the_pending_count_negative() {
+        executor = new TriggerExecutor();
+        executor.start(_ -> {
+        });
+        for (var i = 0; i < 50; i++) {
+            executor.submitAfter(
+                    new TriggerEvent(EventType.CREATED, "db", "coll", "t", "p", false, List.of(), "alice", 0), 5_000L);
+        }
+        executor.stop();
+
+        assertTrue(executor.pending() >= 0,
+                "a retry task that completes after the shutdown reset must not undershoot the counter: a negative"
+                        + " count makes the queue permanently non-idle and the drain burns its whole budget");
+    }
 }

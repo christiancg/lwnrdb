@@ -2,6 +2,7 @@ package org.techhouse.cluster;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -17,7 +18,7 @@ final class CoalescingSweep {
     private final Reconcile reconcile;
     private final ExecutorService reconcileExecutor;
     private final AtomicBoolean scheduled = new AtomicBoolean(false);
-    private ScheduledExecutorService periodicScheduler;
+    private volatile ScheduledExecutorService periodicScheduler;
 
     CoalescingSweep(Logger logger, String threadName, String label, Reconcile reconcile) {
         this.logger = logger;
@@ -41,18 +42,38 @@ final class CoalescingSweep {
         }
     }
 
+    void stop(long awaitMillis) {
+        stopPeriodic();
+        reconcileExecutor.shutdown();
+        try {
+            if (!reconcileExecutor.awaitTermination(awaitMillis, TimeUnit.MILLISECONDS)) {
+                logger.warning(label + " reconciliation did not finish within " + awaitMillis
+                        + "ms; interrupting it so it stops mutating admin metadata during the shutdown");
+                reconcileExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            reconcileExecutor.shutdownNow();
+        }
+    }
+
     void schedule() {
         if (!scheduled.compareAndSet(false, true)) {
             return;
         }
-        reconcileExecutor.submit(() -> {
+        try {
+            reconcileExecutor.submit(() -> {
+                scheduled.set(false);
+                try {
+                    reconcile.run();
+                } catch (Exception e) {
+                    logger.warning(label + " reconciliation failed: " + e.getMessage());
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
             scheduled.set(false);
-            try {
-                reconcile.run();
-            } catch (Exception e) {
-                logger.warning(label + " reconciliation failed: " + e.getMessage());
-            }
-        });
+            logger.info("Skipping " + label + " reconciliation: this node is shutting down");
+        }
     }
 
     private static Thread daemon(Runnable r, String name) {

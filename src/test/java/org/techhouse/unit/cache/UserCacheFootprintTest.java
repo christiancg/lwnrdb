@@ -4,14 +4,28 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
+import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheableResource;
 import org.techhouse.cache.UserCache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.ReflectionUtils;
 
 public class UserCacheFootprintTest {
     private static final String DB = "footprintDb";
@@ -147,6 +161,91 @@ public class UserCacheFootprintTest {
                 cache.evictEntry(DB, COLL, "id" + round);
             }
             assertTrackedMatchesRecomputed(cache);
+        }
+    }
+
+    private static final String FIELD = "status";
+    private static final long COUNT_ONLY_BYTES_PER_ENTRY = 64L;
+
+    private static final AtomicInteger FIELD_INDEX_ITERATIONS = new AtomicInteger();
+
+    private static final class IterationCountingList extends ArrayList<FieldIndexEntry<?>> {
+        @Override
+        @SuppressWarnings("NullableProblems")
+        public Iterator<FieldIndexEntry<?>> iterator() {
+            FIELD_INDEX_ITERATIONS.incrementAndGet();
+            return super.iterator();
+        }
+    }
+
+    private static IterationCountingList publishFieldIndex(UserCache cache) throws Exception {
+        FIELD_INDEX_ITERATIONS.set(0);
+        final var published = new IterationCountingList();
+        for (var i = 0; i < 3; i++) {
+            published.add(new FieldIndexEntry<>(DB, COLL, "value-" + i, Set.of("id" + i, "other" + i)));
+        }
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
+        indexes.put(Cache.getIndexIdentifier(FIELD, String.class), published);
+        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(Cache.getCollectionIdentifier(DB, COLL), indexes);
+        return published;
+    }
+
+    private static long fieldIndexBytes(UserCache cache) {
+        return cache.listCacheableResources().stream().filter(resource -> resource.kind() == AccessKind.FIELD_INDEX)
+                .mapToLong(CacheableResource::estimatedSizeBytes).sum();
+    }
+
+    @Test
+    public void test_a_field_index_is_not_iterated_while_its_writer_holds_the_lock() throws Exception {
+        final var cache = new UserCache();
+        final var published = publishFieldIndex(cache);
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var held = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var writer = new Thread(() -> {
+            try {
+                locks.lockIndex(DB, COLL, FIELD);
+                held.countDown();
+                release.await();
+                locks.releaseIndex(DB, COLL, FIELD);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        writer.start();
+        assertTrue(held.await(5, TimeUnit.SECONDS));
+
+        final var estimate = fieldIndexBytes(cache);
+
+        release.countDown();
+        writer.join(5_000);
+        assertEquals(published.size() * COUNT_ONLY_BYTES_PER_ENTRY, estimate,
+                "an index whose writer is mid-append is estimated by its size alone");
+        assertEquals(0, FIELD_INDEX_ITERATIONS.get(), "the estimate must not walk a list its writer is appending to");
+    }
+
+    @Test
+    public void test_a_field_index_is_measured_in_full_when_its_lock_is_free() throws Exception {
+        final var cache = new UserCache();
+        final var published = publishFieldIndex(cache);
+
+        assertTrue(fieldIndexBytes(cache) > published.size() * COUNT_ONLY_BYTES_PER_ENTRY,
+                "with no writer the estimate counts every value and id");
+    }
+
+    @Test
+    public void test_the_index_writer_can_still_measure_its_own_index() throws Exception {
+        final var cache = new UserCache();
+        final var published = publishFieldIndex(cache);
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lockIndex(DB, COLL, FIELD);
+        try {
+            assertTrue(fieldIndexBytes(cache) > published.size() * COUNT_ONLY_BYTES_PER_ENTRY,
+                    "the worker loading an index measures it in full under its own write lock");
+        } finally {
+            locks.releaseIndex(DB, COLL, FIELD);
         }
     }
 }

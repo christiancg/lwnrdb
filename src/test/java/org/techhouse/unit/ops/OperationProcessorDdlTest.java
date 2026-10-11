@@ -189,13 +189,12 @@ public class OperationProcessorDdlTest {
         assertTrue(new File(dbFolder, "repairedColl").isDirectory());
     }
 
-    // The other side of that repair: with no admin entry there is no such database, and the missing parent
-    // folder is the only thing refusing the create - so it has to keep refusing it.
     @Test
-    public void test_create_collection_on_an_unknown_database_still_fails() {
+    public void test_create_collection_on_an_unknown_database_is_not_found() {
         final var response = processor.processMessage(new CreateCollectionRequest("noSuchDb", "orphanColl"));
 
-        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-4", response.getErrorCode());
         assertNull(cache.getAdminCollectionEntry("noSuchDb", "orphanColl"));
     }
 
@@ -448,4 +447,29 @@ public class OperationProcessorDdlTest {
         ReindexResponse response = (ReindexResponse) processor.processMessage(request);
         assertEquals(OperationStatus.OK, response.getStatus());
     }
+
+    @Test
+    public void test_concurrent_create_and_drop_leave_a_consistent_state() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var collName = "m17created";
+        locks.lock(TestGlobals.DB, collName);
+        final var finished = new CountDownLatch(1);
+        final var worker = new Thread(() -> {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+            finished.countDown();
+        });
+        worker.start();
+        try {
+            assertFalse(finished.await(300, TimeUnit.MILLISECONDS),
+                    "CREATE_COLLECTION must hold the collection lock, or a concurrent DROP lands between the folder"
+                            + " creation and the registration and leaves an admin entry with no directory");
+        } finally {
+            locks.release(TestGlobals.DB, collName);
+        }
+
+        assertTrue(finished.await(5, TimeUnit.SECONDS));
+        worker.join(5_000L);
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, collName));
+    }
+
 }

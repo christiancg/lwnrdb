@@ -61,6 +61,7 @@ public class JsonArrayTest {
     }
 
     @Test
+    @SuppressWarnings("DataFlowIssue")
     public void test_add_all_from_null_source() {
         JsonArray target = new JsonArray();
 
@@ -82,14 +83,13 @@ public class JsonArrayTest {
     }
 
     @Test
-    public void test_add_null_string_creates_json_string_with_null() {
+    public void test_add_null_string_is_a_json_null() {
         JsonArray array = new JsonArray();
 
         array.add((String) null);
 
         assertEquals(1, array.size());
-        assertInstanceOf(JsonString.class, array.get(0));
-        assertNull(((JsonString) array.get(0)).getValue());
+        assertSame(JsonNull.INSTANCE, array.get(0));
     }
 
     @Test
@@ -267,6 +267,7 @@ public class JsonArrayTest {
     }
 
     @Test
+    @SuppressWarnings({"ConstantValue", "EqualsWithItself"})
     public void test_equals_with_same_instance() {
         JsonArray array = new JsonArray();
         array.add("test");
@@ -293,6 +294,7 @@ public class JsonArrayTest {
     }
 
     @Test
+    @SuppressWarnings("ConstantValue")
     public void test_equals_with_null() {
         JsonArray array = new JsonArray();
         array.add("test");

@@ -14,6 +14,7 @@ public class TriggerEvent extends CollectionScopedEvent {
     private final long firedAt;
     private final String runId;
     private final int attempt;
+    private final boolean staleEntries;
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
             boolean batchMode, List<DbEntry> entries, String actingUser, int depth) {
@@ -27,6 +28,20 @@ public class TriggerEvent extends CollectionScopedEvent {
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
             boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId, int attempt) {
+        this(type, dbName, collName, triggerName, procedureName, batchMode, entries, actingUser, depth, runId, attempt,
+                System.currentTimeMillis());
+    }
+
+    public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
+            boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId, int attempt,
+            long firedAt) {
+        this(type, dbName, collName, triggerName, procedureName, batchMode, entries, actingUser, depth, runId, attempt,
+                firedAt, false);
+    }
+
+    private TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
+            boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId, int attempt,
+            long firedAt, boolean staleEntries) {
         super(type, dbName, collName);
         this.triggerName = triggerName;
         this.procedureName = procedureName;
@@ -34,9 +49,24 @@ public class TriggerEvent extends CollectionScopedEvent {
         this.entries = entries;
         this.actingUser = actingUser;
         this.depth = depth;
-        this.firedAt = System.currentTimeMillis();
+        this.firedAt = firedAt;
         this.runId = runId;
         this.attempt = attempt;
+        this.staleEntries = staleEntries;
+    }
+
+    public TriggerEvent retry(int nextAttempt) {
+        return new TriggerEvent(getType(), getDbName(), getCollName(), triggerName, procedureName, batchMode, entries,
+                actingUser, depth, runId, nextAttempt, firedAt, getType() != EventType.DELETED);
+    }
+
+    public TriggerEvent withCurrentEntries(List<DbEntry> currentEntries) {
+        return new TriggerEvent(getType(), getDbName(), getCollName(), triggerName, procedureName, batchMode,
+                currentEntries, actingUser, depth, runId, attempt, firedAt, false);
+    }
+
+    public boolean hasStaleEntries() {
+        return staleEntries;
     }
 
     public int getAttempt() {

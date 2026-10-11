@@ -114,4 +114,21 @@ public class DbDateTimeBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new DbDateTime(NaN)"));
         assertThrows(RangeErrorException.class, () -> Interpreter.run("DbDateTime.from({ year: Infinity })"));
     }
+
+    @Test
+    public void test_from_a_plain_date_time_keeps_its_fraction_of_a_second() {
+        assertEquals("#datetime(2024-01-01T10:00:00.123456789)",
+                str("String(DbDateTime.from(Temporal.PlainDateTime.from('2024-01-01T10:00:00.123456789')))"));
+    }
+
+    @Test
+    public void test_a_round_trip_through_to_temporal_is_lossless() {
+        assertEquals("#datetime(2024-01-01T10:00:00.500)",
+                str("String(DbDateTime.from(DbDateTime.from('2024-01-01T10:00:00.5').toTemporal()))"));
+    }
+
+    @Test
+    public void test_the_component_constructor_is_still_second_precision() {
+        assertEquals("#datetime(2024-01-01T10:00:15)", str("String(new DbDateTime(2024, 1, 1, 10, 0, 15.9))"));
+    }
 }

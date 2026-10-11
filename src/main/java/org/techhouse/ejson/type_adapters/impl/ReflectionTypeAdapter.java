@@ -55,6 +55,8 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             try {
                 appendFieldValue(fields[i], value, out);
             } catch (Exception e) {
+                logger.error("Serialising " + actualClass.getName() + "." + fields[i].getName()
+                        + " failed; emitting null in its place", e);
                 out.setLength(mark);
                 out.append("null");
             }
@@ -120,6 +122,8 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
         if (adapter != null) {
             adapter.toJson(casted, out);
         } else {
+            logger.error("No type adapter for " + field.getDeclaringClass().getName() + "." + field.getName()
+                    + " of type " + pClass.getName() + "; emitting null in its place");
             out.append("null");
         }
     }

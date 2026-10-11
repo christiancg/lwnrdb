@@ -4,9 +4,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.mockito.Mockito;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
@@ -18,11 +28,16 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.SizeParser;
 import org.techhouse.config.ValueType;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.utils.ReflectionUtils;
 
 public class TestUtils {
@@ -65,6 +80,7 @@ public class TestUtils {
         clearBoundedCache(adminCache, "metadataMisses");
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pendingIndexWrites, "generations", new ConcurrentHashMap<>());
         // Drop any tracked clients so leaked test connections can't fill the connection limit and make
         // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
         ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -195,6 +211,48 @@ public class TestUtils {
         field.set(null, fieldValue);
     }
 
+    public static void cacheEntry(Cache cache, String dbName, String collName, DbEntry entry) throws IOException {
+        cache.addEntryToCache(dbName, collName, entry);
+        underCollectionLock(dbName, collName, () -> {
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            final var position = Collections.binarySearch(pkIndex, entry.get_id());
+            if (position < 0) {
+                pkIndex.add(-(position + 1), new PkIndexEntry(dbName, collName, entry.get_id(), 0, 1, entry.getPage()));
+            }
+        });
+    }
+
+    public static void uncacheEntry(Cache cache, String dbName, String collName, String id) throws IOException {
+        cache.evictEntry(dbName, collName, id);
+        underCollectionLock(dbName, collName, () -> {
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            final var position = Collections.binarySearch(pkIndex, id);
+            if (position >= 0) {
+                pkIndex.remove(position);
+            }
+        });
+    }
+
+    private interface PkIndexMutation {
+        void run() throws IOException;
+    }
+
+    private static void underCollectionLock(String dbName, String collName, PkIndexMutation mutation)
+            throws IOException {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        try {
+            locks.lock(dbName, collName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(e);
+        }
+        try {
+            mutation.run();
+        } finally {
+            locks.release(dbName, collName);
+        }
+    }
+
     public static void setDbPath(Object fileSystem, String path) throws NoSuchFieldException, IllegalAccessException {
         setPrivateField(getPrivateField(fileSystem, "paths", Object.class), "dbPath", path);
     }
@@ -247,5 +305,45 @@ public class TestUtils {
             }
         }
         locks.clear();
+    }
+
+    public static List<String> dirtyIndexCollections() {
+        final var result = new ArrayList<String>();
+        final var databases = new File(TestGlobals.PATH).listFiles(File::isDirectory);
+        for (final var database : databases == null ? new File[0] : databases) {
+            final var collections = database.listFiles(File::isDirectory);
+            for (final var collection : collections == null ? new File[0] : collections) {
+                if (new File(collection, collection.getName() + "-indexes.dirty").exists()) {
+                    result.add(database.getName() + "|" + collection.getName());
+                }
+            }
+        }
+        return result;
+    }
+
+    public static OperationResponse createAdmin(String username) {
+        final var request = new CreateUserRequest();
+        request.setUsername(username);
+        request.setPassword("password123");
+        request.setAdmin(true);
+        request.setGlobalPermissions(new HashSet<>());
+        request.setDatabasePermissions(new HashMap<>());
+        request.setCollectionPermissions(new HashMap<>());
+        return UserOperationHelper.processCreateUser(request);
+    }
+
+    public static Socket clientSocket() {
+        final var socket = Mockito.mock(Socket.class);
+        final var address = Mockito.mock(InetAddress.class);
+        Mockito.when(socket.getInetAddress()).thenReturn(address);
+        Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
+        return socket;
+    }
+
+    public static Socket clientSocket(InputStream in, OutputStream out) throws IOException {
+        final var socket = clientSocket();
+        Mockito.when(socket.getInputStream()).thenReturn(in);
+        Mockito.when(socket.getOutputStream()).thenReturn(out);
+        return socket;
     }
 }

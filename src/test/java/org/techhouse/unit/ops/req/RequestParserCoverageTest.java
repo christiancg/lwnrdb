@@ -1,12 +1,16 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.ArmFaultRequest;
+import org.techhouse.ops.req.AwaitFaultRequest;
 import org.techhouse.ops.req.GetDatabaseStatsRequest;
 import org.techhouse.ops.req.ListUsersRequest;
+import org.techhouse.ops.req.ReleaseFaultRequest;
 import org.techhouse.ops.req.RequestParser;
 
 public class RequestParserCoverageTest {
@@ -43,5 +47,23 @@ public class RequestParserCoverageTest {
                  "aggregationSteps":[{"type":"FILTER","operator":{"conjunctionType":"AND",
                  "operators":[{"garbage":true}]}}]}""";
         assertThrows(Exception.class, () -> RequestParser.parseRequest(json));
+    }
+
+    @Test
+    public void test_parse_the_fault_operations() {
+        final var arm = assertInstanceOf(ArmFaultRequest.class,
+                RequestParser.parseRequest(
+                        "{\"type\":\"ARM_FAULT\",\"point\":\"ANTI_ENTROPY_SNAPSHOTTED\",\"action\":\"PAUSE\","
+                                + "\"match\":\"db|coll\"}"));
+        assertEquals("ANTI_ENTROPY_SNAPSHOTTED", arm.getPoint());
+        assertEquals("PAUSE", arm.getAction());
+        assertEquals("db|coll", arm.getMatch());
+        final var await = assertInstanceOf(AwaitFaultRequest.class,
+                RequestParser.parseRequest("{\"type\":\"AWAIT_FAULT\",\"point\":\"PEER_REPLY\",\"timeoutMs\":1000}"));
+        assertEquals("PEER_REPLY", await.getPoint());
+        assertEquals(1000L, await.getTimeoutMs());
+        final var release = assertInstanceOf(ReleaseFaultRequest.class,
+                RequestParser.parseRequest("{\"type\":\"RELEASE_FAULT\",\"point\":\"PEER_REPLY\"}"));
+        assertEquals("PEER_REPLY", release.getPoint());
     }
 }

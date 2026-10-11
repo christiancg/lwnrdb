@@ -21,6 +21,7 @@ public class StartupWarningsTest {
     private String origAllowlist;
     private String origMaxMemory;
     private String origScriptsEnabled;
+    private String origFaultInjection;
 
     @BeforeEach
     public void setUp() {
@@ -29,6 +30,7 @@ public class StartupWarningsTest {
         origAllowlist = String.join(",", config.getScriptFetchAllowlist());
         origMaxMemory = String.valueOf(config.getMaxMemoryBytes());
         origScriptsEnabled = String.valueOf(config.isScriptsEnabled());
+        origFaultInjection = String.valueOf(config.isFaultInjectionEnabled());
     }
 
     @AfterEach
@@ -38,11 +40,12 @@ public class StartupWarningsTest {
         TestUtils.setPrivateField(config, "scriptFetchAllowlist", origAllowlist);
         TestUtils.setPrivateField(config, "maxMemory", origMaxMemory);
         TestUtils.setPrivateField(config, "scriptsEnabled", origScriptsEnabled);
+        TestUtils.setPrivateField(config, "faultInjectionEnabled", origFaultInjection);
     }
 
     @Test
     public void test_the_shipped_admin_password_is_warned_about() throws Exception {
-        TestUtils.setPrivateField(config, "defaultAdminPassword", Globals.DEFAULT_ADMIN_PASSWORD);
+        TestUtils.setPrivateField(config, "defaultAdminPassword", "administrator");
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.warnIfDefaultAdminPassword();
             assertLogged(logWriter, "defaultAdminPassword is still set to the well-known default");
@@ -122,6 +125,15 @@ public class StartupWarningsTest {
         }
     }
 
+    @Test
+    public void test_enabled_fault_injection_is_warned_about() throws Exception {
+        TestUtils.setPrivateField(config, "faultInjectionEnabled", "true");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfFaultInjectionEnabled();
+            assertLogged(logWriter, "faultInjectionEnabled=true");
+        }
+    }
+
     private void enableFetch(String allowlist) throws Exception {
         TestUtils.setPrivateField(config, "scriptFetchEnabled", "true");
         TestUtils.setPrivateField(config, "scriptFetchAllowlist", allowlist);
@@ -135,10 +147,12 @@ public class StartupWarningsTest {
     public void test_every_warning_is_silent_on_a_sane_configuration() throws Exception {
         TestUtils.setPrivateField(config, "defaultAdminPassword", "not-the-default");
         TestUtils.setPrivateField(config, "scriptFetchEnabled", "false");
+        TestUtils.setPrivateField(config, "faultInjectionEnabled", "false");
         assertTrue(config.getMaxMemoryBytes() > 0, "the fixture must have a bounded cache");
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.warnIfDefaultAdminPassword();
             StartupWarnings.warnIfScriptFetchEnabled();
+            StartupWarnings.warnIfFaultInjectionEnabled();
             logWriter.verifyNoInteractions();
         }
     }

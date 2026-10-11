@@ -2,12 +2,9 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.techhouse.cache.Cache;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
@@ -23,8 +20,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
@@ -51,16 +46,12 @@ abstract class ScriptClusterTestBase {
     }
 
     static NodeInfo node(String id, int port, int scriptLoad) {
-        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad);
-        node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
-        return node;
+        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad);
     }
 
     // The cap is arbitrary and shared by both sides of the pair; only the ratio between them decides.
     static NodeInfo cappedNode(String id, int port, int scriptLoad) {
-        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, SCRIPT_CAPACITY);
-        node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
-        return node;
+        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, SCRIPT_CAPACITY);
     }
 
     @BeforeEach
@@ -86,14 +77,7 @@ abstract class ScriptClusterTestBase {
     }
 
     static void createAdminUser() {
-        final var request = new CreateUserRequest();
-        request.setUsername(ADMIN);
-        request.setPassword("password123");
-        request.setAdmin(true);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TestUtils.createAdmin(ADMIN);
     }
 
     static JsonObject doc(String id) {

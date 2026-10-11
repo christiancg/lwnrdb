@@ -1,42 +1,3 @@
-"""End-to-end tests for SimpleJS inside the aggregation pipeline.
-
-Covers the three surfaces a pipeline script can occupy - a SCRIPT mid-operator computing a
-MAP field, a SCRIPT filter operator acting as a predicate, and a REDUCE step folding the
-stream into one document - over the wire, against a seeded collection.
-
-Like the RUN_SCRIPT and schedules suites this script is **self-contained**: it starts its own
-LWNRDB instance on a dedicated port and working directory, because the feature needs a
-deliberately tight aggregation sandbox the shared CI server does not have. It runs in two
-phases:
-
-  phase 1 - `scriptsEnabled=true` with small aggregationScript* limits, so every limit is
-            reachable in a test rather than only in theory;
-  phase 2 - the same data directory restarted with `scriptsEnabled=false`, proving the
-            master switch refuses every pipeline-script shape for everyone, admins included.
-            There is no second key: that phase is the whole gate, alongside permissions.
-
-What is covered:
-
-  * the three JSON shapes, including REDUCE's resultField/initialValue defaults;
-  * permissions, which are the per-caller gate: a READ-only user is refused, the same user
-    succeeds once granted scriptPermissions and is refused again after revocation, and the
-    database owner and an admin succeed without a grant - while a plain no-script AGGREGATE
-    keeps working for the READ-only user throughout;
-  * the sandbox: the per-PIPELINE instruction budget (the same script over one document
-    succeeds and over the whole collection does not), the wall clock, the source cap, and a
-    throwing script;
-  * the closed doors - db, fetch, procedure imports and importText - each asserted by
-    contrast against the identical source succeeding through RUN_SCRIPT;
-  * analyze: the script counters and the "cannot use an index" suggestion, plus a pipeline of
-    indexed FILTER -> SCRIPT filter -> REDUCE;
-  * LISTEN refusing a SCRIPT operator while AGGREGATE accepts the same pipeline;
-  * custom types crossing the boundary, and a BigInt beyond 2^53-1 failing;
-  * nesting: a RUN_SCRIPT whose db.aggregate carries a SCRIPT operator.
-
-The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping it
-never touches an unrelated LWNRDB process.
-"""
-
 import os
 import sys
 import tempfile
@@ -55,18 +16,12 @@ USER_PASSWORD = "password123"
 READER = "agg_reader"
 OWNER = "agg_owner"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 BUDGET = 40_000
 TIMEOUT_MS = 1_000
 MAX_SOURCE_BYTES = 512
 
-
-
-# ── connection / protocol ────────────────────────────────────────────────────
 
 class Conn(bu.Conn):
     def aggregate(self, steps, db=DB, coll=COLL, **extra) -> dict:
@@ -81,18 +36,12 @@ class Conn(bu.Conn):
         return self.send(payload)
 
 def admin_conn() -> Conn:
-    conn = Conn()
-    conn.authenticate()
-    return conn
+    return Conn.authenticated()
 
 
 def user_conn(username: str) -> Conn:
-    conn = Conn()
-    conn.authenticate(username, USER_PASSWORD)
-    return conn
+    return Conn.authenticated(username, USER_PASSWORD)
 
-
-# ── pipeline shapes ──────────────────────────────────────────────────────────
 
 def script_filter(source: str) -> dict:
     return {"type": "FILTER", "operator": {"script": source}}
@@ -118,38 +67,15 @@ def results(response: dict) -> list:
     return response.get("results", [])
 
 
-# ── server lifecycle ─────────────────────────────────────────────────────────
-
 def write_config(work_dir: str, scripts_enabled: bool):
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-        f"scriptsEnabled={'true' if scripts_enabled else 'false'}\n"
-        "scriptInstructionBudget=2000000\n"
-        "scriptTimeoutMs=5000\n"
-        "scriptMaxDepth=64\n"
-        "scriptMaxSourceBytes=8192\n"
-        "scriptMaxLogLines=50\n"
-        "scriptMaxLogLineChars=500\n"
-        "scriptMaxMemoryBytes=4194304\n"
-        "scriptMaxResultBytes=65536\n"
-        "scriptTextImportEnabled=false\n"
-        "scriptTimeZone=UTC\n"
-        "scriptLocale=en-US\n"
-        f"aggregationScriptInstructionBudget={BUDGET}\n"
-        f"aggregationScriptTimeoutMs={TIMEOUT_MS}\n"
-        f"aggregationScriptMaxSourceBytes={MAX_SOURCE_BYTES}\n"
-        "triggersEnabled=false\n"
-        "schedulesEnabled=false\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+    bu.write_config(work_dir, PORT, scriptsEnabled=scripts_enabled, scriptInstructionBudget=2000000,
+                    scriptTimeoutMs=5000, scriptMaxDepth=64, scriptMaxSourceBytes=8192,
+                    scriptMaxLogLines=50, scriptMaxLogLineChars=500, scriptMaxMemoryBytes=4194304,
+                    scriptMaxResultBytes=65536, scriptTextImportEnabled=False, scriptTimeZone="UTC",
+                    scriptLocale="en-US", aggregationScriptInstructionBudget=BUDGET,
+                    aggregationScriptTimeoutMs=TIMEOUT_MS, aggregationScriptMaxSourceBytes=MAX_SOURCE_BYTES,
+                    triggersEnabled=False, schedulesEnabled=False)
 
-
-# ── fixtures ─────────────────────────────────────────────────────────────────
 
 DOCUMENT_COUNT = 10
 
@@ -174,8 +100,6 @@ def setup_data(conn: Conn):
                  conn.send({"type": "CREATE_USER", "username": OWNER, "password": USER_PASSWORD,
                             "admin": False, "databasePermissions": {DB: "READ"}}), "OK")
 
-
-# ── phase 1: the three shapes ────────────────────────────────────────────────
 
 def test_computed_field(conn: Conn):
     section("MAP: a SCRIPT computed field")
@@ -226,6 +150,27 @@ def test_reduce(conn: Conn):
           results(total)[0].get("total") == sum(i * 10 * i for i in range(1, DOCUMENT_COUNT + 1)),
           f"got {results(total)}")
 
+    folded = conn.aggregate([reduce_step("export default (acc, doc) => acc + '|' + doc._id;", "", "folded")])
+    expected_order = "".join(f"|{doc_id}" for doc_id in sorted(f"o{i}" for i in range(1, DOCUMENT_COUNT + 1)))
+    check("a non-commutative fold enumerates in a defined order",
+          results(folded)[0].get("folded") == expected_order,
+          f"got {results(folded)[0].get('folded')!r}, expected {expected_order!r}")
+
+    priced = [{"type": "FILTER", "operator": {"fieldOperatorType": "GREATER_THAN", "field": "price", "value": 0}},
+              reduce_step("export default (acc, doc) => acc + '|' + doc._id;", "", "folded")]
+    after_filter = conn.aggregate(priced)
+    check("a fold after an index-backed FILTER enumerates in _id order",
+          results(after_filter)[0].get("folded") == expected_order,
+          f"got {results(after_filter)[0].get('folded')!r}, expected {expected_order!r}")
+    scanned = conn.aggregate([{"type": "SKIP", "skip": 0}] + priced)
+    check("the same fold answered by a scan agrees with the index",
+          results(scanned)[0].get("folded") == expected_order, f"got {results(scanned)[0].get('folded')!r}")
+
+    distinct = conn.aggregate([{"type": "DISTINCT", "fieldName": "sku"},
+                               reduce_step("export default (acc, row) => acc + '|' + row.sku;", "", "skus")])
+    check("a fold after DISTINCT enumerates its rows in a defined order",
+          results(distinct)[0].get("skus") == "|sku-0|sku-1|sku-2", f"got {results(distinct)}")
+
     defaulted = conn.aggregate([reduce_step("export default (acc, doc) => (acc ?? 0) + 1;")])
     check("default result field is 'value'", results(defaulted)[0].get("value") == DOCUMENT_COUNT,
           f"got {results(defaulted)}")
@@ -241,7 +186,22 @@ def test_reduce(conn: Conn):
           results(after)[0].get("doubled") == DOCUMENT_COUNT * 2, f"got {results(after)}")
 
 
-# ── phase 1: permissions ─────────────────────────────────────────────────────
+def test_getters_cross_the_boundary(conn: Conn):
+    section("MAP and REDUCE: a getter on a script result is read")
+    mapped = conn.aggregate([script_map(
+        "priced", "export default (doc) => ({ get total() { return doc.price * doc.qty; } });")])
+    check_status("a MAP script returning a getter runs", mapped, "OK")
+    rows = {row["_id"]: row for row in results(mapped)}
+    check("a MAP script getter becomes a field", rows.get("o3", {}).get("priced") == {"total": 90},
+          f"got {rows.get('o3')}")
+
+    folded = conn.aggregate([reduce_step(
+        "export default (acc, doc) => { const n = acc.n + 1; return { get n() { return n; } }; };",
+        {"n": 0}, "count")])
+    check_status("a REDUCE script returning a getter runs", folded, "OK")
+    check("a REDUCE accumulator getter is kept",
+          (results(folded) or [{}])[0].get("count") == {"n": DOCUMENT_COUNT}, f"got {results(folded)}")
+
 
 def test_permissions(admin: Conn):
     section("permissions: the per-caller gate")
@@ -280,8 +240,6 @@ def test_permissions(admin: Conn):
     check_status("an admin needs no grant", admin.aggregate(scripted), "OK")
 
 
-# ── phase 1: the sandbox ─────────────────────────────────────────────────────
-
 def test_sandbox(conn: Conn):
     section("sandbox: the per-pipeline budget, the clock and the source cap")
     spin = ("export default (doc) => { let n = 0; for (let i = 0; i < 20000; i++) { n += i; } return true; };")
@@ -290,8 +248,6 @@ def test_sandbox(conn: Conn):
     whole = conn.aggregate([script_filter(spin)])
     check_code("the budget spans the whole pipeline, not each document", whole, "ERROR", "400-11")
 
-    # A timer due past the pipeline's deadline is the deterministic way to reach the wall clock: a
-    # spinning loop would exhaust the (deliberately small) instruction budget first.
     sleeper = "export default (doc) => { setTimeout(() => {}, 5000); return true; };"
     check_code("a script outliving the pipeline deadline is aborted",
                conn.aggregate([{"type": "LIMIT", "limit": 1}, script_filter(sleeper)]), "ERROR", "408-1")
@@ -301,15 +257,12 @@ def test_sandbox(conn: Conn):
 
     thrown = conn.aggregate([script_filter("export default (doc) => { throw new Error('boom'); };")])
     check_code("a throwing script is a script failure", thrown, "ERROR", "400-9")
-    # The callable now carries a trace internally; the wire contract must not have moved with it
     check("the message is still the bare thrown message", (thrown.get("message") or "") == "boom",
           f"message={thrown.get('message')!r}")
     check_code("a script exporting nothing is a script failure",
                conn.aggregate([script_filter("const x = 1;")]), "ERROR", "400-9")
     check_code("a blank source is rejected", conn.aggregate([script_filter("   ")]), "ERROR", "400-1")
 
-
-# ── phase 1: the closed doors ────────────────────────────────────────────────
 
 def test_closed_doors(conn: Conn):
     section("the closed doors: db, fetch, procedure imports, importText")
@@ -342,8 +295,6 @@ def test_closed_doors(conn: Conn):
     check_code("importText is refused inside a pipeline script", imported, "ERROR", "400-9")
 
 
-# ── phase 1: analyze, LISTEN, custom types, nesting ──────────────────────────
-
 def test_analyze(conn: Conn):
     section("analyze")
     response = conn.aggregate([script_filter("export default (doc) => true;")], analyze=True)
@@ -362,8 +313,6 @@ def test_analyze(conn: Conn):
     check_status("indexed FILTER then SCRIPT then REDUCE runs", combined, "OK")
     check("the index was used", combined.get("analyzeResult", {}).get("indexUsed") is True,
           f"got {combined.get('analyzeResult')}")
-    # 5 predicate calls over the index-narrowed set, then 3 fold calls over what it kept - so the
-    # script never saw the 5 documents the index excluded.
     check("the scripts only saw the narrowed set",
           combined.get("analyzeResult", {}).get("scriptInvocations") == 8,
           f"got {combined.get('analyzeResult', {}).get('scriptInvocations')}")
@@ -416,8 +365,6 @@ def test_nested_script(conn: Conn):
     check_status("the outer run's own budget is untouched", outer_still_fine, "OK")
 
 
-# ── phase 2: the master switch ───────────────────────────────────────────────
-
 def test_switch_off(conn: Conn):
     section("phase 2: scriptsEnabled=false")
     shapes = {
@@ -442,10 +389,7 @@ def test_switch_off(conn: Conn):
 def main():
     bu.banner("SimpleJS in the aggregation pipeline test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"jar not found at {jar}; run `mvn clean package -DskipTests` first", file=sys.stderr)
-        sys.exit(1)
+    bu.require_jar()
     if bu.port_open():
         print(f"port {PORT} is already in use", file=sys.stderr)
         sys.exit(1)
@@ -463,6 +407,7 @@ def main():
             test_computed_field(conn)
             test_script_predicate(conn)
             test_reduce(conn)
+            test_getters_cross_the_boundary(conn)
             test_permissions(conn)
             test_sandbox(conn)
             test_closed_doors(conn)
@@ -471,8 +416,6 @@ def main():
             test_host_boundary(conn)
             test_nested_script(conn)
 
-        # Phase 2: same data directory, the master switch off. With no dedicated key, this is the
-        # whole server-side gate, so it is the phase that must not be skipped.
         bu.stop_server(proc)
         proc = None
         write_config(work_dir, scripts_enabled=False)

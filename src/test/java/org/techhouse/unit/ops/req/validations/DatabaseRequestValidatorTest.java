@@ -262,4 +262,41 @@ public class DatabaseRequestValidatorTest {
     public void validate_createIndex_onReservedScriptRunsCollection_returnsOk() {
         assertTrue(RequestValidator.validate(new CreateIndexRequest("myDb", "script_runs", "outcome")).isValid());
     }
+
+    @Test
+    public void validate_createDatabase_clusterName_returnsFail() {
+        final var result = RequestValidator.validate(new CreateDatabaseRequest("cluster"));
+        assertFalse(result.isValid());
+        assertTrue(result.getErrorMessage().contains("reserved"));
+    }
+
+    @Test
+    public void validate_createDatabase_clusterNameAnyCase_returnsFail() {
+        assertFalse(RequestValidator.validate(new CreateDatabaseRequest("Cluster")).isValid());
+        assertFalse(RequestValidator.validate(new CreateDatabaseRequest("CLUSTER")).isValid());
+    }
+
+    @Test
+    public void validate_dropDatabase_clusterName_returnsFail() {
+        assertFalse(RequestValidator.validate(new DropDatabaseRequest("cluster")).isValid());
+    }
+
+    @Test
+    public void validate_save_intoClusterDatabase_returnsFail() {
+        final var request = new SaveRequest("cluster", "items");
+        request.setObject(new JsonObject());
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_findById_inClusterDatabase_returnsOk() {
+        final var request = new FindByIdRequest("cluster", "items");
+        request.set_id("abc");
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_createCollection_namedCluster_returnsOk() {
+        assertTrue(RequestValidator.validate(new CreateCollectionRequest("myDb", "cluster")).isValid());
+    }
 }

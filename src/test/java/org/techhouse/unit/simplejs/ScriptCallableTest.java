@@ -329,4 +329,83 @@ public class ScriptCallableTest {
             });
         }
     }
+    @Test
+    public void test_a_predicate_result_of_infinity_is_truthy() {
+        try (var callable = open("export default () => Infinity;")) {
+            assertTrue(callable.test(document(1)), "JS truthiness keeps a document whose predicate answered Infinity");
+        }
+    }
+
+    @Test
+    public void test_a_predicate_result_of_negative_infinity_is_truthy() {
+        try (var callable = open("export default () => -Infinity;")) {
+            assertTrue(callable.test(document(1)));
+        }
+    }
+
+    @Test
+    public void test_a_predicate_result_of_nan_is_falsy() {
+        try (var callable = open("export default () => NaN;")) {
+            assertFalse(callable.test(document(1)));
+        }
+    }
+
+    @Test
+    public void test_a_predicate_result_of_zero_is_falsy() {
+        try (var callable = open("export default () => 0;")) {
+            assertFalse(callable.test(document(1)));
+        }
+    }
+
+    @Test
+    public void test_a_predicate_result_of_an_empty_string_is_falsy() {
+        try (var callable = open("export default () => '';")) {
+            assertFalse(callable.test(document(1)));
+        }
+    }
+
+    @Test
+    public void test_a_predicate_result_of_an_object_is_truthy() {
+        try (var callable = open("export default () => ({});")) {
+            assertTrue(callable.test(document(1)));
+        }
+    }
+
+    @Test
+    public void test_a_value_result_of_infinity_is_still_nulled() {
+        try (var callable = open("export default () => Infinity;")) {
+            assertTrue(callable.apply(document(1)).isJsonNull(),
+                    "a value that will be stored must stay inside what the document reader can parse");
+        }
+    }
+
+    @Test
+    public void test_a_hook_result_of_infinity_is_still_refused() {
+        try (var callable = open("export default () => Infinity;")) {
+            assertThrows(ScriptCallableException.class, () -> callable.applyWithContext(document(1), new JsonObject()));
+        }
+    }
+
+    @Test
+    public void test_a_finite_predicate_result_is_unchanged() {
+        try (var callable = open("export default (doc) => doc.price * 2;")) {
+            assertTrue(callable.test(document(2)));
+        }
+    }
+
+    private static final String DEEPLY_NESTED_RESULT = "let nested = {}; for (let i = 0; i < 200000; i++) { nested = { inner: nested }; } return nested;";
+
+    @Test
+    public void test_before_hook_returning_a_deeply_nested_document_reports_a_script_error() {
+        try (var callable = open("export default (doc, ctx) => { " + DEEPLY_NESTED_RESULT + " };")) {
+            assertThrows(ScriptCallableException.class, () -> callable.applyWithContext(document(1), new JsonObject()));
+        }
+    }
+
+    @Test
+    public void test_map_returning_a_deeply_nested_value_reports_a_script_error() {
+        try (var callable = open("export default (doc) => { " + DEEPLY_NESTED_RESULT + " };")) {
+            assertThrows(ScriptCallableException.class, () -> callable.apply(document(1)));
+        }
+    }
 }

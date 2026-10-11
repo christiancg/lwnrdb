@@ -55,22 +55,20 @@ public class UserCacheAdmissionTest {
     }
 
     @Test
-    public void test_addEntryToCache_caches_admin_even_when_disabled() throws Exception {
-        final var config = Configuration.getInstance();
-        final long original = config.getMaxMemoryBytes();
-        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
-        try {
-            UserCache cache = IocContainer.get(UserCache.class);
+    public void test_addEntryToCache_never_admits_a_reserved_database() throws Exception {
+        UserCache cache = IocContainer.get(UserCache.class);
+        for (final var reserved : List.of(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_DB_NAME)) {
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
-            cache.addEntryToCache(Globals.ADMIN_DB_NAME, "databases",
-                    DbEntry.fromJsonObject(Globals.ADMIN_DB_NAME, "databases", obj));
+            cache.addEntryToCache(reserved, "databases", DbEntry.fromJsonObject(reserved, "databases", obj));
+            cache.addEntriesToCache(reserved, "collections",
+                    List.of(DbEntry.fromJsonObject(reserved, "collections", obj)));
             final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
             };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
-            assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
-        } finally {
-            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(reserved, "databases")));
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(reserved, "collections")));
+            assertTrue(cache.isCachingDisabled(reserved));
         }
     }
 

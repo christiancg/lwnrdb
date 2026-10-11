@@ -6,9 +6,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.ex.CollectionBusyException;
 
 /**
  * The locks here are always acquired <em>above</em> the per-file locks held inside
@@ -16,24 +19,87 @@ import org.techhouse.config.Globals;
  */
 public class ResourceLocking {
     private static final Map<String, ReentrantReadWriteLock> locks = new ConcurrentHashMap<>();
+    private static final long NO_DEADLINE = Long.MAX_VALUE;
 
     private ReentrantReadWriteLock lockFor(String lockName) {
         return locks.computeIfAbsent(lockName, _ -> new ReentrantReadWriteLock());
     }
 
-    public void lockWrite(String lockName) throws InterruptedException {
-        lockFor(lockName).writeLock().lockInterruptibly();
+    private enum Mode {
+        READ, WRITE
     }
 
-    public void releaseWrite(String lockName) {
-        final var lock = locks.get(lockName);
-        if (lock != null && lock.isWriteLockedByCurrentThread()) {
-            lock.writeLock().unlock();
+    private static Lock side(ReentrantReadWriteLock lock, Mode mode) {
+        return mode == Mode.READ ? lock.readLock() : lock.writeLock();
+    }
+
+    private boolean isStillMapped(String lockName, ReentrantReadWriteLock lock, Mode mode) {
+        if (locks.get(lockName) == lock) {
+            return true;
+        }
+        side(lock, mode).unlock();
+        return false;
+    }
+
+    private boolean tryAcquireNow(String lockName, Mode mode) {
+        while (true) {
+            final var lock = lockFor(lockName);
+            if (!side(lock, mode).tryLock()) {
+                return false;
+            }
+            if (isStillMapped(lockName, lock, mode)) {
+                return true;
+            }
         }
     }
 
+    private boolean tryAcquireBy(String lockName, Mode mode, long deadlineMillis) throws InterruptedException {
+        while (true) {
+            final var lock = lockFor(lockName);
+            if (deadlineMillis == NO_DEADLINE) {
+                side(lock, mode).lockInterruptibly();
+            } else if (!side(lock, mode).tryLock(Math.max(deadlineMillis - System.currentTimeMillis(), 0),
+                    TimeUnit.MILLISECONDS)) {
+                return false;
+            }
+            if (isStillMapped(lockName, lock, mode)) {
+                return true;
+            }
+        }
+    }
+
+    private static long deadlineFor(long timeoutMillis) {
+        return timeoutMillis > 0 ? System.currentTimeMillis() + timeoutMillis : NO_DEADLINE;
+    }
+
+    private static boolean expired(long deadlineMillis) {
+        return deadlineMillis != NO_DEADLINE && deadlineMillis <= System.currentTimeMillis();
+    }
+
+    private boolean tryAcquireWithin(String lockName, Mode mode, long timeoutMillis) throws InterruptedException {
+        return tryAcquireBy(lockName, mode, System.currentTimeMillis() + timeoutMillis);
+    }
+
+    public void lockWrite(String lockName) throws InterruptedException {
+        tryAcquireBy(lockName, Mode.WRITE, NO_DEADLINE);
+    }
+
+    public boolean holdsCollectionLock(String dbName, String collName) {
+        final var lock = locks.get(Cache.getCollectionIdentifier(dbName, collName));
+        return lock != null && (lock.getReadHoldCount() > 0 || lock.isWriteLockedByCurrentThread());
+    }
+
+    public boolean releaseWrite(String lockName) {
+        final var lock = locks.get(lockName);
+        if (lock != null && lock.isWriteLockedByCurrentThread()) {
+            lock.writeLock().unlock();
+            return true;
+        }
+        return false;
+    }
+
     public void lockReadByName(String lockName) throws InterruptedException {
-        lockFor(lockName).readLock().lockInterruptibly();
+        tryAcquireBy(lockName, Mode.READ, NO_DEADLINE);
     }
 
     public void releaseReadByName(String lockName) {
@@ -51,12 +117,16 @@ public class ResourceLocking {
         releaseWrite(dbName, collName);
     }
 
-    public void releaseWrite(String dbName, String collName) {
-        releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
+    public boolean releaseWrite(String dbName, String collName) {
+        return releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public boolean isWriteLockedByCurrentThread(String lockName) {
+        return lockFor(lockName).isWriteLockedByCurrentThread();
     }
 
     public boolean tryLockWrite(String dbName, String collName) {
-        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock();
+        return tryAcquireNow(Cache.getCollectionIdentifier(dbName, collName), Mode.WRITE);
     }
 
     public interface LockedAction<T> {
@@ -65,30 +135,85 @@ public class ResourceLocking {
 
     // Sorted order, so two callers with overlapping sets cannot deadlock. Write locks are thread-owned:
     // the action must complete on this thread, or releaseWrite silently no-ops and strands the lock.
-    public <T> T withWriteLocks(Collection<String> collectionIds, LockedAction<T> action) throws Exception {
-        final var acquired = new ArrayList<String>();
+    public <T> T withWriteLocks(Collection<String> collectionIds, long timeoutMillis, LockedAction<T> action)
+            throws Exception {
+        final var acquired = acquireWriteLocks(collectionIds, timeoutMillis);
         try {
-            for (final var collId : new TreeSet<>(collectionIds)) {
-                lockWrite(collId);
-                acquired.add(collId);
-            }
             return action.run();
         } finally {
-            for (final var collId : acquired) {
+            releaseWriteLocks(acquired);
+        }
+    }
+
+    public <T> T withRetiringCollectionLocks(String dbName, Collection<String> collNames, long timeoutMillis,
+            LockedAction<T> action) throws Exception {
+        final var collectionIds = collNames.stream().map(collName -> Cache.getCollectionIdentifier(dbName, collName))
+                .toList();
+        final var acquired = acquireWriteLocks(collectionIds, Math.max(1L, timeoutMillis));
+        try {
+            return action.run();
+        } finally {
+            releaseWriteLocks(acquired);
+            for (final var collName : collNames) {
+                removeLock(dbName, collName);
+            }
+        }
+    }
+
+    private List<String> acquireWriteLocks(Collection<String> collectionIds, long timeoutMillis)
+            throws InterruptedException {
+        final var acquired = new ArrayList<String>();
+        final var deadline = deadlineFor(timeoutMillis);
+        try {
+            for (final var collId : new TreeSet<>(collectionIds)) {
+                if (expired(deadline) || !tryAcquireBy(collId, Mode.WRITE, deadline)) {
+                    releaseWriteLocks(acquired);
+                    throw new CollectionBusyException(collId, timeoutMillis);
+                }
+                acquired.add(collId);
+            }
+            return acquired;
+        } catch (InterruptedException e) {
+            releaseWriteLocks(acquired);
+            throw e;
+        }
+    }
+
+    public List<String> acquireWriteLocksNotHeld(Collection<String> collectionIds, long timeoutMillis)
+            throws InterruptedException {
+        return acquireWriteLocks(notHeldByCurrentThread(collectionIds), timeoutMillis);
+    }
+
+    private List<String> notHeldByCurrentThread(Collection<String> collectionIds) {
+        return collectionIds.stream().filter(collId -> !isWriteLockedByCurrentThread(collId)).toList();
+    }
+
+    public void releaseWriteLocksHeldByCurrentThread(Collection<String> collectionIds) {
+        for (final var collId : new TreeSet<>(collectionIds)) {
+            while (isWriteLockedByCurrentThread(collId)) {
                 releaseWrite(collId);
             }
+        }
+    }
+
+    private void releaseWriteLocks(List<String> acquired) {
+        for (final var collId : acquired) {
+            releaseWrite(collId);
         }
     }
 
     // Transactions hold their write locks until commit/rollback; the timeout is what stops two of
     // them deadlocking, by making the caller abort instead of waiting forever.
     public boolean tryLockWrite(String dbName, String collName, long timeoutMillis) throws InterruptedException {
-        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock(timeoutMillis,
-                java.util.concurrent.TimeUnit.MILLISECONDS);
+        return tryAcquireWithin(Cache.getCollectionIdentifier(dbName, collName), Mode.WRITE, timeoutMillis);
     }
 
     public void lockRead(String dbName, String collName) throws InterruptedException {
         lockReadByName(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public boolean tryLockRead(String dbName, String collName, long timeoutMillis) throws InterruptedException {
+        return tryAcquireWithin(Cache.getCollectionIdentifier(dbName, collName), Mode.READ, timeoutMillis);
     }
 
     public void releaseRead(String dbName, String collName) {
@@ -97,19 +222,23 @@ public class ResourceLocking {
 
     // Sorted order, so two overlapping multi-collection reads cannot deadlock. A dirty read takes no
     // lock at all and relies on FileSystem's per-file locks for read validity.
-    public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers) throws InterruptedException {
+    public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers, long timeoutMillis)
+            throws InterruptedException {
         if (dirtyRead) {
             return List.of();
         }
         final var sorted = identifiers.stream().distinct().sorted().toList();
         final var acquired = new ArrayList<String>();
+        final var deadline = deadlineFor(timeoutMillis);
         try {
             for (var identifier : sorted) {
-                lockReadByName(identifier);
+                if (expired(deadline) || !tryAcquireBy(identifier, Mode.READ, deadline)) {
+                    releaseReadLocks(acquired);
+                    return null;
+                }
                 acquired.add(identifier);
             }
         } catch (InterruptedException e) {
-            // The caller only releases the returned list, so a partial acquisition must undo itself.
             releaseReadLocks(acquired);
             throw e;
         }
@@ -130,6 +259,14 @@ public class ResourceLocking {
         lockWrite(getIndexIdentifier(dbName, collName, fieldName));
     }
 
+    public boolean tryLockIndex(String dbName, String collName, String fieldName) {
+        return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.WRITE);
+    }
+
+    public boolean tryLockIndexRead(String dbName, String collName, String fieldName) {
+        return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.READ);
+    }
+
     public void releaseIndex(String dbName, String collName, String fieldName) {
         releaseWrite(getIndexIdentifier(dbName, collName, fieldName));
     }
@@ -144,12 +281,46 @@ public class ResourceLocking {
 
     public void removeLock(String dbName, String collName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        locks.remove(collIdentifier);
+        evictIfUnused(collIdentifier);
         final var indexPrefix = collIdentifier + Globals.COLL_IDENTIFIER_SEPARATOR;
-        locks.entrySet().removeIf(entry -> entry.getKey().startsWith(indexPrefix) && isUnheld(entry.getValue()));
+        for (final var key : List.copyOf(locks.keySet())) {
+            if (key.startsWith(indexPrefix)) {
+                evictIfUnused(key);
+            }
+        }
     }
 
-    private static boolean isUnheld(ReentrantReadWriteLock lock) {
-        return !lock.isWriteLocked() && lock.getReadLockCount() == 0;
+    public boolean tryLockDatabaseShared(String dbName, long timeoutMillis) throws InterruptedException {
+        return tryAcquireWithin(dbName, Mode.READ, timeoutMillis);
+    }
+
+    public void releaseDatabaseShared(String dbName) {
+        releaseReadByName(dbName);
+    }
+
+    public boolean tryLockDatabaseExclusive(String dbName, long timeoutMillis) throws InterruptedException {
+        return tryAcquireWithin(dbName, Mode.WRITE, timeoutMillis);
+    }
+
+    public void releaseDatabaseExclusive(String dbName) {
+        releaseWrite(dbName);
+    }
+
+    public void removeDatabaseLock(String dbName) {
+        evictIfUnused(dbName);
+    }
+
+    private static void evictIfUnused(String key) {
+        final var retired = new ReentrantReadWriteLock[1];
+        locks.computeIfPresent(key, (_, lock) -> {
+            if (lock.isWriteLocked() || lock.hasQueuedThreads() || !lock.writeLock().tryLock()) {
+                return lock;
+            }
+            retired[0] = lock;
+            return null;
+        });
+        if (retired[0] != null) {
+            retired[0].writeLock().unlock();
+        }
     }
 }

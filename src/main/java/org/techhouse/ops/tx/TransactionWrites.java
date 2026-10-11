@@ -13,9 +13,11 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.BeforeHookContext;
 import org.techhouse.ops.BeforeHookOutcome;
 import org.techhouse.ops.EntrySizeGuard;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.resp.OperationResponse;
@@ -23,6 +25,7 @@ import org.techhouse.ops.resp.OperationResponse;
 public final class TransactionWrites {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private static final Logger logger = Logger.logFor(TransactionWrites.class);
 
     private TransactionWrites() {
     }
@@ -50,12 +53,8 @@ public final class TransactionWrites {
         }
     }
 
-    // Only re-checked when a hook replaced the document: a hook can inflate one past maxEntrySize.
     public static OperationResponse checkEntrySize(String dbName, String collName, JsonObject effective,
-            JsonObject original, OperationType type) {
-        if (effective == original) {
-            return null;
-        }
+            OperationType type) {
         return EntrySizeGuard.check(dbName, collName, effective, type);
     }
 
@@ -64,7 +63,13 @@ public final class TransactionWrites {
         if (!BeforeHookContext.hasHooksFor(dbName, collName, EventType.DELETED)) {
             return null;
         }
-        final var document = effectiveDocumentFor(transaction, collId, dbName, collName, id);
+        final JsonObject document;
+        try {
+            document = effectiveDocumentFor(transaction, collId, dbName, collName, id);
+        } catch (IOException e) {
+            logger.error(OperationType.DELETE + " failed with " + ErrorCode.ERROR_DELETING.getCode(), e);
+            return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
+        }
         if (document == null) {
             return null;
         }
@@ -76,18 +81,14 @@ public final class TransactionWrites {
     }
 
     public static JsonObject effectiveDocumentFor(Transaction transaction, String collId, String dbName,
-            String collName, String id) {
+            String collName, String id) throws IOException {
         final var overlay = transaction.overlayFor(collId);
         if (overlay != null && overlay.containsKey(id)) {
             final var buffered = overlay.get(id);
             return Transaction.isTombstone(buffered) ? null : buffered;
         }
-        try {
-            final var entries = cache.getEntriesByIds(dbName, collName, Set.of(id));
-            return entries.isEmpty() ? null : entries.getFirst().getData();
-        } catch (IOException e) {
-            return null;
-        }
+        final var entries = cache.getEntriesByIds(dbName, collName, Set.of(id));
+        return entries.isEmpty() ? null : entries.getFirst().getData();
     }
 
     public static JsonObject documentForDeletedTrigger(Transaction transaction, String collId, String dbName,

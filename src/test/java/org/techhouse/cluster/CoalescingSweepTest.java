@@ -76,4 +76,40 @@ public class CoalescingSweepTest {
         }
         return false;
     }
+
+    @Test
+    public void test_stop_awaits_the_reconcile_executor() throws Exception {
+        final var started = new CountDownLatch(1);
+        final var finished = new java.util.concurrent.atomic.AtomicBoolean();
+        final var sweep = new CoalescingSweep(logger, "test-stop", "Test", () -> {
+            started.countDown();
+            Thread.sleep(300);
+            finished.set(true);
+        });
+        sweep.schedule();
+        assertTrue(started.await(5, TimeUnit.SECONDS), "the pass never started");
+
+        sweep.stop(5_000L);
+
+        assertTrue(finished.get(),
+                "an in-flight conform holds collection write locks and mutates admin metadata, so the shutdown"
+                        + " must wait for it rather than run the rollback and the drains alongside it");
+    }
+
+    @Test
+    public void test_stop_gives_up_on_a_pass_that_will_not_finish() throws Exception {
+        final var started = new CountDownLatch(1);
+        final var sweep = new CoalescingSweep(logger, "test-stop-timeout", "Test", () -> {
+            started.countDown();
+            Thread.sleep(30_000L);
+        });
+        sweep.schedule();
+        assertTrue(started.await(5, TimeUnit.SECONDS));
+
+        final var before = System.nanoTime();
+        sweep.stop(200L);
+
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before) < 5_000L,
+                "a stuck reconcile must not hold the shutdown open indefinitely");
+    }
 }

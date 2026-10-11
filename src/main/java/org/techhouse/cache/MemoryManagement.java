@@ -27,7 +27,7 @@ public class MemoryManagement {
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final UsageTracker usageTracker = IocContainer.get(UsageTracker.class);
     private final AtomicBoolean sweepRunning = new AtomicBoolean(false);
-    private ScheduledExecutorService scheduler;
+    private volatile ScheduledExecutorService scheduler;
 
     public static String buildKey(AccessKind kind, String dbName, String collName, String indexKey) {
         return UsageTracker.buildKey(kind, dbName, collName, indexKey);
@@ -188,6 +188,11 @@ public class MemoryManagement {
             if (!locks.tryLockWrite(resource.dbName(), resource.collName())) {
                 continue;
             }
+            final var indexedField = lockedFieldOf(resource);
+            if (indexedField != null && !locks.tryLockIndex(resource.dbName(), resource.collName(), indexedField)) {
+                locks.releaseWrite(resource.dbName(), resource.collName());
+                continue;
+            }
             try {
                 switch (resource.kind()) {
                     case PK_INDEX -> userCache.evictPkIndex(resource.dbName(), resource.collName());
@@ -199,9 +204,19 @@ public class MemoryManagement {
                 }
                 remaining -= resource.estimatedSizeBytes();
             } finally {
+                if (indexedField != null) {
+                    locks.releaseIndex(resource.dbName(), resource.collName(), indexedField);
+                }
                 locks.releaseWrite(resource.dbName(), resource.collName());
             }
         }
+    }
+
+    private static String lockedFieldOf(CacheableResource resource) {
+        if (resource.kind() != AccessKind.FIELD_INDEX || resource.indexKey() == null) {
+            return null;
+        }
+        return CacheableResource.indexedFieldOf(resource.indexKey());
     }
 
     public long userCacheBytes() {

@@ -105,7 +105,7 @@ public class OperationProcessorScheduleTest {
     }
 
     @Test
-    public void test_drop_database_removes_schedules() {
+    public void test_drop_database_removes_schedules() throws Exception {
         final var dbName = "scheddropdb";
         assertEquals(OperationStatus.OK, processor.processMessage(new CreateDatabaseRequest(dbName)).getStatus());
         processor.processMessage(new SaveProcedureRequest(dbName, "job", "return 1;"));

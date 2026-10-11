@@ -44,12 +44,12 @@ public class IndexHelperReadTest {
         return e;
     }
 
-    private void setupCollection(Cache cache, DbEntry... entries) {
+    private void setupCollection(Cache cache, DbEntry... entries) throws IOException {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "x", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, pk);
         for (var entry : entries) {
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
     }
 
@@ -62,7 +62,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_get_index_entries_for_field_returns_entries_when_indexed() throws IOException {
+    public void test_get_index_entries_for_field_returns_entries_when_indexed()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("n1", "tag", new JsonString("alpha")),
                 entryWith("n2", "tag", new JsonString("beta")), entryWith("n3", "tag", new JsonString("alpha")));
@@ -92,7 +93,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_mixed_scalar_and_object_includes_all_docs() throws IOException {
+    public void test_getIndexEntriesForField_mixed_scalar_and_object_includes_all_docs()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("s1", "data", new JsonString("hello")),
                 entryWith("s2", "data", new JsonString("world")), entryWith("o1", "data", objectValue(1)),
@@ -111,7 +113,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_mixed_scalar_and_array_includes_all_docs() throws IOException {
+    public void test_getIndexEntriesForField_mixed_scalar_and_array_includes_all_docs()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("s1", "data", new JsonNumber(42)),
                 entryWith("a1", "data", arrayValue("x", "y")), entryWith("a2", "data", arrayValue("z")));
@@ -126,7 +129,7 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_pure_scalar_field_unchanged() throws IOException {
+    public void test_getIndexEntriesForField_pure_scalar_field_unchanged() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("n1", "score", new JsonNumber(10)),
                 entryWith("n2", "score", new JsonNumber(20)), entryWith("n3", "score", new JsonNumber(10)));
@@ -141,7 +144,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_pure_object_field_returns_entries() throws IOException {
+    public void test_getIndexEntriesForField_pure_object_field_returns_entries()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("o1", "data", objectValue(1)), entryWith("o2", "data", objectValue(1)),
                 entryWith("o3", "data", objectValue(2)));
@@ -157,7 +161,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry() throws IOException {
+    public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("o1", "data", objectValue(5)), entryWith("o2", "data", objectValue(5)),
                 entryWith("o3", "data", objectValue(5)));
@@ -180,7 +185,7 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_get_matching_ids_for_join_returns_matching_ids() throws IOException {
+    public void test_get_matching_ids_for_join_returns_matching_ids() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
                 entryWith("r2", "refKey", new JsonNumber(7)), entryWith("r3", "refKey", new JsonNumber(42)));
@@ -229,7 +234,7 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_records_analyze_context() throws IOException {
+    public void test_getIndexEntriesForField_records_analyze_context() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("a1", "tag", new JsonString("alpha")));
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "tag");
@@ -252,7 +257,7 @@ public class IndexHelperReadTest {
     // whose value changed from object to a scalar without the index having been updated yet (the
     // background-processing lag the object/array hash index tolerates)
     @Test
-    public void test_getIndexEntriesForField_hash_index_skips_stale_entries() throws IOException {
+    public void test_getIndexEntriesForField_hash_index_skips_stale_entries() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("keep1", "data", objectValue(1)), entryWith("gone1", "data", objectValue(2)),
                 entryWith("scalarNow1", "data", objectValue(3)));
@@ -263,21 +268,20 @@ public class IndexHelperReadTest {
         withoutField.add(Globals.PK_FIELD, new JsonString("gone1"));
         final var goneEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, withoutField);
         goneEntry.set_id("gone1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, goneEntry);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, goneEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
                 entryWith("scalarNow1", "data", new JsonString("no-longer-an-object")));
 
         final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
-        assertNotNull(entries);
-        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
-                .collect(java.util.stream.Collectors.toSet());
-        assertTrue(allIds.contains("keep1"));
-        assertFalse(allIds.contains("gone1"));
-        assertFalse(allIds.contains("scalarNow1"));
+
+        assertNull(entries,
+                "a document that lost the field is no longer covered by the index, and an index that does not"
+                        + " cover every document answers nothing rather than a partial set");
     }
 
     @Test
-    public void test_get_matching_ids_for_join_skips_null_and_object_values() throws IOException {
+    public void test_get_matching_ids_for_join_declines_on_null_and_object_values()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
                 entryWith("r2", "refKey", new JsonNumber(7)));
@@ -291,7 +295,25 @@ public class IndexHelperReadTest {
 
         final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues);
 
-        assertNotNull(result);
+        assertNull(result,
+                "an object or null join key has no scalar index entry, so answering from the index would drop every"
+                        + " document it joins: the lookup must decline and let the caller scan");
+    }
+
+    @Test
+    public void test_get_matching_ids_for_join_answers_when_every_key_is_scalar()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
+                entryWith("r2", "refKey", new JsonNumber(7)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("refKey"));
+
+        final var localValues = new java.util.HashSet<JsonBaseElement>();
+        localValues.add(new JsonNumber(42));
+
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues);
+
         assertEquals(Set.of("r1"), result);
     }
 }

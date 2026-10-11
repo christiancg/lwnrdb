@@ -9,7 +9,6 @@ import java.util.random.RandomGenerator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.ScriptPlacement;
@@ -19,23 +18,18 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 
 public class ScriptPlacementTest {
-    private static final long EPOCH = 42L;
     private static final String DB = "placement_db";
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Configuration config = Configuration.getInstance();
     private ScriptedRandom scriptedRandom;
     private ScriptPlacement placement;
     private boolean origEnabled;
     private boolean origRouting;
     private int origWeight;
-    private long origEpoch;
 
     // The two samples are taken by index, so the members map must iterate in a known order.
     private static NodeInfo node(String id, int port, int scriptLoad, NodeState state) {
-        final var node = new NodeInfo(id, "127.0.0.1", port, state, 1L, 1L, scriptLoad);
-        node.setAdminEpoch(EPOCH);
-        return node;
+        return new NodeInfo(id, "127.0.0.1", port, state, 1L, 1L, scriptLoad);
     }
 
     private static NodeInfo caughtUpPeer(String id, int scriptLoad) {
@@ -63,9 +57,7 @@ public class ScriptPlacementTest {
         origEnabled = config.isClusterEnabled();
         origRouting = config.isScriptRoutingEnabled();
         origWeight = config.getScriptLocalityWeight();
-        origEpoch = adminEpoch.current();
         // Set directly rather than through bump(): the setter would persist the epoch file.
-        TestUtils.setPrivateField(adminEpoch, "epoch", EPOCH);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
         TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
@@ -78,7 +70,6 @@ public class ScriptPlacementTest {
         TestUtils.setPrivateField(config, "scriptLocalityWeight", origWeight);
         TestUtils.setPrivateField(membershipService, "members", new java.util.concurrent.ConcurrentHashMap<>());
         TestUtils.setPrivateField(membershipService, "self", null);
-        TestUtils.setPrivateField(adminEpoch, "epoch", origEpoch);
     }
 
     @Test
@@ -158,23 +149,6 @@ public class ScriptPlacementTest {
     }
 
     @Test
-    public void test_skips_a_peer_whose_admin_epoch_is_behind() throws Exception {
-        final var behind = caughtUpPeer("b", 0);
-        behind.setAdminEpoch(EPOCH - 1);
-        membership(node("a-self", 1, 9, NodeState.ALIVE), behind);
-        assertNull(placement.choose(DB));
-    }
-
-    @Test
-    public void test_keeps_a_peer_whose_admin_epoch_is_ahead() throws Exception {
-        final var ahead = caughtUpPeer("b", 0);
-        ahead.setAdminEpoch(EPOCH + 5);
-        membership(node("a-self", 1, 9, NodeState.ALIVE), ahead);
-        samples(0, 0);
-        assertEquals("b", placement.choose(DB).getNodeId());
-    }
-
-    @Test
     public void test_self_stays_a_candidate_while_it_is_admin_syncing() throws Exception {
         final var self = node("a-self", 1, 0, NodeState.ALIVE);
         self.setAdminSyncing(true);
@@ -188,7 +162,7 @@ public class ScriptPlacementTest {
         final var syncing = caughtUpPeer("b", 0);
         syncing.setAdminSyncing(true);
         final var behind = caughtUpPeer("c", 0);
-        behind.setAdminEpoch(EPOCH - 1);
+        behind.setAdminSyncing(true);
         membership(node("a-self", 1, 9, NodeState.ALIVE), syncing, behind, caughtUpPeer("d", 0));
         samples(0, 0);
         assertEquals("d", placement.choose(DB).getNodeId());

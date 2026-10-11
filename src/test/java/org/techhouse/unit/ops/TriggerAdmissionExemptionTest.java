@@ -4,8 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -36,13 +34,12 @@ import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.ScheduleDispatcher;
 import org.techhouse.ops.ScriptAdmission;
 import org.techhouse.ops.TriggerDispatcher;
-import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerAdmissionExemptionTest {
     private static final String OWNER = "exemptowner";
@@ -61,15 +58,7 @@ public class TriggerAdmissionExemptionTest {
         IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, OUTPUT_COLL);
         AdminOperationHelper.createPageCollections(TestGlobals.DB, OUTPUT_COLL);
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, OUTPUT_COLL));
-        AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of(OWNER));
-        final var request = new CreateUserRequest();
-        request.setUsername(OWNER);
-        request.setPassword("password123");
-        request.setAdmin(false);
-        request.setGlobalPermissions(new HashSet<>());
-        request.setDatabasePermissions(new HashMap<>());
-        request.setCollectionPermissions(new HashMap<>());
-        UserOperationHelper.processCreateUser(request);
+        TriggerTestSupport.createDefiner(OWNER);
     }
 
     @AfterAll

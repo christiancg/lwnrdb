@@ -38,6 +38,11 @@ public class JsonVector extends JsonCustom<double[]> {
     }
 
     @Override
+    public String canonicalSpelling() {
+        return buildWireValue(customValue);
+    }
+
+    @Override
     public String getCustomTypeName() {
         return CUSTOM_TYPE_NAME;
     }

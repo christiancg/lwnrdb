@@ -14,19 +14,17 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnection;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ejson.EJson;
+import org.techhouse.test.ClusterTestHarness;
 
 public class PeerConnectionTest {
     private final EJson eJson = new EJson();
 
     private ClusterMessage gossip() {
-        return new ClusterMessage(null, ClusterMessageType.GOSSIP, "s",
-                new NodeInfo("x", "127.0.0.1", 1, NodeState.ALIVE, 1L, 1L), null);
+        return new ClusterMessage(null, ClusterMessageType.GOSSIP, "s", ClusterTestHarness.node("x", 1), null);
     }
 
     @Test
@@ -59,6 +57,7 @@ public class PeerConnectionTest {
     }
 
     @Test
+    @SuppressWarnings("BusyWait")
     public void test_reader_closes_connection_on_eof() throws Exception {
         final PeerConnection connection;
         try (var listener = new ServerSocket(0)) {

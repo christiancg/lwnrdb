@@ -47,6 +47,7 @@ public class OperationProcessorTransactionTest {
     static void setUpBeforeClass() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
+        TestUtils.createTestJoinCollection();
     }
 
     @AfterAll
@@ -399,5 +400,67 @@ public class OperationProcessorTransactionTest {
         find.set_id("txn-none-1");
         final OperationResponse response = processor.processMessage(find, clientId);
         assertEquals(OperationStatus.OK, response.getStatus());
+    }
+
+    private void saveInto(String coll, String id, String value, UUID clientId) {
+        final var req = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString(id));
+        obj.add("k", new JsonString(value));
+        req.setObject(obj);
+        req.set_id(id);
+        assertEquals(OperationStatus.OK, processor.processMessage(req, clientId).getStatus());
+    }
+
+    private List<JsonObject> joinFrom(UUID clientId) {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List
+                .of(new org.techhouse.ops.req.agg.step.JoinAggregationStep(TestGlobals.JOIN_COLL, "k", "k", "cfg")));
+        final var response = processor.processMessage(request, clientId);
+        assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
+        return ((AggregateResponse) response).getResults();
+    }
+
+    @Test
+    public void test_join_sees_documents_written_earlier_in_the_same_transaction() {
+        final var clientId = newClient();
+        saveInto(TestGlobals.COLL, "jtx-left", "shared", clientId);
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        try {
+            saveInto(TestGlobals.JOIN_COLL, "jtx-right", "shared", clientId);
+
+            final var results = joinFrom(clientId);
+
+            final var left = results.stream().filter(o -> "jtx-left".equals(o.get("_id").asJsonString().getValue()))
+                    .findFirst().orElseThrow();
+            assertTrue(left.get("cfg").isJsonArray(),
+                    "read-your-writes must hold for a joined collection the transaction has written, exactly as it"
+                            + " does for FIND_BY_ID and for a plain AGGREGATE on that collection");
+            assertFalse(left.get("cfg").asJsonArray().isEmpty());
+        } finally {
+            processor.processMessage(new RollbackTransactionRequest(), clientId);
+        }
+    }
+
+    @Test
+    public void test_join_does_not_see_documents_deleted_in_the_same_transaction() {
+        final var clientId = newClient();
+        saveInto(TestGlobals.COLL, "jtx2-left", "gone", clientId);
+        saveInto(TestGlobals.JOIN_COLL, "jtx2-right", "gone", clientId);
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        try {
+            final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.JOIN_COLL);
+            delete.set_id("jtx2-right");
+            assertEquals(OperationStatus.OK, processor.processMessage(delete, clientId).getStatus());
+
+            final var results = joinFrom(clientId);
+
+            final var left = results.stream().filter(o -> "jtx2-left".equals(o.get("_id").asJsonString().getValue()))
+                    .findFirst().orElseThrow();
+            assertTrue(left.get("cfg").isJsonNull() || left.get("cfg").asJsonArray().isEmpty(),
+                    "a document the transaction deleted from the joined collection must not still join");
+        } finally {
+            processor.processMessage(new RollbackTransactionRequest(), clientId);
+        }
     }
 }

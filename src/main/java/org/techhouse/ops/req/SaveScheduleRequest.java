@@ -11,7 +11,6 @@ public class SaveScheduleRequest extends VersionedDefinitionRequest {
     private JsonObject args;
     private long timeoutMs;
     private String description;
-    private String stampedDefiner;
 
     public SaveScheduleRequest() {
         super(OperationType.SAVE_SCHEDULE, null, null);
@@ -77,13 +76,5 @@ public class SaveScheduleRequest extends VersionedDefinitionRequest {
 
     public void setDescription(String description) {
         this.description = description;
-    }
-
-    public String getStampedDefiner() {
-        return stampedDefiner;
-    }
-
-    public void setStampedDefiner(String stampedDefiner) {
-        this.stampedDefiner = stampedDefiner;
     }
 }

@@ -8,21 +8,36 @@ public final class JsDbDateTime extends JsValue {
 
     private final LocalDateTime value;
 
+    private final JsonDateTime source;
+
     public JsDbDateTime(LocalDateTime value) {
+        this(value, null);
+    }
+
+    public JsDbDateTime(JsonDateTime source) {
+        this(source.getCustomValue(), source);
+    }
+
+    private JsDbDateTime(LocalDateTime value, JsonDateTime source) {
         this.value = value;
+        this.source = source;
     }
 
     public LocalDateTime getValue() {
         return value;
     }
 
+    public JsDbDateTime copy() {
+        return new JsDbDateTime(value, source);
+    }
+
     public JsonDateTime toJsonDateTime() {
-        return new JsonDateTime(value);
+        return source != null ? source : new JsonDateTime(value);
     }
 
     @Override
     public String toString() {
-        return toJsonDateTime().getValue();
+        return new JsonDateTime(value).getValue();
     }
 
     @Override

@@ -116,7 +116,6 @@ public class ScriptAdmission {
             return;
         }
         pool.release();
-        pools.remove(key, pool);
     }
 
     public boolean tryAcquire() {

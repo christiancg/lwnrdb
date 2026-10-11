@@ -1,7 +1,9 @@
 package org.techhouse.ops.req.validations;
 
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.ArmFaultRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.AwaitFaultRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CallProcedureRequest;
 import org.techhouse.ops.req.CancelScriptRequest;
@@ -21,6 +23,7 @@ import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.ops.req.ReleaseFaultRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.RunScriptRequest;
@@ -85,6 +88,9 @@ public class RequestValidator {
             case LIST_TRIGGER_RUNS -> ControlRequestValidator.validateListTriggerRuns((ListTriggerRunsRequest) request);
             case RESOLVE_TRIGGER_RUN ->
                 ControlRequestValidator.validateResolveTriggerRun((ResolveTriggerRunRequest) request);
+            case ARM_FAULT -> ControlRequestValidator.validateArmFault((ArmFaultRequest) request);
+            case AWAIT_FAULT -> ControlRequestValidator.validateAwaitFault((AwaitFaultRequest) request);
+            case RELEASE_FAULT -> ControlRequestValidator.validateReleaseFault((ReleaseFaultRequest) request);
         };
     }
 }

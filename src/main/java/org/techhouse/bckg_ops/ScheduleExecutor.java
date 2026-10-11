@@ -7,7 +7,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 import org.techhouse.cluster.ClusterConfig;
@@ -28,25 +27,21 @@ public class ScheduleExecutor {
     private final LongAdder failed = new LongAdder();
     private final LongAdder skipped = new LongAdder();
     private final LongAdder dropped = new LongAdder();
-    private final AtomicInteger inFlight = new AtomicInteger();
-    private final IdleSignal idleSignal = new IdleSignal();
+    private final IdleSignal.Workers<ScheduleRegistry.Entry> workers = new IdleSignal.Workers<>();
     private final Set<String> running = ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
-    private ScheduledExecutorService scheduler;
-    private Consumer<ScheduleRegistry.Entry> dispatcher;
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ScheduledExecutorService scheduler;
+    private volatile Consumer<ScheduleRegistry.Entry> dispatcher;
 
     public ScheduleExecutor() {
         this.queue = new LinkedBlockingQueue<>(Math.max(1, Configuration.getInstance().getScheduleQueueSize()));
     }
 
-    public void start(Consumer<ScheduleRegistry.Entry> scheduleDispatcher) {
+    public synchronized void start(Consumer<ScheduleRegistry.Entry> scheduleDispatcher) {
         draining = false;
         this.dispatcher = scheduleDispatcher;
-        final var threadCount = Math.max(1, configuration.getScheduleThreads());
-        for (var i = 0; i < threadCount; i++) {
-            pool.execute(this::runWorker);
-        }
+        workers.start(pool, Math.max(1, configuration.getScheduleThreads()), queue, this::dispatch);
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             final var thread = new Thread(r, "schedule-ticker");
             thread.setDaemon(true);
@@ -81,14 +76,15 @@ public class ScheduleExecutor {
     public void tick(long now) {
         for (final var entry : registry.entries()) {
             final var definition = entry.getDefinition();
-            if (!isOwner(entry)) {
-                continue;
-            }
             if (!definition.isEnabled()) {
                 continue;
             }
             final var nextRunAt = entry.getNextRunAt();
             if (nextRunAt <= 0 || now < nextRunAt) {
+                continue;
+            }
+            if (!isOwner(entry)) {
+                entry.setNextRunAt(registry.nextRunAfter(entry, now));
                 continue;
             }
             entry.setNextRunAt(registry.nextRunAfter(entry, now));
@@ -102,8 +98,8 @@ public class ScheduleExecutor {
     }
 
     private boolean isOwner(ScheduleRegistry.Entry entry) {
-        return !clusterConfig.isEnabled()
-                || ownershipManager.isOwner(entry.getDbName(), ScheduleOperationHelper.ringKey(entry.getName()));
+        return !clusterConfig.isEnabled() || (ownershipManager.hasQuorum()
+                && ownershipManager.isOwner(entry.getDbName(), ScheduleOperationHelper.ringKey(entry.getName())));
     }
 
     public void submit(ScheduleRegistry.Entry entry) {
@@ -122,34 +118,22 @@ public class ScheduleExecutor {
         }
     }
 
-    private void runWorker() {
-        while (!Thread.currentThread().isInterrupted()) {
-            final ScheduleRegistry.Entry entry;
-            try {
-                entry = queue.take();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            inFlight.incrementAndGet();
-            try {
-                dispatcher.accept(entry);
-                fired.increment();
-            } catch (Exception e) {
-                failed.increment();
-                logger.error("Error while dispatching a scheduled run: ", e);
-            } finally {
-                running.remove(entry.key());
-                inFlight.decrementAndGet();
-                idleSignal.signal();
-            }
+    private void dispatch(ScheduleRegistry.Entry entry) {
+        try {
+            dispatcher.accept(entry);
+            fired.increment();
+        } catch (Exception e) {
+            failed.increment();
+            logger.error("Error while dispatching a scheduled run: ", e);
+        } finally {
+            running.remove(entry.key());
         }
     }
 
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {
-            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+            if (workers.awaitIdle(queue::isEmpty, timeoutMillis)) {
                 stop();
                 return true;
             }
@@ -162,20 +146,21 @@ public class ScheduleExecutor {
         return false;
     }
 
-    private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0;
-    }
-
     public int pending() {
-        return queue.size() + inFlight.get();
+        return queue.size() + workers.inFlight();
     }
 
-    public void stop() {
-        draining = true;
+    public synchronized void stopTicking() {
         if (scheduler != null) {
             scheduler.shutdownNow();
             scheduler = null;
         }
+    }
+
+    public synchronized void stop() {
+        workers.stopped();
+        draining = true;
+        stopTicking();
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Schedule");
         queue.clear();
         running.clear();

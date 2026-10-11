@@ -1,5 +1,7 @@
 package org.techhouse.unit.bckg_ops;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
@@ -64,6 +66,26 @@ public class BackgroundTaskManagerTest {
         manager.startBackgroundWorkers();
 
         verify(pool, never()).execute(any(Runnable.class));
+    }
+
+    @Test
+    void test_a_submitted_event_counts_as_pending_until_it_is_settled() {
+        final var manager = new BackgroundTaskManager();
+        manager.submitBackgroundTask(new EntityEvent(EventType.CREATED, "test", "test", new DbEntry()));
+
+        assertEquals(1, manager.pending(), "an event is pending from the moment it is submitted");
+        assertFalse(manager.drain(0L), "a queue holding a submitted event is not idle");
+        assertEquals(0, manager.pending(), "stopping discards exactly the events it dropped from the count");
+    }
+
+    @Test
+    void test_a_task_refused_while_draining_is_not_counted() {
+        final var manager = new BackgroundTaskManager();
+        assertTrue(manager.drain(0L));
+
+        manager.submitBackgroundTask(new EntityEvent(EventType.CREATED, "test", "test", new DbEntry()));
+
+        assertEquals(0, manager.pending());
     }
 
     @Test

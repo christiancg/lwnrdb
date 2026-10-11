@@ -1,16 +1,6 @@
-"""Measure cold vs warm aggregation latency on the same collection.
-
-Inserts a fixed dataset, then runs the same FILTER+COUNT query repeatedly
-against the collection. The first call hits disk (cold); subsequent calls
-should hit the in-memory cache (warm).
-
-Run with the server already up and admin credentials known.
-"""
-
 import os
 import random
 import signal
-import socket
 import statistics
 import string
 import subprocess
@@ -29,12 +19,9 @@ COLL = "items"
 DOCS = int(os.environ.get("BENCH_DOCS", "20000"))
 PAYLOAD_BYTES = int(os.environ.get("BENCH_PAYLOAD_BYTES", "512"))
 WARM_RUNS = int(os.environ.get("BENCH_WARM_RUNS", "30"))
-# Warm (cached) calls must beat the cold (disk) call. Allow a small tolerance so
-# noisy CI timing doesn't flake the assertion while still catching a real regression.
 SPEED_TOLERANCE = float(os.environ.get("BENCH_SPEED_TOLERANCE", "1.0"))
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
-
 
 
 def stat(label, detail):
@@ -87,9 +74,6 @@ def cache_bytes(c):
 
 
 def evict_collection_cache(c):
-    """Drop the collection's cached document map by dropping and re-creating.
-    Cheaper alternative: restart the server. Here we use DROP_COLLECTION + recreate +
-    re-insert, but that's expensive. Instead, we re-run setup() to reset state."""
     setup(c)
 
 
@@ -118,7 +102,6 @@ JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 SERVER_LOG = "/tmp/lwnrdb-bench.log"
 
 
-
 def kill_server():
     pids = []
     try:
@@ -129,12 +112,9 @@ def kill_server():
         return
     for pid in pids:
         os.kill(pid, signal.SIGTERM)
-    # Wait for the port to actually close (the JVM holds the listening socket
-    # until shutdown completes; on CI runners this can take several seconds).
     deadline = time.time() + 30.0
     while time.time() < deadline and bu.port_open():
         time.sleep(0.2)
-    # Escalate to SIGKILL if anything is still alive.
     for pid in pids:
         try:
             os.kill(pid, 0)
@@ -146,7 +126,6 @@ def kill_server():
 
 
 def timed_runs(c, values):
-    """Run each query, returning (latency samples, all-OK flag)."""
     samples, all_ok = [], True
     for v in values:
         dt_ms, ok = time_query(c, v)
@@ -170,13 +149,8 @@ def main():
     stat("cache after insert", f"{cb_before/1024/1024:.2f}MB")
     c.close()
 
-    # Let async background workers finish writing admin metadata to disk before
-    # the abrupt SIGTERM below — otherwise we corrupt admin pages and the next
-    # boot has to salvage them. CI runners are slower than dev hardware so
-    # err on the side of waiting longer.
     time.sleep(8)
 
-    # Restart server to clear the in-memory cache so the "cold" call really is cold.
     section("Restart server to clear the cache")
     kill_server()
     bu.start_server(bu.REPO_ROOT, SERVER_LOG, xmx="1g")
@@ -217,7 +191,6 @@ def main():
         warm_median <= cold_ms * SPEED_TOLERANCE,
         detail=f"cold={cold_ms:.2f} ms  warm median={warm_median:.2f} ms  speedup={speedup:.1f}x")
 
-    # cleanup
     c.send({"type": "DROP_DATABASE", "databaseName": DB})
     c.close()
 

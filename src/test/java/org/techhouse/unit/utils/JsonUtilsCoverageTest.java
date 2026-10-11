@@ -67,4 +67,27 @@ public class JsonUtilsCoverageTest {
         assertTrue(JsonUtils.sortFunctionAscending(a, b, "n") < 0);
         assertTrue(JsonUtils.sortFunctionDescending(a, b, "n") > 0);
     }
+
+    @Test
+    public void test_negative_zero_sorts_equal_to_positive_zero() {
+        final var negative = new JsonNumber(-0.0);
+        final var positive = new JsonNumber(0.0);
+
+        assertEquals(0, JsonUtils.compareSortKeysAscending(negative, positive),
+                "the index buckets both spellings under one key, so a scan that separates them makes the"
+                        + " same query answer differently with and without an index");
+        assertEquals(0, JsonUtils.compareSortKeysDescending(negative, positive));
+    }
+
+    @Test
+    public void test_an_integer_sorts_equal_to_the_same_value_as_a_double() {
+        assertEquals(0, JsonUtils.compareSortKeysAscending(new JsonNumber(2), new JsonNumber(2.0)));
+    }
+
+    @Test
+    public void test_numeric_order_survives_the_normalisation() {
+        assertTrue(JsonUtils.compareSortKeysAscending(new JsonNumber(-1.5), new JsonNumber(-0.0)) < 0);
+        assertTrue(JsonUtils.compareSortKeysAscending(new JsonNumber(-0.0), new JsonNumber(1.5)) < 0);
+        assertTrue(JsonUtils.compareSortKeysDescending(new JsonNumber(1.5), new JsonNumber(-1.5)) < 0);
+    }
 }

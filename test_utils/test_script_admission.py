@@ -1,46 +1,4 @@
-"""End-to-end tests for script admission control (`maxConcurrentScripts` / `scriptQueueWaitMs`).
-
-Like the RUN_SCRIPT and schedules suites this script is **self-contained**: it starts its own
-LWNRDB instance on a dedicated port and working directory, because the cap has to be set to a
-small, known value for a burst to reach it, and the shared CI server runs with the default 16.
-It runs in three phases, each a restart of the same data directory:
-
-  phase 1 — `maxConcurrentScripts=2`, `scriptQueueWaitMs=0`: the cap rejects immediately, so a
-            burst larger than the cap produces `503-6` for the surplus;
-  phase 2 — `maxConcurrentScripts=2`, `scriptQueueWaitMs=10000`: the same burst is absorbed by
-            the wait, so nobody is refused while the ceiling still holds;
-  phase 3 — `maxConcurrentScripts=0`: the cap is off and the burst behaves exactly as it did
-            before the feature existed. This phase is also the **control** for phase 1 — it is
-            what proves the phase-1 ceiling came from the cap and not from a slow runner.
-
-What is covered:
-
-  * the ceiling itself: `scripts.running` is sampled throughout each burst and must never exceed
-    the configured capacity in phases 1 and 2, and must exceed it in phase 3;
-  * the rejection: shape (`type`/`status`/`errorCode`/`message`), that it applies to
-    `RUN_SCRIPT` and `CALL_PROCEDURE` alike, and that every non-rejected caller still gets a
-    real result;
-  * `GET_DATABASE_STATS`: `scripts.capacity`/`available`/`rejected`/`waited`, including that
-    `available` returns to the capacity once the node is quiet (i.e. no permit leaked) after
-    successful, failing, timed-out and memory-aborted runs;
-  * the wait as the leading indicator: `waited` counts a caller that queued, `rejected` counts
-    one that was turned away;
-  * that a doomed request never spends a permit (scripts disabled, unknown database, oversized
-    source), so a saturated node still answers them with their own error;
-  * that a rejection does not poison the connection — the client's retry on the same socket
-    succeeds once a permit frees;
-  * that non-script operations are unaffected while the pool is exhausted;
-  * **the central invariant**: triggers and scheduled procedures are exempt. Both are bounded by
-    their own worker pools, and a run refused for want of a permit would be a *dropped* trigger
-    rather than a retried one, since its pending-run record is consumed by the transaction that
-    applies its effects.
-
-The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping it
-never touches an unrelated LWNRDB process.
-"""
-
 import os
-import sys
 import tempfile
 import threading
 import time
@@ -58,19 +16,11 @@ COLL = "docs"
 AUDIT_COLL = "audit"
 TICKS_COLL = "ticks"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
-
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
-# The cap under test. Deliberately tiny so a burst of CALLERS reaches it in one round.
 CAPACITY = 2
 CALLERS = 6
-# Deliberately below CALLERS but under a generous node-wide cap in its own phase, so a refusal there
-# can only have come from the per-user slice.
 PER_USER_CAPACITY = 2
-# Long enough that the whole burst is still queued when the last caller arrives, short enough
-# that phase 1 does not take noticeably longer than the burst itself.
 SLOW_SCRIPT_MS = 600
 LONG_WAIT_MS = 10_000
 
@@ -80,9 +30,6 @@ MAX_SOURCE_BYTES = 8 * 1024
 
 SLOW_SCRIPT = f"export default new Promise(r => setTimeout(() => r(1), {SLOW_SCRIPT_MS}));"
 
-
-
-# ── connection / protocol ────────────────────────────────────────────────────
 
 class Conn(bu.Conn):
     def run(self, script: str, args=None, db=DB) -> dict:
@@ -127,20 +74,10 @@ class Conn(bu.Conn):
         return response.get("stats", {}).get("scripts", {})
 
 def admin_conn() -> Conn:
-    conn = Conn()
-    conn.authenticate()
-    return conn
+    return Conn.authenticated()
 
-
-# ── the burst ────────────────────────────────────────────────────────────────
 
 class Burst:
-    """The result of firing CALLERS concurrent script runs, each on its own connection.
-
-    `peak_running` is the highest `scripts.running` a separate sampling connection observed while
-    the burst was in flight. That number, not the response mix, is what actually demonstrates the
-    ceiling: responses alone cannot distinguish "the cap held" from "the runner was slow".
-    """
 
     def __init__(self, responses: list, peak_running: int):
         self.responses = responses
@@ -151,11 +88,6 @@ class Burst:
 
 
 def fire_burst(request: dict, callers: int = CALLERS, credentials: list = None) -> Burst:
-    """Authenticate every caller first, then release them together so the burst really overlaps.
-
-    Connecting and authenticating inside the timed window would stagger the arrivals enough that
-    a cap of 2 could be satisfied sequentially without ever being contended.
-    """
     responses = []
     responses_lock = threading.Lock()
     ready = threading.Barrier(callers + 1)
@@ -163,7 +95,6 @@ def fire_burst(request: dict, callers: int = CALLERS, credentials: list = None) 
     peak = [0]
 
     def caller(index: int):
-        # Each caller may authenticate as a different principal, which is what a per-user cap is about.
         username, password = credentials[index % len(credentials)] if credentials \
             else (ADMIN_USERNAME, ADMIN_PASSWORD)
         with Conn() as conn:
@@ -174,9 +105,6 @@ def fire_burst(request: dict, callers: int = CALLERS, credentials: list = None) 
             responses.append(response)
 
     def sampler():
-        # `wait` rather than a bare loop: an undelayed poll would flood the server with stats
-        # requests and perturb the very concurrency it is measuring. A 5ms interval still takes
-        # ~100 samples across a SLOW_SCRIPT_MS run, and an overshoot lasts a whole run.
         with admin_conn() as conn:
             ready.wait()
             while not stop_sampling.wait(0.005):
@@ -197,60 +125,33 @@ def fire_burst(request: dict, callers: int = CALLERS, credentials: list = None) 
 
 
 def await_available(conn: Conn, expected: int, timeout=30.0) -> int:
-    """A permit is released as the response is written, so a quiet node settles almost at once."""
-    deadline = time.time() + timeout
-    latest = -1
-    while time.time() < deadline:
-        latest = conn.script_stats().get("available", -1)
-        if latest == expected:
-            return latest
-        time.sleep(0.1)
-    return latest
+    latest = [-1]
+
+    def reached() -> bool:
+        latest[0] = conn.script_stats().get("available", -1)
+        return latest[0] == expected
+
+    bu.wait_until(reached, timeout, 0.1)
+    return latest[0]
 
 
 def await_doc(conn: Conn, doc_id: str, coll: str, timeout=30.0):
-    """Triggers and schedules are asynchronous, so poll rather than sleep a fixed interval."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    def stored():
         response = conn.find(doc_id, coll=coll)
-        if response.get("status") == "OK":
-            return response.get("object")
-        time.sleep(0.2)
-    return None
+        return response.get("object") if response.get("status") == "OK" else None
 
+    return bu.wait_until(stored, timeout, 0.2) or None
 
-# ── server lifecycle ─────────────────────────────────────────────────────────
 
 def write_config(work_dir: str, capacity: int, queue_wait_ms: int, per_user: int = 0, per_database: int = 0):
-    cfg = (
-        f"port={PORT}\n"
-        "filePath=db\n"
-        "logPath=logs\n"
-        f"defaultAdminUsername={ADMIN_USERNAME}\n"
-        f"defaultAdminPassword={ADMIN_PASSWORD}\n"
-        "scriptsEnabled=true\n"
-        f"maxConcurrentScripts={capacity}\n"
-        f"maxConcurrentScriptsPerUser={per_user}\n"
-        f"maxConcurrentScriptsPerDatabase={per_database}\n"
-        f"scriptQueueWaitMs={queue_wait_ms}\n"
-        f"scriptTimeoutMs={TIMEOUT_MS}\n"
-        f"scriptMaxMemoryBytes={MAX_MEMORY_BYTES}\n"
-        f"scriptMaxSourceBytes={MAX_SOURCE_BYTES}\n"
-        "scriptInstructionBudget=10000000\n"
-        "scriptMaxDepth=200\n"
-        "triggersEnabled=true\n"
-        "triggerThreads=2\n"
-        "schedulesEnabled=true\n"
-        "scheduleThreads=2\n"
-        "scheduleTickMs=200\n"
-        "scriptTimeZone=UTC\n"
-        "scriptLocale=en-US\n"
-    )
-    with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
-        fp.write(cfg)
+    bu.write_config(work_dir, PORT, scriptsEnabled=True, maxConcurrentScripts=capacity,
+                    maxConcurrentScriptsPerUser=per_user, maxConcurrentScriptsPerDatabase=per_database,
+                    scriptQueueWaitMs=queue_wait_ms, scriptTimeoutMs=TIMEOUT_MS,
+                    scriptMaxMemoryBytes=MAX_MEMORY_BYTES, scriptMaxSourceBytes=MAX_SOURCE_BYTES,
+                    scriptInstructionBudget=10000000, scriptMaxDepth=200, triggersEnabled=True,
+                    triggerThreads=2, schedulesEnabled=True, scheduleThreads=2, scheduleTickMs=200,
+                    scriptTimeZone="UTC", scriptLocale="en-US")
 
-
-# ── fixtures ─────────────────────────────────────────────────────────────────
 
 def setup_data(conn: Conn):
     section("Setup")
@@ -285,10 +186,6 @@ def create_tenants(conn: Conn):
                                 "collectionPermissions": {}}), "OK")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 1 — the cap rejects immediately (scriptQueueWaitMs=0)
-# ══════════════════════════════════════════════════════════════════════════
-
 def test_burst_is_capped(conn: Conn):
     section(f"A burst of {CALLERS} with capacity {CAPACITY} and no wait")
     burst = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT})
@@ -305,7 +202,6 @@ def test_burst_is_capped(conn: Conn):
           all(r.get("result") == 1 for r in burst.ok),
           f"results: {[r.get('result') for r in burst.ok]}")
 
-    # The actual ceiling, not just the response mix.
     check(f"no more than {CAPACITY} interpreters ran at once",
           0 < burst.peak_running <= CAPACITY,
           f"scripts.running peaked at {burst.peak_running}")
@@ -339,7 +235,6 @@ def test_call_procedure_is_capped(conn: Conn):
 
 def test_rejection_leaves_the_connection_usable(conn: Conn):
     section("A rejection is an ordinary error response")
-    # Hold the pool with CAPACITY slow runs on their own connections, then ask on a fresh one.
     holders = []
     started = threading.Barrier(CAPACITY + 1)
 
@@ -365,8 +260,6 @@ def test_rejection_leaves_the_connection_usable(conn: Conn):
         for thread in holders:
             thread.join(120)
         await_available(conn, CAPACITY)
-        # The point: no reconnect was needed. A client forced to reconnect after every 503-6
-        # would turn a capacity blip into a connection storm.
         check_result("… and the retry on the same connection succeeds", client.run("return 41 + 1;"), 42)
 
 
@@ -391,8 +284,6 @@ def test_permits_survive_failing_runs(conn: Conn):
     section("A permit is released however the run ends")
     check_code("a throwing script", conn.run("throw new Error('nope');"), "ERROR", "400-9")
     check("… released its permit", await_available(conn, CAPACITY) == CAPACITY)
-    # A timer, not a busy loop: a spin would trip the instruction budget (400-11) long before the
-    # wall clock, and it is the deadline path being tested here.
     check_code("a script that exceeds the deadline",
                conn.run(f"export default new Promise(r => setTimeout(() => r(1), {TIMEOUT_MS * 4}));"),
                "ERROR", "408-1")
@@ -406,7 +297,6 @@ def test_permits_survive_failing_runs(conn: Conn):
 def test_triggers_are_exempt(conn: Conn):
     section("Triggers are exempt from the cap")
     check_status("install a trigger", conn.save_trigger("auditor", "audit", ["CREATED", "UPDATED"]), "OK")
-    # Cumulative for the life of the process, so this section asserts on the delta.
     rejected_before = conn.script_stats().get("rejected")
 
     holders = []
@@ -431,8 +321,6 @@ def test_triggers_are_exempt(conn: Conn):
         check("the script pool is exhausted", exhausted == 0, f"available={exhausted}")
         check_status("a write still commits", writer.save_doc({"_id": "trigger-under-saturation", "v": 1}), "OK")
 
-    # The invariant: a permit must never be able to drop a trigger, because the pending-run record
-    # is consumed by the transaction that applies its effects — nothing would replay it.
     row = await_doc(conn, "trigger-under-saturation", AUDIT_COLL)
     check("the trigger ran while the cap was saturated", row is not None,
           "the audit row never appeared, so the trigger was dropped by the script cap")
@@ -482,10 +370,6 @@ def test_schedules_are_exempt(conn: Conn):
     check_status("remove the schedule", conn.delete_schedule("ticker"), "OK")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 2 — the wait absorbs the burst (scriptQueueWaitMs=10000)
-# ══════════════════════════════════════════════════════════════════════════
-
 def test_wait_absorbs_the_burst(conn: Conn):
     section(f"The same burst with a {LONG_WAIT_MS}ms wait")
     burst = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT})
@@ -493,13 +377,11 @@ def test_wait_absorbs_the_burst(conn: Conn):
     check("nobody was refused", not burst.rejected, f"{len(burst.rejected)} caller(s) got 503-6")
     check("every caller succeeded", len(burst.ok) == CALLERS,
           f"only {len(burst.ok)} of {CALLERS} succeeded; others: {burst.other}")
-    # The cap still bounds concurrency — the wait changes who is refused, not how many run.
     check(f"no more than {CAPACITY} interpreters ran at once",
           0 < burst.peak_running <= CAPACITY, f"scripts.running peaked at {burst.peak_running}")
 
     stats = conn.script_stats()
     check("stats counted no rejections", stats.get("rejected") == 0, f"got {stats!r}")
-    # `waited` is the leading indicator: the cap is becoming the bottleneck before anyone errors.
     check("stats counted the callers that queued", stats.get("waited") >= CALLERS - CAPACITY,
           f"waited={stats.get('waited')}, expected at least {CALLERS - CAPACITY}")
     check("every permit came back", await_available(conn, CAPACITY) == CAPACITY)
@@ -507,7 +389,6 @@ def test_wait_absorbs_the_burst(conn: Conn):
 
 def test_wait_may_exceed_the_run_timeout(conn: Conn):
     section("The wait is not bounded by the run timeout")
-    # Legal and intended: a caller may wait longer for a permit than a run is allowed to take.
     check(f"the configured wait ({LONG_WAIT_MS}ms) exceeds scriptTimeoutMs ({TIMEOUT_MS}ms)",
           LONG_WAIT_MS > TIMEOUT_MS)
     burst = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
@@ -515,10 +396,6 @@ def test_wait_may_exceed_the_run_timeout(conn: Conn):
     check("the caller that had to wait still succeeded", len(burst.ok) == CAPACITY + 1,
           f"only {len(burst.ok)} of {CAPACITY + 1} succeeded; rejected={len(burst.rejected)}")
 
-
-# ══════════════════════════════════════════════════════════════════════════
-# Phase 3 — the cap is off (maxConcurrentScripts=0)
-# ══════════════════════════════════════════════════════════════════════════
 
 def test_per_user_cap(conn: Conn):
     section("A per-user cap under a generous node-wide cap")
@@ -536,8 +413,6 @@ def test_per_user_cap(conn: Conn):
     check(f"no more than {PER_USER_CAPACITY} of that user's runs overlapped",
           0 < one_user.peak_running <= PER_USER_CAPACITY, f"scripts.running peaked at {one_user.peak_running}")
 
-    # The control: the same burst spread over two users reaches a higher ceiling, which is what proves
-    # the limit above came from the per-user cap and not from a slow runner.
     two_users = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
                            credentials=TENANTS)
     check("two users together exceed one user's ceiling", two_users.peak_running > PER_USER_CAPACITY,
@@ -585,8 +460,6 @@ def test_cap_disabled(conn: Conn):
           f"only {len(burst.ok)} of {CALLERS} succeeded; rejected={len(burst.rejected)}; others={burst.other}")
     check("nobody was refused", not burst.rejected)
 
-    # The control for phase 1: with the cap off the same burst really does overlap beyond CAPACITY,
-    # so the phase-1 ceiling was the cap and not a slow runner serialising the work anyway.
     check(f"more than {CAPACITY} interpreters ran at once", burst.peak_running > CAPACITY,
           f"scripts.running only peaked at {burst.peak_running}; phase 1's ceiling proves nothing "
           f"if the burst cannot exceed it here")
@@ -602,15 +475,10 @@ def cleanup(conn: Conn):
     check_status(f"drop {DB}", conn.send({"type": "DROP_DATABASE", "databaseName": DB}), "OK")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-
 def main():
     bu.banner("script admission control test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-        sys.exit(1)
+    bu.require_jar()
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-admission-")
     log_path = os.path.join(work_dir, "server.log")
@@ -645,7 +513,6 @@ def main():
         bu.stop_server(proc)
         proc = None
 
-        # A generous node-wide cap with a small per-user slice: a refusal here can only be the tenant cap.
         write_config(work_dir, capacity=CALLERS * 2, queue_wait_ms=0, per_user=PER_USER_CAPACITY)
         print(f"\n  Restarting server (per-user cap {PER_USER_CAPACITY}) on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)

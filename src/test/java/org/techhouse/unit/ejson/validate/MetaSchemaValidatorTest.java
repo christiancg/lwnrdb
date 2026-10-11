@@ -227,7 +227,41 @@ public class MetaSchemaValidatorTest {
     @Test
     public void test_ref_must_be_string() {
         assertFalse(meta.validate(schema("{\"$ref\":1}")).isValid());
-        assertTrue(meta.validate(schema("{\"$ref\":\"#/$defs/x\"}")).isValid());
+        assertTrue(meta.validate(schema("{\"$defs\":{\"x\":{\"type\":\"string\"}},\"$ref\":\"#/$defs/x\"}")).isValid());
+    }
+
+    @Test
+    public void test_unresolvable_ref_is_rejected() {
+        final var result = meta.validate(schema("{\"$ref\":\"#/$defs/missing\"}"));
+        assertFalse(result.isValid(), "an unresolvable pointer throws at validation time, so it cannot be saved");
+        assertTrue(result.getErrors().getFirst().contains("Unresolvable"));
+    }
+
+    @Test
+    public void test_self_referential_root_ref_is_rejected() {
+        final var result = meta.validate(schema("{\"$ref\":\"#\"}"));
+        assertFalse(result.isValid(), "the root refers to itself without consuming instance depth");
+        assertTrue(result.getErrors().getFirst().contains("cycle"));
+    }
+
+    @Test
+    public void test_cyclic_defs_are_rejected() {
+        final var result = meta.validate(schema("{\"$ref\":\"#/$defs/a\",\"$defs\":{"
+                + "\"a\":{\"$ref\":\"#/$defs/b\"},\"b\":{\"$ref\":\"#/$defs/a\"}}}"));
+        assertFalse(result.isValid());
+        assertTrue(result.getErrors().getFirst().contains("cycle"));
+    }
+
+    @Test
+    public void test_cycle_through_an_applicator_is_rejected() {
+        final var result = meta.validate(schema("{\"allOf\":[{\"$ref\":\"#\"}]}"));
+        assertFalse(result.isValid(), "allOf applies to the same instance node, so the recursion never terminates");
+    }
+
+    @Test
+    public void test_recursion_bounded_by_instance_depth_is_accepted() {
+        assertTrue(meta.validate(schema("{\"type\":\"object\",\"properties\":{\"child\":{\"$ref\":\"#\"}}}")).isValid(),
+                "a ref under a property consumes instance depth and terminates");
     }
 
     @Test

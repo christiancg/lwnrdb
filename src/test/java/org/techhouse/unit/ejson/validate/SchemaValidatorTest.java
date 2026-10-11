@@ -289,4 +289,41 @@ public class SchemaValidatorTest {
         s.add("type", new JsonString("strong"));
         assertFalse(validator.validate(new JsonString("x"), new JsonSchema(s)).isValid());
     }
+
+    @Test
+    public void test_multiple_of_rejects_a_tiny_non_multiple() {
+        assertFalse(ok("{\"multipleOf\":1000000}", "0.001"));
+        assertFalse(ok("{\"multipleOf\":1}", "0.0000000001"));
+    }
+
+    @Test
+    public void test_multiple_of_accepts_a_decimal_multiple() {
+        assertTrue(ok("{\"multipleOf\":0.1}", "0.3"));
+        assertTrue(ok("{\"multipleOf\":0.01}", "19.99"));
+    }
+
+    @Test
+    public void test_multiple_of_accepts_zero_and_negatives() {
+        assertTrue(ok("{\"multipleOf\":7}", "0"));
+        assertTrue(ok("{\"multipleOf\":7}", "-14"));
+        assertFalse(ok("{\"multipleOf\":7}", "-15"));
+    }
+
+    @Test
+    public void test_multiple_of_keeps_precision_for_large_quotients() {
+        assertFalse(ok("{\"multipleOf\":1}", "1000000000000.5"));
+        assertTrue(ok("{\"multipleOf\":3}", "3000000000000"));
+    }
+
+    @Test
+    public void test_multiple_of_refuses_a_quotient_that_overflows() {
+        assertFalse(ok("{\"multipleOf\":0.123456789}", "1e308"));
+        assertTrue(ok("{\"multipleOf\":0.0001}", "1e308"), "1e308 is 0.0001 times 1e312, exactly");
+    }
+
+    @Test
+    public void test_multiple_of_is_exact_past_the_double_integer_range() {
+        assertFalse(ok("{\"multipleOf\":3}", "100000000000000000000"));
+        assertTrue(ok("{\"multipleOf\":5}", "100000000000000000000"));
+    }
 }

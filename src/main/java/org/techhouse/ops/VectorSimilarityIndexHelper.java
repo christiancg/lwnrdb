@@ -36,7 +36,9 @@ public final class VectorSimilarityIndexHelper {
         }
         final var fieldName = operator.getField();
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
-        final List<FieldIndexEntry<JsonVector>> entries;
+        final var query = JsonVector.toVector(operator.getValue());
+        final var budget = Math.max(kFor(operator) * CANDIDATE_MULTIPLIER, MIN_CANDIDATES);
+        final Set<String> candidates;
         try {
             rl.lockIndexRead(dbName, collName, fieldName);
         } catch (InterruptedException e) {
@@ -44,20 +46,18 @@ public final class VectorSimilarityIndexHelper {
             throw new IOException("Interrupted while acquiring index read lock", e);
         }
         try {
-            entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, JsonVector.class);
+            final var entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, JsonVector.class);
+            if (entries == null || entries.isEmpty()) {
+                return null;
+            }
+            candidates = collectNeighbourhood(entries, query, budget);
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
-        }
-        if (entries == null || entries.isEmpty()) {
-            return null;
         }
         recordAnalyzeIndexUse(dbName, collName, fieldName);
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
             cache.recordFieldIndexAccess(dbName, collName, fieldName);
         }
-        final var query = JsonVector.toVector(operator.getValue());
-        final var budget = Math.max(kFor(operator) * CANDIDATE_MULTIPLIER, MIN_CANDIDATES);
-        final var candidates = collectNeighbourhood(entries, query, budget);
         // Not-yet-indexed committed writes may be missing from the index; the caller re-scores them exactly.
         candidates.addAll(PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName));
         return candidates;

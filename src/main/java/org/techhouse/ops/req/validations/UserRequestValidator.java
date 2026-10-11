@@ -162,7 +162,7 @@ public final class UserRequestValidator {
         if (collectionPermissions != null) {
             for (var entry : collectionPermissions.entrySet()) {
                 final var collKey = entry.getKey();
-                final var parts = collKey.split("\\|");
+                final var parts = collKey.split("\\|", -1);
                 if (parts.length != 2) {
                     return ValidationResult.fail("collection permission key must be in format 'database|collection'");
                 }

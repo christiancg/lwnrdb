@@ -2,16 +2,26 @@ package org.techhouse.ops.req.validations;
 
 import java.util.Locale;
 import java.util.UUID;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.TriggerRunStatus;
+import org.techhouse.fault.FaultAction;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.req.ArmFaultRequest;
+import org.techhouse.ops.req.AwaitFaultRequest;
 import org.techhouse.ops.req.CancelScriptRequest;
 import org.techhouse.ops.req.ListTriggerRunsRequest;
 import org.techhouse.ops.req.ListenRequest;
+import org.techhouse.ops.req.ReleaseFaultRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.StopListenRequest;
 
 public final class ControlRequestValidator {
+    private static final String TRIGGER_RUN_STATUS_RULE = "status must be 'PENDING' or 'DEAD'";
+    private static final String FAULT_POINT_RULE = "point must name a fault point";
+
     private ControlRequestValidator() {
     }
 
@@ -33,12 +43,13 @@ public final class ControlRequestValidator {
         if (status == null || status.isBlank()) {
             return ValidationResult.ok();
         }
+        final TriggerRunStatus parsed;
         try {
-            TriggerRunStatus.valueOf(status.toUpperCase(Locale.ROOT));
+            parsed = TriggerRunStatus.valueOf(status.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            return ValidationResult.fail("status must be 'PENDING' or 'DEAD'");
+            return ValidationResult.fail(TRIGGER_RUN_STATUS_RULE);
         }
-        return ValidationResult.ok();
+        return parsed == parsed.reported() ? ValidationResult.ok() : ValidationResult.fail(TRIGGER_RUN_STATUS_RULE);
     }
 
     static ValidationResult validateResolveTriggerRun(ResolveTriggerRunRequest request) {
@@ -90,5 +101,40 @@ public final class ControlRequestValidator {
             return ValidationResult.fail("STOP_LISTEN listenId must be a valid UUID");
         }
         return ValidationResult.ok();
+    }
+
+    static ValidationResult validateArmFault(ArmFaultRequest request) {
+        final var point = FaultInjector.parse(FaultPoint.class, request.getPoint());
+        if (point == null) {
+            return ValidationResult.fail(FAULT_POINT_RULE);
+        }
+        final var action = FaultInjector.parse(FaultAction.class, request.getAction());
+        if (action == null) {
+            return ValidationResult.fail("action must be PAUSE, HALT or DROP");
+        }
+        if (action == FaultAction.DROP && !point.isDroppable()) {
+            return ValidationResult.fail("only a message fault point can drop");
+        }
+        return ValidationResult.ok();
+    }
+
+    static ValidationResult validateAwaitFault(AwaitFaultRequest request) {
+        if (FaultInjector.parse(FaultPoint.class, request.getPoint()) == null) {
+            return ValidationResult.fail(FAULT_POINT_RULE);
+        }
+        if (outOfRange(request.getTimeoutMs())) {
+            return ValidationResult.fail("timeoutMs must be between 1 and " + Globals.FAULT_PAUSE_LIMIT_MS);
+        }
+        return ValidationResult.ok();
+    }
+
+    static ValidationResult validateReleaseFault(ReleaseFaultRequest request) {
+        return request.getPoint() == null || FaultInjector.parse(FaultPoint.class, request.getPoint()) != null
+                ? ValidationResult.ok()
+                : ValidationResult.fail(FAULT_POINT_RULE);
+    }
+
+    private static boolean outOfRange(Long value) {
+        return value == null || value < 1 || value > Globals.FAULT_PAUSE_LIMIT_MS;
     }
 }

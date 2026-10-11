@@ -7,6 +7,7 @@ public final class NameValidations {
     static final String NAME_PATTERN = "^[a-zA-Z0-9_-]{3,64}$";
     static final String ID_PATTERN = "^[a-zA-Z0-9_-]{1,64}$";
     static final String USERNAME_PATTERN = NAME_PATTERN;
+    static final String INDEX_FIELD_PATTERN = "^[A-Za-z0-9_.-]{1,64}$";
 
     private NameValidations() {
     }
@@ -54,11 +55,19 @@ public final class NameValidations {
     }
 
     static boolean isReservedCollectionName(String collName) {
-        return Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName);
+        return Globals.SCRIPT_RUNS_COLLECTION_NAME.equalsIgnoreCase(collName);
     }
 
     static boolean isReservedDbName(String dbName) {
-        return Globals.ADMIN_DB_NAME.equals(dbName) || Globals.ADMIN_PAGES_DB_NAME.equals(dbName);
+        return Globals.ADMIN_DB_NAME.equalsIgnoreCase(dbName) || Globals.ADMIN_PAGES_DB_NAME.equalsIgnoreCase(dbName)
+                || Globals.CLUSTER_FOLDER.equalsIgnoreCase(dbName);
+    }
+
+    static ValidationResult validateIndexFieldName(String fieldName) {
+        if (fieldName != null && fieldName.matches(INDEX_FIELD_PATTERN)) {
+            return ValidationResult.ok();
+        }
+        return ValidationResult.fail("fieldName must be 1-64 characters from A-Z a-z 0-9 _ . -");
     }
 
     static ValidationResult validateDbName(String dbName, boolean rejectAdmin) {

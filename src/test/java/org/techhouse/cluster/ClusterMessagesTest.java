@@ -12,10 +12,10 @@ public class ClusterMessagesTest {
     @Test
     public void test_reply_returns_the_ack_the_builder_filled_in() {
         final var reply = ClusterMessages.reply(ClusterMessageType.ADMIN_SNAPSHOT_ACK, "Failed",
-                response -> response.setAdminEpoch(7L));
+                response -> response.setTxStatus("COMMITTED"));
 
         assertEquals(ClusterMessageType.ADMIN_SNAPSHOT_ACK, reply.getType());
-        assertEquals(7L, reply.getAdminEpoch());
+        assertEquals("COMMITTED", reply.getTxStatus());
     }
 
     @Test
@@ -30,7 +30,7 @@ public class ClusterMessagesTest {
 
     @Test
     public void test_a_failure_replaces_the_ack_type_it_had_already_set() {
-        final var reply = ClusterMessages.reply(ClusterMessageType.REPLICATE_USER_ACK, "Replication failed", _ -> {
+        final var reply = ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Replication failed", _ -> {
             throw new IllegalStateException("nope");
         });
 

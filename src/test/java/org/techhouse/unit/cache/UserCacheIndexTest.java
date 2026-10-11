@@ -269,6 +269,20 @@ public class UserCacheIndexTest {
     }
 
     @Test
+    public void test_has_loaded_index_matches_the_type_qualified_key() throws Exception {
+        final var cache = new UserCache();
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        fieldIndexMap.put(Cache.getCollectionIdentifier("testDb", "testColl"),
+                new HashMap<>(Map.of("score|Double", new ArrayList<>())));
+
+        assertTrue(cache.hasLoadedIndex("testDb", "testColl", "score"),
+                "the cache keys a field index per value type, so a bare field name never matched");
+        assertFalse(cache.hasLoadedIndex("testDb", "testColl", "other"));
+    }
+
+    @Test
     public void test_returns_false_when_field_index_map_empty() {
         UserCache cache = new UserCache();
         String dbName = "testDb";

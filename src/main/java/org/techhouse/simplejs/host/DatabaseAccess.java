@@ -17,6 +17,14 @@ public interface DatabaseAccess {
 
     List<JsonObject> aggregate(String db, String coll, JsonArray pipeline);
 
+    default boolean ordersResults(String db, String coll, JsonArray pipeline) {
+        return true;
+    }
+
+    default int firstUnorderedCut(String db, String coll, JsonArray pipeline) {
+        return -1;
+    }
+
     JsonObject save(String db, String coll, JsonObject document);
 
     BulkSaveOutcome bulkSave(String db, String coll, List<JsonObject> documents);

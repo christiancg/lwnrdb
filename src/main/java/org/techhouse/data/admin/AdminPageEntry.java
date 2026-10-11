@@ -12,6 +12,7 @@ public class AdminPageEntry extends DbEntry {
     private long page;
     private int entryCount;
     private long pageSize;
+    private long storagePage;
 
     public AdminPageEntry(String dbName, String collectionName) {
         this(dbName, collectionName, 0L);
@@ -76,6 +77,14 @@ public class AdminPageEntry extends DbEntry {
 
     public int getEntryCount() {
         return entryCount;
+    }
+
+    public long getStoragePage() {
+        return storagePage;
+    }
+
+    public void setStoragePage(long storagePage) {
+        this.storagePage = storagePage;
     }
 
     public long getPageSize() {

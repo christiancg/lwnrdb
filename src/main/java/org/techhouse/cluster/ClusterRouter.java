@@ -1,7 +1,9 @@
 package org.techhouse.cluster;
 
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -11,13 +13,16 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.ClusterAdminHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class ClusterRouter {
+    public static final String LOCAL_HOLDER = "local";
     private static final Set<OperationType> ROUTABLE = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
             OperationType.DELETE, OperationType.FIND_BY_ID, OperationType.AGGREGATE);
     private static final Set<OperationType> READS = Set.of(OperationType.FIND_BY_ID, OperationType.AGGREGATE);
@@ -61,7 +66,7 @@ public class ClusterRouter {
         if (ownerAddress == null) {
             return null;
         }
-        return forwardToOwner(type, rawJson, ownerAddress, null);
+        return forwardToOwner(type, rawJson, ownerAddress, actingUser);
     }
 
     private String routeActiveTransaction(OperationRequest request, String rawJson, OperationType type,
@@ -70,7 +75,7 @@ public class ClusterRouter {
             return routeCommit(rawJson, actingUser, clientId);
         }
         if (type == OperationType.ROLLBACK_TRANSACTION) {
-            return routeRollback(clientId);
+            return routeRollback(rawJson, actingUser, clientId);
         }
         if (WRITES.contains(type)) {
             return routeTransactionWrite(request, rawJson, type, actingUser, clientId);
@@ -85,21 +90,36 @@ public class ClusterRouter {
             String actingUser, UUID clientId) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
+        final var collectionId = Cache.getCollectionIdentifier(dbName, collName);
         if (Globals.ADMIN_DB_NAME.equals(dbName) || ownershipManager.isOwner(dbName, collName)) {
-            clientTracker.markLocalSlice(clientId);
-            return null;
+            return bufferLocally(clientId, collectionId);
         }
         final var ownerAddress = ownershipManager.ownerAddress(dbName, collName);
         if (ownerAddress == null) {
-            clientTracker.markLocalSlice(clientId);
-            return null;
+            return bufferLocally(clientId, collectionId);
         }
+        final var continuation = clientTracker.transactionParticipants(clientId).contains(ownerAddress);
         clientTracker.addTransactionParticipant(clientId, ownerAddress);
-        return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
+        clientTracker.recordTransactionWrite(clientId, collectionId, ownerAddress);
+        return forwardTx(rawJson, ownerAddress, type, actingUser, clientId, continuation);
+    }
+
+    private String bufferLocally(UUID clientId, String collectionId) {
+        clientTracker.markLocalSlice(clientId);
+        clientTracker.recordTransactionWrite(clientId, collectionId, LOCAL_HOLDER);
+        return null;
     }
 
     private String routeTransactionRead(OperationRequest request, String rawJson, OperationType type, String actingUser,
             UUID clientId) {
+        final var holders = clientTracker.transactionWriteHolders(clientId, touchedCollections(request));
+        if (holders.size() > 1) {
+            return eJson.toJson(new OperationResponse(type, ErrorCode.TRANSACTION_READ_SPANS_NODES));
+        }
+        if (holders.size() == 1) {
+            final var holder = holders.iterator().next();
+            return LOCAL_HOLDER.equals(holder) ? null : forwardTx(rawJson, holder, type, actingUser, clientId, true);
+        }
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (Globals.ADMIN_DB_NAME.equals(dbName) || ownershipManager.isOwner(dbName, collName)) {
@@ -107,32 +127,63 @@ public class ClusterRouter {
         }
         final var ownerAddress = ownershipManager.ownerAddress(dbName, collName);
         if (ownerAddress != null && clientTracker.transactionParticipants(clientId).contains(ownerAddress)) {
-            return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
+            return forwardTx(rawJson, ownerAddress, type, actingUser, clientId, true);
         }
         return null;
     }
 
+    private static List<String> touchedCollections(OperationRequest request) {
+        if (request instanceof AggregateRequest aggregateRequest) {
+            return AggregationOperationHelper.aggregateLockSet(aggregateRequest);
+        }
+        return List.of(Cache.getCollectionIdentifier(request.getDatabaseName(), request.getCollectionName()));
+    }
+
     private String routeCommit(String rawJson, String actingUser, UUID clientId) {
         final var remotes = clientTracker.transactionParticipants(clientId);
-        final var local = clientTracker.hasLocalSlice(clientId);
         if (remotes.isEmpty()) {
             return null;
         }
-        if (!local && remotes.size() == 1) {
-            final var response = forwardTx(rawJson, remotes.iterator().next(), OperationType.COMMIT_TRANSACTION,
+        if (!clientTracker.hasLocalSlice(clientId) && remotes.size() == 1) {
+            return finishSoleRemoteSlice(rawJson, remotes.iterator().next(), OperationType.COMMIT_TRANSACTION,
                     actingUser, clientId);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
-            return response;
         }
         return eJson.toJson(tx2pcCoordinator.commit(clientId));
     }
 
-    private String routeRollback(UUID clientId) {
-        if (clientTracker.transactionParticipants(clientId).isEmpty()) {
+    private String routeRollback(String rawJson, String actingUser, UUID clientId) {
+        final var remotes = clientTracker.transactionParticipants(clientId);
+        if (remotes.isEmpty()) {
             return null;
         }
+        if (!clientTracker.hasLocalSlice(clientId) && remotes.size() == 1) {
+            return finishSoleRemoteSlice(rawJson, remotes.iterator().next(), OperationType.ROLLBACK_TRANSACTION,
+                    actingUser, clientId);
+        }
         return eJson.toJson(tx2pcCoordinator.rollback(clientId));
+    }
+
+    private String finishSoleRemoteSlice(String rawJson, String owner, OperationType type, String actingUser,
+            UUID clientId) {
+        final var response = forwardTx(rawJson, owner, type, actingUser, clientId, true);
+        if (!ownerStillHoldsTheSlice(response)) {
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
+        }
+        return response;
+    }
+
+    private boolean ownerStillHoldsTheSlice(String response) {
+        final String errorCode;
+        try {
+            errorCode = eJson.fromJson(response, OperationResponse.class).getErrorCode();
+        } catch (RuntimeException e) {
+            logger.warning("Could not read the owner's answer to a transaction commit or rollback; keeping the "
+                    + "transaction open so it can be re-sent: " + e.getMessage());
+            return true;
+        }
+        return ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(errorCode)
+                || ErrorCode.TRANSACTION_INDETERMINATE.getCode().equals(errorCode);
     }
 
     public boolean teardownTransaction(UUID clientId) {
@@ -143,10 +194,11 @@ public class ClusterRouter {
         return true;
     }
 
-    private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser,
-            UUID clientId) {
+    private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser, UUID clientId,
+            boolean continuation) {
         final var message = PeerRequest.message(ClusterMessageType.FORWARD_TX_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
+        message.setTxContinuation(continuation);
         message.setActingUser(actingUser);
         message.setTxSessionId(clientId.toString());
         final var transaction = clientTracker.getActiveTransaction(clientId);
@@ -161,10 +213,15 @@ public class ClusterRouter {
             }
             logger.warning(
                     "Owner " + ownerAddress + " rejected a forwarded transaction op: " + response.getErrorMessage());
+            return eJson.toJson(new OperationResponse(type, outcomeUnknownFor(type)));
+        } catch (PeerUnreachableException e) {
+            logger.warning(
+                    "Could not reach owner " + ownerAddress + " for a forwarded transaction op: " + e.getMessage());
+            return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
         } catch (Exception e) {
             logger.warning("Failed to forward transaction op to owner " + ownerAddress + ": " + e.getMessage());
+            return eJson.toJson(new OperationResponse(type, outcomeUnknownFor(type)));
         }
-        return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
     }
 
     private String forwardAdmin(OperationType type, String rawJson, String actingUser) {
@@ -173,7 +230,7 @@ public class ClusterRouter {
         }
         final var coordinatorAddress = ownershipManager.adminCoordinatorAddress();
         if (coordinatorAddress == null) {
-            return null;
+            return eJson.toJson(new OperationResponse(type, ErrorCode.ADMIN_COORDINATOR_UNAVAILABLE));
         }
         return forwardToOwner(type, rawJson, coordinatorAddress, actingUser);
     }
@@ -215,6 +272,13 @@ public class ClusterRouter {
         return eJson.toJson(new OperationResponse(type, ErrorCode.SCRIPT_OUTCOME_UNKNOWN));
     }
 
+    private static ErrorCode outcomeUnknownFor(OperationType type) {
+        if (type == OperationType.COMMIT_TRANSACTION) {
+            return ErrorCode.TRANSACTION_INDETERMINATE;
+        }
+        return WRITES.contains(type) ? ErrorCode.WRITE_OUTCOME_UNKNOWN : ErrorCode.OWNER_UNREACHABLE;
+    }
+
     private String forwardToOwner(OperationType type, String rawJson, String ownerAddress, String actingUser) {
         final var message = PeerRequest.message(ClusterMessageType.FORWARD_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
@@ -226,13 +290,19 @@ public class ClusterRouter {
                 return ForwardBody.decode(response.getForwardBody());
             }
             logger.warning("Owner " + ownerAddress + " rejected a forwarded request: " + response.getErrorMessage());
+            return eJson.toJson(new OperationResponse(type, outcomeUnknownFor(type)));
+        } catch (PeerUnreachableException e) {
+            if (READS.contains(type) && clusterConfig.readFallbackToLocal()) {
+                return null;
+            }
+            logger.warning("Could not reach owner " + ownerAddress + ": " + e.getMessage());
             return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
         } catch (Exception e) {
             if (READS.contains(type) && clusterConfig.readFallbackToLocal()) {
                 return null;
             }
-            logger.warning("Failed to forward request to owner " + ownerAddress + ": " + e.getMessage());
-            return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
+            logger.warning("Owner " + ownerAddress + " did not answer a forwarded request: " + e.getMessage());
+            return eJson.toJson(new OperationResponse(type, ErrorCode.WRITE_OUTCOME_UNKNOWN));
         }
     }
 }

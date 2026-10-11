@@ -9,12 +9,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Objects;
 import java.util.Set;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -22,30 +18,8 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
 
-public class FileSystemReadTest {
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        Configuration config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createBaseDbPath();
-        fileSystem.createAdminDatabase();
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-    }
-
-    @AfterEach
-    public void tearDown() {
-        File dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
-                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            TestUtils.deleteFolder(dbDir);
-        }
-    }
-
+public class FileSystemReadTest extends FileSystemTestBase {
     @Test
     public void test_handle_folder_creation_failure() throws IOException {
         FileSystem fileSystem = new FileSystem();
@@ -75,9 +49,25 @@ public class FileSystemReadTest {
     }
 
     @Test
+    public void test_a_disk_read_entry_carries_its_page() throws Exception {
+        final var fileSystem = fs;
+        final var line = "{\"_id\":\"onpage1\",\"name\":\"test\"}" + Globals.NEWLINE;
+        final var pageOne = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-1" + Globals.DB_FILE_EXTENSION);
+        java.nio.file.Files.writeString(pageOne.toPath(), line);
+        final var indexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "onpage1", 0,
+                line.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, 1L, 0L);
+
+        final var positioned = fileSystem.getById(indexEntry);
+        final var scanned = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 1L).get("onpage1");
+
+        assertEquals(1L, positioned.getPage(), "a positioned read must carry its own page, not default to 0");
+        assertEquals(1L, scanned.getPage(), "a scanned read must carry the page it was scanned from, not default to 0");
+    }
+
+    @Test
     public void test_get_by_id_returns_valid_db_entry() throws Exception {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         fileSystem.createBaseDbPath();
         fileSystem.createAdminDatabase();
         fileSystem.createDatabaseFolder(TestGlobals.DB);
@@ -105,10 +95,8 @@ public class FileSystemReadTest {
     }
 
     @Test
-    public void test_search_does_not_match_prefix_when_value_contains_pipe()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_search_does_not_match_prefix_when_value_contains_pipe() throws IOException {
+        final var fileSystem = fs;
         String fieldName = "testField";
 
         // Write two entries: "foo" and "foo|bar" — the search for "foo" must not hit "foo|bar"
@@ -132,10 +120,8 @@ public class FileSystemReadTest {
     }
 
     @Test
-    public void test_stream_pages_yields_one_map_per_page()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_stream_pages_yields_one_map_per_page() throws IOException {
+        final var fileSystem = fs;
         fileSystem.createDatabaseFolder(TestGlobals.DB);
         fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
@@ -165,17 +151,14 @@ public class FileSystemReadTest {
     }
 
     @Test
-    public void test_stream_pages_missing_folder_empty()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+    public void test_stream_pages_missing_folder_empty() throws IOException {
+        final var fileSystem = fs;
         assertEquals(0L, fileSystem.streamPages("noSuchDbNameForStreamTest", "noSuchCollName").count());
     }
 
     @Test
     public void test_pages_namespace_resolves_under_admin_pages_folder() throws Exception {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         fileSystem.createAdminDatabase();
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "rdb", "coll");
         fileSystem.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
@@ -201,8 +184,6 @@ public class FileSystemReadTest {
 
     @Test
     public void test_readWholeCollectionPage_skips_malformed_lines() throws Exception {
-        final var fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         final var entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -230,10 +211,7 @@ public class FileSystemReadTest {
     }
 
     @Test
-    public void test_stream_entries_empty_collection()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_stream_entries_empty_collection() throws IOException {
         fs.createBaseDbPath();
 
         try (var stream = fs.streamEntries(TestGlobals.DB, "nonExistentColl")) {
@@ -242,10 +220,7 @@ public class FileSystemReadTest {
     }
 
     @Test
-    public void test_stream_entries_yields_all_across_pages()
-            throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fs = new FileSystem();
-        TestUtils.setDbPath(fs, TestGlobals.PATH);
+    public void test_stream_entries_yields_all_across_pages() throws IOException {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -275,8 +250,7 @@ public class FileSystemReadTest {
 
     @Test
     public void test_document_with_newline_occupies_one_line() throws Exception {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         fileSystem.createBaseDbPath();
         fileSystem.createAdminDatabase();
         fileSystem.createDatabaseFolder(TestGlobals.DB);
@@ -304,8 +278,7 @@ public class FileSystemReadTest {
 
     @Test
     public void test_multibyte_document_length_matches_the_indexed_utf8_byte_length() throws Exception {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var fileSystem = fs;
         fileSystem.createBaseDbPath();
         fileSystem.createAdminDatabase();
         fileSystem.createDatabaseFolder(TestGlobals.DB);

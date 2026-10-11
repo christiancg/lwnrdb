@@ -74,6 +74,27 @@ public class UserRequestValidationTest {
     }
 
     @Test
+    public void test_a_collection_key_with_a_trailing_separator_is_refused() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.setCollectionPermissions(Map.of("mydb|secret|", PermissionLevel.READ));
+        assertFalse(RequestValidator.validate(req).isValid(),
+                "a key that can never match database|collection must not be stored as a no-op grant");
+    }
+
+    @Test
+    public void test_a_collection_key_with_a_doubled_separator_is_refused() {
+        for (final var key : java.util.List.of("mydb||secret", "mydb|secret||")) {
+            final var req = new CreateUserRequest();
+            req.setUsername("user");
+            req.setPassword("password123");
+            req.setCollectionPermissions(Map.of(key, PermissionLevel.READ));
+            assertFalse(RequestValidator.validate(req).isValid(), key);
+        }
+    }
+
+    @Test
     public void test_create_user_valid_request() {
         final var req = new CreateUserRequest();
         req.setUsername("user");

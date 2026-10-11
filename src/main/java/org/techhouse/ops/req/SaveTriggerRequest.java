@@ -10,7 +10,6 @@ public class SaveTriggerRequest extends VersionedDefinitionRequest {
     private String mode;
     private String timing;
     private Boolean allowCascade;
-    private String stampedDefiner;
 
     public SaveTriggerRequest() {
         super(OperationType.SAVE_TRIGGER, null, null);
@@ -70,13 +69,5 @@ public class SaveTriggerRequest extends VersionedDefinitionRequest {
 
     public void setAllowCascade(Boolean allowCascade) {
         this.allowCascade = allowCascade;
-    }
-
-    public String getStampedDefiner() {
-        return stampedDefiner;
-    }
-
-    public void setStampedDefiner(String stampedDefiner) {
-        this.stampedDefiner = stampedDefiner;
     }
 }

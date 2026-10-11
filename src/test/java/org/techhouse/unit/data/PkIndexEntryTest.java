@@ -3,20 +3,21 @@ package org.techhouse.unit.data;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 
 public class PkIndexEntryTest {
     @Test
     public void test_to_file_entry_conversion() {
         PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L, 0);
-        String expected = "testValue|123|456|0|0";
+        String expected = line("testValue", "123", "456", "0", "0");
         assertEquals(expected, entry.toFileEntry());
     }
 
     @Test
     public void test_to_file_entry_includes_version() {
         PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L, 0L, 1720000000000L);
-        assertEquals("testValue|123|456|0|1720000000000", entry.toFileEntry());
+        assertEquals(line("testValue", "123", "456", "0", "1720000000000"), entry.toFileEntry());
     }
 
     @Test
@@ -37,28 +38,73 @@ public class PkIndexEntryTest {
     }
 
     @Test
-    public void test_to_file_entry_with_pipe_in_value() {
+    public void test_to_file_entry_delimits_with_the_unit_separator() {
+        PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L, 0);
+        assertEquals(5, entry.toFileEntry().split(Globals.ID_SEPARATOR, -1).length);
+    }
+
+    @Test
+    public void test_a_pipe_in_the_value_needs_no_escaping() {
         PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "my|custom|id", 100L, 50L, 2L);
-        assertEquals("my|custom|id|100|50|2|0", entry.toFileEntry());
+        assertEquals(line("my|custom|id", "100", "50", "2", "0"), entry.toFileEntry());
+        PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", entry.toFileEntry());
+        assertEquals("my|custom|id", parsed.getValue());
+        assertEquals(100L, parsed.getPosition());
+        assertEquals(50L, parsed.getLength());
+        assertEquals(2L, parsed.getPage());
     }
 
     @Test
-    public void test_from_index_file_entry_with_pipe_in_value() {
-        PkIndexEntry entry = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", "my|custom|id|100|50|2|0");
-        assertEquals("my|custom|id", entry.getValue());
-        assertEquals(100L, entry.getPosition());
-        assertEquals(50L, entry.getLength());
-        assertEquals(2L, entry.getPage());
-    }
-
-    @Test
-    public void test_round_trip_with_pipe_in_value() {
-        PkIndexEntry original = new PkIndexEntry("testDB", "testCollection", "foo|bar|baz", 200L, 75L, 1L);
-        PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", original.toFileEntry());
-        assertEquals(original.getValue(), parsed.getValue());
+    public void test_an_admin_page_row_id_round_trips() {
+        PkIndexEntry original = new PkIndexEntry("admin", "pages", "mydb|mycoll|3", 200L, 75L, 1L);
+        PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("admin", "pages", original.toFileEntry());
+        assertEquals("mydb|mycoll|3", parsed.getValue());
         assertEquals(original.getPosition(), parsed.getPosition());
         assertEquals(original.getLength(), parsed.getLength());
         assertEquals(original.getPage(), parsed.getPage());
+    }
+
+    @Test
+    public void test_a_unit_separator_in_the_value_round_trips() {
+        PkIndexEntry original = new PkIndexEntry("testDB", "testCollection", "a" + Globals.ID_SEPARATOR + "b", 200L,
+                75L, 1L, 9L);
+        String fileEntry = original.toFileEntry();
+        assertEquals(5, fileEntry.split(Globals.ID_SEPARATOR, -1).length);
+        PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", fileEntry);
+        assertEquals("a" + Globals.ID_SEPARATOR + "b", parsed.getValue());
+        assertEquals(200L, parsed.getPosition());
+        assertEquals(75L, parsed.getLength());
+        assertEquals(1L, parsed.getPage());
+        assertEquals(9L, parsed.getVersion());
+    }
+
+    @Test
+    public void test_a_backslash_and_newline_in_the_value_round_trip() {
+        PkIndexEntry original = new PkIndexEntry("testDB", "testCollection", "a\\b\nc\rd", 1L, 2L, 3L, 4L);
+        PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", original.toFileEntry());
+        assertEquals("a\\b\nc\rd", parsed.getValue());
+    }
+
+    @Test
+    public void test_an_empty_value_round_trips() {
+        PkIndexEntry original = new PkIndexEntry("testDB", "testCollection", "", 1L, 2L, 3L, 4L);
+        PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", original.toFileEntry());
+        assertEquals("", parsed.getValue());
+    }
+
+    @Test
+    public void test_a_line_in_the_old_pipe_grammar_is_rejected() {
+        assertThrows(Exception.class, () -> PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", "a|0|20|0|0"));
+    }
+
+    @Test
+    public void test_a_line_missing_a_field_is_rejected() {
+        String line = line("a", "0", "20", "0");
+        assertThrows(Exception.class, () -> PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", line));
+    }
+
+    private static String line(String... fields) {
+        return String.join(Globals.ID_SEPARATOR, fields);
     }
 
     @Test
