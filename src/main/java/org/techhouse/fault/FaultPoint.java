@@ -5,6 +5,7 @@ public enum FaultPoint {
     WRITE_OWNERSHIP_RECHECKED(false),
     DELETE_TOMBSTONE_RESERVED(false),
     ANTI_ENTROPY_SNAPSHOTTED(false),
+    PK_INDEX_REPLACED(false),
     PEER_REPLY(true);
     // @formatter:on
 

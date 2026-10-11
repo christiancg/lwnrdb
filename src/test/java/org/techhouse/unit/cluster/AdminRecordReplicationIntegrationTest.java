@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.techhouse.test.ClusterTestHarness.SECRET;
 import static org.techhouse.test.ClusterTestHarness.node;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
@@ -33,6 +36,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
@@ -175,6 +179,24 @@ public class AdminRecordReplicationIntegrationTest {
                 ForwardBody.encode(eJson.toJson(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null))));
         final var ack = pool.request(cluster.serverAddress(), message, 3000);
         assertEquals(ClusterMessageType.REINDEX_BROADCAST_ACK, ack.getType());
+    }
+
+    @Test
+    public void test_a_primary_key_reindex_broadcast_rebuilds_the_peer_pk_index() throws Exception {
+        cluster.configureRemoteCoordinator();
+        final var pkFile = new File(
+                TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL,
+                TestGlobals.COLL + "-pk.idx");
+        Files.writeString(pkFile.toPath(), "garbage\n", StandardCharsets.UTF_8);
+        final var message = new ClusterMessage(null, ClusterMessageType.REINDEX_BROADCAST, SECRET, null, null);
+        message.setForwardBody(
+                ForwardBody.encode(eJson.toJson(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null, true))));
+
+        final var ack = pool.request(cluster.serverAddress(), message, 3000);
+
+        assertEquals(ClusterMessageType.REINDEX_BROADCAST_ACK, ack.getType());
+        assertTrue(IocContainer.get(FileSystem.class).readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
+                "the peer rebuilt the unreadable pk.idx from its (empty) pages");
     }
 
     @Test

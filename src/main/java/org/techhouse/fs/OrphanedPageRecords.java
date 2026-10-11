@@ -100,16 +100,36 @@ final class OrphanedPageRecords {
                 .mapToLong(entry -> entry.getPosition() + entry.getLength()).max().orElse(0L);
     }
 
+    record PageRecordScan(List<Orphan> records, String unreadable, boolean unterminatedTail) {
+        private static final PageRecordScan EMPTY = new PageRecordScan(List.of(), null, false);
+
+        boolean readable() {
+            return unreadable == null;
+        }
+    }
+
     static List<Orphan> orphansOf(File page, String dbName, String collName, long pageNumber, long indexedEnd,
             Set<String> indexedIds) throws IOException {
+        final var scan = scanRecords(page, dbName, collName, pageNumber, indexedEnd);
+        if (!scan.readable()
+                || scan.records().stream().anyMatch(orphan -> indexedIds.contains(orphan.entry().get_id()))) {
+            logger.error("Page " + page.getName() + " holds bytes past its last indexed record that are"
+                    + " not whole records of unindexed ids; leaving the page untouched");
+            return List.of();
+        }
+        return scan.records();
+    }
+
+    static PageRecordScan scanRecords(File page, String dbName, String collName, long pageNumber, long fromOffset)
+            throws IOException {
         final var lock = FileLocks.lockFor(page).writeLock();
         lock.lock();
         try {
-            if (!page.exists() || page.length() <= indexedEnd) {
-                return List.of();
+            if (!page.exists() || page.length() <= fromOffset) {
+                return PageRecordScan.EMPTY;
             }
-            final var tail = readFrom(page, indexedEnd);
-            final var orphans = new ArrayList<Orphan>();
+            final var tail = readFrom(page, fromOffset);
+            final var records = new ArrayList<Orphan>();
             final var seen = new HashSet<String>();
             var lineStart = 0;
             for (var i = 0; i < tail.length; i++) {
@@ -119,20 +139,25 @@ final class OrphanedPageRecords {
                 final var lineEnd = i + 1;
                 final var text = recordText(tail, lineStart, i);
                 if (!text.isEmpty()) {
-                    final var orphan = parseOrphan(page, dbName, collName, pageNumber, text);
-                    if (orphan == null || indexedIds.contains(orphan.get_id()) || !seen.add(orphan.get_id())) {
-                        logger.error("Page " + page.getName() + " holds bytes past its last indexed record that are"
-                                + " not whole records of unindexed ids; leaving the page untouched");
-                        return List.of();
+                    final var record = parseOrphan(page, dbName, collName, pageNumber, text);
+                    if (record == null) {
+                        return unreadable("a record at offset " + (fromOffset + lineStart) + " has no readable _id");
                     }
-                    orphans.add(new Orphan(orphan, indexedEnd + lineStart, lineEnd - lineStart));
+                    if (!seen.add(record.get_id())) {
+                        return unreadable("_id '" + record.get_id() + "' appears twice");
+                    }
+                    records.add(new Orphan(record, fromOffset + lineStart, lineEnd - lineStart));
                 }
                 lineStart = lineEnd;
             }
-            return orphans;
+            return new PageRecordScan(records, null, lineStart < tail.length);
         } finally {
             lock.unlock();
         }
+    }
+
+    private static PageRecordScan unreadable(String reason) {
+        return new PageRecordScan(List.of(), reason, false);
     }
 
     private static void dropPagesSharingAnId(Map<Long, List<Orphan>> orphansByPage) {
@@ -175,7 +200,7 @@ final class OrphanedPageRecords {
             entry.setVersion(UNVERSIONED);
             return entry;
         } catch (RuntimeException e) {
-            logger.warning("Unreadable record past the last indexed one in " + page.getName() + ": " + e.getMessage());
+            logger.warning("Unreadable record in " + page.getName() + ": " + e.getMessage());
             return null;
         }
     }

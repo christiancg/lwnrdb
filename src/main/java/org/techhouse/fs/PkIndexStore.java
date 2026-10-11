@@ -16,7 +16,8 @@ import org.techhouse.log.Logger;
 final class PkIndexStore {
     private static final Logger logger = Logger.logFor(PkIndexStore.class);
     private static final String PK_INDEX_ROLLBACK_FAILURE = "Could not roll back a failed pk index append;"
-            + " the pk index may list ids whose records are not on any page, and nothing rebuilds it";
+            + " the pk index may list ids whose records are not on any page; REINDEX with \"primaryKey\": true"
+            + " rebuilds it from the pages";
     private static final Parsed<List<PkIndexEntry>> EMPTY_PARSED = new Parsed<>(List.of(), List.of(), false, false);
 
     private final FilePaths paths;
@@ -109,12 +110,27 @@ final class PkIndexStore {
         return others;
     }
 
+    void replaceAll(String dbName, String collectionName, List<PkIndexEntry> entries) throws IOException {
+        final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        final var lock = FileLocks.lockFor(indexFile).writeLock();
+        lock.lock();
+        try {
+            final var sorted = new ArrayList<>(entries);
+            sorted.sort(Comparator.comparing(PkIndexEntry::getValue));
+            FileLocks.rewriteFileAtomically(indexFile.toPath(),
+                    sorted.stream().map(PkIndexEntry::toFileEntry).toList());
+        } finally {
+            lock.unlock();
+        }
+    }
+
     List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
         final var parsed = readHealed(dbName, collectionName);
         if (parsed.unrecognised()) {
             throw new IOException("No line in " + paths.pkIndexFile(dbName, collectionName).getName()
-                    + " could be read as a PK index entry; it is left untouched. Repair or restore it before"
-                    + " reading or writing " + dbName + "|" + collectionName);
+                    + " could be read as a PK index entry; it is left untouched. Rebuild it with REINDEX and"
+                    + " \"primaryKey\": true, or repair or restore it, before reading or writing " + dbName + "|"
+                    + collectionName);
         }
         return parsed.entries();
     }
@@ -132,8 +148,8 @@ final class PkIndexStore {
         final var parsed = FileLocks.readHealing(indexFile, file -> parsePkIndex(dbName, collectionName, file));
         if (parsed.unrecognised()) {
             logger.error("No line in " + indexFile.getName() + " could be read as a PK index entry, so it is not"
-                    + " the file this loader expects; leaving it untouched. Nothing rebuilds the PK index, so it"
-                    + " must never be rewritten from a read that understood none of it.");
+                    + " the file this loader expects; leaving it untouched, because it must never be rewritten from a"
+                    + " read that understood none of it. REINDEX with \"primaryKey\": true rebuilds it from the pages.");
         }
         return parsed;
     }

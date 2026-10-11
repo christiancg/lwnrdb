@@ -170,6 +170,17 @@ public class DatabaseRequestValidatorTest {
     }
 
     @Test
+    public void validate_reindex_primaryKey_aloneAndWithFieldNames_returnsOk() {
+        assertTrue(RequestValidator.validate(new ReindexRequest("myDb", "myColl", null, true)).isValid());
+        assertTrue(RequestValidator.validate(new ReindexRequest("myDb", "myColl", List.of("email"), true)).isValid());
+    }
+
+    @Test
+    public void validate_reindex_primaryKey_blankEntryInFieldNames_returnsFail() {
+        assertFalse(RequestValidator.validate(new ReindexRequest("myDb", "myColl", List.of(" "), true)).isValid());
+    }
+
+    @Test
     public void validate_reindex_blankEntryInFieldNames_returnsFail() {
         final var result = RequestValidator.validate(new ReindexRequest("myDb", "myColl", List.of("email", " ")));
         assertFalse(result.isValid());

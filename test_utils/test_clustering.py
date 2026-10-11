@@ -652,6 +652,40 @@ def test_reindex_rebuilds_the_index_on_every_node():
           detail=str(_index_lines(victim, "indexed", "email")))
 
 
+def _pk_path(node, coll) -> str:
+    return os.path.join(node.work_dir, "db", DB, coll, f"{coll}-pk.idx")
+
+
+def _rows_read_their_own_record(node, coll) -> bool:
+    folder = os.path.join(node.work_dir, "db", DB, coll)
+    for doc_id, position, length, page, _version in bu.read_pk_rows(_pk_path(node, coll)):
+        with open(os.path.join(folder, f"{coll}-{page}.dat"), "rb") as fp:
+            fp.seek(position)
+            if not fp.read(length).startswith(f'{{"_id":"{doc_id}"'.encode("utf-8")):
+                return False
+    return True
+
+
+def test_reindex_primary_key_rebuilds_the_pk_index_on_every_node():
+    section("REINDEX primaryKey is cluster-wide: it re-addresses a damaged pk.idx on a node that did not receive it")
+
+    victim = nodes[2]
+    rows = bu.read_pk_rows(_pk_path(victim, "indexed"))
+    check("node-2's pk.idx names both documents", len(rows) == 2, detail=str(rows))
+    rows[0][1:3], rows[1][1:3] = rows[1][1:3], rows[0][1:3]
+    bu.write_pk_rows(_pk_path(victim, "indexed"), rows)
+    check("node-2's pk.idx now addresses the wrong records", not _rows_read_their_own_record(victim, "indexed"))
+
+    check_status("REINDEX primaryKey via node-1", op_with_retry(lambda: op(nodes[1].client_port, {
+        "type": "REINDEX", "databaseName": DB, "collectionName": "indexed", "primaryKey": True})), "OK")
+
+    check("node-2 rebuilt its pk.idx from its pages",
+          wait_until(lambda: _rows_read_their_own_record(victim, "indexed"), timeout_s=20.0))
+    for doc_id in ("e1", "e2"):
+        check(f"{doc_id} reads back on every node",
+              all(find_by_id(p, DB, "indexed", doc_id).get("status") == "OK" for p in all_ports()))
+
+
 def test_user_and_permission_replication():
     section("User + permission replication (record-shipped — auth works on every node)")
 
@@ -3096,6 +3130,7 @@ GROUPS = {
         test_bulk_delete_and_upsert,
         test_index_replication,
         test_reindex_rebuilds_the_index_on_every_node,
+        test_reindex_primary_key_rebuilds_the_pk_index_on_every_node,
         test_user_and_permission_replication,
         test_grants_are_pruned_on_every_node,
         test_a_deleted_users_ownership_is_pruned_on_every_node,

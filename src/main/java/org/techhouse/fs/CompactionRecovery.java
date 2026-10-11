@@ -41,6 +41,37 @@ final class CompactionRecovery {
         return completedDeletes;
     }
 
+    int recoverPagesOf(String dbName, String collName) throws IOException {
+        var recovered = 0;
+        for (final var file : journal.findMarkerFiles(dbName, collName)) {
+            final var marker = CompactionJournal.decode(Files.readAllBytes(file.toPath()));
+            if (marker == null) {
+                discardTornMarker(file);
+                continue;
+            }
+            final var page = paths.collectionPage(dbName, collName, marker.page());
+            if (page.exists()) {
+                recoverPage(page, marker);
+                logger.warning("Recovered the pages of an interrupted " + marker.kind() + " of " + marker.id() + " in "
+                        + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + " page " + marker.page()
+                        + " ahead of a PK index rebuild");
+            }
+            journal.end(marker);
+            recovered++;
+        }
+        return recovered;
+    }
+
+    List<String> replayableMarkersOf(String dbName, String collName) throws IOException {
+        final var replayable = new ArrayList<String>();
+        for (final var file : journal.findMarkerFiles(dbName, collName)) {
+            if (CompactionJournal.decode(Files.readAllBytes(file.toPath())) != null) {
+                replayable.add(file.getName());
+            }
+        }
+        return replayable;
+    }
+
     private static void discardTornMarker(File file) throws IOException {
         logger.warning("Discarding the compaction marker " + file.getPath() + ": it was torn while being written,"
                 + " which happens before the page is touched");
@@ -59,14 +90,12 @@ final class CompactionRecovery {
                 rows -> marker.kind() == Kind.DELETE ? completeDelete(marker, rows) : undoRemoval(marker, rows));
         if (!pkRecognised) {
             logger.error("Leaving the interrupted " + marker.kind() + " of " + marker.id() + " in " + label
-                    + " unrecovered: no line of its pk index could be read, and nothing rebuilds the pk index. Repair or"
-                    + " restore the pk index; the marker is replayed at the next startup");
+                    + " unrecovered: no line of its pk index could be read. Run REINDEX with \"primaryKey\": true on the"
+                    + " collection, which recovers this marker and rebuilds the pk index, or repair or restore the pk"
+                    + " index; the marker is replayed at the next startup");
             return false;
         }
-        if (marker.kind() == Kind.RELOCATE) {
-            truncateRelocationTarget(marker);
-        }
-        restorePage(page, marker);
+        recoverPage(page, marker);
         logger.warning("Recovered an interrupted " + marker.kind() + " of " + marker.id() + " in " + label + ": "
                 + (marker.kind() == Kind.DELETE ? "completed" : "undone to the last acknowledged version"));
         return true;
@@ -112,15 +141,34 @@ final class CompactionRecovery {
         return rows;
     }
 
+    private void recoverPage(File page, Marker marker) throws IOException {
+        if (marker.kind() == Kind.RELOCATE) {
+            truncateRelocationTarget(marker);
+        }
+        final var lock = FileLocks.lockFor(page).writeLock();
+        lock.lock();
+        try {
+            restorePage(page, marker);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private void truncateRelocationTarget(Marker marker) throws IOException {
         if (marker.targetPage() == CompactionJournal.NO_TARGET) {
             return;
         }
         final var target = paths.collectionPage(marker.dbName(), marker.collName(), marker.targetPage());
-        if (target.exists() && target.length() > marker.targetLengthBefore()) {
-            try (var writer = new RandomAccessFile(target, Globals.RW_PERMISSIONS)) {
-                writer.setLength(marker.targetLengthBefore());
+        final var lock = FileLocks.lockFor(target).writeLock();
+        lock.lock();
+        try {
+            if (target.exists() && target.length() > marker.targetLengthBefore()) {
+                try (var writer = new RandomAccessFile(target, Globals.RW_PERMISSIONS)) {
+                    writer.setLength(marker.targetLengthBefore());
+                }
             }
+        } finally {
+            lock.unlock();
         }
     }
 

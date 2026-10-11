@@ -393,6 +393,28 @@ public class FileSystem {
         return OrphanedPageRecords.retireDangling(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
     }
 
+    public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
+        if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
+            compactionRecovery.recoverPagesOf(dbName, collName);
+        } else {
+            refuseStaleCompactionMarkers(dbName, collName);
+        }
+        return PkIndexRebuild.plan(paths, pkIndexStore, dbName, collName, pageFileLengths(dbName, collName).keySet());
+    }
+
+    public void applyPkRebuild(String dbName, String collName, PkRebuild rebuild) throws IOException {
+        PkIndexRebuild.apply(pkIndexStore, dbName, collName, rebuild);
+    }
+
+    private void refuseStaleCompactionMarkers(String dbName, String collName) throws IOException {
+        final var stale = compactionRecovery.replayableMarkersOf(dbName, collName);
+        if (!stale.isEmpty()) {
+            throw PkIndexRebuild.refused(dbName, collName, "compaction marker(s) " + stale + " were left by writes"
+                    + " this process could not clean up after; their saved tails are stale, and replaying one would"
+                    + " truncate every record written since. Fix what stopped their removal, then delete them");
+        }
+    }
+
     public List<DbEntry> adoptOrphanedRecords(String dbName, String collName) throws IOException {
         return OrphanedPageRecords.adoptAll(paths, pkIndexStore, dbName, collName,
                 pageFileLengths(dbName, collName).keySet());
