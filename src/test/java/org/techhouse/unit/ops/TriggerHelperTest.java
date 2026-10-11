@@ -55,6 +55,7 @@ public class TriggerHelperTest {
     @BeforeEach
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "triggersEnabled", true);
+        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
         // One worker keeps the queue strictly FIFO, which is what makes the sentinel in capture() conclusive
         TestUtils.setPrivateField(configuration, "triggerThreads", 1);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);

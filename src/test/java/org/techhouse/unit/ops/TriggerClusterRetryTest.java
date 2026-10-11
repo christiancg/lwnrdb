@@ -74,7 +74,7 @@ public class TriggerClusterRetryTest {
             TestUtils.setPrivateField(router, "ownershipManager", realOwnership);
         }
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
-        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
+        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

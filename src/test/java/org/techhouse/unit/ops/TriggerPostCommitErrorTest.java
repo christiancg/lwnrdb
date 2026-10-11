@@ -63,7 +63,7 @@ public class TriggerPostCommitErrorTest {
     static void tearDown() throws Exception {
         IocContainer.get(TriggerExecutor.class).stop();
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
-        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
+        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
