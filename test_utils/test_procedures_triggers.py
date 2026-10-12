@@ -10,7 +10,7 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("PROC_TEST_PORT", "8996"))
 CLUSTER_PORT = int(os.environ.get("PROC_TEST_CLUSTER_PORT", "9996"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "proc_test_db"
 OTHER_DB = "proc_other_db"
@@ -27,6 +27,8 @@ TWIN_AUDITED_COLL = "twin_audited"
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
+MANAGER_TWO = "proc_manager_two"
+PROC_OWNER = "proc_owner"
 WRITER = "proc_writer"
 LEGACY = "proc_legacy"
 USER_PASSWORD = "password123"
@@ -113,7 +115,7 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                  clustered: bool = False):
     cluster = {"clusterEnabled": True, "clusterPort": CLUSTER_PORT, "clusterBindAddress": "127.0.0.1",
                "clusterAdvertisedAddress": "127.0.0.1", "clusterSeeds": "", "clusterExpectedSize": 2,
-               "clusterSecret": "proc-test-cluster-secret"} if clustered else {}
+               "clusterSecret": "proc-test-cluster-secret-of-32-plus-chars"} if clustered else {}
     bu.write_config(work_dir, PORT,
                     scriptsEnabled=scripts_enabled,
                     scriptInstructionBudget=INSTRUCTION_BUDGET,
@@ -152,7 +154,7 @@ def setup_data(conn: Conn):
     section("Setup")
     for db in (DB, OTHER_DB):
         conn.send({"type": "DROP_DATABASE", "databaseName": db})
-        check_status(f"create database {db}", conn.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
+        check_status(f"CREATE_DATABASE {db}", conn.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
     for coll in (COLL, AUDIT):
         check_status(f"create collection {coll}",
                      conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -171,6 +173,12 @@ def setup_data(conn: Conn):
     check_status("create a user with a legacy boolean grant", conn.send({
         "type": "CREATE_USER", "username": LEGACY, "password": USER_PASSWORD, "admin": False,
         "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: True}}), "OK")
+    for username in (MANAGER_TWO, PROC_OWNER):
+        check_status(f"create the MANAGE-level user {username}", conn.send({
+            "type": "CREATE_USER", "username": username, "password": USER_PASSWORD, "admin": False,
+            "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}), "OK")
+    check_status("make the owner user a database owner", conn.send({
+        "type": "SET_DATABASE_OWNERS", "databaseName": DB, "owners": [ADMIN_USERNAME, PROC_OWNER]}), "OK")
 
 
 def test_procedure_lifecycle(conn: Conn):
@@ -325,6 +333,11 @@ def test_storage_placement(work_dir: str):
           f"admin/ contains {admin_children}")
 
 
+GUARDED_SOURCE = (
+    "import db from 'db'; import args from 'args';"
+    "db.save(db.name, '" + AUDIT + "', { _id: 'guarded-' + args.id }); return 'guarded';"
+)
+
 AUDIT_PROCEDURE = (
     "import db from 'db'; import args from 'args';"
     "db.save(db.name, '" + AUDIT + "', { _id: args.event + '-' + args.id,"
@@ -475,6 +488,89 @@ def test_definer_rights():
             check("it records the writer as the actor", row["object"].get("by") == WRITER, f"got {row['object']}")
             check("and the installer as the definer",
                   row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
+
+
+def stored_procedure(conn: Conn, name: str) -> dict:
+    listed = conn.send({"type": "LIST_PROCEDURES", "databaseName": DB, "includeSource": True})
+    return next((p for p in listed.get("procedures") or [] if p.get("name") == name), {})
+
+
+def check_bound(label: str, response: dict):
+    check_code(label, response, "FORBIDDEN", "403-4")
+
+
+def check_the_direct_binding_is_protected(manager: Conn, intruder: Conn):
+    check_status("MANAGER installs the guarded procedure", manager.save_procedure("guarded", GUARDED_SOURCE), "OK")
+    check_status("and binds a trigger to it",
+                 manager.save_trigger("guard_trigger", ["CREATED"], "guarded"), "OK")
+    before = stored_procedure(manager, "guarded")
+    check_bound("another MANAGE user may not overwrite it", intruder.save_procedure("guarded", "return 'pwned';"))
+    check_bound("nor disable it", intruder.save_procedure("guarded", GUARDED_SOURCE, enabled=False))
+    check_bound("nor delete it",
+                intruder.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "guarded"}))
+    after = stored_procedure(manager, "guarded")
+    check("the source and version are unchanged",
+          (after.get("source"), after.get("version"), after.get("enabled"))
+          == (before.get("source"), before.get("version"), True), f"before {before} after {after}")
+    check_status("a write still fires the original procedure", manager.save_doc({"_id": "guarded-doc"}), "OK")
+    row = await_doc(manager, "guarded-guarded-doc")
+    check("the bound trigger ran the original source", row.get("status") == "OK", f"got {row}")
+
+
+def check_the_privileged_may_overwrite(manager: Conn):
+    with user_conn(PROC_OWNER) as owner, admin_conn() as admin:
+        check_status("the definer may overwrite it", manager.save_procedure("guarded", GUARDED_SOURCE), "OK")
+        check_status("a database owner may", owner.save_procedure("guarded", GUARDED_SOURCE), "OK")
+        check_status("an admin may", admin.save_procedure("guarded", GUARDED_SOURCE), "OK")
+    check_status("drop the guard trigger", manager.send(
+        {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "guard_trigger"}), "OK")
+
+
+def check_schedule_and_hook_bindings(manager: Conn, intruder: Conn):
+    check_status("MANAGER installs a scheduled procedure", manager.save_procedure("sched_guarded", "return 1;"), "OK")
+    check_status("and schedules it hourly", manager.send(
+        {"type": "SAVE_SCHEDULE", "databaseName": DB, "name": "guard_schedule", "procedureName": "sched_guarded",
+         "intervalMs": 3_600_000}), "OK")
+    check_bound("a schedule binding protects its procedure", intruder.save_procedure("sched_guarded", "return 2;"))
+    check_status("drop the schedule", manager.send(
+        {"type": "DELETE_SCHEDULE", "databaseName": DB, "name": "guard_schedule"}), "OK")
+
+    check_status("MANAGER installs a before hook",
+                 install_hook(manager, "guard_hook", "guarded_hook", "return null;", ["CREATED"]), "OK")
+    check_bound("a before hook binding protects its procedure", intruder.save_procedure("guarded_hook", "return 1;"))
+    drop_hook(manager, "guard_hook")
+
+
+def check_import_bindings(manager: Conn, intruder: Conn):
+    check_status("MANAGER installs a library", manager.save_procedure("guard_lib", "export const v = 'lib';"), "OK")
+    check_status("and an entry importing it", manager.save_procedure(
+        "guard_entry", "import { v } from 'procedures/guard_lib'; return v;"), "OK")
+    check_status("binds a trigger to the entry", manager.save_trigger("guard_import", ["CREATED"], "guard_entry"), "OK")
+    check_bound("the imported library is protected too", intruder.save_procedure("guard_lib", "export const v = 1;"))
+    check_status("drop the import trigger", manager.send(
+        {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "guard_import"}), "OK")
+
+    check_status("MANAGER installs a procedure importing by a computed name", manager.save_procedure(
+        "guard_dyn", "const n = 'x'; try { await import('procedures/' + n); } catch (e) {} return 1;"), "OK")
+    check_status("and binds a trigger to it", manager.save_trigger("guard_dyn_trigger", ["CREATED"], "guard_dyn"), "OK")
+    check_bound("so any procedure name counts as reached",
+                intruder.save_procedure("guard_unrelated", "return 1;"))
+    check_status("drop the computed-import trigger", manager.send(
+        {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "guard_dyn_trigger"}), "OK")
+    check_status("with nothing bound the same save is free",
+                 intruder.save_procedure("guard_unrelated", "return 1;"), "OK")
+
+
+def test_a_procedure_bound_by_another_definer_is_protected():
+    section("A procedure bound by another definer is protected")
+    with user_conn(MANAGER) as manager, user_conn(MANAGER_TWO) as intruder:
+        check_the_direct_binding_is_protected(manager, intruder)
+        check_the_privileged_may_overwrite(manager)
+        check_schedule_and_hook_bindings(manager, intruder)
+        check_import_bindings(manager, intruder)
+        check_status("MANAGER installs an unbound procedure", manager.save_procedure("guard_free", "return 1;"), "OK")
+        check_status("another MANAGE user may overwrite an unbound one",
+                     intruder.save_procedure("guard_free", "return 2;"), "OK")
 
 
 def test_a_client_cannot_forge_a_definer():
@@ -1555,7 +1651,7 @@ def trigger_runs(conn: Conn, status: str = None) -> list:
     payload = {"type": "LIST_TRIGGER_RUNS"}
     if status:
         payload["status"] = status
-    return (conn.send(payload).get("runs") or [])
+    return conn.send(payload).get("runs") or []
 
 
 def dead_letters_for(conn: Conn, trigger_name: str) -> list:
@@ -1896,6 +1992,7 @@ def main():
             test_dry_run(conn)
             test_result_cap(conn)
         test_definer_rights()
+        test_a_procedure_bound_by_another_definer_is_protected()
         test_a_client_cannot_forge_a_definer()
         with admin_conn() as conn:
             test_procedure_imports(conn)

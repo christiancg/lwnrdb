@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.List;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -204,10 +205,20 @@ public final class ScheduleOperationHelper {
         return json;
     }
 
-    public static String scheduleReferencing(String dbName, String procedureName) throws IOException {
+    public static List<ScheduleDefinition> schedulesIn(String dbName) throws IOException {
+        final var result = new ArrayList<ScheduleDefinition>();
         for (final var name : fs.listScheduleNames(dbName)) {
             final var definition = cache.getSchedule(dbName, name);
-            if (definition != null && procedureName.equals(definition.getProcedureName())) {
+            if (definition != null) {
+                result.add(definition);
+            }
+        }
+        return result;
+    }
+
+    public static String scheduleReferencing(String dbName, String procedureName) throws IOException {
+        for (final var definition : schedulesIn(dbName)) {
+            if (procedureName.equals(definition.getProcedureName())) {
                 return definition.getName();
             }
         }

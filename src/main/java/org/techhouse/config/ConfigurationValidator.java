@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntPredicate;
+import org.techhouse.ops.req.validations.NameValidations;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public final class ConfigurationValidator {
 
@@ -28,6 +30,8 @@ public final class ConfigurationValidator {
         validateWritablePath(configs, "filePath", errors);
         validateWritablePath(configs, "logPath", errors);
         validatePageAndEntrySize(configs, errors);
+        validateRequestSize(configs, errors);
+        validateAuthFailureDelay(configs, errors);
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
         validateCursorBatchSizes(configs, errors);
@@ -44,6 +48,33 @@ public final class ConfigurationValidator {
         final var maxEntrySize = sizeOrNull(configs.get("maxEntrySize"));
         if (maxPageSize != null && maxEntrySize != null && maxPageSize <= maxEntrySize) {
             errors.add("maxPageSize (" + maxPageSize + ") must be greater than maxEntrySize (" + maxEntrySize + ")");
+        }
+    }
+
+    private static void validateRequestSize(Map<String, String> configs, List<String> errors) {
+        final var maxRequestSize = sizeOrNull(
+                configs.getOrDefault(ConfigKey.MAX_REQUEST_SIZE.key(), ConfigKey.MAX_REQUEST_SIZE.defaultValue()));
+        final var maxEntrySize = sizeOrNull(
+                configs.getOrDefault(ConfigKey.MAX_ENTRY_SIZE.key(), ConfigKey.MAX_ENTRY_SIZE.defaultValue()));
+        if (maxRequestSize == null) {
+            return;
+        }
+        if (maxEntrySize != null && maxRequestSize < maxEntrySize) {
+            errors.add("maxRequestSize (" + maxRequestSize + ") must not be smaller than maxEntrySize (" + maxEntrySize
+                    + ")");
+        }
+        if (maxRequestSize > Globals.MAX_REQUEST_SIZE_CEILING) {
+            errors.add("maxRequestSize (" + maxRequestSize + ") must not be greater than "
+                    + Globals.MAX_REQUEST_SIZE_CEILING);
+        }
+    }
+
+    private static void validateAuthFailureDelay(Map<String, String> configs, List<String> errors) {
+        final var base = parseLongOrNull(configs.get("authFailureDelayBaseMs"));
+        final var max = parseLongOrNull(configs.get("authFailureDelayMaxMs"));
+        if (base != null && max != null && max < base) {
+            errors.add("authFailureDelayMaxMs (" + max + ") must not be smaller than authFailureDelayBaseMs (" + base
+                    + ")");
         }
     }
 
@@ -101,13 +132,32 @@ public final class ConfigurationValidator {
         if (isBlank(configs.get("clusterAdvertisedAddress"))) {
             errors.add("clusterAdvertisedAddress must be a non-blank address when clusterEnabled is true");
         }
-        if (isBlank(configs.get("clusterSecret"))) {
-            errors.add("clusterSecret must be a non-blank string when clusterEnabled is true");
-        }
+        validateSecret(configs.get("clusterSecret"), errors);
+        validateFrameSize(configs, errors);
         validateSeeds(configs.get("clusterSeeds"), errors);
         validateExpectedSize(configs, errors);
         validateDeadEviction(configs, errors);
         validateDeadProbeInterval(configs, errors);
+    }
+
+    private static void validateSecret(String secret, List<String> errors) {
+        if (isBlank(secret)) {
+            errors.add("clusterSecret must be a non-blank string when clusterEnabled is true");
+        } else if (secret.length() < Globals.CLUSTER_MIN_SECRET_LENGTH) {
+            errors.add("clusterSecret must be at least " + Globals.CLUSTER_MIN_SECRET_LENGTH
+                    + " characters when clusterEnabled is true");
+        }
+    }
+
+    private static void validateFrameSize(Map<String, String> configs, List<String> errors) {
+        final var frameSize = sizeOrNull(configs.getOrDefault(ConfigKey.CLUSTER_MAX_FRAME_SIZE.key(),
+                ConfigKey.CLUSTER_MAX_FRAME_SIZE.defaultValue()));
+        final var maxRequestSize = sizeOrNull(
+                configs.getOrDefault(ConfigKey.MAX_REQUEST_SIZE.key(), ConfigKey.MAX_REQUEST_SIZE.defaultValue()));
+        if (frameSize != null && maxRequestSize != null && frameSize < 2 * maxRequestSize) {
+            errors.add("clusterMaxFrameSize (" + frameSize + ") must be at least twice maxRequestSize ("
+                    + maxRequestSize + ") when clusterEnabled is true");
+        }
     }
 
     private static void validateExpectedSize(Map<String, String> configs, List<String> errors) {
@@ -178,7 +228,7 @@ public final class ConfigurationValidator {
             final Path parent = Paths.get(keystorePath.trim()).toAbsolutePath().getParent();
             if (parent != null) {
                 try {
-                    Files.createDirectories(parent);
+                    OwnerOnlyPermissions.createDirectories(parent);
                     if (!Files.isWritable(parent)) {
                         errors.add("tlsKeystorePath (" + keystorePath + ") parent directory is not writable");
                     }
@@ -202,7 +252,7 @@ public final class ConfigurationValidator {
         }
         final Path path = Paths.get(value.trim());
         try {
-            Files.createDirectories(path);
+            OwnerOnlyPermissions.createDirectories(path);
         } catch (IOException | RuntimeException e) {
             errors.add(key + " (" + value + ") could not be created: " + e.getMessage());
             return;
@@ -216,14 +266,14 @@ public final class ConfigurationValidator {
         final var value = configs.get("defaultAdminUsername");
         if (value == null || value.isBlank()) {
             errors.add("defaultAdminUsername must be a non-blank string");
+        } else if (!NameValidations.isUsername(value)) {
+            errors.add("defaultAdminUsername must be 3-64 characters from A-Z a-z 0-9 _ -, like any user name");
         }
     }
 
     private static void validateAdminPassword(Map<String, String> configs, List<String> errors) {
         final var value = configs.get("defaultAdminPassword");
-        if (value == null || value.isBlank()) {
-            errors.add("defaultAdminPassword must be a non-blank string");
-        } else if (value.length() < Globals.PASSWORD_MIN_LENGTH) {
+        if (value != null && !value.isBlank() && value.length() < Globals.PASSWORD_MIN_LENGTH) {
             errors.add("defaultAdminPassword must be at least " + Globals.PASSWORD_MIN_LENGTH + " characters");
         }
     }

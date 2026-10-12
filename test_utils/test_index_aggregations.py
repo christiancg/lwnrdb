@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import time
+from typing import Callable
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_status, section
@@ -10,7 +11,7 @@ HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("INDEX_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "idxagg_db"
 COLL = "idxagg_main"
@@ -169,7 +170,7 @@ def indexes_present(c, expected) -> bool:
     return all(field in present.get(coll, set()) for coll, field in expected)
 
 
-def wait_for_indexes(c, expected, timeout_s=20.0):
+def wait_for_indexes(c: Conn, expected, timeout_s=20.0):
     if bu.wait_until(lambda: indexes_present(c, expected), timeout_s, interval_s=0.5):
         return True
     time.sleep(3)
@@ -236,7 +237,7 @@ def join_signature(r):
     for row in rows:
         joined = row.get("joined") or []
         labels.append(tuple(sorted(j.get("label") for j in joined)))
-    return (len(rows), sorted(labels))
+    return len(rows), sorted(labels)
 
 
 def compare(label, scan_time, unindexed_resp, indexed_time, indexed_resp, signature, strict_speed):
@@ -445,7 +446,7 @@ def probe_save_delete_converges(c):
                detail=f"{bad}/{CONS_REPEATS} deleted values still present after settling")
 
 
-def probe_concurrent_save_during_create_index(c):
+def probe_concurrent_save_during_create_index(c: Conn):
     seed = 40
     for i in range(seed):
         save_doc(c, CONS_CREATE, {"_id": f"seed_{i}", "tag": f"t{i % 5}"})
@@ -457,14 +458,14 @@ def probe_concurrent_save_during_create_index(c):
     def writer():
         with Conn() as wc:
             wc.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
-            i = 0
+            written = 0
             while not stop.is_set():
-                doc_id = f"conc_{i}"
+                doc_id = f"conc_{written}"
                 r = save_doc(wc, CONS_CREATE, {"_id": doc_id, "tag": "concurrent"})
                 if r.get("status") == "OK":
                     with saved_lock:
                         saved_ids.append(doc_id)
-                i += 1
+                written += 1
 
     t = threading.Thread(target=writer)
     t.start()
@@ -772,7 +773,7 @@ def agree(c, label, query_coll, steps, index_coll, index_field, extract=agree_id
               f"expected={expected!r}  got={scanned!r}")
 
 
-def index_matches_scan(c, coll, steps, extract=agree_ids):
+def index_matches_scan(c: Conn, coll, steps, extract: Callable[[dict], object] = agree_ids):
     return extract(agg(c, coll, steps)), extract(agg(c, coll, forced_scan(steps)))
 
 
@@ -1055,16 +1056,16 @@ def probe_lone_surrogate_before_a_pair_orders_the_index_consistently(c):
     build_index(c, AGREE_SURROGATE_FOLD, "v")
 
     def compare_every_operator(label):
-        for doc_id, value in values.items():
-            for operator, operand in (("EQUALS", value), ("NOT_EQUALS", value), ("IN", [value])):
+        for probe_id, probe_value in values.items():
+            for operator, operand in (("EQUALS", probe_value), ("NOT_EQUALS", probe_value), ("IN", [probe_value])):
                 indexed, scanned = index_matches_scan(c, AGREE_SURROGATE_FOLD,
                                                       [bu.filter_step("v", operator, operand)])
-                check(f"{label}: an index-backed {operator} on the {doc_id} value equals the scan",
+                check(f"{label}: an index-backed {operator} on the {probe_id} value equals the scan",
                       indexed == scanned, f"index={indexed!r} scan={scanned!r}")
             counted, scanned_count = index_matches_scan(c, AGREE_SURROGATE_FOLD,
-                                                        [bu.filter_step("v", "EQUALS", value), {"type": "COUNT"}],
+                                                        [bu.filter_step("v", "EQUALS", probe_value), {"type": "COUNT"}],
                                                         extract=bu.count_of)
-            check(f"{label}: index-only COUNT on the {doc_id} value equals the scan count",
+            check(f"{label}: index-only COUNT on the {probe_id} value equals the scan count",
                   counted == scanned_count, f"index={counted} scan={scanned_count}")
 
     compare_every_operator("after CREATE_INDEX")
@@ -1210,7 +1211,7 @@ def probe_index_values_containing_delimiters(c):
 
     scanned, indexed = scanned_then_indexed(
         c, [(REG_DELIMITER, "note")],
-        [lambda note=note: filter_ids(c, REG_DELIMITER, "note", note) for note in values.values()], settle=True)
+        [lambda expected=expected: filter_ids(c, REG_DELIMITER, "note", expected) for expected in values.values()], settle=True)
     for (doc_id, note), got in zip(values.items(), scanned):
         check(f"{doc_id}: unindexed scan finds {note!r}", got == [doc_id], detail=f"got {got}")
     for (doc_id, note), got in zip(values.items(), indexed):
@@ -1541,8 +1542,8 @@ def probe_a_conjunction_after_a_row_reshaping_step(c):
         save_doc(c, REG_NOID, {"_id": doc_id, "category": category})
     wait_for_background()
 
-    def conjunction(kind):
-        return {"type": "FILTER", "operator": {"conjunctionType": kind, "operators": [
+    def conjunction(conjunction_type):
+        return {"type": "FILTER", "operator": {"conjunctionType": conjunction_type, "operators": [
             {"fieldOperatorType": "EQUALS", "field": "category", "value": "books"},
             {"fieldOperatorType": "NOT_EQUALS", "field": "category", "value": "music"}]}}
 
@@ -1645,9 +1646,9 @@ def probe_a_field_operator_without_a_value_is_refused(c):
     save_doc(c, REG_VALUELESS, {"_id": "v1", "name": "alice"})
     wait_for_background()
 
-    def valueless(field, operator_type):
+    def valueless(field, operator):
         return agg(c, REG_VALUELESS,
-                   [{"type": "FILTER", "operator": {"fieldOperatorType": operator_type, "field": field}}])
+                   [{"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": field}}])
 
     for indexed in (False, True):
         if indexed:

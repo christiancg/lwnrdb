@@ -214,9 +214,11 @@ public final class DatabaseOperationHelper {
         return Math.max(0, deadline - System.currentTimeMillis());
     }
 
-    public static OperationResponse processListDatabasesOperation() {
+    public static OperationResponse processListDatabasesOperation(String actingUser) {
         return OperationResponse.respondOrError(OperationType.LIST_DATABASES, ErrorCode.ERROR_LISTING_DATABASES, () -> {
-            final var names = cache.getUserDatabaseNames();
+            final var user = actingUser == null ? null : cache.getAdminUserEntry(actingUser);
+            final var names = cache.getUserDatabaseNames().stream()
+                    .filter(name -> DatabaseVisibility.isVisible(user, cache.getAdminDbEntry(name))).toList();
             return new ListDatabasesResponse("Ok", names);
         });
     }

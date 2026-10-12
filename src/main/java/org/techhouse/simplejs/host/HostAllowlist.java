@@ -39,6 +39,22 @@ public final class HostAllowlist {
         return false;
     }
 
+    public static boolean listsExactly(List<String> allowlist, String host) {
+        if (allowlist == null || host == null || host.isBlank()) {
+            return false;
+        }
+        final var candidate = host.toLowerCase(Locale.ROOT);
+        for (final var raw : allowlist) {
+            if (raw != null) {
+                final var entry = raw.trim().toLowerCase(Locale.ROOT);
+                if (!MATCH_EVERYTHING.equals(entry) && !entry.startsWith(WILDCARD_PREFIX) && entry.equals(candidate)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public static boolean allowsEverything(List<String> allowlist) {
         if (allowlist == null) {
             return false;

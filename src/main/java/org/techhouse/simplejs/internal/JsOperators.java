@@ -157,7 +157,8 @@ public final class JsOperators {
             return new JsString(leftText + rightText);
         }
         if (leftPrim instanceof JsBigInt && rightPrim instanceof JsBigInt) {
-            return new JsBigInt(((JsBigInt) leftPrim).getValue().add(((JsBigInt) rightPrim).getValue()));
+            return new JsBigInt(
+                    BigIntLimits.add(((JsBigInt) leftPrim).getValue(), ((JsBigInt) rightPrim).getValue(), ops));
         }
         requireNoMixedBigInt(leftPrim, rightPrim);
         return new JsNumber(JsCoercion.toNumber(leftPrim) + JsCoercion.toNumber(rightPrim));
@@ -167,7 +168,7 @@ public final class JsOperators {
         final var lnum = JsCoercion.toNumeric(left, ops);
         final var rnum = JsCoercion.toNumeric(right, ops);
         if (lnum instanceof JsBigInt x && rnum instanceof JsBigInt y) {
-            return bigIntArithmetic(operator, x.getValue(), y.getValue());
+            return bigIntArithmetic(operator, x.getValue(), y.getValue(), ops);
         }
         requireNoMixedBigInt(lnum, rnum);
         assert lnum instanceof JsNumber;
@@ -183,13 +184,13 @@ public final class JsOperators {
         });
     }
 
-    private static JsValue bigIntArithmetic(String operator, BigInteger a, BigInteger b) {
+    private static JsValue bigIntArithmetic(String operator, BigInteger a, BigInteger b, InterpreterOps ops) {
         return new JsBigInt(switch (operator) {
-            case "-" -> a.subtract(b);
-            case "*" -> a.multiply(b);
+            case "-" -> BigIntLimits.subtract(a, b, ops);
+            case "*" -> BigIntLimits.multiply(a, b, ops);
             case "/" -> requireNonZero(b) ? a.divide(b) : a;
             case "%" -> requireNonZero(b) ? a.remainder(b) : a;
-            case "**" -> bigIntPow(a, b);
+            case "**" -> BigIntLimits.pow(a, b, ops);
             default -> throw new TypeErrorException("Unknown arithmetic operator: " + operator);
         });
     }
@@ -201,18 +202,11 @@ public final class JsOperators {
         return true;
     }
 
-    private static BigInteger bigIntPow(BigInteger a, BigInteger b) {
-        if (b.signum() < 0) {
-            throw new RangeErrorException("Exponent must be non-negative");
-        }
-        return a.pow(b.intValueExact());
-    }
-
     private static JsValue bitwise(String operator, JsValue left, JsValue right, InterpreterOps ops) {
         final var lnum = JsCoercion.toNumeric(left, ops);
         final var rnum = JsCoercion.toNumeric(right, ops);
         if (lnum instanceof JsBigInt x && rnum instanceof JsBigInt y) {
-            return bigIntBitwise(operator, x.getValue(), y.getValue());
+            return bigIntBitwise(operator, x.getValue(), y.getValue(), ops);
         }
         requireNoMixedBigInt(lnum, rnum);
         if (">>>".equals(operator)) {
@@ -231,13 +225,13 @@ public final class JsOperators {
         });
     }
 
-    private static JsValue bigIntBitwise(String operator, BigInteger a, BigInteger b) {
+    private static JsValue bigIntBitwise(String operator, BigInteger a, BigInteger b, InterpreterOps ops) {
         return new JsBigInt(switch (operator) {
             case "&" -> a.and(b);
             case "|" -> a.or(b);
             case "^" -> a.xor(b);
-            case "<<" -> a.shiftLeft(b.intValueExact());
-            case ">>" -> a.shiftRight(b.intValueExact());
+            case "<<" -> BigIntLimits.shiftLeft(a, b, ops);
+            case ">>" -> BigIntLimits.shiftRight(a, b, ops);
             default -> throw new TypeErrorException("BigInts have no unsigned right shift");
         });
     }

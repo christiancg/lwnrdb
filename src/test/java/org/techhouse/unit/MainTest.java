@@ -1,11 +1,13 @@
 package org.techhouse.unit;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.Main;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
@@ -13,6 +15,7 @@ import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
+import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -22,9 +25,18 @@ import org.techhouse.test.TestUtils;
 
 public class MainTest {
     private static final long KEYSTORE_WAIT_MS = 10_000L;
+    private final Configuration config = Configuration.getInstance();
+    private String origPassword;
+
+    @BeforeEach
+    public void setUp() throws NoSuchFieldException, IllegalAccessException {
+        origPassword = config.getDefaultAdminPassword();
+        TestUtils.setPrivateField(config, "defaultAdminPassword", TestGlobals.ADMIN_PASSWORD);
+    }
 
     @AfterEach
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(config, "defaultAdminPassword", origPassword);
         // Stop them here, or a leaked worker writing admin/collection_usage corrupts later tests in the
         // same JVM fork.
         IocContainer.get(BackgroundTaskManager.class).stopBackgroundWorkers();
@@ -138,4 +150,28 @@ public class MainTest {
         thread.join(2000);
     }
 
+    @Test
+    public void test_main_refuses_to_start_with_the_shipped_admin_password() throws Exception {
+        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
+        TestUtils.setPrivateField(config, "defaultAdminPassword", "administrator");
+        final var dbPath = new File(TestGlobals.PATH);
+        if (dbPath.exists()) {
+            TestUtils.deleteFolder(dbPath);
+        }
+
+        assertThrows(InvalidConfigurationException.class, () -> Main.main(new String[]{}));
+        assertFalse(dbPath.exists(), "the refusal must come before any storage is created");
+    }
+
+    @Test
+    public void test_main_refuses_a_blank_password_when_no_admin_exists() throws Exception {
+        TestUtils.standardTearDown();
+        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
+        TestUtils.setPrivateField(config, "defaultAdminPassword", "");
+
+        final var refusal = assertThrows(InvalidConfigurationException.class, () -> Main.main(new String[]{}));
+        assertTrue(refusal.getMessage().contains("no admin user exists"));
+    }
 }

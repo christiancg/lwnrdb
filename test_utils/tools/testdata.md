@@ -2,10 +2,20 @@
 
 Manual test playbook — send each JSON command to the server over TCP, one line at a time.
 
-Anything but `AUTHENTICATE`, `LIST_DATABASES` and `CLOSE_CONNECTION` before authenticating → `401-1`
+Anything but `AUTHENTICATE` and `CLOSE_CONNECTION` before authenticating → `401-1`
 
 ```json
 {"type": "LIST_COLLECTIONS", "databaseName": "test"}
+```
+
+`LIST_DATABASES` is no longer public either → `401-1`
+
+```json
+{"type": "LIST_DATABASES"}
+```
+
+```json
+{"type":"LIST_DATABASES","status":"UNAUTHENTICATED","message":"Must authenticate first","errorCode":"401-1"}
 ```
 
 A wrong password, or a user that does not exist → `401-3`
@@ -14,15 +24,69 @@ A wrong password, or a user that does not exist → `401-3`
 {"type": "AUTHENTICATE", "username": "admin", "password": "not-the-password"}
 ```
 
-Authenticate (must be done before any protected operation)
+Each failure delays the next `AUTHENTICATE` for that username from the same address (250ms, then 500ms, 1s,
+2s ... up to 30s; a success clears it), so the next correct admin login below takes about 250ms. An unknown
+username answers the same `401-3` after the same amount of work.
+
+Too many failures on one connection → `401-4`, and the server closes the connection. Open a fresh connection and
+send a wrong password five times (`maxFailedAuthAttempts`, 5 by default); the first four answer `401-3`, the fifth
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
+{"type": "AUTHENTICATE", "username": "nobody", "password": "not-the-password"}
 ```
+
+answers this and the connection is closed. The count is per connection and a successful login in between does
+not reset it; a new connection starts again at zero.
+
+```json
+{"type":"AUTHENTICATE","status":"UNAUTHENTICATED","message":"Too many failed authentication attempts on this connection","errorCode":"401-4"}
+```
+
+Authenticate (must be done before any protected operation). The admin password is whatever `defaultAdminPassword`
+held when the first admin was bootstrapped; these examples use the integration suites' value (`base_utils.PASSWORD`),
+`Tst-Admin-9xQ2mV`, which is what a server started for the suites has in its `lwnrdb.cfg`.
+
+```json
+{"type": "AUTHENTICATE", "username": "admin", "password": "Tst-Admin-9xQ2mV"}
+```
+
+Startup refusal (no wire example: the server never opens its port). With `defaultAdminPassword=administrator` in
+`lwnrdb.cfg` (whether or not an admin already exists), or with a blank/missing `defaultAdminPassword` while no admin
+user exists yet, the process logs one FATAL line and exits non-zero:
+
+```
+FATAL-org.techhouse.AdminPasswordGuard - Insecure configuration, the application will not start: defaultAdminPassword is the well-known shipped value 'administrator'. Set a different password in lwnrdb.cfg, or remove the key if an admin user already exists.
+FATAL-org.techhouse.AdminPasswordGuard - Insecure configuration, the application will not start: no admin user exists and defaultAdminPassword is not set. Set defaultAdminPassword in lwnrdb.cfg (at least 8 characters) to create the first admin.
+```
+
+Once an admin exists, a blank `defaultAdminPassword` starts normally and the existing admin keeps its password.
 
 A connection past `maxConnections` (100 by default) gets a single `CLOSE_CONNECTION` frame carrying `503-1`
 and is closed before it can send anything. There is no command for it: set `maxConnections=2` in
 `lwnrdb.cfg` and open a third connection.
+
+A request line longer than the limit → `400-22`, sent as a `CLOSE_CONNECTION` frame, and the connection is
+closed. The limit is 64Kb until the connection authenticates and `maxRequestSize` (`64Mb` by default) after.
+The server answers as soon as the limit is passed, without waiting for the newline. To try it by hand,
+before authenticating, send any line of more than 65 536 bytes, for example
+`printf 'x%.0s' $(seq 1 70000) | nc 127.0.0.1 8989`. The answer:
+
+```json
+{"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "The request exceeds the maximum allowed size", "errorCode": "400-22"}
+```
+
+A line much denser than real data (more than one JSON token per 4 bytes of the line limit, such as a
+`LIST_DATABASES` carrying a flat array of 20 000 ones before authenticating) is answered
+`The command is not valid` instead, and the connection stays open.
+
+A connection that has not authenticated within `authTimeoutMs` (10 s by default) of being accepted → `408-4`,
+sent as a `CLOSE_CONNECTION` frame, and the connection is closed. Failed `AUTHENTICATE` attempts, blank lines
+and partial lines do not extend the deadline. There is no command for it: open a connection and send nothing.
+The answer:
+
+```json
+{"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "The connection did not authenticate in time", "errorCode": "408-4"}
+```
 
 Create database
 
@@ -971,7 +1035,7 @@ Users and permissions
 Re-authenticate after reconnecting
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
+{"type": "AUTHENTICATE", "username": "admin", "password": "Tst-Admin-9xQ2mV"}
 ```
 
 Create a non-admin user with read-write access to one database, allowed to run scripts on it
@@ -1025,7 +1089,7 @@ Authenticate as Alice
 Authenticate back as admin
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
+{"type": "AUTHENTICATE", "username": "admin", "password": "Tst-Admin-9xQ2mV"}
 ```
 
 Change a user's password as admin — no `currentPassword` needed
@@ -1061,7 +1125,7 @@ The wrong current password is refused → `400-6`
 Back to admin
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
+{"type": "AUTHENTICATE", "username": "admin", "password": "Tst-Admin-9xQ2mV"}
 ```
 
 Database owners — an owner has full access to the database and may drop it. Admin only; the list
@@ -1073,6 +1137,27 @@ replaces the current owners outright.
 
 ```json
 {"type": "LIST_DATABASES"}
+```
+
+A non-admin lists only the databases they own or hold a database, collection or script grant on. As Alice,
+who now owns `test`:
+
+```json
+{"type": "AUTHENTICATE", "username": "Alice", "password": "secret1234"}
+```
+
+```json
+{"type": "LIST_DATABASES"}
+```
+
+```json
+{"type":"LIST_DATABASES","status":"OK","message":"Ok","databases":["test"]}
+```
+
+Back to admin, who lists every database
+
+```json
+{"type": "AUTHENTICATE", "username": "admin", "password": "Tst-Admin-9xQ2mV"}
 ```
 
 An unknown user cannot be made an owner → `400-1`
@@ -1102,6 +1187,10 @@ nor deleted → `400-4`
 Deleting a user signs out every connection still authenticated as them: if Alice is connected on another
 connection, her next request there answers `401-1` until she authenticates again. A user created later under
 the same name does not inherit those connections.
+
+`SET_PASSWORD` signs the user out the same way: after Alice changes her own password, her other connections
+answer `401-1` until they authenticate with the new one, while the connection that made the change stays
+signed in. When an admin changes Alice's password, every connection of Alice's is signed out.
 
 Delete Alice
 
@@ -1247,6 +1336,70 @@ Allocating past `scriptMaxMemoryBytes` (`64Mb` by default) → `400-12`
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "const parts = [];\nwhile (true) { parts.push('x'.repeat(1000000)); }"}
 ```
 
+Native recursion over deeply nested data stops at 512 levels with a catchable RangeError → `400-9`,
+`"message": "RangeError: Maximum nesting depth exceeded"` (the same for `JSON.stringify`, `structuredClone`,
+`flat(Infinity)` and `String()` of nested arrays)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return JSON.parse('['.repeat(20000) + ']'.repeat(20000)).length;"}
+```
+
+… and the script may catch it (answers `"RangeError"`)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "let a = [];\nfor (let i = 0; i < 20000; i++) { a = [a]; }\ntry { JSON.stringify(a); } catch (e) { return e.name; }"}
+```
+
+A builtin scanning a sparse array is charged about one instruction per element → `400-11`,
+`"message": "ScriptLimitError: Script exceeded its instruction budget"`, in well under the timeout
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return new Array(2 ** 32 - 1).indexOf(1);"}
+```
+
+A BigInt result over 2^24 bits is refused before it is computed → `400-9`,
+`"message": "RangeError: Maximum BigInt size exceeded"`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return String(3n ** 100000000n).length;"}
+```
+
+A `procedures/<name>` import whose name the wire would refuse (`..`, a backslash, under 3 or over 64
+characters) never resolves → `400-9`, `"message": "Error: Cannot find module 'procedures/..'"`
+(the same answer as an unknown procedure)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import x from 'procedures/..';\nreturn x;"}
+```
+
+`fetch` with the shipped `scriptFetchAllowlist=*` reaches public hosts only. Loopback, private, link-local
+(the metadata endpoint), CGNAT and unique-local addresses are refused before any connection, by name or by
+literal → `400-9`, `"message": "TypeError: fetch: host not allowed"`. Listing the exact host
+(`scriptFetchAllowlist=*,127.0.0.1`) is what re-opens it.
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return (await fetch('http://169.254.169.254/latest/meta-data/')).status;"}
+```
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return (await fetch('http://localhost:8989/')).status;"}
+```
+
+Any other network failure is the bare `fetch failed`, with no host, port or cause → `400-9`,
+`"message": "TypeError: fetch failed"` (with `scriptFetchAllowlist=127.0.0.1` so the closed port is reachable)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return (await fetch('http://127.0.0.1:1/')).status;"}
+```
+
+More than `scriptFetchMaxConcurrent` (default `8`) fetches in flight in one run: the extra one rejects with the
+catchable `TypeError: fetch: too many concurrent requests` (answers `["fetch: too many concurrent requests"]`
+when the other eight are still pending, e.g. against a slow allowlisted host)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "const all = Array.from({ length: 9 }, () => fetch('https://example.com/'));\nconst outcomes = await Promise.allSettled(all);\nreturn outcomes.filter(o => o.status === 'rejected').map(o => o.reason.message);"}
+```
+
 A result larger than `scriptMaxResultBytes` (`16Mb` by default) → `400-15`
 
 ```json
@@ -1345,7 +1498,7 @@ Refused everywhere → `403-1`
 Back to admin
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
+{"type": "AUTHENTICATE", "username": "admin", "password": "Tst-Admin-9xQ2mV"}
 ```
 
 `CHANGE_PERMISSIONS` replaces **all** permissions, so omitting `scriptPermissions` (or sending `{}`)
@@ -1756,6 +1909,52 @@ A schema the server cannot read never lets a write through unvalidated: every `S
 collection → `503-11` until the schema is saved again or deleted. To see it, stop the server, replace
 `<filePath>/test/people/people-schema.json` with text that is not JSON, and start it again.
 
+Validation is bounded by `schemaValidationBudget` (5000000 steps by default). Replace the schema with one whose
+`pattern` backtracks catastrophically on a long run of `x` that does not end in `y`
+
+```json
+{"type": "SAVE_SCHEMA", "databaseName": "test", "collectionName": "people", "schema": {"type": "object", "properties": {"name": {"type": "string", "pattern": "(x+x+)+y"}}}}
+```
+
+A cheap document that matches still saves
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "people", "object": {"_id": "p4", "name": "xxy"}}
+```
+
+A name of 120 `x` followed by `!` exhausts the budget and is refused at once (a longer one used to run for
+minutes under the collection write lock) → `400-23`, and nothing is written. A `BULK_SAVE` holding it and the
+same `SAVE` inside a transaction (the transaction stays open) are refused the same way; a before trigger
+returning it is refused with `400-21`, naming the budget
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "people", "object": {"_id": "p5", "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx!"}}
+```
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "Schema validation exceeded its evaluation budget", "errorCode": "400-23"}
+```
+
+A schema whose `$ref`s expand to more than 100000 nodes is refused at save → `400-24`, and the schema in force
+is unchanged. Each level of this chain references the next one twice, so it doubles per level: the 17 levels shown
+are past the limit, 12 would be accepted
+
+```json
+{"type": "SAVE_SCHEMA", "databaseName": "test", "collectionName": "people", "schema": {"$ref": "#/$defs/d0", "$defs": {"d0": {"allOf": [{"$ref": "#/$defs/d1"}, {"$ref": "#/$defs/d1"}]}, "d1": {"allOf": [{"$ref": "#/$defs/d2"}, {"$ref": "#/$defs/d2"}]}, "d2": {"allOf": [{"$ref": "#/$defs/d3"}, {"$ref": "#/$defs/d3"}]}, "d3": {"allOf": [{"$ref": "#/$defs/d4"}, {"$ref": "#/$defs/d4"}]}, "d4": {"allOf": [{"$ref": "#/$defs/d5"}, {"$ref": "#/$defs/d5"}]}, "d5": {"allOf": [{"$ref": "#/$defs/d6"}, {"$ref": "#/$defs/d6"}]}, "d6": {"allOf": [{"$ref": "#/$defs/d7"}, {"$ref": "#/$defs/d7"}]}, "d7": {"allOf": [{"$ref": "#/$defs/d8"}, {"$ref": "#/$defs/d8"}]}, "d8": {"allOf": [{"$ref": "#/$defs/d9"}, {"$ref": "#/$defs/d9"}]}, "d9": {"allOf": [{"$ref": "#/$defs/d10"}, {"$ref": "#/$defs/d10"}]}, "d10": {"allOf": [{"$ref": "#/$defs/d11"}, {"$ref": "#/$defs/d11"}]}, "d11": {"allOf": [{"$ref": "#/$defs/d12"}, {"$ref": "#/$defs/d12"}]}, "d12": {"allOf": [{"$ref": "#/$defs/d13"}, {"$ref": "#/$defs/d13"}]}, "d13": {"allOf": [{"$ref": "#/$defs/d14"}, {"$ref": "#/$defs/d14"}]}, "d14": {"allOf": [{"$ref": "#/$defs/d15"}, {"$ref": "#/$defs/d15"}]}, "d15": {"allOf": [{"$ref": "#/$defs/d16"}, {"$ref": "#/$defs/d16"}]}, "d16": {"allOf": [{"$ref": "#/$defs/d17"}, {"$ref": "#/$defs/d17"}]}, "d17": {"type": "object"}}}}
+```
+
+```json
+{"type": "SAVE_SCHEMA", "status": "ERROR", "message": "The schema expands past the complexity limit: it expands to more than 100000 schema nodes once its references are followed", "errorCode": "400-24"}
+```
+
+A catastrophic `RegExp` in a script is bounded by the script's instruction budget, deadline and cancellation like
+any runaway loop → `408-1` after `scriptTimeoutMs` with the shipped defaults (`400-11` when `scriptInstructionBudget` runs out
+first; regex work costs one instruction per 64 matcher steps), instead of running unbounded
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return /(x+x+)+y/.test('x'.repeat(800) + '!');"}
+```
+
 Remove the schema — idempotent, so sending it twice still returns OK
 
 ```json
@@ -1971,6 +2170,31 @@ Back on connection A
 {"type": "ROLLBACK_TRANSACTION"}
 ```
 
+If connection A had sat silent for longer than `transactionIdleTimeoutMs` (30 s by default) before that
+`ROLLBACK_TRANSACTION`, the server would already have rolled its transaction back and released the lock, and
+the rollback answers `409-16` instead (see below).
+
+A transaction left idle longer than `transactionIdleTimeoutMs` (30 s by default) is rolled back by the server:
+its buffered writes are discarded, its locks released, and the connection stays open. The next request on
+that connection, whatever it is except `CLOSE_CONNECTION`, → `409-16` once and is not executed; the one after
+is served normally. Start a transaction and buffer a write
+
+```json
+{"type": "START_TRANSACTION"}
+```
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "tx-idle", "holder": "idle"}}
+```
+
+wait more than 30 s, then send any request, for example the same `SAVE` again. The answer:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The transaction was rolled back after being idle too long", "errorCode": "409-16"}
+```
+
+`tx-idle` was not written. Sending the `SAVE` once more writes it as an ordinary standalone save.
+
 In a cluster a transaction can touch collections owned by different nodes, and a few more answers appear:
 
 - `409-7` — a participant could not prepare (it lost quorum, lost ownership of a collection it buffered, or
@@ -2014,7 +2238,8 @@ A decision other than commit/abort → `400-1`
 Stored procedures
 
 A named script, stored with its database and called by name. Installing one needs admin, database
-ownership, or `scriptPermissions` of `MANAGE` on that database; calling one needs `RUN`. The source is
+ownership, or `scriptPermissions` of `MANAGE` on that database; calling one needs `RUN`. Changing one
+that another user's trigger, before hook or schedule runs is refused with `403-4` (see Triggers). The source is
 parsed at save time, so a broken body is refused here rather than on somebody else's first call.
 
 ```json
@@ -2137,8 +2362,9 @@ Triggers
 
 A trigger runs a stored procedure after a committed write. It fires asynchronously, so it cannot
 reject or modify the write — use a collection schema for that — and it runs with the authority of
-whoever installed it (`definer`), not the writer's. Set `triggersEnabled=true` in `lwnrdb.cfg` for
-triggers to actually fire; the DDL below works either way.
+whoever installed it (`definer`), not the writer's. Installing, deleting or testing one needs admin,
+ownership, or `MANAGE` together with `READ_WRITE` on the collection. Set `triggersEnabled=true` in
+`lwnrdb.cfg` for triggers to actually fire; the DDL below works either way.
 
 The procedure a trigger will call — its `args` carry the event, the document and who wrote it
 
@@ -2266,6 +2492,72 @@ Deleting a procedure a trigger still references is refused → `400-14`
 {"type": "DELETE_PROCEDURE", "databaseName": "test", "name": "auditWrite"}
 ```
 
+A procedure bound by another definer's trigger is protected. Two users with `MANAGE` on `test`: one
+with `READ_WRITE` on the database, one with no data grant at all
+
+```json
+{"type": "CREATE_USER", "username": "procmanager", "password": "procmanager1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {"test": "MANAGE"}}
+```
+
+```json
+{"type": "CREATE_USER", "username": "scriptsonly", "password": "scriptsonly1234", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {"test": "MANAGE"}}
+```
+
+```json
+{"type": "AUTHENTICATE", "username": "procmanager", "password": "procmanager1234"}
+```
+
+`auditWrites` was installed by `admin`, so overwriting, disabling or deleting the procedure it runs as
+`admin` is refused for anyone but `admin`, a database owner or another admin → `403-4`. The same holds
+for any procedure `auditWrite` imports, and for a procedure a before hook or a schedule names
+
+```json
+{"type": "SAVE_PROCEDURE", "databaseName": "test", "name": "auditWrite", "script": "return 1;"}
+```
+
+```json
+{"type": "SAVE_PROCEDURE", "status": "FORBIDDEN", "message": "Procedure 'auditWrite' is bound by a trigger or schedule that runs as another user; only that user, a database owner or an admin may change it", "errorCode": "403-4"}
+```
+
+`DELETE_PROCEDURE` answers `403-4` before the `400-14` reference refusal
+
+```json
+{"type": "DELETE_PROCEDURE", "databaseName": "test", "name": "auditWrite"}
+```
+
+```json
+{"type": "DELETE_PROCEDURE", "status": "FORBIDDEN", "message": "Procedure 'auditWrite' is bound by a trigger or schedule that runs as another user; only that user, a database owner or an admin may change it", "errorCode": "403-4"}
+```
+
+`MANAGE` without `READ_WRITE` on the collection (no entry, and no database grant) cannot install a
+trigger there → `403-1`; `DELETE_TRIGGER` and `TEST_TRIGGER` answer the same
+
+```json
+{"type": "AUTHENTICATE", "username": "scriptsonly", "password": "scriptsonly1234"}
+```
+
+```json
+{"type": "SAVE_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "sneakyHook", "events": ["CREATED"], "procedureName": "auditWrite", "timing": "before"}
+```
+
+```json
+{"type": "SAVE_TRIGGER", "status": "FORBIDDEN", "message": "Action is forbidden, no permissions", "errorCode": "403-1"}
+```
+
+Back to admin, and remove the two users
+
+```json
+{"type": "AUTHENTICATE", "username": "admin", "password": "Tst-Admin-9xQ2mV"}
+```
+
+```json
+{"type": "DELETE_USER", "username": "procmanager"}
+```
+
+```json
+{"type": "DELETE_USER", "username": "scriptsonly"}
+```
+
 Delete — idempotent, so sending it twice still returns OK
 
 ```json
@@ -2283,7 +2575,8 @@ Delete — idempotent, so sending it twice still returns OK
 Scheduled procedures
 
 A schedule runs a stored procedure on a clock. Like a trigger it runs with its installer's authority
-and needs `MANAGE` to install; unlike a trigger it may open its own `db.transaction`. Delivery is
+and needs `MANAGE` to install (but no data grant, since it binds no collection); unlike a trigger it
+may open its own `db.transaction`. Delivery is
 at-most-once per due instant: missed runs while the node was down are skipped, not caught up.
 
 ```json
@@ -2441,6 +2734,12 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
   merged that node's records, and a node that just took over answers it for one round). Retry shortly.
 - `503-9` — no admin coordinator could be resolved from this node's view of the cluster.
 - `503-10` — the collection exists on the cluster but has not reached this node yet.
+- `403-1` / `401-2` once, right after a grant or a `CREATE_USER` — a forwarded request is re-authorized on the
+  node that runs it, against that node's own copy of the users. Grant `READ_WRITE` to a user on node A and
+  immediately save, as that user, through node B into a collection owned by node C: if C has not applied the
+  grant yet the save answers
+  `{"type":"SAVE","status":"FORBIDDEN","message":"Action is forbidden, no permissions","errorCode":"403-1"}`.
+  Retry; the grant reaches every node within one admin replication or anti-entropy round.
 - `421-1` — the node stopped owning the collection while the write waited for its lock (or, for a `DELETE`,
   while its before-hook ran; the document is left untouched), or an admin operation reached a node that is no
   longer the coordinator. Retry, and it is routed to the new one.

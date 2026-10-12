@@ -8,6 +8,7 @@ import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.BigIntLimits;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -21,7 +22,6 @@ public final class BigIntBuiltins {
 
     private static final int MIN_RADIX = 2;
     private static final int MAX_RADIX = 36;
-    private static final int MAX_BITS = 1 << 24;
 
     private BigIntBuiltins() {
     }
@@ -99,9 +99,7 @@ public final class BigIntBuiltins {
     private static JsValue asIntN(List<JsValue> args, boolean signed, InterpreterOps ops) {
         final var bits = toIndex(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(), ops);
         final var value = toBigInt(args.size() < 2 ? JsUndefined.getInstance() : args.get(1), ops);
-        if (bits > MAX_BITS) {
-            throw new RangeErrorException("BigInt is too big");
-        }
+        BigIntLimits.checkBits(bits, ops);
         final var modulus = BigInteger.ONE.shiftLeft(bits);
         final var remainder = value.getValue().mod(modulus);
         if (signed && bits > 0 && remainder.compareTo(BigInteger.ONE.shiftLeft(bits - 1)) >= 0) {

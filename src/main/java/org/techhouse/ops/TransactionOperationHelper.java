@@ -234,10 +234,19 @@ public final class TransactionOperationHelper {
         } catch (Exception e) {
             logger.warning("Failed to clean up transaction on disconnect: " + e.getMessage());
         } finally {
-            releaseHeldLocks(transaction);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
+            releaseAndDeregister(transaction, clientId);
         }
+    }
+
+    public static boolean reapIdleTransaction(UUID clientId) {
+        cleanupOnDisconnect(clientId);
+        return clientTracker.getActiveTransaction(clientId) == null;
+    }
+
+    public static boolean isReapable(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        return transaction != null && !transaction.isAborted() && !isFenced(transaction)
+                && !clientTracker.hasFencedRemoteSlice(clientId);
     }
 
     private static int awaitDepartures(List<CountDownLatch> departures) {

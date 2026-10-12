@@ -20,6 +20,7 @@ import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.GrantPruner;
 import org.techhouse.ops.admin.LeftoverFolders;
+import org.techhouse.ops.req.validations.NameValidations;
 
 final class CollectionRecordApplier {
     private static final Logger logger = Logger.logFor(CollectionRecordApplier.class);
@@ -126,6 +127,27 @@ final class CollectionRecordApplier {
     private static void clearAll(String dbName, String collName, Set<String> added, Set<String> removed) {
         added.forEach(field -> fs.indexMarkers().clear(dbName, collName, field));
         removed.forEach(field -> fs.indexMarkers().clear(dbName, collName, field));
+    }
+
+    static boolean indexFieldsAreValid(AdminRecord record) {
+        final AdminCollEntry entry;
+        try {
+            entry = AdminCollEntry.fromJsonObject(record.body());
+        } catch (RuntimeException unreadable) {
+            return true;
+        }
+        final var indexes = entry.getIndexes();
+        return indexes == null || indexes.stream().allMatch(NameValidations::isIndexFieldName);
+    }
+
+    static boolean incarnationWithinSkew(AdminRecord record) {
+        final long incarnation;
+        try {
+            incarnation = AdminCollEntry.fromJsonObject(record.body()).getIncarnation();
+        } catch (RuntimeException unreadable) {
+            return true;
+        }
+        return incarnation == 0 || hybridClock.withinSkew(incarnation, clusterConfig.maxClockSkewMs());
     }
 
     static AdminRecordKey caseVariantOf(String dbName, String collName) {

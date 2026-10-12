@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.auth.PasswordHasher;
+import org.techhouse.test.TestUtils;
 
 public class PasswordHasherTest {
     @Test
@@ -55,5 +56,22 @@ public class PasswordHasherTest {
             PasswordHasher.verify("wrongPassword", hash);
             PasswordHasher.verify("x", hash);
         });
+    }
+
+    @Test
+    public void dummy_verify_is_always_false_even_for_the_dummy_secret() {
+        assertFalse(PasswordHasher.dummyVerify("lwnrdb-dummy-credential"));
+        assertFalse(PasswordHasher.dummyVerify("anything"));
+        assertFalse(PasswordHasher.dummyVerify(""));
+        assertFalse(PasswordHasher.dummyVerify(null));
+    }
+
+    @Test
+    public void dummy_hash_uses_production_iteration_count() throws Exception {
+        final var holder = Class.forName(PasswordHasher.class.getName() + "$DummyCredential");
+        final var dummy = TestUtils.getPrivateStaticField(holder, "DUMMY_HASH", String.class);
+        final var production = PasswordHasher.hash("x");
+        assertEquals(production.split("\\$")[1], dummy.split("\\$")[1]);
+        assertEquals(production.split("\\$")[0], dummy.split("\\$")[0]);
     }
 }

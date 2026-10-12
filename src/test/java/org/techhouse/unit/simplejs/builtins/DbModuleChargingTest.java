@@ -91,7 +91,7 @@ public class DbModuleChargingTest {
     private static ResourceLimits budget(long memory) {
         return new ResourceLimits(-1, -1, -1, true, false, List.of(), -1, -1, false, false,
                 ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.DEFAULT_MAX_LOG_LINES,
-                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, memory, -1, -1, -1);
+                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, memory, -1, -1, -1, 8);
     }
 
     private static ScriptResult run(FakeDatabaseAccess database, String source, long memory) {

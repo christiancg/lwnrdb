@@ -101,7 +101,7 @@ public class DatabaseHostBindingsTest {
                 base.maxDepth(), base.reportUnhandledRejections(), base.fetchEnabled(), base.fetchHostAllowlist(),
                 base.maxResponseBytes(), base.fetchTimeoutMillis(), base.strictScriptGoal(), base.textImportEnabled(),
                 base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget(), -1,
-                base.cursorBatchSize(), base.cursorMaxBatchSize());
+                base.cursorBatchSize(), base.cursorMaxBatchSize(), base.fetchMaxConcurrent());
 
         assertTrue(rebuilt.fetchEnabled());
         assertEquals(java.util.List.of("api.example.com"), rebuilt.fetchHostAllowlist());

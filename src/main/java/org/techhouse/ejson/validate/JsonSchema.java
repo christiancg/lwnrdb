@@ -5,13 +5,28 @@ import java.util.Set;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
+import org.techhouse.simplejs.internal.regex.RegexStepBudget;
 
 public class JsonSchema {
     private final JsonBaseElement root;
     private final Set<RefExpansion> expanding = new HashSet<>();
+    private final SchemaBudget budget;
 
     public JsonSchema(JsonBaseElement root) {
+        this(root, Long.MAX_VALUE);
+    }
+
+    public JsonSchema(JsonBaseElement root, long stepBudget) {
         this.root = root;
+        this.budget = new SchemaBudget(stepBudget);
+    }
+
+    RegexStepBudget budget() {
+        return budget;
+    }
+
+    void charge() {
+        budget.step();
     }
 
     JsonBaseElement getRoot() {

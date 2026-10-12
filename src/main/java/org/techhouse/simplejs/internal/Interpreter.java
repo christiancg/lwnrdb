@@ -78,6 +78,7 @@ public final class Interpreter {
     public final long deadlineNanos;
     public final CancellationToken cancellation;
     public int depth;
+    public int nativeDepth;
     public int moduleDepth;
     public final CallStack callStack = new CallStack();
     public Environment globalEnv;
@@ -410,6 +411,10 @@ public final class Interpreter {
 
     public void tick() {
         lifecycle.tick();
+    }
+
+    public void tick(long weight) {
+        lifecycle.tick(weight);
     }
 
     public void checkDeadline() {

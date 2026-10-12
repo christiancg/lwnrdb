@@ -2,14 +2,19 @@ package org.techhouse.simplejs.builtins;
 
 import static org.techhouse.simplejs.builtins.JsonBuiltins.EJSON;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.host.FetchRequest;
 import org.techhouse.simplejs.host.FetchResponse;
+import org.techhouse.simplejs.host.FetchTarget;
 import org.techhouse.simplejs.host.HostAllowlist;
+import org.techhouse.simplejs.host.JdkNetworkAccess;
+import org.techhouse.simplejs.host.JdkNetworkAccess.NetworkException;
 import org.techhouse.simplejs.host.NetworkAccess;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.internal.Environment;
@@ -26,63 +31,83 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class FetchBuiltins {
+    private static final String HOST_NOT_ALLOWED = "fetch: host not allowed";
+    private static final String TOO_LARGE = "fetch response exceeds maximum size";
 
     private FetchBuiltins() {
     }
 
     public static void install(Environment global, EventLoop eventLoop, NetworkAccess network, ResourceLimits limits,
             Intrinsics intrinsics) {
+        final var inFlight = new AtomicInteger();
         final var fetch = new JsNativeFunction("fetch",
-                (_, args) -> fetch(eventLoop, network, limits, args, intrinsics));
+                (_, args) -> fetch(eventLoop, network, limits, args, intrinsics, inFlight));
         global.declareBuiltin("fetch", fetch);
     }
 
     private static JsValue fetch(EventLoop eventLoop, NetworkAccess network, ResourceLimits limits, List<JsValue> args,
-            Intrinsics intrinsics) {
+            Intrinsics intrinsics, AtomicInteger inFlight) {
         final var promise = new JsPromise(eventLoop);
         if (network == null || !limits.fetchEnabled()) {
             promise.reject(error("fetch is not available", intrinsics));
             return promise;
         }
         final var url = args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst());
-        if (!allowed(url, limits.fetchHostAllowlist())) {
-            promise.reject(error("fetch: host not allowed", intrinsics));
+        final var host = FetchTarget.host(url);
+        if (host == null || !HostAllowlist.allows(limits.fetchHostAllowlist(), host)) {
+            promise.reject(error(HOST_NOT_ALLOWED, intrinsics));
             return promise;
         }
         final var init = args.size() > 1 && args.get(1) instanceof JsObject object ? object : null;
-        final var request = new FetchRequest(method(init), url, headers(init), body(init), limits.fetchTimeoutMillis());
-        runAsync(eventLoop, promise, network, request, limits.maxResponseBytes(), intrinsics);
+        final var request = new FetchRequest(method(init), url, headers(init), body(init), limits.fetchTimeoutMillis(),
+                limits.maxResponseBytes(), HostAllowlist.listsExactly(limits.fetchHostAllowlist(), host));
+        if (inFlight.incrementAndGet() > limits.fetchMaxConcurrent()) {
+            inFlight.decrementAndGet();
+            promise.reject(error("fetch: too many concurrent requests", intrinsics));
+            return promise;
+        }
+        runAsync(eventLoop, promise, network, request, intrinsics, inFlight);
         return promise;
     }
 
     private static void runAsync(EventLoop eventLoop, JsPromise promise, NetworkAccess network, FetchRequest request,
-            long maxResponseBytes, Intrinsics intrinsics) {
+            Intrinsics intrinsics, AtomicInteger inFlight) {
         eventLoop.beginAsyncJob();
         Thread.ofVirtual().start(() -> {
             final var outcome = new FetchOutcome();
-            final var timeout = request.timeoutMillis();
-            if (timeout > 0) {
-                final var worker = Thread.ofVirtual().start(() -> invoke(network, request, outcome));
-                try {
-                    worker.join(timeout);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                }
-                if (worker.isAlive()) {
-                    worker.interrupt();
-                    outcome.timedOut = true;
-                }
-            } else {
-                invoke(network, request, outcome);
+            try {
+                perform(network, request, outcome);
+            } finally {
+                eventLoop.completeAsyncJob(() -> {
+                    inFlight.decrementAndGet();
+                    settle(promise, outcome, request.maxResponseBytes(), eventLoop, intrinsics);
+                });
             }
-            eventLoop.completeAsyncJob(() -> settle(promise, outcome, maxResponseBytes, eventLoop, intrinsics));
         });
+    }
+
+    private static void perform(NetworkAccess network, FetchRequest request, FetchOutcome outcome) {
+        final var timeout = request.timeoutMillis();
+        if (timeout <= 0) {
+            invoke(network, request, outcome);
+            return;
+        }
+        final var worker = Thread.ofVirtual().start(() -> invoke(network, request, outcome));
+        try {
+            worker.join(timeout);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        if (worker.isAlive()) {
+            worker.interrupt();
+            outcome.timedOut = true;
+        }
     }
 
     private static void invoke(NetworkAccess network, FetchRequest request, FetchOutcome outcome) {
         try {
             outcome.response = network.fetch(request);
-        } catch (RuntimeException error) {
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError error) {
             outcome.error = error;
         }
     }
@@ -93,17 +118,18 @@ public final class FetchBuiltins {
             promise.reject(error("fetch timed out", intrinsics));
             return;
         }
-        if (outcome.error != null) {
-            promise.reject(error("fetch failed: " + message(outcome.error), intrinsics));
+        if (outcome.error instanceof NetworkException network && network.kind() != JdkNetworkAccess.Kind.FAILED) {
+            promise.reject(
+                    error(network.kind() == JdkNetworkAccess.Kind.BLOCKED ? HOST_NOT_ALLOWED : TOO_LARGE, intrinsics));
             return;
         }
-        if (outcome.response == null) {
+        if (outcome.error != null || outcome.response == null) {
             promise.reject(error("fetch failed", intrinsics));
             return;
         }
         final var body = outcome.response.bodyText() == null ? "" : outcome.response.bodyText();
-        if (maxResponseBytes >= 0 && body.length() > maxResponseBytes) {
-            promise.reject(error("fetch response exceeds maximum size", intrinsics));
+        if (maxResponseBytes >= 0 && body.getBytes(StandardCharsets.UTF_8).length > maxResponseBytes) {
+            promise.reject(error(TOO_LARGE, intrinsics));
             return;
         }
         promise.resolve(makeResponse(outcome.response, body, eventLoop, intrinsics));
@@ -171,46 +197,13 @@ public final class FetchBuiltins {
         return null;
     }
 
-    private static boolean allowed(String url, List<String> allowlist) {
-        return HostAllowlist.allows(allowlist, hostOf(url));
-    }
-
-    private static String hostOf(String url) {
-        var host = url;
-        final var scheme = host.indexOf("://");
-        if (scheme >= 0) {
-            host = host.substring(scheme + 3);
-        }
-        var end = host.length();
-        for (final var delimiter : new char[]{'/', '?', '#'}) {
-            final var index = host.indexOf(delimiter);
-            if (index >= 0 && index < end) {
-                end = index;
-            }
-        }
-        host = host.substring(0, end);
-        final var at = host.lastIndexOf('@');
-        if (at >= 0) {
-            host = host.substring(at + 1);
-        }
-        final var colon = host.indexOf(':');
-        if (colon >= 0) {
-            host = host.substring(0, colon);
-        }
-        return host;
-    }
-
-    private static String message(RuntimeException error) {
-        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-    }
-
     private static JsValue error(String message, Intrinsics intrinsics) {
         return intrinsics.makeError("TypeError", message);
     }
 
     private static final class FetchOutcome {
-        private FetchResponse response;
-        private RuntimeException error;
-        private boolean timedOut;
+        private volatile FetchResponse response;
+        private volatile Throwable error;
+        private volatile boolean timedOut;
     }
 }

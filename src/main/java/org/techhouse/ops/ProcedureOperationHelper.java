@@ -84,6 +84,11 @@ public final class ProcedureOperationHelper {
         }
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
+            final var refusal = ProcedureBindingGuard.refusal(OperationType.SAVE_PROCEDURE, dbName, request.getName(),
+                    actingUser);
+            if (refusal != null) {
+                return refusal;
+            }
             final var existing = cache.getProcedure(dbName, request.getName());
             if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
@@ -135,7 +140,7 @@ public final class ProcedureOperationHelper {
                 request.isEnabled(), createdAt, updatedAt, actingUser);
     }
 
-    public static OperationResponse executeDelete(DeleteProcedureRequest request)
+    public static OperationResponse executeDelete(DeleteProcedureRequest request, String actingUser)
             throws IOException, InterruptedException {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
@@ -144,6 +149,11 @@ public final class ProcedureOperationHelper {
         }
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
+            final var refusal = ProcedureBindingGuard.refusal(OperationType.DELETE_PROCEDURE, dbName, request.getName(),
+                    actingUser);
+            if (refusal != null) {
+                return refusal;
+            }
             final var referencing = TriggerOperationHelper.triggerReferencing(dbName, request.getName());
             if (referencing != null) {
                 return new OperationResponse(OperationType.DELETE_PROCEDURE,

@@ -255,12 +255,18 @@ public final class TriggerOperationHelper {
         return new ListTriggersResponse("Ok", result);
     }
 
-    public static String triggerReferencing(String dbName, String procedureName) {
+    public static List<TriggerDefinition> triggersIn(String dbName) {
+        final var result = new ArrayList<TriggerDefinition>();
         for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
-            for (final var trigger : cache.getTriggersFor(dbName, collName)) {
-                if (procedureName.equals(trigger.getProcedureName())) {
-                    return trigger.getName();
-                }
+            result.addAll(cache.getTriggersFor(dbName, collName));
+        }
+        return result;
+    }
+
+    public static String triggerReferencing(String dbName, String procedureName) {
+        for (final var trigger : triggersIn(dbName)) {
+            if (procedureName.equals(trigger.getProcedureName())) {
+                return trigger.getName();
             }
         }
         return null;

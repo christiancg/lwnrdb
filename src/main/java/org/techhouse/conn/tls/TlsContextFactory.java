@@ -39,6 +39,14 @@ public final class TlsContextFactory {
 
     // The keystore is both key and trust material: nodes must share one keystore (or a common CA) to connect.
     public static SSLSocketFactory createSocketFactory(Configuration config) {
+        return mutualContext(config, "Failed to initialise the TLS client context").getSocketFactory();
+    }
+
+    public static SSLServerSocketFactory createClusterServerSocketFactory(Configuration config) {
+        return mutualContext(config, "Failed to initialise the cluster TLS context").getServerSocketFactory();
+    }
+
+    private static SSLContext mutualContext(Configuration config, String failure) {
         final var keystorePath = Paths.get(config.getTlsKeystorePath());
         final var password = config.getTlsKeystorePassword().toCharArray();
         final var keyStore = loadOrGenerateKeyStore(keystorePath, password);
@@ -49,9 +57,9 @@ public final class TlsContextFactory {
             trustManagerFactory.init(keyStore);
             final var context = SSLContext.getInstance(Globals.TLS_PROTOCOL);
             context.init(keyManagerFactory.getKeyManagers(), trustManagerFactory.getTrustManagers(), null);
-            return context.getSocketFactory();
+            return context;
         } catch (GeneralSecurityException e) {
-            throw new TlsConfigurationException("Failed to initialise the TLS client context", e);
+            throw new TlsConfigurationException(failure, e);
         }
     }
 

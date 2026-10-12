@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Client {
@@ -19,8 +21,11 @@ public class Client {
     private final ReentrantLock writerLock = new ReentrantLock();
     private volatile Transaction activeTransaction;
     private volatile boolean hasLocalSlice;
+    private volatile boolean remoteSliceFenced;
+    private final AtomicBoolean transactionReaped = new AtomicBoolean();
     private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
     private final Map<String, Set<String>> transactionWriteHolders = new ConcurrentHashMap<>();
+    private final AtomicInteger failedAuthentications = new AtomicInteger();
 
     public Client(String address) {
         this.address = address;
@@ -28,6 +33,10 @@ public class Client {
 
     public String getAddress() {
         return address;
+    }
+
+    public int incrementFailedAuthentications() {
+        return failedAuthentications.incrementAndGet();
     }
 
     public LocalDateTime getConnectionTime() {
@@ -78,6 +87,22 @@ public class Client {
         this.hasLocalSlice = true;
     }
 
+    public boolean hasFencedRemoteSlice() {
+        return remoteSliceFenced;
+    }
+
+    public void markRemoteSliceFenced() {
+        this.remoteSliceFenced = true;
+    }
+
+    public void markTransactionReaped() {
+        transactionReaped.set(true);
+    }
+
+    public boolean consumeTransactionReaped() {
+        return transactionReaped.getAndSet(false);
+    }
+
     public Set<String> getTransactionParticipants() {
         return transactionParticipants;
     }
@@ -100,6 +125,7 @@ public class Client {
 
     public void clearTransactionState() {
         hasLocalSlice = false;
+        remoteSliceFenced = false;
         transactionParticipants.clear();
         transactionWriteHolders.clear();
     }

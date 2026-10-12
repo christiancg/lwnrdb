@@ -170,4 +170,46 @@ public class ProcedureModuleResolverTest {
         assertNotNull(resolved);
         assertEquals(SOURCE, resolved.source());
     }
+
+    @Test
+    void test_dotdot_name_is_refused() {
+        assertNull(resolver().resolve("procedures/..", "main"));
+        assertNull(resolver().resolve("procedures/../admin", "main"));
+    }
+
+    @Test
+    void test_dot_name() {
+        assertNull(resolver().resolve("procedures/.", "main"));
+        assertNull(resolver().resolve("procedures/.lib", "main"));
+    }
+
+    @Test
+    void test_backslash_name() {
+        assertNull(resolver().resolve("procedures/a\\b", "main"));
+        assertNull(resolver().resolve("procedures/..\\lib", "main"));
+    }
+
+    @Test
+    void test_nul_in_name() {
+        assertNull(resolver().resolve("procedures/lib\u0000", "main"));
+    }
+
+    @Test
+    void test_two_char_name() {
+        assertNull(resolver().resolve("procedures/ab", "main"));
+    }
+
+    @Test
+    void test_65_char_name() {
+        assertNull(resolver().resolve("procedures/" + "a".repeat(65), "main"));
+    }
+
+    @Test
+    void test_valid_name_still_resolves() throws Exception {
+        final var longest = "p".repeat(64);
+        save(longest, SOURCE, true);
+        save("a-b_c", SOURCE, true);
+        assertNotNull(resolver().resolve("procedures/" + longest, "main"));
+        assertNotNull(resolver().resolve("procedures/a-b_c", "main"));
+    }
 }

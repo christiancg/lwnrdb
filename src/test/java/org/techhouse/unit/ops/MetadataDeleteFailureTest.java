@@ -179,6 +179,7 @@ public class MetadataDeleteFailureTest {
     @Test
     public void test_listing_triggers_answers_an_error_when_a_trigger_file_is_unparseable() throws Exception {
         fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, UNPARSEABLE);
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
 
         final var response = TriggerOperationHelper
                 .executeList(new ListTriggersRequest(TestGlobals.DB, TestGlobals.COLL));

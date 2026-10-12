@@ -34,6 +34,21 @@ final class RunLifecycle {
         }
     }
 
+    void tick(long weight) {
+        if (interpreter.instructionsRemaining >= 0) {
+            if (interpreter.instructionsRemaining < weight) {
+                interpreter.instructionsRemaining = 0;
+                throw new ScriptLimitException("Script exceeded its instruction budget");
+            }
+            interpreter.instructionsRemaining -= weight;
+        }
+        interpreter.instructionsUsed += weight;
+        if (interpreter.cancellation != null && interpreter.cancellation.isCancelled()) {
+            throw new ScriptCancelledException("Script was cancelled");
+        }
+        checkDeadline();
+    }
+
     void checkDeadline() {
         if (interpreter.deadlineNanos >= 0 && System.nanoTime() >= interpreter.deadlineNanos) {
             throw new ScriptTimeoutException(TIMED_OUT_MESSAGE);

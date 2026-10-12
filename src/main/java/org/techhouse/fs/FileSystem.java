@@ -5,6 +5,8 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,6 +22,7 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class FileSystem {
     private final FilePaths paths = new FilePaths();
@@ -39,8 +42,9 @@ public class FileSystem {
         paths.useDbPath(Configuration.getInstance().getFilePath());
         final var directory = new File(paths.dbPath());
         if (!directory.exists()) {
-            var result = directory.mkdir();
-            if (!result) {
+            try {
+                OwnerOnlyPermissions.createDirectories(directory.toPath());
+            } catch (IOException e) {
                 throw new DirectoryNotFoundException(directory.getAbsolutePath());
             }
         }
@@ -92,7 +96,7 @@ public class FileSystem {
 
     public boolean deleteDatabase(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
-        return !dbFolder.exists() || FileTreeDeleter.delete(dbFolder);
+        return isAbsent(dbFolder) || FileTreeDeleter.delete(dbFolder);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
@@ -115,7 +119,11 @@ public class FileSystem {
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
-        return !collectionFolder.exists() || FileTreeDeleter.delete(collectionFolder);
+        return isAbsent(collectionFolder) || FileTreeDeleter.delete(collectionFolder);
+    }
+
+    private static boolean isAbsent(File folder) {
+        return !Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS);
     }
 
     public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {

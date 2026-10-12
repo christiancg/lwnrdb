@@ -3,8 +3,10 @@ package org.techhouse.simplejs.internal.interpreter;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.*;
 
 import java.util.List;
+import org.techhouse.simplejs.builtins.NativeDepth;
 import org.techhouse.simplejs.builtins.object.ObjectDescriptors;
 import org.techhouse.simplejs.builtins.object.ObjectOwnKeys;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
@@ -151,5 +153,23 @@ public final class InterpreterOpsBridge implements org.techhouse.simplejs.builti
     @Override
     public void tick() {
         interp.tick();
+    }
+
+    @Override
+    public void tick(long weight) {
+        interp.tick(weight);
+    }
+
+    @Override
+    public void enterNested() {
+        if (interp.nativeDepth >= NativeDepth.MAX) {
+            throw new RangeErrorException(NativeDepth.EXCEEDED);
+        }
+        interp.nativeDepth++;
+    }
+
+    @Override
+    public void leaveNested() {
+        interp.nativeDepth--;
     }
 }

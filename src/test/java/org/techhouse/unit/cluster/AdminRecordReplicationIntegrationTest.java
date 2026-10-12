@@ -203,7 +203,8 @@ public class AdminRecordReplicationIntegrationTest {
     public void test_router_forwards_admin_op_and_a_receiver_that_does_not_coordinate_refuses_it() throws Exception {
         cluster.configureRemoteCoordinator();
         final var request = new CreateCollectionRequest(TestGlobals.DB, "routed-coll");
-        final var relayed = router.forward(request, eJson.toJson(request), false, "alice", null);
+        final var relayed = router.forward(request, eJson.toJson(request), false, ClusterTestHarness.ACTING_ADMIN,
+                null);
         assertNotNull(relayed);
         assertTrue(relayed.contains("421-1"), relayed);
         assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "routed-coll"));

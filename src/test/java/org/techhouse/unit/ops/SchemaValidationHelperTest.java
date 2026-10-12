@@ -20,6 +20,7 @@ import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.unit.ejson.validate.DiamondSchemas;
 
 public class SchemaValidationHelperTest {
     private final Cache cache = IocContainer.get(Cache.class);
@@ -199,5 +200,48 @@ public class SchemaValidationHelperTest {
         final var refused = SchemaValidationHelper.check(save(doc(null)));
         assertNotNull(refused);
         assertEquals("400-7", refused.getErrorCode());
+    }
+
+    private void installRedosSchema() {
+        cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL,
+                eJson.fromJson(DiamondSchemas.redosPatternSchema(), JsonObject.class));
+    }
+
+    @Test
+    public void test_check_maps_budget_exception_to_400_23_not_503_11() {
+        installRedosSchema();
+
+        final var response = SchemaValidationHelper.check(save(doc(DiamondSchemas.hostileName())));
+
+        assertNotNull(response);
+        assertEquals("400-23", response.getErrorCode());
+        assertEquals("Schema validation exceeded its evaluation budget", response.getMessage());
+        assertNull(SchemaValidationHelper.check(save(doc("xxy"))));
+    }
+
+    @Test
+    public void test_bulk_save_budget_refusal_names_400_23() {
+        installRedosSchema();
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(doc("xxy"), doc(DiamondSchemas.hostileName())));
+
+        final var response = SchemaValidationHelper.check(request);
+
+        assertNotNull(response);
+        assertEquals("400-23", response.getErrorCode());
+    }
+
+    @Test
+    public void test_stored_over_limit_schema_still_loads_and_cheap_documents_pass() throws Exception {
+        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, DiamondSchemas.behindProperty("deep", 28));
+        cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+
+        assertNotNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(SchemaValidationHelper.check(save(doc("cheap"))));
+        final var expensive = doc("expensive");
+        expensive.add("deep", new JsonObject());
+        final var refused = SchemaValidationHelper.check(save(expensive));
+        assertNotNull(refused);
+        assertEquals("400-23", refused.getErrorCode());
     }
 }

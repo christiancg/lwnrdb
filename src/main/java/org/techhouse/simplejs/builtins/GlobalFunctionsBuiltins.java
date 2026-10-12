@@ -265,8 +265,17 @@ public final class GlobalFunctionsBuiltins {
             case JsProxy ignored -> throw dataCloneError(value);
             default -> {
                 final var existing = seen.get(value);
-                return Objects.requireNonNullElseGet(existing, () -> cloneStructured(value, seen, ops));
+                return Objects.requireNonNullElseGet(existing, () -> cloneNested(value, seen, ops));
             }
+        }
+    }
+
+    private static JsValue cloneNested(JsValue value, Map<JsValue, JsValue> seen, InterpreterOps ops) {
+        NativeDepth.enter(ops);
+        try {
+            return cloneStructured(value, seen, ops);
+        } finally {
+            NativeDepth.leave(ops);
         }
     }
 

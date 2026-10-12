@@ -177,7 +177,8 @@ public final class IndexMarkers {
     }
 
     private File buildingFile(String dbName, String collName, String fieldName) {
-        return new File(paths.collectionFolder(dbName, collName), collName + "-" + fieldName + BUILDING_SUFFIX);
+        return new File(paths.collectionFolder(dbName, collName),
+                collName + "-" + FilePaths.embedded(fieldName) + BUILDING_SUFFIX);
     }
 
     private File dirtyFile(String dbName, String collName) {

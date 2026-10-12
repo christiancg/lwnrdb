@@ -1,6 +1,7 @@
 import os
 import socket
 import ssl
+import stat
 import tempfile
 
 import base_utils as bu
@@ -9,7 +10,7 @@ from base_utils import Conn, check, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TLS_TEST_PORT", "9443"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 KEYSTORE_PASSWORD = "changeit"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -129,11 +130,112 @@ def test_plaintext_rejected():
     survived = False
     try:
         with tls_socket(verify=False) as s:
-            r = Conn(sock=s).send({"type": "LIST_DATABASES"})
+            conn = Conn(sock=s)
+            conn.authenticate()
+            r = conn.send({"type": "LIST_DATABASES"})
             survived = r.get("status") == "OK"
     except OSError:
         survived = False
     check("Server still accepts a TLS client after rejecting plaintext", survived)
+
+
+def fresh_work_dir(prefix: str):
+    work_dir = tempfile.mkdtemp(prefix=f"lwnrdb-{prefix}-")
+    return work_dir, os.path.join(work_dir, "server.log")
+
+
+def check_refused_start(label: str, work_dir: str, log_path: str, expected: str, storage_untouched: bool):
+    code = bu.run_until_exit(work_dir, log_path)
+    log = bu.read_log(log_path)
+    check(f"{label}: the server exits non-zero", code is not None and code != 0, f"exit={code}")
+    check(f"{label}: a FATAL line names defaultAdminPassword",
+          "FATAL" in log and "defaultAdminPassword" in log and "will not start" in log and expected in log,
+          next((line for line in log.splitlines() if "FATAL" in line), log[-600:]))
+    check(f"{label}: no port was opened", not bu.port_open())
+    if storage_untouched:
+        check(f"{label}: the admin database was never created",
+              not os.path.isdir(os.path.join(work_dir, "db", "admin")))
+
+
+def test_default_admin_password_refuses_to_start():
+    section("The shipped admin password refuses to start")
+    work_dir, log_path = fresh_work_dir("shipped-pw")
+    bu.write_config(work_dir, PORT, admin_password="administrator")
+    check_refused_start("defaultAdminPassword=administrator", work_dir, log_path, "well-known shipped value", True)
+
+
+def test_blank_admin_password_refuses_to_bootstrap():
+    section("A blank admin password refuses to bootstrap the first admin")
+    work_dir, log_path = fresh_work_dir("blank-pw")
+    bu.write_config(work_dir, PORT, admin_password="")
+    check_refused_start("blank defaultAdminPassword", work_dir, log_path, "no admin user exists", False)
+
+
+def test_blank_admin_password_starts_once_an_admin_exists():
+    section("A blank admin password starts once an admin exists, and plaintext is warned about")
+    work_dir, log_path = fresh_work_dir("blank-after-admin")
+    bu.write_config(work_dir, PORT)
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path)
+        bu.stop_server(proc)
+        bu.write_config(work_dir, PORT, admin_password="")
+        proc = bu.start_server(work_dir, log_path)
+        with Conn() as c:
+            check_status("AUTHENTICATE with the original password after restarting blank", c.authenticate(), "OK")
+        with Conn() as c:
+            r = c.authenticate(ADMIN_USERNAME, "")
+            check("A blank password does not authenticate", r.get("status") != "OK", str(r))
+    finally:
+        bu.stop_server(proc)
+    log = bu.read_log(log_path)
+    check("tlsEnabled=false logs a plaintext SECURITY WARNING",
+          "SECURITY WARNING: tlsEnabled=false" in log)
+
+
+def test_default_keystore_password_warning(main_log_path: str):
+    section("The shipped keystore password is warned about with TLS on")
+    check("A custom keystore password logs no change_it warning",
+          "tlsKeystorePassword is still the shipped value" not in bu.read_log(main_log_path))
+    check("A TLS server logs no plaintext warning",
+          "SECURITY WARNING: tlsEnabled=false" not in bu.read_log(main_log_path))
+    work_dir, log_path = fresh_work_dir("change-it")
+    bu.write_config(work_dir, PORT, tlsEnabled=True, tlsKeystorePath="certs/lwnrdb.p12",
+                    tlsKeystorePassword="change_it")
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path)
+    finally:
+        bu.stop_server(proc)
+    check("tlsKeystorePassword=change_it logs a SECURITY WARNING",
+          "tlsKeystorePassword is still the shipped value 'change_it'" in bu.read_log(log_path))
+
+
+def mode_of(path: str) -> int:
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def test_data_and_keystore_folders_are_owner_only(work_dir: str, log_path: str):
+    section("Created data, log and keystore paths are owner-only")
+    if os.name != "posix":
+        bu.warn("POSIX permissions are not available on this host; skipped")
+        return
+    for folder in ("db", "logs", "certs"):
+        path = os.path.join(work_dir, folder)
+        check(f"{folder}/ was created 0700", mode_of(path) == 0o700, oct(mode_of(path)))
+    keystore = os.path.join(work_dir, "certs", "lwnrdb.p12")
+    check("The generated keystore is 0600", mode_of(keystore) == 0o600, oct(mode_of(keystore)))
+    data_root = os.path.join(work_dir, "db")
+    os.chmod(data_root, 0o755)
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path)
+    finally:
+        bu.stop_server(proc)
+    log = bu.read_log(log_path)
+    check("A group/world-accessible data root is warned about at startup",
+          "data folder (filePath)" in log and "chmod 700" in log)
+    check("The warning never chmod-ed the existing data root", mode_of(data_root) == 0o755, oct(mode_of(data_root)))
 
 
 def main():
@@ -155,7 +257,13 @@ def main():
         test_tls_roundtrip()
         test_plaintext_rejected()
     finally:
-        bu.stop_server(proc, wait_for_port=False)
+        bu.stop_server(proc)
+
+    test_data_and_keystore_folders_are_owner_only(work_dir, log_path)
+    test_default_keystore_password_warning(log_path)
+    test_default_admin_password_refuses_to_start()
+    test_blank_admin_password_refuses_to_bootstrap()
+    test_blank_admin_password_starts_once_an_admin_exists()
 
     bu.summary(on_failure=lambda: bu.dump_log(log_path))
 

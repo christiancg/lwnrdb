@@ -9,7 +9,7 @@ from base_utils import check, check_code, check_result, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ADMISSION_TEST_PORT", "8997"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "admission_test_db"
 COLL = "docs"
@@ -387,7 +387,7 @@ def test_wait_absorbs_the_burst(conn: Conn):
     check("every permit came back", await_available(conn, CAPACITY) == CAPACITY)
 
 
-def test_wait_may_exceed_the_run_timeout(conn: Conn):
+def test_wait_may_exceed_the_run_timeout():
     section("The wait is not bounded by the run timeout")
     check(f"the configured wait ({LONG_WAIT_MS}ms) exceeds scriptTimeoutMs ({TIMEOUT_MS}ms)",
           LONG_WAIT_MS > TIMEOUT_MS)
@@ -397,7 +397,7 @@ def test_wait_may_exceed_the_run_timeout(conn: Conn):
           f"only {len(burst.ok)} of {CAPACITY + 1} succeeded; rejected={len(burst.rejected)}")
 
 
-def test_per_user_cap(conn: Conn):
+def test_per_user_cap():
     section("A per-user cap under a generous node-wide cap")
     one_user = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
                           credentials=[TENANTS[0]])
@@ -508,7 +508,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_wait_absorbs_the_burst(conn)
-            test_wait_may_exceed_the_run_timeout(conn)
+            test_wait_may_exceed_the_run_timeout()
 
         bu.stop_server(proc)
         proc = None
@@ -518,7 +518,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             create_tenants(conn)
-            test_per_user_cap(conn)
+            test_per_user_cap()
             test_a_tenant_refusal_frees_the_node_permit(conn)
             test_tenant_caps_exempt_triggers_and_schedules(conn)
 

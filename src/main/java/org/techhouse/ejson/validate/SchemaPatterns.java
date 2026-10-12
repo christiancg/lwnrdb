@@ -7,6 +7,7 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.regex.RegexMatcher;
 import org.techhouse.simplejs.internal.regex.RegexParser;
 import org.techhouse.simplejs.internal.regex.RegexProgram;
+import org.techhouse.simplejs.internal.regex.RegexStepBudget;
 
 final class SchemaPatterns {
     private static final String ECMA_UNICODE_MODE = "u";
@@ -25,14 +26,14 @@ final class SchemaPatterns {
         }
     }
 
-    static boolean matches(String regex, String input) {
+    static boolean matches(String regex, String input, RegexStepBudget budget) {
         final RegexProgram program;
         try {
             program = compile(regex);
         } catch (SyntaxErrorException | IllegalStateException e) {
             throw new InvalidSchemaException("Invalid ECMA-262 regular expression in schema: " + regex);
         }
-        return RegexMatcher.exec(program, input, 0, false) != null;
+        return RegexMatcher.exec(program, input, 0, false, budget) != null;
     }
 
     private static RegexProgram compile(String regex) {

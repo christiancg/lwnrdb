@@ -1,6 +1,7 @@
 package org.techhouse.unit.log;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -8,6 +9,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
@@ -19,11 +21,15 @@ import org.techhouse.config.Globals;
 import org.techhouse.log.LogWriter;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class LogWriterTest {
+    private int origMaxLogFiles;
+
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
+        origMaxLogFiles = config.getMaxLogFiles();
         TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
         final var logDir = new File(config.getLogPath());
         if (!logDir.exists()) {
@@ -34,8 +40,10 @@ public class LogWriterTest {
     }
 
     @AfterEach
-    public void tearDown() {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "maxLogFiles", origMaxLogFiles);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
         final var logfile = new File(config.getLogPath() + Globals.FILE_SEPARATOR + logFileName(LocalDate.now()));
         if (logfile.exists()) {
             if (!logfile.delete()) {
@@ -138,6 +146,73 @@ public class LogWriterTest {
         assertTrue(recentFile1.exists());
         assertTrue(recentFile2.exists());
         assertEquals(3, Objects.requireNonNull(tempDir.listFiles()).length);
+    }
+
+    @Test
+    public void test_unrelated_files_in_the_log_folder_are_not_deleted() throws Exception {
+        File tempDir = new File(TestGlobals.LOG_PATH);
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxLogFiles", 3);
+        final var survivors = new File[]{new File(tempDir, "notes.txt"), new File(tempDir, "server.log.1"),
+                new File(tempDir, "data.dat"), new File(tempDir, "abc.log"), new File(tempDir, "2020-13-45.log")};
+        for (final var survivor : survivors) {
+            assertTrue(survivor.createNewFile());
+        }
+        final var subfolder = new File(tempDir, "old");
+        assertTrue(subfolder.mkdir());
+        final var expired = new File(tempDir, "2000-01-01.log");
+        assertTrue(expired.createNewFile());
+
+        LogWriter.deleteOldLogFiles(tempDir);
+
+        for (final var survivor : survivors) {
+            assertTrue(survivor.exists(), survivor.getName() + " is not a dated log and must survive");
+        }
+        assertTrue(subfolder.exists());
+        assertFalse(expired.exists());
+    }
+
+    @Test
+    public void test_logPath_pointing_at_a_populated_folder_keeps_everything_but_expired_logs() throws Exception {
+        final var workDir = new File(TestGlobals.LOG_PATH, "work");
+        assertTrue(workDir.mkdir());
+        final var pom = new File(workDir, "pom.xml");
+        Files.writeString(pom.toPath(), "<project/>");
+        final var nested = new File(new File(workDir, "src"), "Main.java");
+        assertTrue(nested.getParentFile().mkdir());
+        Files.writeString(nested.toPath(), "class Main {}");
+        final var expired = new File(workDir, "2001-02-03.log");
+        assertTrue(expired.createNewFile());
+        TestUtils.setPrivateField(Configuration.getInstance(), "logPath", workDir.getPath());
+
+        LogWriter.createLogPathAndRemoveOldFiles();
+
+        assertTrue(pom.exists());
+        assertTrue(nested.exists());
+        assertFalse(expired.exists());
+        assertTrue(new File(workDir, logFileName(LocalDate.now())).exists());
+    }
+
+    @Test
+    public void test_an_expired_dated_log_that_is_a_directory_is_left_alone() throws Exception {
+        File tempDir = new File(TestGlobals.LOG_PATH);
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxLogFiles", 3);
+        final var folder = new File(tempDir, "2000-01-01.log");
+        assertTrue(folder.mkdir());
+
+        LogWriter.deleteOldLogFiles(tempDir);
+
+        assertTrue(folder.isDirectory());
+    }
+
+    @Test
+    public void test_a_created_log_folder_is_owner_only() throws Exception {
+        assumeTrue(OwnerOnlyPermissions.supported());
+        final var logDir = new File(TestGlobals.LOG_PATH);
+        TestUtils.deleteFolder(logDir);
+
+        LogWriter.createLogPathAndRemoveOldFiles();
+
+        assertEquals("rwx------", PosixFilePermissions.toString(Files.getPosixFilePermissions(logDir.toPath())));
     }
 
     @Test

@@ -5,9 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.conn.tls.SelfSignedCertificateGenerator;
 import org.techhouse.ex.TlsConfigurationException;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class SelfSignedCertificateGeneratorTest {
 
@@ -74,5 +77,16 @@ public class SelfSignedCertificateGeneratorTest {
         final var keystorePath = blocker.resolve("sub").resolve("lwnrdb.p12");
         assertThrows(TlsConfigurationException.class,
                 () -> SelfSignedCertificateGenerator.generate(keystorePath, PASSWORD, ALIAS));
+    }
+
+    @Test
+    public void test_generated_keystore_and_its_folder_are_owner_only(@TempDir Path tempDir) throws Exception {
+        assumeTrue(OwnerOnlyPermissions.supported());
+        final var certsFolder = tempDir.resolve("certs");
+        final var keystorePath = certsFolder.resolve("lwnrdb.p12");
+        SelfSignedCertificateGenerator.generate(keystorePath, PASSWORD, ALIAS);
+
+        assertEquals("rwx------", PosixFilePermissions.toString(Files.getPosixFilePermissions(certsFolder)));
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(keystorePath)));
     }
 }

@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -10,6 +11,7 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.test.TestUtils;
 
 public class CoroutineTest {
     @Test
@@ -164,5 +166,78 @@ public class CoroutineTest {
         flags[1] = coroutine.isDelegatedYield();
         assertTrue(flags[0]);
         assertFalse(flags[1]);
+    }
+
+    @Test
+    public void test_error_in_body_is_rethrown_to_driver() {
+        final var coroutine = new Coroutine();
+        coroutine.prime(() -> {
+            throw new StackOverflowError("deep");
+        });
+        final var thrown = assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> assertThrows(StackOverflowError.class, () -> coroutine.resumeNext(JsUndefined.getInstance())));
+        assertEquals("deep", thrown.getMessage());
+        assertTrue(coroutine.isDone());
+    }
+
+    @Test
+    public void test_out_of_memory_in_body_is_rethrown() {
+        final var coroutine = new Coroutine();
+        final Coroutine.Body body = () -> {
+            throw new OutOfMemoryError("heap");
+        };
+        assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> assertThrows(OutOfMemoryError.class, () -> coroutine.startAsync(body)));
+        assertTrue(coroutine.isDone());
+    }
+
+    @Test
+    public void test_error_in_generator_resume_is_not_swallowed_by_observer() {
+        final var coroutine = new Coroutine();
+        final var observed = new int[1];
+        coroutine.setResumeObserver(_ -> observed[0]++);
+        coroutine.prime(() -> {
+            throw new StackOverflowError();
+        });
+        assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> assertThrows(StackOverflowError.class, () -> coroutine.resumeNext(JsUndefined.getInstance())));
+        assertEquals(0, observed[0]);
+    }
+
+    @Test
+    public void test_error_after_yield_reaches_resumer() {
+        final var coroutine = new Coroutine();
+        coroutine.prime(() -> {
+            coroutine.yieldOut(new JsNumber(1));
+            throw new StackOverflowError();
+        });
+        assertFalse(coroutine.resumeNext(JsUndefined.getInstance()).done());
+        assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> assertThrows(StackOverflowError.class, () -> coroutine.resumeNext(JsUndefined.getInstance())));
+        assertTrue(coroutine.isDone());
+        assertTrue(coroutine.resumeNext(JsUndefined.getInstance()).done());
+    }
+
+    @Test
+    public void test_interrupt_before_first_turn_releases_driver() throws Exception {
+        final var coroutine = new Coroutine();
+        coroutine.prime(() -> new JsNumber(1));
+        final var threadMain = Coroutine.class.getDeclaredMethod("threadMain");
+        threadMain.setAccessible(true);
+        final var interruptedAfter = new boolean[1];
+        final var worker = Thread.ofVirtual().start(() -> {
+            Thread.currentThread().interrupt();
+            try {
+                threadMain.invoke(coroutine);
+            } catch (ReflectiveOperationException failure) {
+                throw new IllegalStateException(failure);
+            }
+            interruptedAfter[0] = Thread.currentThread().isInterrupted();
+        });
+        worker.join(5000);
+        assertFalse(worker.isAlive());
+        assertTrue(coroutine.isDone());
+        assertTrue(interruptedAfter[0]);
+        assertTrue(TestUtils.getPrivateField(coroutine, "exited", Boolean.class));
     }
 }

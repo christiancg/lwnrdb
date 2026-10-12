@@ -59,11 +59,13 @@ public record FunctionInvoker(Interpreter interp) {
     }
 
     public JsValue invokeNative(JsNativeFunction nativeFunction, JsValue thisArg, List<JsValue> args) {
+        interp.ops.enterNested();
         interp.callStack.push(nativeFunction.getName(), CallStack.NATIVE_MODULE);
         try {
             return nativeFunction.invoke(thisArg, args);
         } finally {
             interp.callStack.pop();
+            interp.ops.leaveNested();
         }
     }
 

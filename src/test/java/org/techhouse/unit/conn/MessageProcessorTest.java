@@ -67,7 +67,7 @@ public class MessageProcessorTest {
 
         String response = out.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("LIST_DATABASES"), "Response should echo operation type");
-        assertTrue(response.contains("OK"), "Response should indicate success");
+        assertTrue(response.contains("401-1"), "LIST_DATABASES requires authentication");
     }
 
     @Test

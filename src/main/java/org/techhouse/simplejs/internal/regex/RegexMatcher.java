@@ -8,12 +8,14 @@ public final class RegexMatcher {
     private final String input;
     private final boolean unicode;
     private final RxNode root;
+    private final RegexStepBudget budget;
     private int[] starts;
     private int[] ends;
     private int matchEnd;
 
-    private RegexMatcher(RegexProgram program, String input) {
+    private RegexMatcher(RegexProgram program, String input, RegexStepBudget budget) {
         this.input = input;
+        this.budget = budget;
         this.unicode = program.unicode();
         this.root = program.root();
         this.starts = new int[program.groupCount() + 1];
@@ -21,9 +23,15 @@ public final class RegexMatcher {
     }
 
     public static RegexMatch exec(RegexProgram program, String input, int fromIndex, boolean sticky) {
-        final var engine = new RegexMatcher(program, input);
+        return exec(program, input, fromIndex, sticky, RegexStepBudget.UNLIMITED);
+    }
+
+    public static RegexMatch exec(RegexProgram program, String input, int fromIndex, boolean sticky,
+            RegexStepBudget budget) {
+        final var engine = new RegexMatcher(program, input, budget);
         var start = Math.max(fromIndex, 0);
         while (start <= input.length()) {
+            budget.step();
             engine.resetCaptures();
             if (engine.tryMatchAt(start)) {
                 return engine.buildResult(start);
@@ -58,6 +66,7 @@ public final class RegexMatcher {
     }
 
     private boolean match(RxNode node, int pos, int dir, Cont k) {
+        budget.step();
         if (isSimple(node)) {
             final var next = tryConsumeSimple(node, pos, dir);
             return next >= 0 && k.run(next);
@@ -172,12 +181,14 @@ public final class RegexMatcher {
         }
         if (greedy) {
             for (var count = reached; count >= min; count--) {
+                budget.step();
                 if (k.run(reachedEnds.get(count))) {
                     return true;
                 }
             }
         } else {
             for (var count = min; count <= reached; count++) {
+                budget.step();
                 if (k.run(reachedEnds.get(count))) {
                     return true;
                 }

@@ -38,20 +38,24 @@ public final class Configuration {
         }
     }
 
-    private int intValue(ConfigKey key) {
+    public int intValue(ConfigKey key) {
         return (int) resolved.computeIfAbsent(key, k -> Integer.parseInt(values.get(k).trim()));
     }
 
-    private long longValue(ConfigKey key) {
+    public long longValue(ConfigKey key) {
         return (long) resolved.computeIfAbsent(key, k -> Long.parseLong(values.get(k).trim()));
     }
 
-    private long sizeValue(ConfigKey key) {
+    public long sizeValue(ConfigKey key) {
         return (long) resolved.computeIfAbsent(key, k -> SizeParser.parse(values.get(k)));
     }
 
-    private boolean booleanValue(ConfigKey key) {
+    public boolean booleanValue(ConfigKey key) {
         return (boolean) resolved.computeIfAbsent(key, k -> Boolean.parseBoolean(values.get(k).trim()));
+    }
+
+    public String stringValue(ConfigKey key) {
+        return values.get(key);
     }
 
     public static Configuration getInstance() {
@@ -67,6 +71,22 @@ public final class Configuration {
 
     public int getMaxConnections() {
         return intValue(ConfigKey.MAX_CONNECTIONS);
+    }
+
+    public int getMaxFailedAuthAttempts() {
+        return intValue(ConfigKey.MAX_FAILED_AUTH_ATTEMPTS);
+    }
+
+    public long getAuthFailureDelayBaseMs() {
+        return longValue(ConfigKey.AUTH_FAILURE_DELAY_BASE_MS);
+    }
+
+    public long getAuthFailureDelayMaxMs() {
+        return longValue(ConfigKey.AUTH_FAILURE_DELAY_MAX_MS);
+    }
+
+    public int getMaxConcurrentPasswordChecks() {
+        return intValue(ConfigKey.MAX_CONCURRENT_PASSWORD_CHECKS);
     }
 
     public String getFilePath() {
@@ -125,6 +145,18 @@ public final class Configuration {
         return longValue(ConfigKey.SHUTDOWN_TIMEOUT_MS);
     }
 
+    public long getMaxRequestSize() {
+        return sizeValue(ConfigKey.MAX_REQUEST_SIZE);
+    }
+
+    public long getAuthTimeoutMs() {
+        return longValue(ConfigKey.AUTH_TIMEOUT_MS);
+    }
+
+    public long getTransactionIdleTimeoutMs() {
+        return longValue(ConfigKey.TRANSACTION_IDLE_TIMEOUT_MS);
+    }
+
     public boolean isTlsEnabled() {
         return booleanValue(ConfigKey.TLS_ENABLED);
     }
@@ -143,10 +175,6 @@ public final class Configuration {
 
     public int getClusterPort() {
         return intValue(ConfigKey.CLUSTER_PORT);
-    }
-
-    public String getClusterBindAddress() {
-        return values.get(ConfigKey.CLUSTER_BIND_ADDRESS);
     }
 
     public String getClusterAdvertisedAddress() {
@@ -169,10 +197,6 @@ public final class Configuration {
         return longValue(ConfigKey.GOSSIP_INTERVAL_MS);
     }
 
-    public long getSuspectTimeoutMs() {
-        return longValue(ConfigKey.SUSPECT_TIMEOUT_MS);
-    }
-
     public long getDeadTimeoutMs() {
         return longValue(ConfigKey.DEAD_TIMEOUT_MS);
     }
@@ -181,20 +205,8 @@ public final class Configuration {
         return longValue(ConfigKey.DEAD_EVICTION_MS);
     }
 
-    public long getDeadProbeIntervalMs() {
-        return longValue(ConfigKey.DEAD_PROBE_INTERVAL_MS);
-    }
-
     public long getReplicationAckTimeoutMs() {
         return longValue(ConfigKey.REPLICATION_ACK_TIMEOUT_MS);
-    }
-
-    public int getVirtualNodesPerNode() {
-        return intValue(ConfigKey.VIRTUAL_NODES_PER_NODE);
-    }
-
-    public boolean isReadFallbackToLocal() {
-        return booleanValue(ConfigKey.READ_FALLBACK_TO_LOCAL);
     }
 
     public boolean isScriptRoutingEnabled() {
@@ -356,6 +368,10 @@ public final class Configuration {
         return sizeValue(ConfigKey.SCRIPT_FETCH_MAX_RESPONSE_BYTES);
     }
 
+    public int getScriptFetchMaxConcurrent() {
+        return intValue(ConfigKey.SCRIPT_FETCH_MAX_CONCURRENT);
+    }
+
     public int getProcedureCacheSize() {
         return intValue(ConfigKey.PROCEDURE_CACHE_SIZE);
     }
@@ -446,6 +462,10 @@ public final class Configuration {
 
     public int getScheduleMaxPerDatabase() {
         return intValue(ConfigKey.SCHEDULE_MAX_PER_DATABASE);
+    }
+
+    public int getSchemaValidationBudget() {
+        return intValue(ConfigKey.SCHEMA_VALIDATION_BUDGET);
     }
 
     public boolean isFaultInjectionEnabled() {

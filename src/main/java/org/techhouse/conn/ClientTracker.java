@@ -13,32 +13,38 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
 import org.techhouse.data.Transaction;
 
 public class ClientTracker {
+    private static final String UNKNOWN_ADDRESS = "unknown";
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
     private final Map<UUID, Runnable> disconnectSignals = new ConcurrentHashMap<>();
     private final Map<UUID, CountDownLatch> departures = new ConcurrentHashMap<>();
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
+    private final AtomicInteger socketClients = new AtomicInteger();
     private final Configuration configuration = Configuration.getInstance();
 
     public UUID addClient(Socket socket) {
         final var maxConnections = configuration.getMaxConnections();
-        if (maxConnections == 0 || maxConnections > clients.size()) {
-            final var clientId = UUID.randomUUID();
-            clients.put(clientId, new Client(socket.getInetAddress().getHostAddress()));
-            disconnectSignals.put(clientId, () -> closeQuietly(socket));
-            return clientId;
+        if (socketClients.incrementAndGet() > maxConnections && maxConnections != 0) {
+            socketClients.decrementAndGet();
+            return null;
         }
-        return null;
+        final var clientId = UUID.randomUUID();
+        clients.put(clientId, new Client(socket.getInetAddress().getHostAddress()));
+        disconnectSignals.put(clientId, () -> closeQuietly(socket));
+        return clientId;
     }
 
     public void removeById(UUID clientId) {
         clients.remove(clientId);
-        disconnectSignals.remove(clientId);
+        if (disconnectSignals.remove(clientId) != null) {
+            socketClients.decrementAndGet();
+        }
         final var departure = departures.remove(clientId);
         if (departure != null) {
             departure.countDown();
@@ -108,6 +114,30 @@ public class ClientTracker {
         }
     }
 
+    public void markTransactionReaped(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.markTransactionReaped();
+        }
+    }
+
+    public boolean consumeTransactionReaped(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null && client.consumeTransactionReaped();
+    }
+
+    public void markRemoteSliceFenced(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.markRemoteSliceFenced();
+        }
+    }
+
+    public boolean hasFencedRemoteSlice(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null && client.hasFencedRemoteSlice();
+    }
+
     public boolean hasLocalSlice(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
         return client != null && client.hasLocalSlice();
@@ -169,12 +199,26 @@ public class ClientTracker {
     }
 
     public void deauthenticateUser(String username) {
+        deauthenticateUserExcept(username, null);
+    }
+
+    public void deauthenticateUserExcept(String username, UUID keepClientId) {
         for (final var entry : clients.entrySet()) {
-            if (disconnectSignals.containsKey(entry.getKey())
+            if (!entry.getKey().equals(keepClientId) && disconnectSignals.containsKey(entry.getKey())
                     && username.equals(entry.getValue().getAuthenticatedUsername())) {
                 entry.getValue().setAuthenticatedUsername(null);
             }
         }
+    }
+
+    public int recordFailedAuthentication(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null ? client.incrementFailedAuthentications() : 0;
+    }
+
+    public String addressOf(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null ? client.getAddress() : UNKNOWN_ADDRESS;
     }
 
     public String getAuthenticatedUsername(UUID clientId) {

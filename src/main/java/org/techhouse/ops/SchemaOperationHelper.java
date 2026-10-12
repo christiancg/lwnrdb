@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -35,6 +36,13 @@ public final class SchemaOperationHelper {
             return new OperationResponse(OperationType.SAVE_SCHEMA,
                     ErrorCode.INVALID_SCHEMA.getDefaultMessage() + ": " + String.join("; ", validation.getErrors()),
                     ErrorCode.INVALID_SCHEMA);
+        }
+        if (eJson.schemaExpandedNodeCount(schema,
+                Globals.MAX_SCHEMA_EXPANDED_NODES) > Globals.MAX_SCHEMA_EXPANDED_NODES) {
+            return new OperationResponse(OperationType.SAVE_SCHEMA,
+                    ErrorCode.SCHEMA_TOO_COMPLEX.getDefaultMessage() + ": it expands to more than "
+                            + Globals.MAX_SCHEMA_EXPANDED_NODES + " schema nodes once its references are followed",
+                    ErrorCode.SCHEMA_TOO_COMPLEX);
         }
         StoredDefinitions.writeSchema(dbName, collName, schema);
         cache.putCollectionSchema(dbName, collName, schema);

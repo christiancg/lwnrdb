@@ -4,7 +4,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
@@ -18,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 /**
  * The X.509 structure is hand-encoded because the JDK exposes no public {@code X509Certificate} builder.
@@ -109,9 +109,9 @@ public final class SelfSignedCertificateGenerator {
             throws GeneralSecurityException, IOException {
         final var parent = keystorePath.toAbsolutePath().getParent();
         if (parent != null) {
-            Files.createDirectories(parent);
+            OwnerOnlyPermissions.createDirectories(parent);
         }
-        try (var out = Files.newOutputStream(keystorePath)) {
+        try (var out = OwnerOnlyPermissions.newOwnerOnlyOutputStream(keystorePath)) {
             keyStore.store(out, password);
         }
     }

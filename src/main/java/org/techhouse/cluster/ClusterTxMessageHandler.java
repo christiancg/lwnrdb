@@ -46,7 +46,9 @@ final class ClusterTxMessageHandler {
         final var sessionId = request.getTxSessionId();
         try {
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
-            final var schemaError = SchemaValidationHelper.check(parsed);
+            final var refused = ForwardedRequestGate.checkTransactional(parsed, request.getActingUser(),
+                    sessionHoldsTransaction(sessionId));
+            final var schemaError = refused != null ? refused : SchemaValidationHelper.check(parsed);
             if (schemaError != null) {
                 response.setType(ClusterMessageType.FORWARD_RESPONSE);
                 response.setForwardBody(ForwardBody.encode(eJson.toJson(schemaError)));
@@ -75,7 +77,15 @@ final class ClusterTxMessageHandler {
         return response;
     }
 
+    private static boolean sessionHoldsTransaction(String sessionId) {
+        final var session = clientTracker.txSession(sessionId);
+        return session != null && clientTracker.getActiveTransaction(session.clientId()) != null;
+    }
+
     static ClusterMessage handleReplicateTx(ClusterMessage request) {
+        if (!PeerNames.txPayload(request.getTxReplication())) {
+            return ClusterMessages.invalidPayload();
+        }
         final var response = new ClusterMessage();
         if (ReplicatedTxApplyHelper.apply(request.getTxReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_TX_ACK);

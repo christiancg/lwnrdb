@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.colle
 
 import java.util.ArrayList;
 import java.util.Map;
+import org.techhouse.simplejs.ModuleReferences;
 import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ScriptModule;
 import org.techhouse.simplejs.exceptions.JsThrowException;
@@ -68,7 +69,7 @@ public final class ModuleEvaluator {
             case "args" -> builtin(interp.cacheBuiltinModule("builtin:args",
                     () -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args())));
             case "db" -> builtin(interp.cacheBuiltinModule("builtin:db", this::createDbModule));
-            case "script" -> builtin(interp.cacheBuiltinModule("builtin:script",
+            case ModuleReferences.SCRIPT_MODULE -> builtin(interp.cacheBuiltinModule("builtin:script",
                     () -> ScriptModule.create(this::importText, host.limits(), interp.intrinsics())));
             default -> new ResolvedBinding(resolveHostModule(source), true);
         };

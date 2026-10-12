@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Invoker;
+import org.techhouse.simplejs.builtins.NativeDepth;
 import org.techhouse.simplejs.builtins.ObjectProtoBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -177,12 +178,21 @@ public final class ArrayMutation {
             }
             final var element = target.get(i);
             if (!(element instanceof JsUndefined) && !(element instanceof JsNull)) {
-                sb.append(JsCoercion.toStr(element, ops));
+                sb.append(nestedText(element, ops));
             }
             InterpreterOps.chargeChars(ops, sb.length() - charged);
             charged = sb.length();
         }
         return sb.toString();
+    }
+
+    private static String nestedText(JsValue element, InterpreterOps ops) {
+        NativeDepth.enter(ops);
+        try {
+            return JsCoercion.toStr(element, ops);
+        } finally {
+            NativeDepth.leave(ops);
+        }
     }
 
     public static JsValue toStringMethod(ArrayLike target, Invoker invoker, InterpreterOps ops) {

@@ -29,6 +29,7 @@ import org.techhouse.ejson.type_adapters.impl.NumberTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.StringTypeAdapter;
 import org.techhouse.ejson.validate.JsonSchema;
 import org.techhouse.ejson.validate.MetaSchemaValidator;
+import org.techhouse.ejson.validate.SchemaComplexity;
 import org.techhouse.ejson.validate.SchemaValidationResult;
 import org.techhouse.ejson.validate.SchemaValidator;
 
@@ -106,6 +107,10 @@ public class EJson {
         return reader.fromJson(jsonString, tClass, maxDepth);
     }
 
+    public <T> T fromJson(String jsonString, Class<T> tClass, int maxDepth, int maxTokens) {
+        return reader.fromJson(jsonString, tClass, maxDepth, maxTokens);
+    }
+
     public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass) {
         final var adapter = TypeAdapterFactory.getAdapter(tClass);
         return adapter.fromJson(jsonObject);
@@ -152,5 +157,13 @@ public class EJson {
 
     public SchemaValidationResult validateInstance(JsonBaseElement instance, JsonObject schema) {
         return schemaValidator.validate(instance, new JsonSchema(schema));
+    }
+
+    public SchemaValidationResult validateInstance(JsonBaseElement instance, JsonObject schema, long stepBudget) {
+        return schemaValidator.validate(instance, new JsonSchema(schema, stepBudget));
+    }
+
+    public long schemaExpandedNodeCount(JsonObject schema, int limit) {
+        return SchemaComplexity.expandedNodeCount(schema, limit);
     }
 }

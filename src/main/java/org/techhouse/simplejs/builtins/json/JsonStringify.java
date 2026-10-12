@@ -19,6 +19,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Invoker;
 import org.techhouse.simplejs.builtins.JsonBuiltins.Replacer;
+import org.techhouse.simplejs.builtins.NativeDepth;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.EJsonInterop;
@@ -54,6 +55,16 @@ public final class JsonStringify {
 
     public static JsonBaseElement toJsonTree(JsValue raw, JsValue holder, String key, Replacer replacer,
             Set<JsValue> seen, InterpreterOps ops, Invoker invoker) {
+        NativeDepth.enter(ops);
+        try {
+            return treeOf(raw, holder, key, replacer, seen, ops, invoker);
+        } finally {
+            NativeDepth.leave(ops);
+        }
+    }
+
+    private static JsonBaseElement treeOf(JsValue raw, JsValue holder, String key, Replacer replacer, Set<JsValue> seen,
+            InterpreterOps ops, Invoker invoker) {
         var value = applyToJson(raw, key, ops, invoker);
         if (replacer.function() != null) {
             value = invoker.call(replacer.function(), holder, List.of(new JsString(key), value));

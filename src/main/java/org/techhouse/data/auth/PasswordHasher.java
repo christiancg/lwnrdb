@@ -15,6 +15,15 @@ public final class PasswordHasher {
     private PasswordHasher() {
     }
 
+    private static final class DummyCredential {
+        private static final String DUMMY_HASH = hash("lwnrdb-dummy-credential");
+    }
+
+    public static boolean dummyVerify(String plain) {
+        verify(plain == null ? "" : plain, DummyCredential.DUMMY_HASH);
+        return false;
+    }
+
     public static String hash(String plain) {
         try {
             final var random = new SecureRandom();

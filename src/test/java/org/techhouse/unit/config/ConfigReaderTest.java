@@ -48,6 +48,10 @@ public class ConfigReaderTest {
         Map<String, String> expectedConfig = new HashMap<>();
         expectedConfig.put("port", "8989");
         expectedConfig.put("maxConnections", "100");
+        expectedConfig.put("maxFailedAuthAttempts", "5");
+        expectedConfig.put("authFailureDelayBaseMs", "250");
+        expectedConfig.put("authFailureDelayMaxMs", "30000");
+        expectedConfig.put("maxConcurrentPasswordChecks", "0");
         expectedConfig.put("filePath", "db");
         expectedConfig.put("backgroundProcessingThreads", "10");
         expectedConfig.put("logPath", "logs");
@@ -55,8 +59,9 @@ public class ConfigReaderTest {
         expectedConfig.put("maxLogFiles", "7");
         expectedConfig.put("maxPageSize", "2Mb");
         expectedConfig.put("maxEntrySize", "1Mb");
+        expectedConfig.put("schemaValidationBudget", "5000000");
         expectedConfig.put("defaultAdminUsername", "admin");
-        expectedConfig.put("defaultAdminPassword", "administrator");
+        expectedConfig.put("defaultAdminPassword", "");
         expectedConfig.put("maxMemory", "512mb");
         expectedConfig.put("transactionLockTimeoutMs", "5000");
         expectedConfig.put("tlsEnabled", "false");
@@ -81,8 +86,19 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptLocalityWeight", "50");
         expectedConfig.put("clusterTlsEnabled", "false");
         expectedConfig.put("clusterSecret", "");
+        expectedConfig.put("clusterMaxFrameSize", "256Mb");
+        expectedConfig.put("clusterHandshakeTimeoutMs", "5000");
+        expectedConfig.put("clusterMaxClockSkewMs", "3600000");
         expectedConfig.put("antiEntropyIntervalMs", "60000");
         expectedConfig.put("tombstoneRetentionMs", "86400000");
+        putScriptingDefaults(expectedConfig);
+
+        Map<String, String> actualConfig = ConfigReader.loadConfiguration();
+
+        assertEquals(expectedConfig, actualConfig);
+    }
+
+    private static void putScriptingDefaults(Map<String, String> expectedConfig) {
         expectedConfig.put("scriptTimeZone", "UTC");
         expectedConfig.put("scriptLocale", "en-US");
         expectedConfig.put("scriptsEnabled", "true");
@@ -109,6 +125,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptFetchAllowlist", "*");
         expectedConfig.put("scriptFetchTimeoutMs", "5000");
         expectedConfig.put("scriptFetchMaxResponseBytes", "1Mb");
+        expectedConfig.put("scriptFetchMaxConcurrent", "8");
         expectedConfig.put("metadataCacheMaxBytes", "72Mb");
         expectedConfig.put("metadataCacheMaxEntries", "4096");
         expectedConfig.put("procedureCacheSize", "128");
@@ -118,6 +135,9 @@ public class ConfigReaderTest {
         expectedConfig.put("triggerMaxDepth", "3");
         expectedConfig.put("triggerTimeoutMs", "1000");
         expectedConfig.put("shutdownTimeoutMs", "15000");
+        expectedConfig.put("maxRequestSize", "64Mb");
+        expectedConfig.put("authTimeoutMs", "10000");
+        expectedConfig.put("transactionIdleTimeoutMs", "30000");
         expectedConfig.put("triggerRunLogEnabled", "true");
         expectedConfig.put("triggerRunRetentionMs", "86400000");
         expectedConfig.put("triggerMaxAttempts", "3");
@@ -139,10 +159,6 @@ public class ConfigReaderTest {
         expectedConfig.put("aggregationScriptInstructionBudget", "1000000");
         expectedConfig.put("aggregationScriptTimeoutMs", "2000");
         expectedConfig.put("aggregationScriptMaxSourceBytes", "16Kb");
-
-        Map<String, String> actualConfig = ConfigReader.loadConfiguration();
-
-        assertEquals(expectedConfig, actualConfig);
     }
 
     @Test

@@ -87,6 +87,7 @@ public final class TypedArrayMutation {
         }
         final var result = allocate(receiver.kind(), length, ops);
         for (var i = 0; i < length; i++) {
+            InterpreterOps.pace(ops, i);
             result.setElement(i, i == index ? replacement : receiver.getElement(i));
         }
         return result;
@@ -107,7 +108,9 @@ public final class TypedArrayMutation {
                 args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0, ops) : length, length);
         validate(receiver);
         final var slice = new ArrayList<JsValue>();
+        InterpreterOps.chargeElements(ops, Math.max(end - start, 0));
         for (var i = start; i < end; i++) {
+            InterpreterOps.pace(ops, i);
             slice.add(receiver.getElement(i));
         }
         final var live = receiver.length();
@@ -284,6 +287,7 @@ public final class TypedArrayMutation {
         validate(receiver);
         final var live = Math.min(end, receiver.length());
         for (var i = start; i < live; i++) {
+            InterpreterOps.pace(ops, i);
             receiver.setElement(i, value);
         }
         return receiver;

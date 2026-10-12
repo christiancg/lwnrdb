@@ -5,6 +5,8 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mockStatic;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -283,6 +285,58 @@ public class LoggerTest {
 
             logWriterMock.verify(() -> LogWriter.writeLogEntry(argThat(
                     logEntry -> logEntry.contains("-INFO-") && logEntry.endsWith(InfoTest.class.getName() + " - "))));
+        }
+    }
+
+    @Test
+    public void message_with_newline_writes_a_single_log_line() throws Exception {
+        final var logDir = new File(Configuration.getInstance().getLogPath());
+        assertTrue(logDir.exists() || logDir.mkdirs());
+        final var marker = "forge-" + System.nanoTime();
+
+        Logger.logFor(InfoTest.class).error(marker + "\nFORGED-" + marker + "\r\nFORGED-AGAIN");
+        LogWriter.flushAndClose();
+
+        final var lines = Files.readAllLines(new File(logDir, logFileName(LocalDate.now())).toPath(),
+                StandardCharsets.UTF_8);
+        assertEquals(1, lines.stream().filter(line -> line.contains(marker)).count(), lines.toString());
+        assertTrue(lines.stream().noneMatch(line -> line.startsWith("FORGED")), lines.toString());
+        assertTrue(lines.stream().anyMatch(line -> line.contains(marker + "\\nFORGED-" + marker + "\\r\\n")));
+    }
+
+    @Test
+    public void exception_message_with_newline_writes_a_single_log_line() {
+        Logger logger = Logger.logFor(InfoTest.class);
+
+        try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
+            logger.warning("refused", new IllegalArgumentException("bad\nFAKE-LINE"));
+
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("bad\\nFAKE-LINE") && !logEntry.contains("\nFAKE-LINE"))));
+        }
+    }
+
+    @Test
+    public void stack_trace_frames_are_still_joined_by_newlines() {
+        Logger logger = Logger.logFor(InfoTest.class);
+
+        try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
+            logger.error("with trace", new IllegalStateException("plain"));
+
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains(Globals.NEWLINE) && logEntry.contains("plain"))));
+        }
+    }
+
+    @Test
+    public void lazy_message_is_neutralised_too() {
+        Logger logger = Logger.logFor(InfoTest.class);
+
+        try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
+            logger.info(() -> "lazy\nFORGED");
+
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("lazy\\nFORGED") && !logEntry.contains("\n"))));
         }
     }
 }

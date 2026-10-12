@@ -51,10 +51,14 @@ public class JdkNetworkAccessTest {
         server.stop(0);
     }
 
+    private static FetchRequest loopback(String method, String url, Map<String, String> headers, String body) {
+        return new FetchRequest(method, url, headers, body, 2000, -1, true);
+    }
+
     @Test
     public void test_get_round_trip() {
         final var network = new JdkNetworkAccess();
-        final var response = network.fetch(new FetchRequest("GET", baseUrl + "/echo", Map.of(), null, 2000));
+        final var response = network.fetch(loopback("GET", baseUrl + "/echo", Map.of(), null));
         assertEquals(200, response.status());
         final var testHeader = response.headers().entrySet().stream()
                 .filter(entry -> entry.getKey().equalsIgnoreCase("X-Test")).map(Map.Entry::getValue).findFirst();
@@ -65,7 +69,7 @@ public class JdkNetworkAccessTest {
     @Test
     public void test_post_forwards_body() {
         final var network = new JdkNetworkAccess();
-        network.fetch(new FetchRequest("POST", baseUrl + "/echo", Map.of("X-A", "1"), "payload", 2000));
+        network.fetch(loopback("POST", baseUrl + "/echo", Map.of("X-A", "1"), "payload"));
         assertEquals("POST", lastMethod[0]);
         assertEquals("payload", lastBody[0]);
     }
@@ -73,7 +77,7 @@ public class JdkNetworkAccessTest {
     @Test
     public void test_not_found_status() {
         final var network = new JdkNetworkAccess();
-        final var response = network.fetch(new FetchRequest("GET", baseUrl + "/missing", Map.of(), null, 2000));
+        final var response = network.fetch(loopback("GET", baseUrl + "/missing", Map.of(), null));
         assertEquals(404, response.status());
         assertEquals("Not Found", response.statusText());
     }
@@ -82,7 +86,7 @@ public class JdkNetworkAccessTest {
     public void test_connection_failure_throws() {
         final var network = new JdkNetworkAccess();
         assertThrows(JdkNetworkAccess.NetworkException.class,
-                () -> network.fetch(new FetchRequest("GET", "http://127.0.0.1:1/x", Map.of(), null, 500)));
+                () -> network.fetch(new FetchRequest("GET", "http://127.0.0.1:1/x", Map.of(), null, 500, -1, true)));
     }
 
     @Test

@@ -212,7 +212,7 @@ public class TriggerOperationHelperTest {
     public void test_deleting_referenced_procedure_is_rejected() throws Exception {
         save(request("audit"));
         final var response = ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "recalc"));
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "recalc"), ACTOR);
         assertEquals(ErrorCode.INVALID_TRIGGER.getCode(), response.getErrorCode());
         assertTrue(response.getMessage().contains("audit"));
         assertNotNull(cache.getProcedure(TestGlobals.DB, "recalc"));
@@ -223,7 +223,7 @@ public class TriggerOperationHelperTest {
         save(request("audit"));
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "spare", "return 2;"), ACTOR);
         assertEquals(OperationStatus.OK, ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "spare")).getStatus());
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "spare"), ACTOR).getStatus());
     }
 
     @Test

@@ -7,11 +7,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class LogWriter {
     private static final Configuration config = Configuration.getInstance();
@@ -24,14 +26,23 @@ public class LogWriter {
         final var logPath = config.getLogPath();
         final var logDirectory = new File(logPath);
         if (!logDirectory.exists()) {
-            if (!logDirectory.mkdir()) {
-                System.out.println("Error creating log directory");
-            } else {
+            if (createOwnerOnly(logDirectory)) {
                 createCurrentLogFileIfNecessary();
+            } else {
+                System.out.println("Error creating log directory");
             }
         } else {
             deleteOldLogFiles(logDirectory);
             createCurrentLogFileIfNecessary();
+        }
+    }
+
+    private static boolean createOwnerOnly(File logDirectory) {
+        try {
+            OwnerOnlyPermissions.createDirectories(logDirectory.toPath());
+            return true;
+        } catch (IOException e) {
+            return false;
         }
     }
 
@@ -54,12 +65,27 @@ public class LogWriter {
             for (var i = 1; i <= maxLogFiles; i++) {
                 fileNames.add(logFileName(now.minusDays(i)));
             }
-            final var toDelete = Arrays.stream(allFiles).filter(file -> !fileNames.contains(file.getName())).toList();
+            final var toDelete = Arrays.stream(allFiles).filter(LogWriter::isDatedLogFile)
+                    .filter(file -> !fileNames.contains(file.getName())).toList();
             for (var fileToDelete : toDelete) {
                 if (!fileToDelete.delete()) {
                     System.out.println("Error deleting old log file with name " + fileToDelete.getName());
                 }
             }
+        }
+    }
+
+    private static boolean isDatedLogFile(File file) {
+        final var name = file.getName();
+        if (!file.isFile() || !name.endsWith(Globals.LOG_FILE_EXTENSION)) {
+            return false;
+        }
+        try {
+            LocalDate.parse(name.substring(0, name.length() - Globals.LOG_FILE_EXTENSION.length()),
+                    DateTimeFormatter.ISO_DATE);
+            return true;
+        } catch (DateTimeParseException e) {
+            return false;
         }
     }
 

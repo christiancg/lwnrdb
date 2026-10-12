@@ -5,8 +5,11 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
+import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
 
 public class ClusterServer {
@@ -16,6 +19,7 @@ public class ClusterServer {
     private final String bindAddress;
     private final SSLServerSocketFactory sslServerSocketFactory;
     private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private final AtomicInteger inHandshake = new AtomicInteger();
     private volatile ServerSocket serverSocket;
     private volatile boolean running;
     private volatile boolean refusingWrites;
@@ -40,13 +44,27 @@ public class ClusterServer {
         while (running && !Thread.currentThread().isInterrupted()) {
             try {
                 final var socket = serverSocket.accept();
-                pool.execute(new ClusterConnectionHandler(socket, this::isRefusingWrites));
+                if (inHandshake.incrementAndGet() > Globals.CLUSTER_MAX_UNAUTHENTICATED_CONNECTIONS) {
+                    inHandshake.decrementAndGet();
+                    socket.close();
+                    continue;
+                }
+                pool.execute(new ClusterConnectionHandler(socket, this::isRefusingWrites, handshakeDone()));
             } catch (IOException e) {
                 if (running) {
                     logger.warning("Cluster server accept failed: " + e.getMessage());
                 }
             }
         }
+    }
+
+    private Runnable handshakeDone() {
+        final var done = new AtomicBoolean();
+        return () -> {
+            if (done.compareAndSet(false, true)) {
+                inHandshake.decrementAndGet();
+            }
+        };
     }
 
     public void stop() {
@@ -79,6 +97,7 @@ public class ClusterServer {
             final var sslServerSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(port, BACKLOG,
                     address);
             sslServerSocket.setEnabledProtocols(new String[]{"TLSv1.3", "TLSv1.2"});
+            sslServerSocket.setNeedClientAuth(true);
             return sslServerSocket;
         }
         return new ServerSocket(port, BACKLOG, address);

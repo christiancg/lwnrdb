@@ -8,6 +8,7 @@ import org.techhouse.log.Logger;
 
 public class EnumTypeAdapter<T extends Enum<T>> implements TypeAdapter<T> {
 
+    private static final int MAX_LOGGED_VALUE_CHARS = 64;
     private final Logger logger = Logger.logFor(EnumTypeAdapter.class);
 
     private final Class<T> clazz;
@@ -43,11 +44,14 @@ public class EnumTypeAdapter<T extends Enum<T>> implements TypeAdapter<T> {
             final var name = value.asJsonString().getValue();
             final var constant = byName.get(name);
             if (constant == null) {
-                logger.error("Error while parsing enum value: ",
-                        new IllegalArgumentException("No enum constant " + clazz.getName() + "." + name));
+                logger.warning("Unknown enum value for " + clazz.getSimpleName() + ": " + truncated(name));
             }
             return constant;
         }
         return null;
+    }
+
+    private static String truncated(String name) {
+        return name.length() > MAX_LOGGED_VALUE_CHARS ? name.substring(0, MAX_LOGGED_VALUE_CHARS) : name;
     }
 }

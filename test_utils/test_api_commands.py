@@ -10,7 +10,7 @@ HOST = os.environ.get("API_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("API_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "api_test_db"
 
@@ -167,7 +167,7 @@ def test_reserved_script_runs_collection(c):
                save(c, "script_runs", {"_id": "x", "a": 1}), "ERROR", "400-1")
     check_code("BULK_SAVE into script_runs -> 400-1",
                bulk_save(c, "script_runs", [{"_id": "x"}]), "ERROR", "400-1")
-    check_code("DELETE from script_runs -> 400-1",
+    check_code("DELETE in script_runs -> 400-1",
                delete(c, "script_runs", "x"), "ERROR", "400-1")
     check_code("CREATE_COLLECTION script_runs -> 400-1",
                create_coll(c, "script_runs"), "ERROR", "400-1")
@@ -186,7 +186,7 @@ def test_reserved_script_runs_collection(c):
 def test_database_and_collection_ops(c):
     section("Database & collection operations (DDL + metadata)")
 
-    check_status("LIST_DATABASES (public, OK)", list_databases(c), "OK")
+    check_status("LIST_DATABASES (authenticated, OK)", list_databases(c), "OK")
     check("LIST_DATABASES contains api_test_db",
                DB in (list_databases(c).get("databases") or []))
 
@@ -915,7 +915,7 @@ def test_flows(c):
     check("Bulk update reads back intact for every doc", bad == 0, detail=f"{bad}/4 stale")
 
 
-def test_operation_permissions(c):
+def test_operation_permissions(_c):
     section("Operation-level permission edges (non-overlapping with test_auth)")
 
     with Conn() as uc:
@@ -1040,7 +1040,7 @@ def main():
         if r.get("status") != "OK":
             print(f"\n[ERROR] Cannot authenticate as admin: {r.get('message')}")
             print("        Make sure the server is running and lwnrdb.cfg has the correct")
-            print(f"        defaultAdminUsername={ADMIN_USERNAME!r} / defaultAdminPassword set.\n")
+            print(f"        defaultAdminUsername={ADMIN_USERNAME} / defaultAdminPassword={ADMIN_PASSWORD} (base_utils.PASSWORD).\n")
             sys.exit(1)
         print("\n  Setting up fixtures...")
         setup(c)

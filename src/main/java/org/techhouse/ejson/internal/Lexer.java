@@ -10,6 +10,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.elements.JsonSyntaxToken;
+import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.exceptions.MissingEndOfStringException;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
@@ -27,8 +28,13 @@ public final class Lexer {
     private static final int ESTIMATED_CHARS_PER_TOKEN = 8;
 
     public static List<JsonBaseElement> lex(String input) {
+        return lex(input, Integer.MAX_VALUE);
+    }
+
+    public static List<JsonBaseElement> lex(String input, int maxTokens) {
         final var length = input.length();
-        final var tokens = new ArrayList<JsonBaseElement>(length / ESTIMATED_CHARS_PER_TOKEN + 16);
+        final var tokens = new ArrayList<JsonBaseElement>(
+                (int) Math.min(length / ESTIMATED_CHARS_PER_TOKEN + 16L, maxTokens + 1L));
         var i = 0;
         while (i < length) {
             final var c = input.charAt(i);
@@ -52,6 +58,9 @@ public final class Lexer {
                 i++;
             } else {
                 throw new UnexpectedCharacterException(c, i);
+            }
+            if (tokens.size() > maxTokens) {
+                throw new MalformedJsonException("JSON has more tokens than the allowed limit");
             }
         }
         return tokens;

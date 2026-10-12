@@ -8,7 +8,7 @@ from base_utils import check, check_code, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AGG_SCRIPT_TEST_PORT", "8999"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "agg_script_db"
 COLL = "orders"
@@ -242,7 +242,7 @@ def test_permissions(admin: Conn):
 
 def test_sandbox(conn: Conn):
     section("sandbox: the per-pipeline budget, the clock and the source cap")
-    spin = ("export default (doc) => { let n = 0; for (let i = 0; i < 20000; i++) { n += i; } return true; };")
+    spin = "export default (doc) => { let n = 0; for (let i = 0; i < 20000; i++) { n += i; } return true; };"
     one_document = conn.aggregate([{"type": "LIMIT", "limit": 1}, script_filter(spin)])
     check_status("the same script over one document fits the budget", one_document, "OK")
     whole = conn.aggregate([script_filter(spin)])

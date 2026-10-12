@@ -83,10 +83,12 @@ public class Main {
 
     public static void main(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
+        AdminPasswordGuard.refuseShippedPassword();
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         final var recoveredDeletes = fs.recoverInterruptedCompactions();
         cache.loadAdminData();
+        AdminPasswordGuard.refuseUnsetPasswordWhenBootstrapping(cache);
         seedHybridClock();
         AdminRecords.stampUnversioned();
         StartupWarnings.retainAndReportUncleanStops();
@@ -95,6 +97,7 @@ public class Main {
         PageOccupancyReconciler.scheduleIndexCleanupFor(recoveredDeletes);
         cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
+        PasswordHasher.dummyVerify("");
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
         final var startupTriggerRuns = TriggerRunRecovery.startupRunIds();
@@ -109,9 +112,12 @@ public class Main {
         scriptRunHistory.startSweep();
         StartupWarnings.warnIfXmxExceedsMaxMemory();
         StartupWarnings.warnIfCachesExceedHeap();
-        StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
+        StartupWarnings.warnIfPlaintextClients();
+        StartupWarnings.warnIfDefaultKeystorePassword();
+        StartupWarnings.warnIfStorageIsReadableByOthers();
         StartupWarnings.warnIfFaultInjectionEnabled();
+        StartupWarnings.warnIfClusterWithoutTls();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();
@@ -144,7 +150,9 @@ public class Main {
             return;
         }
         try {
-            final var factory = clusterConfig.tlsEnabled() ? TlsContextFactory.createServerSocketFactory(config) : null;
+            final var factory = clusterConfig.tlsEnabled()
+                    ? TlsContextFactory.createClusterServerSocketFactory(config)
+                    : null;
             clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(), factory);
             clusterServer.start();
             membershipService.addListener(ownershipManager);

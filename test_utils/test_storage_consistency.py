@@ -11,7 +11,7 @@ from base_utils import check, check_code, check_field, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("STORAGE_CONSISTENCY_TEST_PORT", "8996"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "storage_db"
 COLL = "docs"
@@ -59,6 +59,10 @@ UNLISTED_GHOST = "unlisted_docX"
 DROPPED_DB_COLLECTIONS = 4
 ADMIN_PAGES_DB = "admin_pages_spill_db"
 ADMIN_PAGES_COLLECTIONS = 80
+SYMLINK_DB = "symlink_db"
+SYMLINK_COLL = "linked_docs"
+SYMLINK_TARGET = "outside_symlink_target"
+SYMLINK_PRECIOUS = "precious.txt"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -325,8 +329,8 @@ def test_a_script_written_document_survives_a_restart(conn: Conn):
 def test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn: Conn):
     section("A script-written custom value lands in its own index family")
 
-    def ids_for(value, force_scan):
-        return conn.ids(SCRIPT_COLL, (FULL_SCAN if force_scan else []) + [bu.filter_step("loc", "EQUALS", value)])
+    def ids_for(operand, force_scan):
+        return conn.ids(SCRIPT_COLL, (FULL_SCAN if force_scan else []) + [bu.filter_step("loc", "EQUALS", operand)])
 
     for value, expected in (("#geo(3.0,4.0)", ["sw_geo"]), ("#geo(1.0,2.0)", ["ww_geo"]),
                             ("#time(08:00:00)", ["sw_time"]), ("ordinary", ["sw_plain", "ww_plain"])):
@@ -1053,7 +1057,7 @@ def index_files(work_dir: str, db: str, coll: str) -> dict:
     return sizes
 
 
-def await_index_file(conn: Conn, work_dir: str, coll: str, name: str, present: bool,
+def await_index_file(work_dir: str, coll: str, name: str, present: bool,
                      timeout: float = 15.0) -> bool:
     return bool(bu.wait_until(lambda: (name in index_files(work_dir, DB, coll)) == present, timeout, 0.2))
 
@@ -1071,14 +1075,14 @@ def test_an_index_with_no_entries_left_is_removed(conn: Conn, work_dir: str):
         check_status(f"write a string-valued document {i}",
                      conn.save({"_id": f"str{i}", "mixed": f"value{i}"}, coll=EMPTY_IDX_COLL), "OK")
     check("the boolean index file exists while a boolean value does",
-          await_index_file(conn, work_dir, EMPTY_IDX_COLL, boolean_index, True),
+          await_index_file(work_dir, EMPTY_IDX_COLL, boolean_index, True),
           f"index files: {sorted(index_files(work_dir, DB, EMPTY_IDX_COLL))}")
 
     check_status("rewrite the only boolean document with a string value",
                  conn.save({"_id": "bool1", "mixed": "value9"}, coll=EMPTY_IDX_COLL), "OK")
 
     check("the now-entryless boolean index file is gone rather than empty",
-          await_index_file(conn, work_dir, EMPTY_IDX_COLL, boolean_index, False),
+          await_index_file(work_dir, EMPTY_IDX_COLL, boolean_index, False),
           f"index files: {index_files(work_dir, DB, EMPTY_IDX_COLL)}")
 
     contains = bu.filter_step("mixed", "CONTAINS", "value")
@@ -1568,8 +1572,8 @@ def test_not_equals_null_returns_the_documents_that_are_not_null(conn: Conn):
     conn.save({"_id": "u_num", "v": 7}, coll=coll)
     conn.save({"_id": "u_absent"}, coll=coll)
 
-    def against_null(operator: str) -> list:
-        return conn.ids(coll, [bu.filter_step("v", operator, None)])
+    def against_null(operator_type: str) -> list:
+        return conn.ids(coll, [bu.filter_step("v", operator_type, None)])
 
     for stage in ("unindexed", "indexed"):
         if stage == "indexed":
@@ -1593,8 +1597,8 @@ def test_in_and_not_in_treat_null_as_a_member(conn: Conn):
     conn.save({"_id": "m_one", "x": 1}, coll=coll)
     conn.save({"_id": "m_absent"}, coll=coll)
 
-    def ids(operator: str, value) -> list:
-        return conn.ids(coll, [bu.filter_step("x", operator, value)])
+    def ids(operator_type: str, operand) -> list:
+        return conn.ids(coll, [bu.filter_step("x", operator_type, operand)])
 
     expected = [("IN", [None], ["m_null"]), ("IN", [1, None], ["m_null", "m_one"]),
                 ("NOT_IN", [None], ["m_one"]), ("NOT_IN", [1, None], []), ("NOT_IN", [1], ["m_null"])]
@@ -1645,7 +1649,7 @@ def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
         thread.join(timeout=5.0)
 
 
-def test_an_unclean_stop_is_reported_at_the_next_startup(work_dir: str, log_path: str, log_offset: int):
+def test_an_unclean_stop_is_reported_at_the_next_startup(log_path: str, log_offset: int):
     section("Startup names a collection whose field-index work never drained")
 
     with open(log_path, "rb") as fp:
@@ -1766,11 +1770,11 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
             with admin_conn() as writer_conn:
                 counter = 0
                 while not stop.is_set():
-                    doc_id = f"race{index}-{counter:05d}"
+                    race_id = f"race{index}-{counter:05d}"
                     counter += 1
-                    if writer_conn.save({"_id": doc_id, "pad": "x"}, coll=HEAL_COLL).get("status") == "OK":
+                    if writer_conn.save({"_id": race_id, "pad": "x"}, coll=HEAL_COLL).get("status") == "OK":
                         with guard:
-                            committed.append(doc_id)
+                            committed.append(race_id)
         except Exception as exc:
             errors.append(f"writer {index}: {exc}")
 
@@ -1971,6 +1975,48 @@ def test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_co
           f"indexed={len(found)} scanned={len(scanned)}")
 
 
+def seed_a_database_whose_collection_will_be_a_symlink(conn: Conn):
+    check_status("create the database whose collection folder becomes a symlink",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": SYMLINK_DB}), "OK")
+    check_status("create the collection that will be linked", conn.create_coll(SYMLINK_COLL, db=SYMLINK_DB), "OK")
+    check_status("write a document into it",
+                 conn.save({"_id": "linked", "v": 1}, db=SYMLINK_DB, coll=SYMLINK_COLL), "OK")
+
+
+def symlink_target(work_dir: str) -> str:
+    return os.path.join(work_dir, SYMLINK_TARGET)
+
+
+def link_the_collection_folder_elsewhere(work_dir: str) -> bool:
+    folder = os.path.join(work_dir, "db", SYMLINK_DB, SYMLINK_COLL)
+    target = symlink_target(work_dir)
+    shutil.move(folder, target)
+    with open(os.path.join(target, SYMLINK_PRECIOUS), "w") as fp:
+        fp.write("must survive the drop")
+    try:
+        os.symlink(target, folder, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        shutil.move(target, folder)
+        return False
+    return True
+
+
+def test_drop_database_does_not_follow_a_symlink(conn: Conn, work_dir: str, linked: bool):
+    section("DROP_DATABASE unlinks a symlinked collection folder and keeps its target")
+    if not linked:
+        bu.warn("symbolic links are not available on this host; skipped")
+        return
+    check_status("the collection is served through the link",
+                 conn.find("linked", db=SYMLINK_DB, coll=SYMLINK_COLL), "OK")
+    check_status("DROP_DATABASE over a symlinked collection folder",
+                 conn.send({"type": "DROP_DATABASE", "databaseName": SYMLINK_DB}), "OK")
+    check("the database folder is gone", not os.path.lexists(os.path.join(work_dir, "db", SYMLINK_DB)))
+    check("the file in the link's target survived the drop",
+          os.path.isfile(os.path.join(symlink_target(work_dir), SYMLINK_PRECIOUS)))
+    check("the link's target still holds the collection's page files",
+          any(name.endswith(".dat") for name in os.listdir(symlink_target(work_dir))))
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -2031,6 +2077,7 @@ def main():
             seed_collections_whose_compactions_a_kill_will_interrupt(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
             seed_a_collection_its_database_will_stop_listing(conn)
+            seed_a_database_whose_collection_will_be_a_symlink(conn)
             interrupted = admin_conn()
             arrange_a_killed_commit_with_repeated_ids(interrupted, work_dir)
 
@@ -2057,10 +2104,11 @@ def main():
         interrupt_the_drops(work_dir)
         unlist_the_collection(work_dir)
         tear_an_admin_page_tail(work_dir)
+        linked = link_the_collection_folder_elsewhere(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
         proc = bu.start_server(work_dir, log_path)
-        test_an_unclean_stop_is_reported_at_the_next_startup(work_dir, log_path, log_offset)
+        test_an_unclean_stop_is_reported_at_the_next_startup(log_path, log_offset)
         with admin_conn() as conn:
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
@@ -2087,6 +2135,7 @@ def main():
             test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn, work_dir)
             test_an_unlisted_collection_is_relisted_at_startup(conn, work_dir)
             test_a_killed_commit_with_repeated_ids_replays_to_its_last_value(conn, work_dir)
+            test_drop_database_does_not_follow_a_symlink(conn, work_dir, linked)
         bu.stop_server(proc)
         proc = None
         restore_the_old_grammar_pk_index(work_dir)

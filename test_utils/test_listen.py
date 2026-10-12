@@ -8,7 +8,7 @@ HOST = os.environ.get("LISTEN_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("LISTEN_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "listen_test_db"
 COLL = "listen_coll"

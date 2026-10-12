@@ -19,6 +19,7 @@ import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.exceptions.SchemaBudgetExceededException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.validations.DataRequestValidator;
 import org.techhouse.ops.resp.OperationResponse;
@@ -165,7 +166,13 @@ public final class BeforeHookContext implements AutoCloseable {
             rejected.incrementAndGet();
             return reject(type, hook, "the document it returned is too deep: " + DataRequestValidator.NESTING_MESSAGE);
         }
-        final var schemaErrors = SchemaValidationHelper.schemaErrors(dbName, collName, replacement);
+        final String schemaErrors;
+        try {
+            schemaErrors = SchemaValidationHelper.schemaErrors(dbName, collName, replacement);
+        } catch (SchemaBudgetExceededException e) {
+            rejected.incrementAndGet();
+            return reject(type, hook, "the document it returned exceeds the schema validation budget");
+        }
         if (schemaErrors != null) {
             rejected.incrementAndGet();
             return reject(type, hook, "the document it returned does not match the collection schema: " + schemaErrors);
@@ -211,7 +218,7 @@ public final class BeforeHookContext implements AutoCloseable {
                 base.reportUnhandledRejections(), base.fetchEnabled(), base.fetchHostAllowlist(),
                 base.maxResponseBytes(), base.fetchTimeoutMillis(), base.strictScriptGoal(), base.textImportEnabled(),
                 base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget(),
-                base.maxResultBytes(), base.cursorBatchSize(), base.cursorMaxBatchSize());
+                base.maxResultBytes(), base.cursorBatchSize(), base.cursorMaxBatchSize(), base.fetchMaxConcurrent());
     }
 
     private JsonObject contextFor(TriggerDefinition hook, String id) {

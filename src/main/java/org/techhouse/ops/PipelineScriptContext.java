@@ -54,7 +54,7 @@ public final class PipelineScriptContext implements AutoCloseable {
                 base.reportUnhandledRejections(), base.fetchEnabled(), base.fetchHostAllowlist(),
                 base.maxResponseBytes(), base.fetchTimeoutMillis(), base.strictScriptGoal(), base.textImportEnabled(),
                 base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget(),
-                base.maxResultBytes(), base.cursorBatchSize(), base.cursorMaxBatchSize());
+                base.maxResultBytes(), base.cursorBatchSize(), base.cursorMaxBatchSize(), base.fetchMaxConcurrent());
     }
 
     @Override

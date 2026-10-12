@@ -2,8 +2,10 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.concurrent.CountDownLatch;
@@ -111,6 +113,20 @@ public class ScriptOperationHelperAdmissionTest {
         admission.reconfigure(1, 0L);
         assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), run("throw new Error('nope');").getErrorCode());
         assertEquals(1, admission.available());
+        assertEquals(OperationStatus.OK, run("return 1;").getStatus());
+    }
+
+    @Test
+    public void test_permit_released_after_a_stack_overflow_on_the_script_thread() throws Exception {
+        admission.reconfigure(2, 0L);
+        TestUtils.setPrivateField(configuration, "scriptMaxDepth", -1);
+        for (var i = 0; i < 3; i++) {
+            final var overflowed = assertTimeoutPreemptively(Duration.ofSeconds(30),
+                    () -> run("function f(n) { return f(n + 1) + 1; } return f(0);"));
+            assertEquals(ErrorCode.SCRIPT_MEMORY_EXCEEDED.getCode(), overflowed.getErrorCode());
+        }
+        assertEquals(2, admission.available());
+        TestUtils.setPrivateField(configuration, "scriptMaxDepth", 200);
         assertEquals(OperationStatus.OK, run("return 1;").getStatus());
     }
 

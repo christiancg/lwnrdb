@@ -14,7 +14,7 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "mem_stress"
 NUM_COLLECTIONS = int(os.environ.get("MEM_TEST_COLLECTIONS", "8"))
@@ -84,7 +84,7 @@ def live_heap_bytes(pid):
     return int(total.group(1)) if total else None
 
 
-def small_doc(i):
+def small_doc(i: int):
     return {
         "_id": f"acc_{i:06d}",
         "v": i,
@@ -103,7 +103,7 @@ def count_query(c, operator):
                   timeout=120)
 
 
-def accounting_accuracy(c, pid):
+def accounting_accuracy(c: Conn, pid):
     section(f"Accounting accuracy: {ACCOUNTING_DOCS} small docs, userCacheBytes vs live heap")
     if shutil.which("jcmd") is None:
         warn("jcmd is not on PATH — accounting accuracy skipped")
@@ -164,7 +164,7 @@ def teardown(c):
     c.send({"type": "DROP_DATABASE", "databaseName": DB})
 
 
-def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
+def mass_insert(c: Conn, pid, rss_samples, cache_samples, heap_samples):
     section(f"Mass insert: {NUM_COLLECTIONS} collections x {DOCS_PER_COLLECTION} docs "
             f"x {PAYLOAD_BYTES}B "
             f"(~{(NUM_COLLECTIONS * DOCS_PER_COLLECTION * PAYLOAD_BYTES) // (1024*1024)}MB)")
@@ -224,7 +224,7 @@ def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
     return samples
 
 
-def create_indexes(c, pid):
+def create_indexes(c: Conn, pid):
     section("Create field indexes on every collection")
     for ci in range(NUM_COLLECTIONS):
         coll = f"coll_{ci}"
@@ -237,7 +237,7 @@ def create_indexes(c, pid):
     print(f"  after indexing — {fmt_snap(snapshot(c), pid)}")
 
 
-def mixed_workload(c, pid, rss_samples, cache_samples, heap_samples):
+def mixed_workload(c: Conn, pid, rss_samples, cache_samples, heap_samples):
     section("Mixed workload — indexed queries, full scans, aggregations")
     categories = ["alpha", "beta", "gamma", "delta", "epsilon"]
     max_op_ms = 0.0
@@ -332,7 +332,7 @@ def assert_heap(label, heap_ratio, high_watermark):
         "HEAP ABOVE HIGH WATERMARK — sweep falling behind")
 
 
-def assert_rss_bounded(label, max_rss_mb, xmx_mb):
+def assert_rss_bounded(label, max_rss_mb: float, xmx_mb):
     envelope = xmx_mb * 2.0
     check(f"{label}: max RSS {max_rss_mb:.1f}MB <= envelope {envelope:.0f}MB "
           f"(-Xmx={xmx_mb}MB)",

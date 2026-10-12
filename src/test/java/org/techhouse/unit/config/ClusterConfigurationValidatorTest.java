@@ -108,4 +108,71 @@ public class ClusterConfigurationValidatorTest {
         final var errors = ConfigurationValidator.validate(config);
         assertFalse(errors.isEmpty());
     }
+
+    @Test
+    public void aSecretShorterThan32CharactersIsRefusedWhenClusteringIsEnabled(@TempDir Path tempDir) {
+        assertError(tempDir, "clusterSecret", "a".repeat(31),
+                "clusterSecret must be at least 32 characters when clusterEnabled is true");
+    }
+
+    @Test
+    public void a32CharacterSecretIsAccepted(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("clusterSecret", "a".repeat(32));
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void aShortSecretIsIgnoredWhenClusteringIsDisabled(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("clusterEnabled", "false");
+        config.put("clusterSecret", "short");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void aBlankSecretKeepsItsOwnMessage(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("clusterSecret", "");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.contains("clusterSecret must be a non-blank string when clusterEnabled is true"),
+                errors.toString());
+        assertFalse(errors.stream().anyMatch(e -> e.contains("at least 32")), errors.toString());
+    }
+
+    @Test
+    public void clusterMaxFrameSizeBelowTwiceMaxRequestSizeIsRefused(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("maxRequestSize", "64Mb");
+        config.put("clusterMaxFrameSize", "127Mb");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(
+                e -> e.startsWith("clusterMaxFrameSize") && e.contains("must be at least twice maxRequestSize")),
+                errors.toString());
+    }
+
+    @Test
+    public void clusterMaxFrameSizeAtTwiceMaxRequestSizeIsAccepted(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("maxRequestSize", "64Mb");
+        config.put("clusterMaxFrameSize", "128Mb");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void theNewClusterKeysAreRangeChecked(@TempDir Path tempDir) {
+        assertError(tempDir, "clusterHandshakeTimeoutMs", "0", "clusterHandshakeTimeoutMs");
+        assertError(tempDir, "clusterMaxClockSkewMs", "0", "clusterMaxClockSkewMs");
+        assertError(tempDir, "clusterMaxFrameSize", "0", "clusterMaxFrameSize");
+    }
+
+    @Test
+    public void defaultsPassTogether(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.remove("clusterMaxFrameSize");
+        config.remove("maxRequestSize");
+        config.remove("clusterHandshakeTimeoutMs");
+        config.remove("clusterMaxClockSkewMs");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
 }

@@ -39,6 +39,10 @@ import org.techhouse.ops.req.TestTriggerRequest;
 
 public class RequestValidator {
 
+    public static ValidationResult validateSystemHistory(OperationRequest request) {
+        return NameValidations.validateDbAndColl(request, true, false);
+    }
+
     public static ValidationResult validate(OperationRequest request) {
         return switch (request.getType()) {
             case SAVE -> DataRequestValidator.validateSave((SaveRequest) request);
@@ -75,7 +79,7 @@ public class RequestValidator {
             case RUN_SCRIPT -> ScriptRequestValidator.validateRunScript((RunScriptRequest) request);
             case SAVE_PROCEDURE -> ScriptRequestValidator.validateSaveProcedure((SaveProcedureRequest) request);
             case DELETE_PROCEDURE -> ScriptRequestValidator.validateDeleteProcedure((DeleteProcedureRequest) request);
-            case LIST_PROCEDURES -> NameValidations.validateDbNameOnly(request.getDatabaseName());
+            case LIST_PROCEDURES, LIST_SCHEDULES -> NameValidations.validateDbNameOnly(request.getDatabaseName());
             case CALL_PROCEDURE -> ScriptRequestValidator.validateCallProcedure((CallProcedureRequest) request);
             case SAVE_TRIGGER -> ScriptRequestValidator.validateSaveTrigger((SaveTriggerRequest) request);
             case DELETE_TRIGGER -> ScriptRequestValidator.validateDeleteTrigger((DeleteTriggerRequest) request);
@@ -83,7 +87,6 @@ public class RequestValidator {
             case TEST_TRIGGER -> ScriptRequestValidator.validateTestTrigger((TestTriggerRequest) request);
             case SAVE_SCHEDULE -> ScriptRequestValidator.validateSaveSchedule((SaveScheduleRequest) request);
             case DELETE_SCHEDULE -> ScriptRequestValidator.validateDeleteSchedule((DeleteScheduleRequest) request);
-            case LIST_SCHEDULES -> NameValidations.validateDbNameOnly(request.getDatabaseName());
             case CANCEL_SCRIPT -> ControlRequestValidator.validateCancelScript((CancelScriptRequest) request);
             case LIST_TRIGGER_RUNS -> ControlRequestValidator.validateListTriggerRuns((ListTriggerRunsRequest) request);
             case RESOLVE_TRIGGER_RUN ->

@@ -58,9 +58,26 @@ public interface InterpreterOps {
     default void tick() {
     }
 
+    default void tick(long weight) {
+    }
+
+    default void enterNested() {
+    }
+
+    default void leaveNested() {
+    }
+
+    long PACE_MASK = 0x3FF;
+
     static void tick(InterpreterOps ops) {
         if (ops != null) {
             ops.tick();
+        }
+    }
+
+    static void pace(InterpreterOps ops, long index) {
+        if (ops != null && index > 0 && (index & PACE_MASK) == 0) {
+            ops.tick(PACE_MASK + 1);
         }
     }
 

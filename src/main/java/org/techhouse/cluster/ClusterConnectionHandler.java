@@ -1,9 +1,7 @@
 package org.techhouse.cluster;
 
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -16,10 +14,12 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
+import org.techhouse.conn.BoundedLineReader;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.InFlightRequests;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ex.RequestTooLargeException;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
@@ -35,6 +35,7 @@ import org.techhouse.ops.TriggerRunResolution;
 import org.techhouse.ops.index.IndexOperationHelper;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class ClusterConnectionHandler implements Runnable {
@@ -53,28 +54,47 @@ public class ClusterConnectionHandler implements Runnable {
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
     private final BooleanSupplier refusingWrites;
+    private final Runnable handshakeDone;
 
-    public ClusterConnectionHandler(Socket socket, BooleanSupplier refusingWrites) {
+    public ClusterConnectionHandler(Socket socket, BooleanSupplier refusingWrites, Runnable handshakeDone) {
         this.socket = socket;
         this.refusingWrites = refusingWrites;
+        this.handshakeDone = handshakeDone;
     }
 
     @Override
     public void run() {
+        try (socket) {
+            final var reader = new BoundedLineReader(socket.getInputStream(), socket::setSoTimeout);
+            final var accepted = ClusterHandshake.accept(reader);
+            handshakeDone.run();
+            if (accepted) {
+                serve(reader);
+            }
+        } catch (RequestTooLargeException e) {
+            logger.warning("Closed a cluster connection: a frame exceeded clusterMaxFrameSize");
+        } catch (SSLException e) {
+            logger.warning("Rejected cluster connection: TLS handshake failed");
+        } catch (IOException e) {
+            logger.warning("Cluster connection error: " + e.getMessage());
+        } finally {
+            handshakeDone.run();
+        }
+    }
+
+    private void serve(BoundedLineReader reader) throws IOException {
         // Both executors are declared after the socket so both close first: close() drains what is
         // outstanding, and draining while the socket is still open is what lets those answers be written.
-        try (socket;
-                var concurrent = Executors.newVirtualThreadPerTaskExecutor();
+        try (var concurrent = Executors.newVirtualThreadPerTaskExecutor();
                 var ordered = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory())) {
-            final var reader = new BufferedReader(
-                    new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             final var writer = new BufferedWriter(
                     new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
             // One lock because gossip answers off this thread: two writers interleaving their JSON would
             // corrupt the frame stream. Replying out of order is fine - the peer dispatches on correlationId.
             final var writerLock = new ReentrantLock();
+            final var maxFrameBytes = clusterConfig.maxFrameBytes();
             String line;
-            while ((line = reader.readLine()) != null) {
+            while ((line = reader.readLine(maxFrameBytes)) != null) {
                 if (line.isBlank()) {
                     continue;
                 }
@@ -88,10 +108,6 @@ public class ClusterConnectionHandler implements Runnable {
                     ordered.execute(() -> respondSafely(writer, writerLock, request));
                 }
             }
-        } catch (SSLException e) {
-            logger.warning("Rejected cluster connection: TLS handshake failed");
-        } catch (IOException e) {
-            logger.warning("Cluster connection error: " + e.getMessage());
         }
     }
 
@@ -127,7 +143,7 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handle(ClusterMessage request) {
-        if (!clusterConfig.secret().equals(request.getSecret())) {
+        if (!ClusterSecret.matches(request.getSecret())) {
             final var error = new ClusterMessage();
             error.setType(ClusterMessageType.ERROR);
             error.setErrorMessage("Invalid cluster secret");
@@ -237,6 +253,12 @@ public class ClusterConnectionHandler implements Runnable {
                 response -> {
                     final var reindex = (ReindexRequest) RequestParser
                             .parseRequest(ForwardBody.decode(request.getForwardBody()));
+                    final var validation = RequestValidator.validate(reindex);
+                    if (!validation.isValid()) {
+                        response.setType(ClusterMessageType.ERROR);
+                        response.setErrorMessage("Refused the index rebuild: " + validation.getErrorMessage());
+                        return;
+                    }
                     final var result = IndexOperationHelper.processReindex(reindex, true);
                     if (result.getStatus() != OperationStatus.OK) {
                         response.setType(ClusterMessageType.ERROR);
@@ -249,9 +271,13 @@ public class ClusterConnectionHandler implements Runnable {
     // again. The synthetic client carries the acting user so admin ops apply with the correct identity.
     private OperationResponse executeForwarded(ClusterMessage request) {
         final var actingUser = request.getActingUser();
+        final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+        final var refused = ForwardedRequestGate.check(parsed, actingUser);
+        if (refused != null) {
+            return refused;
+        }
         final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;
         try {
-            final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
             final var schemaError = SchemaValidationHelper.check(parsed);
             if (schemaError != null) {
                 return schemaError;
@@ -265,6 +291,9 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleReplicate(ClusterMessage request) {
+        if (!PeerNames.payload(request.getReplication())) {
+            return ClusterMessages.invalidPayload();
+        }
         final var response = new ClusterMessage();
         if (ReplicatedApplyHelper.apply(request.getReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_ACK);
@@ -284,6 +313,9 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleDigest(ClusterMessage request) {
+        if (!PeerNames.antiEntropy(request.getAntiEntropy())) {
+            return ClusterMessages.invalidPayload();
+        }
         if (adminAntiEntropyService.isSyncing()) {
             return notAdminSyncedYet();
         }
@@ -295,6 +327,9 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handlePull(ClusterMessage request) {
+        if (!PeerNames.antiEntropy(request.getAntiEntropy())) {
+            return ClusterMessages.invalidPayload();
+        }
         if (adminAntiEntropyService.isSyncing()) {
             return notAdminSyncedYet();
         }

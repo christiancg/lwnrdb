@@ -110,7 +110,7 @@ public class ClusterRouterIntegrationTest {
         final var raw = "{\"type\":\"AGGREGATE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + coll + "\",\"aggregationSteps\":[{\"type\":\"FILTER\",\"operator\":"
                 + "{\"script\":\"export default (doc) => doc.price > 10;\"}}]}";
-        final var relayed = router.forward(request, raw, false, null, null);
+        final var relayed = router.forward(request, raw, false, ClusterTestHarness.ACTING_ADMIN, null);
 
         assertNotNull(relayed);
         assertTrue(relayed.contains("s2"), "expected the owner's scripted result, got: " + relayed);
@@ -134,7 +134,7 @@ public class ClusterRouterIntegrationTest {
 
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("f1");
-        final var relayed = router.forward(request, rawFind(coll, "f1"), false, null, null);
+        final var relayed = router.forward(request, rawFind(coll, "f1"), false, ClusterTestHarness.ACTING_ADMIN, null);
 
         assertNotNull(relayed);
         assertTrue(relayed.contains("f1"), "expected forwarded read response to contain the document, got: " + relayed);
@@ -145,7 +145,8 @@ public class ClusterRouterIntegrationTest {
         cluster.configureMembership(1, node("self", cluster.serverPort()));
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setObject(doc("local"));
-        assertNull(router.forward(request, rawSave(TestGlobals.COLL, "local"), false, null, null));
+        assertNull(router.forward(request, rawSave(TestGlobals.COLL, "local"), false, ClusterTestHarness.ACTING_ADMIN,
+                null));
     }
 
     @Test
@@ -154,7 +155,7 @@ public class ClusterRouterIntegrationTest {
         final var coll = collectionOwnedByOther();
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("x");
-        assertNull(router.forward(request, rawFind(coll, "x"), false, null, null));
+        assertNull(router.forward(request, rawFind(coll, "x"), false, ClusterTestHarness.ACTING_ADMIN, null));
     }
 
     @Test
@@ -163,7 +164,7 @@ public class ClusterRouterIntegrationTest {
         final var coll = collectionOwnedByOther();
         final var request = new SaveRequest(TestGlobals.DB, coll);
         request.setObject(doc("y"));
-        final var relayed = router.forward(request, rawSave(coll, "y"), false, null, null);
+        final var relayed = router.forward(request, rawSave(coll, "y"), false, ClusterTestHarness.ACTING_ADMIN, null);
         assertNotNull(relayed);
         assertTrue(relayed.contains("503-4"), "expected OWNER_UNREACHABLE, got: " + relayed);
     }
@@ -175,7 +176,7 @@ public class ClusterRouterIntegrationTest {
         final var request = new SaveRequest(TestGlobals.DB, coll);
         request.setObject(doc("z"));
 
-        final var relayed = router.forward(request, "{not json", false, null, null);
+        final var relayed = router.forward(request, "{not json", false, ClusterTestHarness.ACTING_ADMIN, null);
 
         assertNotNull(relayed);
         assertTrue(relayed.contains("503-8"),
@@ -187,6 +188,7 @@ public class ClusterRouterIntegrationTest {
     public void test_forward_request_handler_executes_write_on_owner() throws Exception {
         cluster.configureMembership(1, node("self", cluster.serverPort()));
         final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, SECRET, null, null);
+        message.setActingUser(ClusterTestHarness.ACTING_ADMIN);
         message.setForwardBody(ForwardBody.encode(rawSave(TestGlobals.COLL, "h1")));
         final var response = pool.request(cluster.serverAddress(), message, 3000);
 

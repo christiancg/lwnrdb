@@ -26,7 +26,7 @@ WARN = f"{YELLOW}WARN{RESET}"
 HOST = "127.0.0.1"
 PORT = 8989
 USERNAME = "admin"
-PASSWORD = "administrator"
+PASSWORD = "Tst-Admin-9xQ2mV"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
 
@@ -140,7 +140,7 @@ def section(title: str) -> None:
     print(f"{'─' * WIDTH}")
 
 
-def summary(on_failure: Optional[Callable[[], None]] = None, suffix: str = "") -> None:
+def summary(on_failure: Optional[Callable] = None, suffix: str = "") -> None:
     print("\n" + "═" * WIDTH)
     if _failures == 0:
         print(f"  {GREEN}All checks passed.{RESET}{suffix}")
@@ -201,7 +201,7 @@ class Conn:
             return unparsed
 
     def recv(self, timeout: float = 2.0) -> Optional[dict]:
-        ready, _, _ = select.select([self.f.raw._sock], [], [], timeout)
+        ready, _, _ = select.select([self.s], [], [], timeout)
         if not ready:
             return None
         try:
@@ -300,9 +300,10 @@ def _config_value(value) -> str:
     return str(value)
 
 
-def write_config(work_dir: str, port: int, **settings) -> None:
+def write_config(work_dir: str, port: int, *, admin_password: Optional[str] = None, **settings) -> None:
+    password = PASSWORD if admin_password is None else admin_password
     lines = [f"port={port}", "filePath=db", "logPath=logs",
-             f"defaultAdminUsername={USERNAME}", f"defaultAdminPassword={PASSWORD}"]
+             f"defaultAdminUsername={USERNAME}", f"defaultAdminPassword={password}"]
     lines += [f"{key}={_config_value(value)}" for key, value in settings.items()]
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write("\n".join(lines) + "\n")
@@ -341,8 +342,9 @@ def local_commit_markers(work_dir: str) -> int:
 
 def read_pk_rows(pk_path: str) -> list:
     with open(pk_path, "r", encoding="utf-8") as fp:
-        return [[fields[0]] + [int(value) for value in fields[1:]]
+        rows = [[fields[0]] + [int(value) for value in fields[1:]]
                 for fields in (line.rstrip("\r\n").split(PK_FIELD_SEPARATOR) for line in fp) if len(fields) == 5]
+    return rows
 
 
 def write_pk_rows(pk_path: str, rows: list) -> None:
@@ -395,6 +397,19 @@ def start_server(work_dir: str, log_path: str, jar: Optional[str] = None,
     dump_log(log_path)
     proc.kill()
     raise RuntimeError("server did not come up in time")
+
+
+def run_until_exit(work_dir: str, log_path: str, jar: Optional[str] = None, xmx: str = "512m",
+                   timeout_s: float = 30.0) -> Optional[int]:
+    jar = jar or JAR_PATH
+    with open(log_path, "ab") as log:
+        proc = subprocess.Popen(["java", f"-Xmx{xmx}", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
+    try:
+        return proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return None
 
 
 def stop_server(proc, host: Optional[str] = None, port: Optional[int] = None,

@@ -11,7 +11,7 @@ from base_utils import check, check_code, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCHEDULE_TEST_PORT", "8995"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "sched_test_db"
 COLL = "counters"

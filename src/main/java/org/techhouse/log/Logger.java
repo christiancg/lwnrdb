@@ -85,11 +85,12 @@ public class Logger {
             return;
         }
         String logEntry = LocalTime.now().format(DateTimeFormatter.ISO_LOCAL_TIME) + LOG_ENTRY_SEPARATOR
-                + severity.name() + LOG_ENTRY_SEPARATOR + tClass.getName() + MESSAGE_SEPARATOR + message;
+                + severity.name() + LOG_ENTRY_SEPARATOR + tClass.getName() + MESSAGE_SEPARATOR
+                + LogSanitizer.neutralise(message);
         if (exception != null) {
             final var exceptionMessage = exception.getMessage();
             if (exceptionMessage != null) {
-                logEntry += EXCEPTION_MESSAGE_SEPARATOR + exceptionMessage;
+                logEntry += EXCEPTION_MESSAGE_SEPARATOR + LogSanitizer.neutralise(exceptionMessage);
             }
             final var stackTrace = exception.getStackTrace();
             if (stackTrace != null) {

@@ -46,6 +46,7 @@ public abstract class ClusterConnectionHandlerTestBase {
         final var message = new ClusterMessage();
         message.setType(type);
         message.setSecret(ClusterTestHarness.SECRET);
+        message.setActingUser(ClusterTestHarness.ACTING_ADMIN);
         return message;
     }
 

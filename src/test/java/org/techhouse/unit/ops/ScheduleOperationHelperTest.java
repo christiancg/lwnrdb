@@ -230,14 +230,14 @@ public class ScheduleOperationHelperTest {
     public void test_deleting_a_procedure_referenced_by_a_schedule_is_refused() throws Exception {
         save(intervalRequest("s"));
         final var response = ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE));
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE), ACTOR);
         assertEquals(ErrorCode.INVALID_SCHEDULE.getCode(), response.getErrorCode());
         assertTrue(response.getMessage().contains("'s'"), response.getMessage());
         assertNotNull(cache.getProcedure(TestGlobals.DB, PROCEDURE));
 
         ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"));
         assertEquals(OperationStatus.OK, ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE)).getStatus());
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE), ACTOR).getStatus());
     }
 
     @Test

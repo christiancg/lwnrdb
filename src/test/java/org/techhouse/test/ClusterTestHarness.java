@@ -2,6 +2,7 @@ package org.techhouse.test;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeAddress;
@@ -16,6 +17,7 @@ import org.techhouse.ioc.IocContainer;
 public final class ClusterTestHarness {
     public static final String SECRET = "s";
     public static final String SELF = "self";
+    public static final String ACTING_ADMIN = "admin";
     public static final int SELF_PORT = 5000;
     private static final long DEFAULT_ACK_TIMEOUT_MS = 1500L;
 
@@ -23,6 +25,7 @@ public final class ClusterTestHarness {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private final Cache cache = IocContainer.get(Cache.class);
     private ClusterServer server;
     private int serverPort;
     private boolean origEnabled;
@@ -78,6 +81,9 @@ public final class ClusterTestHarness {
         server = new ClusterServer(0, "127.0.0.1", null);
         server.start();
         serverPort = server.getPort();
+        if (cache.getAdminUserEntry(ACTING_ADMIN) == null) {
+            TestUtils.createAdmin(ACTING_ADMIN);
+        }
     }
 
     public void stop() throws Exception {

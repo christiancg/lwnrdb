@@ -76,6 +76,12 @@ public class ErrorCodeTest {
     }
 
     @Test
+    public void procedure_bound_by_other_definer_is_a_forbidden_403_4() {
+        assertEquals("403-4", ErrorCode.PROCEDURE_BOUND_BY_OTHER_DEFINER.getCode());
+        assertEquals(OperationStatus.FORBIDDEN, ErrorCode.PROCEDURE_BOUND_BY_OTHER_DEFINER.getStatus());
+    }
+
+    @Test
     public void no_permissions_code_is_403_1() {
         assertEquals("403-1", ErrorCode.NO_PERMISSIONS.getCode());
     }
@@ -98,6 +104,8 @@ public class ErrorCodeTest {
     public void client_401_unauthenticated_codes_have_unauthenticated_status() {
         assertEquals(OperationStatus.UNAUTHENTICATED, ErrorCode.MUST_AUTHENTICATE_FIRST.getStatus());
         assertEquals(OperationStatus.UNAUTHENTICATED, ErrorCode.USER_NO_LONGER_EXISTS.getStatus());
+        assertEquals(OperationStatus.UNAUTHENTICATED, ErrorCode.TOO_MANY_FAILED_ATTEMPTS.getStatus());
+        assertEquals("401-4", ErrorCode.TOO_MANY_FAILED_ATTEMPTS.getCode());
     }
 
     @Test
@@ -146,5 +154,23 @@ public class ErrorCodeTest {
         assertEquals("410-1", ErrorCode.LISTEN_ENDED.getCode());
         assertEquals(OperationStatus.NOT_FOUND, ErrorCode.LISTEN_ENDED.getStatus());
         assertEquals(ErrorCode.LISTEN_ENDED, ErrorCode.byCode("410-1"));
+    }
+
+    @Test
+    public void test_schema_budget_codes_resolve_with_error_status() {
+        assertEquals(ErrorCode.SCHEMA_VALIDATION_BUDGET_EXCEEDED, ErrorCode.byCode("400-23"));
+        assertEquals(OperationStatus.ERROR, ErrorCode.SCHEMA_VALIDATION_BUDGET_EXCEEDED.getStatus());
+        assertEquals(ErrorCode.SCHEMA_TOO_COMPLEX, ErrorCode.byCode("400-24"));
+        assertEquals(OperationStatus.ERROR, ErrorCode.SCHEMA_TOO_COMPLEX.getStatus());
+    }
+
+    @Test
+    public void connection_limit_codes_are_errors() {
+        assertEquals("400-22", ErrorCode.REQUEST_TOO_LARGE.getCode());
+        assertEquals("408-4", ErrorCode.AUTHENTICATION_TIMEOUT.getCode());
+        assertEquals("409-16", ErrorCode.TRANSACTION_IDLE_TIMEOUT.getCode());
+        assertEquals(OperationStatus.ERROR, ErrorCode.REQUEST_TOO_LARGE.getStatus());
+        assertEquals(OperationStatus.ERROR, ErrorCode.AUTHENTICATION_TIMEOUT.getStatus());
+        assertEquals(OperationStatus.ERROR, ErrorCode.TRANSACTION_IDLE_TIMEOUT.getStatus());
     }
 }

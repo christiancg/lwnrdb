@@ -44,6 +44,7 @@ public record HookHostBindings(ResourceLimits limits, ZoneId timeZone, Locale lo
         return new ResourceLimits(configuration.getBeforeHookInstructionBudget(),
                 configuration.getBeforeHookTimeoutMs(), configuration.getScriptMaxDepth(), true, false, List.of(), -1,
                 -1, false, false, ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.DEFAULT_MAX_LOG_LINES,
-                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, configuration.getScriptMaxMemoryBytes(), -1, -1, -1);
+                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, configuration.getScriptMaxMemoryBytes(), -1, -1, -1,
+                ResourceLimits.DEFAULT_FETCH_MAX_CONCURRENT);
     }
 }

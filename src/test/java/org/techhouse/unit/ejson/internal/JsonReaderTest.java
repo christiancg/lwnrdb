@@ -292,4 +292,20 @@ public class JsonReaderTest {
     public void unlimited_overload_parses_beyond_the_limit() {
         assertDoesNotThrow(() -> eJson.fromJson(nestedObjects(LIMIT * 4), JsonObject.class));
     }
+
+    @Test
+    public void test_the_token_budget_refuses_a_flat_array_over_the_limit() {
+        final var input = "{\"a\":[" + "1,".repeat(99) + "1]}";
+
+        assertThrows(MalformedJsonException.class, () -> eJson.fromJson(input, JsonObject.class, LIMIT, 100));
+    }
+
+    @Test
+    public void test_a_document_under_the_budget_still_parses() {
+        final var input = "{\"a\":[1,2,3],\"b\":\"text\"}";
+
+        final var parsed = eJson.fromJson(input, JsonObject.class, LIMIT, 15);
+
+        assertEquals(3, parsed.get("a").asJsonArray().size());
+    }
 }

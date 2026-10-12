@@ -4,11 +4,13 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.req.validations.NameValidations;
+import org.techhouse.simplejs.ModuleReferences;
 
 public final class ProcedureModuleResolver implements ModuleResolver {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
-    public static final String SPECIFIER_PREFIX = "procedures/";
+    public static final String SPECIFIER_PREFIX = ModuleReferences.PROCEDURE_SPECIFIER_PREFIX;
 
     private final String scopedDatabase;
 
@@ -18,11 +20,8 @@ public final class ProcedureModuleResolver implements ModuleResolver {
 
     @Override
     public ResolvedModule resolve(String specifier, String referrer) {
-        if (scopedDatabase == null || specifier == null || !specifier.startsWith(SPECIFIER_PREFIX)) {
-            return null;
-        }
-        final var name = specifier.substring(SPECIFIER_PREFIX.length());
-        if (name.isEmpty() || name.indexOf('/') >= 0) {
+        final var name = ModuleReferences.procedureNameOf(specifier);
+        if (scopedDatabase == null || !NameValidations.isValidProcedureName(name)) {
             return null;
         }
         final var definition = cache.getProcedure(scopedDatabase, name);

@@ -10,6 +10,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.regex.RegexMatch;
 import org.techhouse.simplejs.internal.regex.RegexMatcher;
+import org.techhouse.simplejs.internal.regex.RegexStepBudget;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
@@ -27,11 +28,11 @@ public final class RegexExec {
         final var read = toLength(readLastIndex(target, ops), ops);
         final var lastIndex = stateful ? read : 0;
         if (lastIndex > input.length()) {
-            resetLastIndex(target, stateful, ops);
+            writeLastIndex(target, 0, ops);
             return JsNull.getInstance();
         }
         final var start = (int) lastIndex;
-        final var matcher = RegexMatcher.exec(state.getProgram(), input, start, sticky);
+        final var matcher = RegexMatcher.exec(state.getProgram(), input, start, sticky, budgetFor(ops));
         if (matcher == null) {
             resetLastIndex(target, stateful, ops);
             return JsNull.getInstance();
@@ -166,6 +167,30 @@ public final class RegexExec {
             return builtinExec(rx, regexp, s, ops);
         }
         throw new TypeErrorException("RegExp.prototype.exec method is not generic");
+    }
+
+    private static RegexStepBudget budgetFor(InterpreterOps ops) {
+        return ops == null ? RegexStepBudget.UNLIMITED : new TickingBudget(ops);
+    }
+
+    private static final class TickingBudget implements RegexStepBudget {
+        private static final int STEPS_PER_TICK = 64;
+
+        private final InterpreterOps ops;
+        private int steps;
+
+        private TickingBudget(InterpreterOps ops) {
+            this.ops = ops;
+        }
+
+        @Override
+        public void step() {
+            steps++;
+            if (steps == STEPS_PER_TICK) {
+                steps = 0;
+                ops.tick();
+            }
+        }
     }
 
     private RegexExec() {

@@ -93,10 +93,9 @@ public final class AuthorizationChecker {
         }
 
         if (isScriptManagementOperation(type)) {
-            return user.canManageScripts(dbName) && !(TRIGGER_OPERATIONS.contains(type)
-                    && carvesOutOfCollection(user, dbName, req.getCollectionName()))
-                            ? AuthorizationResult.allow()
-                            : AuthorizationResult.deny("action is forbidden, no permissions");
+            return allowsScriptManagement(user, dbName, req)
+                    ? AuthorizationResult.allow()
+                    : AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
         final var requiredLevel = getRequiredPermissionLevel(type);
@@ -130,12 +129,12 @@ public final class AuthorizationChecker {
         return AuthorizationResult.allow();
     }
 
-    private static boolean carvesOutOfCollection(AdminUserEntry user, String dbName, String collName) {
-        if (collName == null || collName.isBlank()) {
+    private static boolean allowsScriptManagement(AdminUserEntry user, String dbName, OperationRequest req) {
+        if (!user.canManageScripts(dbName)) {
             return false;
         }
-        final var collPerm = user.getCollectionPermissions().get(dbName + "|" + collName);
-        return collPerm != null && !collPerm.covers(PermissionLevel.READ_WRITE);
+        return !TRIGGER_OPERATIONS.contains(req.getType())
+                || !lacksCollectionAccess(user, dbName, req.getCollectionName(), PermissionLevel.READ_WRITE);
     }
 
     private static boolean lacksCollectionAccess(AdminUserEntry user, String dbName, String collName,

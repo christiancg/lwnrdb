@@ -10,7 +10,7 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 HOT_COLL = "hot_coll"
 COLD_COLL = "cold_coll"
@@ -134,7 +134,7 @@ def test_mass_insert_with_eviction(c):
                                 "collectionName": coll, "objects": batch})
                 if r.get("status") != "OK":
                     check_status("BULK_SAVE during mass insert", r, "OK")
-                    return
+                    return None
                 if len(sample_ids[coll]) < 50:
                     sample_ids[coll].append(doc_id)
                 batch = []
@@ -174,7 +174,7 @@ def test_correctness_after_eviction(c, sample_ids: dict):
     )
 
 
-def test_hot_collection_remains_warm(c):
+def test_hot_collection_remains_warm(c: Conn):
     section("Hot-vs-cold access pattern — repeated reads on hot, occasional on cold")
 
     for _ in range(200):
@@ -220,9 +220,9 @@ def test_repeated_full_scan(c):
 def test_server_still_alive(c):
     section("Liveness check after the whole run")
 
-    check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
     check_status("AUTHENTICATE still works",
           c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
 
 
 def main():

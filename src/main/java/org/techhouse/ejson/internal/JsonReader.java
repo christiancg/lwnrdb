@@ -18,7 +18,11 @@ public class JsonReader {
     }
 
     public <T> T fromJson(String input, Class<T> tClass, int maxDepth) {
-        final var tokens = Lexer.lex(input);
+        return fromJson(input, tClass, maxDepth, Integer.MAX_VALUE);
+    }
+
+    public <T> T fromJson(String input, Class<T> tClass, int maxDepth, int maxTokens) {
+        final var tokens = Lexer.lex(input, maxTokens);
         final var parsed = internalParse(tokens, true, maxDepth);
         if (parsed.tokensToSkip() < tokens.size()) {
             throw new MalformedJsonException("Unexpected content after the root value");

@@ -8,6 +8,8 @@ public final class NameValidations {
     static final String ID_PATTERN = "^[a-zA-Z0-9_-]{1,64}$";
     static final String USERNAME_PATTERN = NAME_PATTERN;
     static final String INDEX_FIELD_PATTERN = "^[A-Za-z0-9_.-]{1,64}$";
+    private static final int MIN_NAME_LENGTH = 3;
+    private static final int MAX_NAME_LENGTH = 64;
 
     private NameValidations() {
     }
@@ -18,11 +20,15 @@ public final class NameValidations {
         if (name == null || name.isBlank()) {
             return ValidationResult.fail("procedure name is required");
         }
-        if (!name.matches(NAME_PATTERN)) {
+        if (!isValidProcedureName(name)) {
             return ValidationResult
                     .fail("procedure name must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
         return ValidationResult.ok();
+    }
+
+    public static boolean isValidProcedureName(String name) {
+        return isName(name);
     }
 
     static ValidationResult validateDbNameOnly(String databaseName) {
@@ -58,13 +64,44 @@ public final class NameValidations {
         return Globals.SCRIPT_RUNS_COLLECTION_NAME.equalsIgnoreCase(collName);
     }
 
-    static boolean isReservedDbName(String dbName) {
+    public static boolean isReservedDbName(String dbName) {
         return Globals.ADMIN_DB_NAME.equalsIgnoreCase(dbName) || Globals.ADMIN_PAGES_DB_NAME.equalsIgnoreCase(dbName)
                 || Globals.CLUSTER_FOLDER.equalsIgnoreCase(dbName);
     }
 
+    public static boolean isName(String value) {
+        return matchesCharset(value, MIN_NAME_LENGTH);
+    }
+
+    public static boolean isId(String value) {
+        return matchesCharset(value, 1);
+    }
+
+    public static boolean isUsername(String value) {
+        return matchesCharset(value, MIN_NAME_LENGTH);
+    }
+
+    private static boolean matchesCharset(String value, int minLength) {
+        if (value == null || value.length() < minLength || value.length() > MAX_NAME_LENGTH) {
+            return false;
+        }
+        for (var i = 0; i < value.length(); i++) {
+            final var c = value.charAt(i);
+            final var allowed = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+                    || c == '-';
+            if (!allowed) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static boolean isIndexFieldName(String fieldName) {
+        return fieldName != null && fieldName.matches(INDEX_FIELD_PATTERN);
+    }
+
     static ValidationResult validateIndexFieldName(String fieldName) {
-        if (fieldName != null && fieldName.matches(INDEX_FIELD_PATTERN)) {
+        if (isIndexFieldName(fieldName)) {
             return ValidationResult.ok();
         }
         return ValidationResult.fail("fieldName must be 1-64 characters from A-Z a-z 0-9 _ . -");

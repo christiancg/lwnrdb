@@ -67,6 +67,10 @@ public final class Globals {
     public static final int GEO_HASH_MAX_PRECISION = 9;
     public static final int GEO_HASH_MAX_COVERING_CELLS = 32;
     public static final int MAX_REQUEST_NESTING_DEPTH = 128;
+    public static final int MAX_SCHEMA_EXPANDED_NODES = 100_000;
+    public static final int MAX_UNAUTHENTICATED_REQUEST_BYTES = 65536;
+    public static final int MIN_BYTES_PER_REQUEST_TOKEN = 4;
+    public static final long MAX_REQUEST_SIZE_CEILING = 1_073_741_824L;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
     public static final int TLS_KEY_SIZE = 2048;
@@ -82,5 +86,8 @@ public final class Globals {
     public static final String CLUSTER_SEED_SEPARATOR = ",";
     public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
     public static final String CLUSTER_ADMIN_COORDINATOR_KEY = "__admin_coordinator__";
+    public static final int CLUSTER_MIN_SECRET_LENGTH = 32;
+    public static final int CLUSTER_HANDSHAKE_MAX_LINE_BYTES = 4096;
+    public static final int CLUSTER_MAX_UNAUTHENTICATED_CONNECTIONS = 64;
     public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
 }

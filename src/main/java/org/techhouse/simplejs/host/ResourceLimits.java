@@ -6,8 +6,9 @@ public record ResourceLimits(long instructionBudget, long wallClockMillis, int m
         boolean reportUnhandledRejections, boolean fetchEnabled, List<String> fetchHostAllowlist, long maxResponseBytes,
         long fetchTimeoutMillis, boolean strictScriptGoal, boolean textImportEnabled, int maxModuleDepth,
         int maxLogLines, int maxLogLineChars, long memoryBudget, long maxResultBytes, int cursorBatchSize,
-        int cursorMaxBatchSize) {
+        int cursorMaxBatchSize, int fetchMaxConcurrent) {
     public static final int DEFAULT_MAX_MODULE_DEPTH = 16;
+    public static final int DEFAULT_FETCH_MAX_CONCURRENT = 8;
     public static final int DEFAULT_MAX_LOG_LINES = 1000;
     public static final int DEFAULT_MAX_LOG_LINE_CHARS = 4096;
     public static final int DEFAULT_CURSOR_BATCH_SIZE = 500;
@@ -32,7 +33,7 @@ public record ResourceLimits(long instructionBudget, long wallClockMillis, int m
             int maxLogLineChars, long memoryBudget) {
         this(instructionBudget, wallClockMillis, maxDepth, reportUnhandledRejections, fetchEnabled, fetchHostAllowlist,
                 maxResponseBytes, fetchTimeoutMillis, strictScriptGoal, textImportEnabled, maxModuleDepth, maxLogLines,
-                maxLogLineChars, memoryBudget, -1, -1, -1);
+                maxLogLineChars, memoryBudget, -1, -1, -1, DEFAULT_FETCH_MAX_CONCURRENT);
     }
 
     public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, boolean reportUnhandledRejections,

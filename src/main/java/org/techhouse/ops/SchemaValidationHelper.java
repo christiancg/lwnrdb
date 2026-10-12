@@ -4,10 +4,12 @@ import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
+import org.techhouse.ejson.exceptions.SchemaBudgetExceededException;
 import org.techhouse.ejson.validate.SchemaValidationResult;
 import org.techhouse.ex.MetadataReadException;
 import org.techhouse.ioc.IocContainer;
@@ -21,6 +23,7 @@ public final class SchemaValidationHelper {
     private static final Logger logger = Logger.logFor(SchemaValidationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final Configuration configuration = Configuration.getInstance();
     private static final Map<String, CheckedSchema> checkedSchemas = new ConcurrentHashMap<>();
 
     private record CheckedSchema(WeakReference<JsonObject> source, SchemaValidationResult metaResult) {
@@ -44,6 +47,10 @@ public final class SchemaValidationHelper {
             logger.error("Refusing the write: the stored schema for " + request.getDatabaseName() + "|"
                     + request.getCollectionName() + " does not meta-validate", e);
             return new OperationResponse(request.getType(), ErrorCode.SCHEMA_UNAVAILABLE);
+        } catch (SchemaBudgetExceededException e) {
+            logger.warning("Refusing the write: validating it against the schema of " + request.getDatabaseName() + "|"
+                    + request.getCollectionName() + " exceeded the schema validation budget");
+            return new OperationResponse(request.getType(), ErrorCode.SCHEMA_VALIDATION_BUDGET_EXCEEDED);
         } catch (Exception e) {
             logger.error("Refusing the write: the schema check for " + request.getDatabaseName() + "|"
                     + request.getCollectionName() + " failed unexpectedly", e);
@@ -81,7 +88,7 @@ public final class SchemaValidationHelper {
             return null;
         }
         requireValidSchema(dbName, collName, schema);
-        final var result = eJson.validateInstance(withoutId(object), schema);
+        final var result = eJson.validateInstance(withoutId(object), schema, configuration.getSchemaValidationBudget());
         return result.isValid() ? null : String.join("; ", result.getErrors());
     }
 

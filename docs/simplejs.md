@@ -45,9 +45,13 @@ Three things are deliberately left open, none of them engine work:
    allocates a small object per instruction is bounded only by `scriptInstructionBudget`, so the
    two must be sized together (see *Sandbox and resource limits*).
 2. **Outbound `fetch` ships on, with its allowlist at `*`** — a capability behind a default-off
-   flag is one nobody discovers, but the shipped posture hands a script the server's network
-   position. `Main.warnIfScriptFetchEnabled` says so at every startup; operators are expected
-   to narrow it.
+   flag is one nobody discovers. `*` means any **public** host: loopback, private, link-local
+   (the 169.254.169.254 metadata endpoint), CGNAT, unique-local and the other non-public ranges
+   are refused unless the exact host is listed, so the shipped posture no longer hands a script
+   the server's position *inside* the network — but it still lets any script make the server
+   call any public host. `StartupWarnings.warnIfScriptFetchEnabled` says so at every startup,
+   and raises a SECURITY WARNING when an exact entry re-opens `localhost` or a literal private
+   address; operators are expected to narrow it.
 3. **npm packages are a non-goal**, not a pending phase. Resolution is the smaller half: a real
    package (`mysql2` is the worked example) needs raw TCP sockets, `Buffer`, `stream`,
    `EventEmitter` and asymmetric crypto — i.e. a Node runtime, which is the boundary this
@@ -211,6 +215,15 @@ Negation order matters and follows the spec — a property escape negates before
 because a real backtracking engine is exposed to blowups `java.util.regex`'s optimizations hide:
 alternation is a loop rather than a Java frame per branch (a `\p{RGI_Emoji}` class compiles to
 thousands of alternatives), and failed `(position, min, max)` repeat attempts are memoized.
+Neither stops a nested quantifier such as `(x+x+)+y` from backtracking exponentially, so the
+matcher also takes a `RegexStepBudget`, a callback charged once per start position, once per
+`match` call and once per candidate count a simple quantifier backtracks through. The 4-argument
+`RegexMatcher.exec` is unlimited and is for trusted patterns only; every caller that runs an
+untrusted pattern or input passes a budget. `RegExp` in scripts passes one that calls
+`InterpreterOps.tick()` every 64 steps (see *Sandbox and resource limits*), and the JSON Schema
+validator passes its per-document evaluation budget (`schemaValidationBudget`, refused with
+`400-23`). The budget throws its caller's own exception through the continuations; the matcher
+holds no state beyond one `exec`, so nothing needs unwinding.
 
 Unicode property escapes resolve a name to a `CodePointSet` using `java.util.regex.Pattern` as a
 one-time per-property **oracle** (compiled once, every code point tested, cached) — never as the
@@ -270,6 +283,16 @@ is enforced per call. Breaching any of them throws a `ScriptAbortException`, whi
 `try`/`catch` cannot intercept and which skips `finally` and `using` disposal — so a script
 cannot trap its own timeout in a `finally { while (true) {} }`.
 
+Regex matching is inside that boundary too. A single `RegExp.prototype.exec` (and so `test`,
+`match`, `matchAll`, `replace`, `split` and `search`, which all reach it) used to be one Java call
+that never returned control to the interpreter, so a catastrophic pattern ran past
+`scriptTimeoutMs`, the instruction budget and cancellation alike. `RegexExec.builtinExec` now hands
+the matcher a budget that ticks once every 64 matcher steps, so the budget, the deadline and the
+cancellation token all reach inside one `exec`, and a runaway pattern ends with `400-11`, `408-1`
+or `408-2` like any runaway loop. The side effect: regex work counts against
+`scriptInstructionBudget` (and the before-hook, pipeline and trigger budgets) at one instruction
+per 64 matcher steps. Regex semantics are unchanged.
+
 The **allocation budget** (`scriptMaxMemoryBytes`) is a per-run cumulative total of the
 allocations proportional to a script-supplied length or to input size — a `repeat` result, a
 dense array, a typed array, a `join`, a `JSON` payload, a `structuredClone` node — and of what
@@ -284,6 +307,27 @@ while `s = s + s` — the case `tick()` cannot see — has a delta equal to the 
 `db.cursor` batches are the one charge credited back, at a fixed deterministic release point.
 `OutOfMemoryError`/`StackOverflowError` are caught at the `SimpleJs.run` boundary as a last
 resort and reported as `ScriptMemoryError`.
+
+**Native loops and recursion.** Work a builtin does in Java, not in interpreted code, is charged
+to the same machinery. A native loop over an array-like paces through `ArrayLike.has`/`get`/
+`delete`: every 1024th index calls `InterpreterOps.tick(1024)`, which takes a whole block from the
+instruction budget and checks the cancellation token and the deadline on every call — so a sparse
+`new Array(2 ** 32 - 1).indexOf(x)` ends with `400-11` (or `408-1`/`408-2`) instead of scanning
+four billion holes, while a scan shorter than 1024 elements costs nothing extra. A loop that
+bypasses `ArrayLike` (the typed-array scans, `fill`, `copyWithin`, `join`) calls
+`InterpreterOps.pace` itself. Native recursion over script data — `JSON.parse` and its reviver,
+`JSON.stringify`, `structuredClone`, `flat`, `join`/`String()` of nested arrays — is bounded by
+`NativeDepth.MAX = 512` levels, and every native call counts one level, so native-to-native
+recursion through `toString`/`toJSON` is bounded without touching each builtin; past it a
+**catchable** `RangeError: Maximum nesting depth exceeded` is thrown (512 levels fit a
+virtual-thread stack under the deepest `scriptMaxDepth` call stack; a test pins it). BigInt
+results are sized **before** they are computed (`internal/BigIntLimits`): a result over 2^24 bits
+(2 MiB) throws a catchable `RangeError: Maximum BigInt size exceeded`, a result above 64 bits is
+charged to `scriptMaxMemoryBytes`, and an exponent or shift count beyond `int` is that same
+RangeError rather than an internal error. Finally, an `Error` raised on a coroutine thread (every
+script body, generator and async function runs on one) is relayed to the driver and rethrown
+before any generator or promise observer sees it, so a `StackOverflowError` deep inside an async
+function ends the run as `400-12` instead of hanging it with its admission permit held.
 
 Per-run budgets bound **one** run; `ops/ScriptAdmission` bounds their sum. It caps
 client-initiated runs at `maxConcurrentScripts` (admitting after a bounded `scriptQueueWaitMs`
@@ -303,6 +347,31 @@ bare `*`; an **empty** list denies everything even with the switch on), a respon
 timeout, and runs off the interpreter thread as an `EventLoop` async job. It reaches
 `RUN_SCRIPT`, `CALL_PROCEDURE`, triggers and schedules, and deliberately not pipeline scripts or
 before-write hooks, which hold collection locks where a blocking egress call is a stall.
+
+- **One parser.** The host the allowlist checks and the host connected to both come from
+  `URI.getHost()` (`host/FetchTarget`); only `http`/`https` URLs with a host are accepted, anything
+  else is "fetch: host not allowed".
+- **Public addresses only, checked where it connects.** `JdkNetworkAccess` resolves the host once,
+  requires every address to pass `PublicAddressPolicy` (no loopback, private, link-local, CGNAT,
+  multicast, reserved, unique-local, or IPv6 form embedding such an IPv4 — mapped, compatible,
+  NAT64, 6to4) and pins exactly those addresses in `PinnedResolution` for the duration of the
+  request. `PinningResolverProvider`, a JDK `InetAddressResolverProvider` registered through
+  `META-INF/services`, answers the `HttpClient`'s own lookup from the pin, so a DNS answer that
+  changes between the check and the connect (rebinding) cannot redirect it; unpinned names
+  delegate to the JDK's built-in resolver, so cluster and peer resolution are unchanged. The
+  Host header, SNI and certificate checks still use the URL's host. Only an **exact** allowlist
+  entry equal to the host (`10.0.0.5`, `localhost`) lets it reach a private address; `*` and
+  `*.example.com` never do. Redirects are never followed (the client's policy is `NEVER`).
+- **Bounded body.** The body is read as a stream and abandoned the moment it passes
+  `scriptFetchMaxResponseBytes` (or at once when `Content-Length` already says so), counted in
+  bytes, so an endless response cannot exhaust the heap.
+- **Bounded concurrency.** One run may have at most `scriptFetchMaxConcurrent` (default 8) fetches
+  in flight; one more rejects with "fetch: too many concurrent requests" until an earlier one
+  settles.
+- **No connect detail.** Every network failure other than a timeout, a blocked host or an
+  oversized body rejects with the bare "fetch failed"; the cause goes to the server log, so a
+  script cannot use error text to scan ports. A fast refusal and a timeout still differ in
+  timing for hosts the allowlist permits.
 
 `strictScriptGoal` selects the spec's Script goal. It defaults to `false`, which is what the
 database host uses — the result contract deliberately allows a top-level `return`, and
@@ -339,8 +408,10 @@ knowing: a procedure written for `CALL_PROCEDURE` with a top-level `return` impo
 Everything else is the host's decision through `host/ModuleResolver`. The database host resolves
 **`procedures/<name>`** (`ProcedureModuleResolver`, gated by `scriptProcedureImportEnabled`,
 default on), so a library *is* a stored procedure — managed by the operations that already exist,
-with nothing new persisted or replicated. The namespace is flat and scope-restricted (a `/` in
-the name is refused; only the run's own database is searched), a missing or disabled procedure
+with nothing new persisted or replicated. The namespace is flat and scope-restricted (the name
+must pass the wire's procedure-name rule, `NameValidations.isValidProcedureName`: 3-64 letters,
+digits, `_` or `-`, so `/`, `..`, `\`, NUL and over-long names never reach the file layer; only
+the run's own database is searched), a missing or disabled procedure
 answers `Cannot find module`, and the module id carries the procedure's version so a
 `CompiledProcedureCache` entry can be reused across runs. Authority is the **importer's**:
 importing widens what code is reachable, never what it may do. `SAVE_PROCEDURE` walks the
@@ -356,6 +427,11 @@ database other than the run's scope. Opening DDL to scripts would put `CREATE_IN
 `DROP_COLLECTION` behind a trigger's definer rights and would race the admin coordinator's DDL
 serialization; a migration is a client driving DDL over the wire and calling a script for the
 data half.
+
+`db.listDatabases()` answers the run's scope without a request when the run is scoped. An unscoped
+run (an ad-hoc `RUN_SCRIPT`) dispatches `LIST_DATABASES` as its acting user, so it gets the same
+filtered answer the wire gives that user: every database for an admin, otherwise only the databases
+the user owns or holds a database, collection or script grant on.
 
 **Failure contract**: every method throws a catchable JS `Error` (built with the script's own
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
@@ -530,9 +606,14 @@ runtime state lives in the per-run `Interpreter`/`Environment`/`Intrinsics`.
 `scriptPermissions` is a per-database `ScriptPermissionLevel` — `NONE`/`RUN`/`MANAGE`, where
 `MANAGE` additionally allows installing procedures, triggers and schedules; admins and database
 owners have an implicit `MANAGE`. A legacy boolean reads as `RUN`/`NONE`. For a trigger,
-`MANAGE` is bounded by the collection: a `collectionPermissions` entry that does not grant
-`READ_WRITE` on that collection refuses `SAVE_TRIGGER`, `DELETE_TRIGGER` and `TEST_TRIGGER` there,
-because a before hook rewrites or vetoes every write to it.
+`MANAGE` is bounded by the collection: `SAVE_TRIGGER`, `DELETE_TRIGGER` and `TEST_TRIGGER` also
+need `READ_WRITE` on that collection — through an explicit `collectionPermissions` entry when one
+exists (the entry alone decides), otherwise through the database grant — and answer `403-1`
+without it. An after trigger receives every document written to its collection and a before hook
+rewrites or vetoes every write there, so `MANAGE` with only `READ` (or no data grant at all) must
+not install one. Procedures and schedules consult no collection: a schedule binds none and receives
+no document — it runs its procedure with the `args` its installer chose, and every `db.*` call that
+procedure makes is authorized again against the definer's own grants.
 
 **Errors** map to: `403-2` scripting disabled, `404-4` unknown database, `400-10` source too
 large, `400-9` threw or would not parse, `400-11` budget/depth, `400-12` memory, `400-15` result
@@ -548,8 +629,7 @@ lock and decide whether the write happens at all.
 Both are installed with a **definer**, and an after trigger runs under **definer rights** rather
 than the writer's. That is load-bearing: under invoker rights an audit trigger's effect would
 depend on who wrote, and would fail for exactly the low-privilege users most worth auditing —
-as a WARN in a log the writer never sees. The escalation is bounded by the fact that only an
-admin, owner or `MANAGE` user can install one. Two consequences: a definer who no longer exists
+as a WARN in a log the writer never sees. Two consequences: a definer who no longer exists
 **disables** the trigger (falling back to the writer would silently reinstate invoker rights, and
 falling back to an admin would let *deleting* a user widen a trigger's authority), and a definer
 whose permissions are later reduced silently narrows it.
@@ -557,6 +637,25 @@ whose permissions are later reduced silently narrows it.
 The definer is always the saving user: no request field can name another one, so a client cannot
 install a trigger that runs as someone else. Peers never derive it either — they receive the
 coordinator's definition file, definer included, as a versioned admin record.
+
+Limiting who may *install* a trigger is not enough. A trigger, before hook or schedule names its
+procedure, and the procedure is looked up **by name when it fires**, so whoever can change that
+procedure — or any procedure it imports — changes what runs with the definer's authority.
+While such a binding exists, `SAVE_PROCEDURE` (disabling with `enabled:false` included) and
+`DELETE_PROCEDURE` of a procedure it reaches answer `403-4` for anyone but the binding's definer, a
+database owner or an admin; an unbound procedure, or one bound only by the caller, stays freely
+editable. Reach is the transitive import closure, computed lexically from each procedure's source:
+static `import`/`export … from` and a dynamic `import('procedures/x')` with a literal specifier
+name exact procedures, while a dynamic import with a computed specifier, or any import of the
+`script` module (whose `importText` runs arbitrary module text), makes the procedure able to import
+*any* procedure in the database — so while a foreign definer's binding reaches one, every name
+counts as reached, existing or new. A disabled procedure still counts, because its definer or an
+owner may re-enable it. The check runs in the handler under the database's procedures lock — the
+lock `SAVE_TRIGGER` and `SAVE_SCHEDULE` also take, so no binding can appear between the check and
+the write — and therefore on the cluster's admin coordinator; peers install the result without
+re-checking. Not covered, because no foreign authority changes hands: deleting another user's
+trigger or schedule (a denial of service at worst), and replacing another user's trigger by name,
+which makes the replacer its definer.
 
 **An after trigger runs exactly once, not at least once.** Before an event is queued,
 `TriggerRunLog` persists a pending-run record in `admin/trigger_runs`; `TriggerDispatcher` then
@@ -764,7 +863,11 @@ collection's owner; a transactional write registers each foreign owner as a part
 `db.transaction` spans owners through the same 2PC the wire protocol uses.
 `ops/resp/ResponseParser` rebuilds a typed response from the owner's JSON through each subclass's
 public constructor, and `aggregate` forwards the caller's own pipeline JSON so a polymorphic
-`CUSTOM` (geo/vector) operator survives the trip.
+`CUSTOM` (geo/vector) operator survives the trip. The owner re-validates every forwarded request
+and re-checks the script user's permission against its own copy of the users, so a grant made a
+moment before the script ran may answer one `403-1` on an owner that has not applied it yet.
+Script-run history writes to `script_runs` carry no user and skip that check (their names are still
+validated).
 
 **Where the run itself lands** is chosen by `cluster/ScriptPlacement` (gated by
 `scriptRoutingEnabled`, default on): it samples two eligible members and takes the one with the
@@ -788,7 +891,7 @@ influence any of them.
 | Logs | `scriptMaxLogLines`, `scriptMaxLogLineChars` |
 | Imports | `scriptProcedureImportEnabled` (on), `scriptTextImportEnabled` (off) |
 | Cursors | `scriptCursorBatchSize`, `scriptCursorMaxBatchSize` |
-| Egress | `scriptFetchEnabled` (on), `scriptFetchAllowlist` (`*`), `scriptFetchTimeoutMs`, `scriptFetchMaxResponseBytes` |
+| Egress | `scriptFetchEnabled` (on), `scriptFetchAllowlist` (`*`, public hosts only), `scriptFetchTimeoutMs`, `scriptFetchMaxResponseBytes`, `scriptFetchMaxConcurrent` (8) |
 | Admission | `maxConcurrentScripts`, `scriptQueueWaitMs`, `maxConcurrentScriptsPerUser`, `maxConcurrentScriptsPerDatabase` |
 | Caching | `procedureCacheSize` (compiled procedures and parsed ad-hoc scripts), `metadataCacheMaxBytes`, `metadataCacheMaxEntries` |
 | Locale | `scriptTimeZone` (UTC), `scriptLocale` (en-US) |

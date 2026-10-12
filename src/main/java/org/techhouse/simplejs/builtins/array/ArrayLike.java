@@ -36,6 +36,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
     }
 
     public JsValue get(long index) {
+        InterpreterOps.pace(ops, index);
         final var dense = dense();
         if (dense != null && index >= 0 && index <= Integer.MAX_VALUE && index < dense.length()
                 && !dense.isHole((int) index)) {
@@ -46,6 +47,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
     }
 
     public boolean has(long index) {
+        InterpreterOps.pace(ops, index);
         final var dense = dense();
         if (dense != null && index >= 0 && index <= Integer.MAX_VALUE && index < dense.length()
                 && !dense.isHole((int) index)) {
@@ -136,6 +138,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
     }
 
     public void delete(long index) {
+        InterpreterOps.pace(ops, index);
         if (ops == null) {
             final var dense = dense();
             if (dense != null && index >= 0 && index <= Integer.MAX_VALUE && index < dense.length()) {

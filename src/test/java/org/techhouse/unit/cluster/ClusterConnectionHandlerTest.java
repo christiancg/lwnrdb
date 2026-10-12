@@ -96,6 +96,8 @@ public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBa
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
         try (var raw = new Socket("127.0.0.1", cluster.serverPort())) {
             final var out = new BufferedWriter(new OutputStreamWriter(raw.getOutputStream(), StandardCharsets.UTF_8));
+            out.write(eJson.toJson(envelope(ClusterMessageType.HELLO)));
+            out.newLine();
             for (final var id : QUEUED_IDS) {
                 out.write(eJson.toJson(saveRequest(id)));
                 out.newLine();

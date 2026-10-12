@@ -13,7 +13,7 @@ RUN mvn clean package -DskipTests
 #   jdk.unsupported  - sun.misc.Unsafe, used by EJson's UnsafeAllocator fallback
 #                      to instantiate objects without a matching constructor
 RUN jlink \
-        --add-modules java.base,java.management,jdk.crypto.ec,jdk.unsupported \
+        --add-modules java.base,java.management,java.net.http,jdk.crypto.ec,jdk.unsupported \
         --strip-debug \
         --no-man-pages \
         --no-header-files \

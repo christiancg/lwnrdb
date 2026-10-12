@@ -99,7 +99,7 @@ public class OperationProcessor {
             case DELETE -> processDeleteOperation((DeleteRequest) operationRequest, activeTransaction, actingUser);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest, clientId);
             case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
-            case LIST_DATABASES -> processListDatabasesOperation();
+            case LIST_DATABASES -> processListDatabasesOperation(actingUser);
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
             case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest);
             case LIST_COLLECTIONS -> processListCollectionsOperation((ListCollectionsRequest) operationRequest);
@@ -130,7 +130,7 @@ public class OperationProcessor {
             case LIST_TRANSACTIONS -> processListTransactions();
             case RUN_SCRIPT -> processRunScriptOperation((RunScriptRequest) operationRequest, actingUser, clientId);
             case SAVE_PROCEDURE -> processSaveProcedure((SaveProcedureRequest) operationRequest, actingUser);
-            case DELETE_PROCEDURE -> processDeleteProcedure((DeleteProcedureRequest) operationRequest);
+            case DELETE_PROCEDURE -> processDeleteProcedure((DeleteProcedureRequest) operationRequest, actingUser);
             case LIST_PROCEDURES -> processListProcedures((ListProceduresRequest) operationRequest);
             case CALL_PROCEDURE -> processCallProcedure((CallProcedureRequest) operationRequest, actingUser, clientId);
             case SAVE_TRIGGER -> processSaveTrigger((SaveTriggerRequest) operationRequest, actingUser);
@@ -209,8 +209,8 @@ public class OperationProcessor {
         return DatabaseOperationHelper.processDropDatabaseOperation(dropDatabaseRequest);
     }
 
-    private OperationResponse processListDatabasesOperation() {
-        return DatabaseOperationHelper.processListDatabasesOperation();
+    private OperationResponse processListDatabasesOperation(String actingUser) {
+        return DatabaseOperationHelper.processListDatabasesOperation(actingUser);
     }
 
     private OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
@@ -242,9 +242,9 @@ public class OperationProcessor {
                 () -> ProcedureOperationHelper.executeSave(request, actingUser));
     }
 
-    private OperationResponse processDeleteProcedure(DeleteProcedureRequest request) {
+    private OperationResponse processDeleteProcedure(DeleteProcedureRequest request, String actingUser) {
         return OperationResponse.respondOrError(OperationType.DELETE_PROCEDURE, ErrorCode.ERROR_DELETING_PROCEDURE,
-                () -> ProcedureOperationHelper.executeDelete(request));
+                () -> ProcedureOperationHelper.executeDelete(request, actingUser));
     }
 
     private OperationResponse processListProcedures(ListProceduresRequest request) {

@@ -62,4 +62,18 @@ public class HostAllowlistTest {
         assertFalse(HostAllowlist.allowsEverything(List.of()));
         assertFalse(HostAllowlist.allowsEverything(null));
     }
+
+    @Test
+    public void test_lists_exactly_matches_only_an_exact_entry() {
+        assertTrue(HostAllowlist.listsExactly(List.of("  Internal.Example.COM "), "internal.example.com"));
+        assertTrue(HostAllowlist.listsExactly(List.of("*", "10.0.0.5"), "10.0.0.5"));
+        assertFalse(HostAllowlist.listsExactly(List.of("*"), "10.0.0.5"));
+        assertFalse(HostAllowlist.listsExactly(List.of("*.example.com"), "a.example.com"));
+        assertFalse(HostAllowlist.listsExactly(List.of("*.example.com"), "*.example.com"));
+        assertFalse(HostAllowlist.listsExactly(Arrays.asList(null, "other.com"), "a.com"));
+        assertFalse(HostAllowlist.listsExactly(null, "a.com"));
+        assertFalse(HostAllowlist.listsExactly(List.of("a.com"), null));
+        assertFalse(HostAllowlist.listsExactly(List.of("a.com"), " "));
+        assertFalse(HostAllowlist.listsExactly(List.of(), "a.com"));
+    }
 }

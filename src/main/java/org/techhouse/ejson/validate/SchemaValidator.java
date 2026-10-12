@@ -20,6 +20,7 @@ public class SchemaValidator {
 
     void validateNode(JsonBaseElement instance, JsonBaseElement schemaNode, JsonSchema schema, String path,
             List<String> errors) {
+        schema.charge();
         if (schemaNode == null) {
             return;
         }
@@ -63,7 +64,7 @@ public class SchemaValidator {
         switch (instance.getJsonType()) {
             case OBJECT -> objectValidator.validateObject(instance.asJsonObject(), obj, schema, path, errors);
             case ARRAY -> arrayValidator.validateArray(instance.asJsonArray(), obj, schema, path, errors);
-            case STRING, CUSTOM -> scalarValidator.validateString(instance.asJsonString(), obj, path, errors);
+            case STRING, CUSTOM -> scalarValidator.validateString(instance.asJsonString(), obj, schema, path, errors);
             case NUMBER ->
                 scalarValidator.validateNumber(instance.asJsonNumber().getValue().doubleValue(), obj, path, errors);
             default -> {

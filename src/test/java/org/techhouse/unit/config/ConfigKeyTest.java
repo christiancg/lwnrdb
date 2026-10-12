@@ -63,4 +63,18 @@ public class ConfigKeyTest {
             assertNull(key.validate(key.defaultValue()), key.key() + " ships a default its own rule rejects");
         }
     }
+
+    @Test
+    public void test_schema_validation_budget_has_a_floor_of_one_thousand() {
+        assertEquals("5000000", ConfigKey.SCHEMA_VALIDATION_BUDGET.defaultValue());
+        assertNull(ConfigKey.SCHEMA_VALIDATION_BUDGET.validate("1000"));
+        assertNotNull(ConfigKey.SCHEMA_VALIDATION_BUDGET.validate("999"));
+    }
+
+    @Test
+    public void test_script_fetch_max_concurrent_must_be_at_least_one() {
+        assertNotNull(ConfigKey.SCRIPT_FETCH_MAX_CONCURRENT.validate("0"));
+        assertNull(ConfigKey.SCRIPT_FETCH_MAX_CONCURRENT.validate("1"));
+        assertEquals("8", ConfigKey.SCRIPT_FETCH_MAX_CONCURRENT.defaultValue());
+    }
 }

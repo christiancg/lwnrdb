@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+from typing import Callable
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_status, section
@@ -8,7 +10,7 @@ HOST = os.environ.get("API_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("API_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "schema_test_db"
 COLL = "people"
@@ -182,6 +184,80 @@ def test_pattern_uses_ecma_semantics(c):
                save_schema(c, COLL, {"type": "object", "patternProperties": {"(?i)^a": {}}}), "ERROR", "400-8")
 
 
+HOSTILE = "x" * 800 + "!"
+REDOS_SCHEMA = {"type": "object", "properties": {"name": {"type": "string", "pattern": "(x+x+)+y"}}}
+BUDGET_DEADLINE_S = 15
+
+
+def diamond_chain(depth):
+    defs = {f"d{i}": {"allOf": [{"$ref": f"#/$defs/d{i + 1}"}, {"$ref": f"#/$defs/d{i + 1}"}]} for i in range(depth)}
+    defs[f"d{depth}"] = {"type": "object"}
+    return {"$ref": "#/$defs/d0", "$defs": defs}
+
+
+def timed(call: Callable[[], dict]):
+    started = time.monotonic()
+    response = call()
+    return response, time.monotonic() - started
+
+
+def test_pattern_redos_is_refused_within_a_deadline(c):
+    section("A catastrophic pattern is refused by the validation budget")
+    check_status("save a schema with a catastrophic pattern", save_schema(c, COLL, REDOS_SCHEMA), "OK")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "redos", "name": HOSTILE}))
+    check_code("the hostile document is refused with 400-23", resp, "ERROR", "400-23")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check("the refused document was not persisted", find_by_id(c, COLL, "redos").get("status") == "NOT_FOUND")
+    check_status("a cheap matching document still saves", save(c, COLL, {"_id": "cheap", "name": "xxy"}), "OK")
+
+
+def test_pattern_properties_redos_is_refused(c):
+    section("A catastrophic patternProperties key is refused by the validation budget")
+    check_status("save a patternProperties schema",
+                 save_schema(c, COLL, {"type": "object", "patternProperties": {"(x+x+)+y": {"type": "number"}}}), "OK")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "redos-key", HOSTILE: 1}))
+    check_code("the hostile key is refused with 400-23", resp, "ERROR", "400-23")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+
+
+def test_bulk_save_with_one_redos_document_is_atomic(c):
+    section("BULK_SAVE with one document over the budget writes nothing")
+    save_schema(c, COLL, REDOS_SCHEMA)
+    resp = bulk_save(c, COLL, [{"_id": "bulk-cheap", "name": "xxy"}, {"_id": "bulk-redos", "name": HOSTILE}])
+    check_code("the batch is refused with 400-23", resp, "ERROR", "400-23")
+    check("no document from the batch was persisted",
+          all(find_by_id(c, COLL, _id).get("status") == "NOT_FOUND" for _id in ("bulk-cheap", "bulk-redos")))
+
+
+def test_transactional_save_answers_400_23(c):
+    section("A transactional save over the budget answers 400-23 and the transaction stays usable")
+    save_schema(c, COLL, REDOS_SCHEMA)
+    check_status("start a transaction", c.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("the hostile save is refused", save(c, COLL, {"_id": "tx-redos", "name": HOSTILE}), "ERROR", "400-23")
+    check_status("a cheap save in the same transaction is buffered",
+                 save(c, COLL, {"_id": "tx-cheap", "name": "xxy"}), "OK")
+    check_status("commit", c.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("the cheap document committed", find_by_id(c, COLL, "tx-cheap").get("status") == "OK")
+    check("the hostile one did not", find_by_id(c, COLL, "tx-redos").get("status") == "NOT_FOUND")
+
+
+def test_complex_ref_chain_save_schema_is_refused(c):
+    section("SAVE_SCHEMA refuses a $ref diamond that expands past the node limit")
+    resp, elapsed = timed(lambda: save_schema(c, COLL, diamond_chain(28)))
+    check_code("a 28-level allOf diamond is refused with 400-24", resp, "ERROR", "400-24")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check_status("nothing was stored: an unconstrained save passes", save(c, COLL, {"_id": "free", "any": 1}), "OK")
+
+
+def test_diamond_chain_under_limit_is_accepted_and_bounded(c):
+    section("A $ref diamond under the node limit is accepted and validates in bounded time")
+    check_status("a 12-level diamond is accepted", save_schema(c, COLL, diamond_chain(12)), "OK")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "diamond", "name": "d"}))
+    check("a save against it answers OK or 400-23", resp.get("status") == "OK" or resp.get("errorCode") == "400-23",
+          f"got {resp.get('status')} {resp.get('errorCode')}")
+    check("and answers inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+
+
 def test_invalid_schema_rejected(c):
     section("Invalid schema rejected")
     check_code("schema with a bad keyword value is rejected",
@@ -298,7 +374,7 @@ def main():
 
     with Conn() as c:
         if c.authenticate().get("status") != "OK":
-            print("Could not authenticate as admin. Check lwnrdb.cfg defaultAdminUsername/defaultAdminPassword.")
+            print(f"Could not authenticate as admin. Check lwnrdb.cfg defaultAdminUsername/defaultAdminPassword={bu.PASSWORD}.")
             sys.exit(1)
         setup(c)
 
@@ -309,6 +385,12 @@ def main():
         test_multiple_of_rejects_a_tiny_non_multiple,
         test_multiple_of_is_exact_for_huge_values,
         test_pattern_uses_ecma_semantics,
+        test_pattern_redos_is_refused_within_a_deadline,
+        test_pattern_properties_redos_is_refused,
+        test_bulk_save_with_one_redos_document_is_atomic,
+        test_transactional_save_answers_400_23,
+        test_complex_ref_chain_save_schema_is_refused,
+        test_diamond_chain_under_limit_is_accepted_and_bounded,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,
         test_ref_targets_are_checked,

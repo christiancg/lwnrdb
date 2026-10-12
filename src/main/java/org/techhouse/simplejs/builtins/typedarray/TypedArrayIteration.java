@@ -207,6 +207,7 @@ public final class TypedArrayIteration {
         }
         final var bounds = searchBounds(args, length, last, ops);
         for (var i = bounds[0]; last ? i >= bounds[1] : i <= bounds[1]; i += last ? -1 : 1) {
+            InterpreterOps.pace(ops, i);
             if (sameNumber(receiver.getElement(i), target)) {
                 return i;
             }
@@ -246,6 +247,7 @@ public final class TypedArrayIteration {
         var from = (int) toInteger(intArg(args, 1, 0, ops));
         from = from < 0 ? Math.max(length + from, 0) : Math.min(from, length);
         for (var i = from; i < length; i++) {
+            InterpreterOps.pace(ops, i);
             if (SameValueZero.equal(receiver.getElement(i), target)) {
                 return true;
             }
@@ -266,7 +268,9 @@ public final class TypedArrayIteration {
                 ? ","
                 : JsCoercion.toStr(args.getFirst(), ops);
         final var sb = new StringBuilder();
+        var charged = 0;
         for (var i = 0; i < length; i++) {
+            InterpreterOps.pace(ops, i);
             if (i > 0) {
                 sb.append(separator);
             }
@@ -274,6 +278,8 @@ public final class TypedArrayIteration {
             if (!(element instanceof JsUndefined)) {
                 sb.append(JsCoercion.toStr(element));
             }
+            InterpreterOps.chargeChars(ops, sb.length() - charged);
+            charged = sb.length();
         }
         return sb.toString();
     }

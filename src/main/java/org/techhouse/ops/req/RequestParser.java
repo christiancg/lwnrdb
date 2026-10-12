@@ -46,8 +46,13 @@ public final class RequestParser {
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
+        return parseRequest(message, Integer.MAX_VALUE);
+    }
+
+    public static OperationRequest parseRequest(final String message, final int maxTokens)
+            throws InvalidCommandException {
         try {
-            final var root = eJson.fromJson(message, JsonObject.class, Globals.MAX_REQUEST_NESTING_DEPTH);
+            final var root = eJson.fromJson(message, JsonObject.class, Globals.MAX_REQUEST_NESTING_DEPTH, maxTokens);
             final var baseReq = eJson.fromJson(root, OperationRequest.class);
             return switch (baseReq.getType()) {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);

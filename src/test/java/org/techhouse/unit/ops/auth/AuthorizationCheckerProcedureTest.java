@@ -125,7 +125,7 @@ public class AuthorizationCheckerProcedureTest {
 
     @Test
     public void test_manage_level_allows_save_and_call() {
-        final var manager = userWith(ScriptPermissionLevel.MANAGE, null);
+        final var manager = userWith(ScriptPermissionLevel.MANAGE, PermissionLevel.READ_WRITE);
         assertTrue(
                 AuthorizationChecker.check(new CallProcedureRequest(TestGlobals.DB, "p", null), manager).isAllowed());
         for (final var request : managementRequests()) {

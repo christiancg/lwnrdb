@@ -1,15 +1,18 @@
 package org.techhouse.unit.config;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.ConfigurationValidator;
 import org.techhouse.test.ConfigFixture;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class ConfigurationValidatorTest {
     private static Map<String, String> baseValid(Path writablePath) {
@@ -76,8 +79,36 @@ public class ConfigurationValidatorTest {
     @Test
     public void test_invalid_admin_credentials(@TempDir Path tempDir) {
         assertHasError(tempDir, "defaultAdminUsername", "  ", "defaultAdminUsername");
+        assertHasError(tempDir, "defaultAdminUsername", "ab", "like any user name");
+        assertHasError(tempDir, "defaultAdminUsername", "ops.admin", "like any user name");
+        final var config = baseValid(tempDir);
+        config.put("defaultAdminUsername", "ops_admin-2");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_short_admin_password_is_still_rejected(@TempDir Path tempDir) {
         assertHasError(tempDir, "defaultAdminPassword", "short", "defaultAdminPassword");
-        assertHasError(tempDir, "defaultAdminPassword", "  ", "defaultAdminPassword");
+    }
+
+    @Test
+    public void test_blank_admin_password_is_accepted_by_the_validator(@TempDir Path tempDir) {
+        for (final var blank : new String[]{"", "  "}) {
+            final var config = baseValid(tempDir);
+            config.put("defaultAdminPassword", blank);
+            assertTrue(ConfigurationValidator.validate(config).stream().noneMatch(e -> e.contains("defaultAdmin")));
+        }
+    }
+
+    @Test
+    public void test_validator_creates_missing_data_folder_owner_only(@TempDir Path tempDir) throws IOException {
+        assumeTrue(OwnerOnlyPermissions.supported());
+        final var config = baseValid(tempDir);
+        final var dataFolder = tempDir.resolve("fresh").resolve("data");
+        config.put("filePath", dataFolder.toString());
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+        assertEquals("rwx------", PosixFilePermissions.toString(Files.getPosixFilePermissions(dataFolder)));
+        assertEquals("rwx------", PosixFilePermissions.toString(Files.getPosixFilePermissions(dataFolder.getParent())));
     }
 
     @Test
@@ -386,5 +417,63 @@ public class ConfigurationValidatorTest {
         config.put("scriptsEnabled", "true");
         config.put("scriptTextImportEnabled", "true");
         assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_max_request_size_must_not_be_below_max_entry_size(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("maxEntrySize", "1Mb");
+        config.put("maxRequestSize", "512Kb");
+        assertTrue(ConfigurationValidator.validate(config).stream()
+                .anyMatch(e -> e.contains("maxRequestSize") && e.contains("maxEntrySize")));
+        config.put("maxRequestSize", "1Mb");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_max_request_size_above_the_ceiling_is_refused(@TempDir Path tempDir) {
+        assertHasError(tempDir, "maxRequestSize", "2Gb", "must not be greater than 1073741824");
+        assertHasError(tempDir, "maxRequestSize", String.valueOf(Integer.MAX_VALUE), "must not be greater than");
+        assertHasError(tempDir, "maxRequestSize", "0", "maxRequestSize");
+        final var config = baseValid(tempDir);
+        config.put("maxRequestSize", "1Gb");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_auth_failure_delay_max_below_base_is_rejected(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("authFailureDelayBaseMs", "1000");
+        config.put("authFailureDelayMaxMs", "999");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("authFailureDelayMaxMs")), errors.toString());
+    }
+
+    @Test
+    public void test_auth_throttle_keys_accept_zero(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("maxFailedAuthAttempts", "0");
+        config.put("authFailureDelayBaseMs", "0");
+        config.put("authFailureDelayMaxMs", "0");
+        config.put("maxConcurrentPasswordChecks", "0");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_timeouts_must_be_positive(@TempDir Path tempDir) {
+        assertHasError(tempDir, "authTimeoutMs", "0", "authTimeoutMs");
+        assertHasError(tempDir, "authTimeoutMs", "soon", "authTimeoutMs");
+        assertHasError(tempDir, "transactionIdleTimeoutMs", "0", "transactionIdleTimeoutMs");
+        assertHasError(tempDir, "transactionIdleTimeoutMs", "-5", "transactionIdleTimeoutMs");
+    }
+
+    @Test
+    public void test_auth_throttle_keys_reject_negatives(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("maxFailedAuthAttempts", "-1");
+        config.put("maxConcurrentPasswordChecks", "-1");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("maxFailedAuthAttempts")), errors.toString());
+        assertTrue(errors.stream().anyMatch(e -> e.contains("maxConcurrentPasswordChecks")), errors.toString());
     }
 }

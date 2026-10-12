@@ -15,6 +15,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.mockito.Mockito;
 import org.techhouse.bckg_ops.PendingIndexWrites;
@@ -36,6 +37,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.auth.AuthFailureThrottle;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.utils.ReflectionUtils;
@@ -85,6 +87,8 @@ public class TestUtils {
         // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
         ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
         TestUtils.setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
+        resetSocketClients(clientTracker);
+        TestUtils.getPrivateField(IocContainer.get(AuthFailureThrottle.class), "states", Map.class).clear();
     }
 
     private static void clearBoundedCache(AdminCache adminCache, String fieldName)
@@ -289,6 +293,13 @@ public class TestUtils {
         final var clientTracker = IocContainer.get(ClientTracker.class);
         setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
         setPrivateField(clientTracker, "txSessions", new ConcurrentHashMap<>());
+        resetSocketClients(clientTracker);
+    }
+
+    private static void resetSocketClients(ClientTracker clientTracker)
+            throws NoSuchFieldException, IllegalAccessException {
+        setPrivateField(clientTracker, "disconnectSignals", new ConcurrentHashMap<>());
+        getPrivateField(clientTracker, "socketClients", AtomicInteger.class).set(0);
     }
 
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {

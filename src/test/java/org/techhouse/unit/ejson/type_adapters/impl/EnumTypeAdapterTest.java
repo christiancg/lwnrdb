@@ -1,13 +1,17 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mockStatic;
 
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.EnumTypeAdapter;
+import org.techhouse.log.LogWriter;
 
 public class EnumTypeAdapterTest {
     enum TestEnum {
@@ -112,5 +116,43 @@ public class EnumTypeAdapterTest {
         TestEnum result = adapter.fromJson(jsonNumber);
 
         assertNull(result);
+    }
+
+    private static String loggedEntryFor(String wireValue) {
+        final var entries = new java.util.ArrayList<String>();
+        try (MockedStatic<LogWriter> logWriter = mockStatic(LogWriter.class)) {
+            logWriter.when(() -> LogWriter.writeLogEntry(anyString()))
+                    .thenAnswer(invocation -> entries.add(invocation.getArgument(0)));
+            assertNull(new EnumTypeAdapter<>(TestEnum.class).fromJson(new JsonString(wireValue)));
+        }
+        assertEquals(1, entries.size(), entries.toString());
+        return entries.getFirst();
+    }
+
+    @Test
+    public void unknown_value_logs_one_warning_without_stack_trace_and_returns_null() {
+        final var entry = loggedEntryFor("NOT_A_CONSTANT");
+
+        assertTrue(entry.contains("-WARNING-"), entry);
+        assertTrue(entry.contains("Unknown enum value for TestEnum: NOT_A_CONSTANT"), entry);
+        assertFalse(entry.contains("\n"), entry);
+        assertFalse(entry.contains("at org."), entry);
+    }
+
+    @Test
+    public void forged_newline_value_does_not_create_a_second_log_line() {
+        final var entry = loggedEntryFor("X\nFAKE-LOG-LINE\rAGAIN");
+
+        assertFalse(entry.contains("\n"), entry);
+        assertFalse(entry.contains("\r"), entry);
+        assertTrue(entry.contains("X\\nFAKE-LOG-LINE\\rAGAIN"), entry);
+    }
+
+    @Test
+    public void overlong_value_is_truncated_in_the_log() {
+        final var entry = loggedEntryFor("A".repeat(64) + "TAIL" + "B".repeat(1000));
+
+        assertTrue(entry.endsWith(": " + "A".repeat(64)), entry);
+        assertFalse(entry.contains("TAIL"), entry);
     }
 }

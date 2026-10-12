@@ -161,22 +161,23 @@ public class ProcedureOperationHelperTest {
     @Test
     public void test_delete_is_idempotent_when_absent() throws Exception {
         final var response = ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "never-existed"));
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "never-existed"), ACTOR);
         assertEquals(OperationStatus.OK, response.getStatus());
     }
 
     @Test
     public void test_delete_removes_the_procedure() throws Exception {
         save("return 1;");
-        assertEquals(OperationStatus.OK,
-                ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "p")).getStatus());
+        assertEquals(OperationStatus.OK, ProcedureOperationHelper
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "p"), ACTOR).getStatus());
         assertNull(cache.getProcedure(TestGlobals.DB, "p"));
         assertTrue(fs.listProcedureNames(TestGlobals.DB).isEmpty());
     }
 
     @Test
     public void test_delete_rejects_unknown_database() throws Exception {
-        final var response = ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest("missingDb", "p"));
+        final var response = ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest("missingDb", "p"),
+                ACTOR);
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), response.getErrorCode());
     }
 

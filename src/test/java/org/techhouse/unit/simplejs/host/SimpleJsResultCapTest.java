@@ -19,7 +19,7 @@ public class SimpleJsResultCapTest {
     private static ResourceLimits capped(long maxResultBytes) {
         return new ResourceLimits(-1, -1, -1, true, false, List.of(), -1, -1, false, false,
                 ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.DEFAULT_MAX_LOG_LINES,
-                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, -1, maxResultBytes, -1, -1);
+                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, -1, maxResultBytes, -1, -1, 8);
     }
 
     private ScriptResult run(String source, ResourceLimits limits) {

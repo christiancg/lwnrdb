@@ -11,7 +11,7 @@ HOST = os.environ.get("TXN_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXN_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "txn_test_db"
 COLL = "orders"
@@ -20,7 +20,7 @@ JOIN_COLL = "order_configs"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-def send_only(c, payload: dict):
+def send_only(c: Conn, payload: dict):
     c.s.sendall((json.dumps(payload) + "\n").encode())
 
 
@@ -342,7 +342,7 @@ def test_lock_timeout_aborts_and_refuses_retries(c):
               orphan.get("status") == "NOT_FOUND", f"got {orphan}")
 
 
-def test_crossed_read_and_write_sets_do_not_hang(c):
+def test_crossed_read_and_write_sets_do_not_hang(c: Conn):
     section("Two transactions whose read and write sets cross time out instead of deadlocking")
     other = "orders_crossed"
     check_status("create the second collection",
@@ -544,7 +544,7 @@ def main():
         if r.get("status") != "OK":
             print(f"\n[ERROR] Cannot authenticate as admin: {r.get('message')}")
             print("        Make sure the server is running and lwnrdb.cfg has the correct")
-            print(f"        defaultAdminUsername={ADMIN_USERNAME!r} / defaultAdminPassword set.\n")
+            print(f"        defaultAdminUsername={ADMIN_USERNAME} / defaultAdminPassword={ADMIN_PASSWORD} (base_utils.PASSWORD).\n")
             sys.exit(1)
         print("\n  Setting up fixtures...")
         setup_fixtures(c)

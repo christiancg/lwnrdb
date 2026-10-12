@@ -85,6 +85,10 @@ public final class SimpleJs {
         return List.copyOf(specifiers);
     }
 
+    public ModuleReferences moduleReferences(CompiledScript compiled) {
+        return ModuleReferences.scan(compiled.source(), moduleSpecifiers(compiled));
+    }
+
     public ScriptResult run(String source, HostBindings host) {
         final var limits = host.limits();
         final var capture = new ConsoleCapture(
@@ -296,8 +300,7 @@ public final class SimpleJs {
                 new ScriptError(PENDING_RESULT, error.getMessage(), error.getCapturedStack());
             case SimpleJsRuntimeException error ->
                 new ScriptError(INTERNAL_ERROR, error.getMessage(), error.getCapturedStack());
-            case OutOfMemoryError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
-            case StackOverflowError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
+            case OutOfMemoryError _, StackOverflowError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
             case ScriptCallableException _ -> null;
             case RuntimeException unmapped -> reportedInternalError(unmapped);
             default -> null;

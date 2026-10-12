@@ -126,4 +126,26 @@ public class MainStartupOrderTest {
         assertTrue(positionOf(body, "bootstrapDefaultAdmin();") < positionOf(body, "startClusterIfEnabled();"),
                 "a fresh node's own bootstrap admin must already exist, or it would be counted as missing data");
     }
+
+    @Test
+    public void test_the_shipped_password_check_precedes_any_storage_creation() throws IOException {
+        final var body = mainBody();
+        final var check = positionOf(body, "AdminPasswordGuard.refuseShippedPassword();");
+
+        assertTrue(positionOf(body, "LogWriter.createLogPathAndRemoveOldFiles();") < check,
+                "the FATAL line must reach the log file");
+        assertTrue(check < positionOf(body, "fs.createBaseDbPath();"),
+                "a refused start must not create the data folder");
+    }
+
+    @Test
+    public void test_the_bootstrap_check_follows_admin_load_and_precedes_worker_start() throws IOException {
+        final var body = mainBody();
+        final var check = positionOf(body, "AdminPasswordGuard.refuseUnsetPasswordWhenBootstrapping(cache);");
+
+        assertTrue(positionOf(body, "cache.loadAdminData();") < check, "the check needs the loaded admin users");
+        assertTrue(check < positionOf(body, "bootstrapDefaultAdmin();"));
+        assertTrue(check < positionOf(body, "backgroundTaskManager.startBackgroundWorkers();"),
+                "the refusal ends the JVM only while no non-daemon thread has started");
+    }
 }

@@ -109,4 +109,25 @@ public class LexerTest {
         assertEquals(1, result.size());
         assertEquals(Double.MAX_VALUE, ((JsonNumber) result.getFirst()).getValue().doubleValue());
     }
+
+    @Test
+    public void test_the_token_budget_refuses_a_flat_array_at_the_limit() {
+        final var input = "[1,1,1,1,1]";
+
+        assertEquals(11, Lexer.lex(input, 11).size());
+        final var refusal = assertThrows(MalformedJsonException.class, () -> Lexer.lex(input, 10));
+        assertTrue(refusal.getMessage().contains("more tokens"), refusal.getMessage());
+    }
+
+    @Test
+    public void test_whitespace_does_not_count_against_the_token_budget() {
+        assertEquals(3, Lexer.lex("[ 1     ]", 3).size());
+    }
+
+    @Test
+    public void test_the_one_argument_lex_is_unbounded() {
+        final var input = "[" + "1,".repeat(100_000) + "1]";
+
+        assertEquals(200_003, Lexer.lex(input).size());
+    }
 }

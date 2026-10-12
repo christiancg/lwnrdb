@@ -1,6 +1,7 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.HashSet;
@@ -104,5 +105,22 @@ public class HybridClockTest {
     @Test
     public void test_a_negative_physical_is_clamped_to_zero() {
         assertEquals(0L, HybridClock.physicalOf(HybridClock.pack(-5L, 0)));
+    }
+
+    @Test
+    public void withinSkewAcceptsNowAndRefusesTheFuture() {
+        final var clock = new HybridClock();
+        final var now = System.currentTimeMillis();
+        assertTrue(clock.withinSkew(HybridClock.pack(now, 0), 0));
+        assertTrue(clock.withinSkew(HybridClock.pack(now + 1_000, 0), 60_000));
+        assertFalse(clock.withinSkew(HybridClock.pack(now + 120_000, 0), 60_000));
+    }
+
+    @Test
+    public void withinSkewHandlesTheMaxPhysicalValue() {
+        final var clock = new HybridClock();
+        assertFalse(clock.withinSkew(Long.MAX_VALUE, 3_600_000));
+        assertFalse(clock.withinSkew(HybridClock.pack(Long.MAX_VALUE, 0), 3_600_000));
+        assertFalse(clock.withinSkew(-1L, 3_600_000));
     }
 }

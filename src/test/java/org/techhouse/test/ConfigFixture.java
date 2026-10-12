@@ -9,6 +9,7 @@ import java.util.Map;
  * the registry under test would make these tests tautological.
  */
 public final class ConfigFixture {
+    public static final String CLUSTER_SECRET = "shared-secret-of-at-least-32-chars";
 
     private ConfigFixture() {
     }
@@ -24,7 +25,7 @@ public final class ConfigFixture {
         map.put("maxPageSize", "2Mb");
         map.put("maxEntrySize", "1Mb");
         map.put("defaultAdminUsername", "admin");
-        map.put("defaultAdminPassword", "administrator");
+        map.put("defaultAdminPassword", TestGlobals.ADMIN_PASSWORD);
         map.put("maxMemory", "512Mb");
         map.put("transactionLockTimeoutMs", "5000");
         map.put("tlsEnabled", "false");
@@ -47,6 +48,9 @@ public final class ConfigFixture {
         map.put("clusterSecret", "");
         map.put("antiEntropyIntervalMs", "60000");
         map.put("tombstoneRetentionMs", "86400000");
+        map.put("clusterMaxFrameSize", "256Mb");
+        map.put("clusterHandshakeTimeoutMs", "5000");
+        map.put("clusterMaxClockSkewMs", "3600000");
         map.put("scriptTimeZone", "UTC");
         map.put("scriptLocale", "en-US");
         map.put("scriptsEnabled", "false");
@@ -100,7 +104,7 @@ public final class ConfigFixture {
         map.put("clusterEnabled", "true");
         map.put("clusterExpectedSize", "3");
         map.put("clusterSeeds", "host1:9990,host2:9991");
-        map.put("clusterSecret", "shared-secret");
+        map.put("clusterSecret", CLUSTER_SECRET);
         return map;
     }
 }
