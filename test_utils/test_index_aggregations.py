@@ -24,6 +24,7 @@ LEFT_DOCS = int(os.environ.get("INDEX_TEST_LEFT_DOCS", "100"))
 PAYLOAD_BYTES = int(os.environ.get("INDEX_TEST_PAYLOAD_BYTES", "256"))
 BULK_BATCH_SIZE = int(os.environ.get("INDEX_TEST_BATCH_SIZE", "500"))
 REPEATS = int(os.environ.get("INDEX_TEST_REPEATS", "5"))
+WARMUPS = int(os.environ.get("INDEX_TEST_WARMUPS", "20"))
 SPEED_TOLERANCE = float(os.environ.get("INDEX_TEST_SPEED_TOLERANCE", "1.25"))
 
 CONS = "idxagg_cons"
@@ -81,6 +82,9 @@ def index_used(c, coll, steps):
 
 
 def timed_scan_and_index(c, coll, steps, scan_steps):
+    for _ in range(WARMUPS):
+        agg(c, coll, scan_steps)
+        agg(c, coll, steps)
     scan_best = None
     index_best = None
     index_resp = None
