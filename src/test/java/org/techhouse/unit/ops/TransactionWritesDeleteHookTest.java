@@ -49,7 +49,7 @@ public class TransactionWritesDeleteHookTest {
         processor.processMessage(new RollbackTransactionRequest(), client);
         clientTracker.removeById(client);
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

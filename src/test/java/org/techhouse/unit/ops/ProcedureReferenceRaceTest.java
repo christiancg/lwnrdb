@@ -58,7 +58,7 @@ public class ProcedureReferenceRaceTest {
     public void tearDown() throws Exception {
         holder.close();
         registry.clear();
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();

@@ -44,7 +44,7 @@ final class ProcedureBindingSupport {
 
     static void tearDown() throws Exception {
         registry.clear();
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();

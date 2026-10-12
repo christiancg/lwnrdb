@@ -47,7 +47,7 @@ public class ScriptOperationHelperTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        setConfig("scriptsEnabled", false);
+        setConfig("scriptsEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

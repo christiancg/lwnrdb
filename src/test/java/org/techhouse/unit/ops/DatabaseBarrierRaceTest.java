@@ -77,7 +77,7 @@ public class DatabaseBarrierRaceTest {
         holder.close();
         registry.clear();
         TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", originalTimeout);
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();

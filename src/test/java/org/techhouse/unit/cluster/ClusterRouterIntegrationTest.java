@@ -16,6 +16,7 @@ import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -52,6 +53,7 @@ public class ClusterRouterIntegrationTest {
 
     @BeforeEach
     public void setUp() throws Exception {
+        TestUtils.setPrivateField(Configuration.getInstance(), "scriptsEnabled", true);
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         cluster.start();
