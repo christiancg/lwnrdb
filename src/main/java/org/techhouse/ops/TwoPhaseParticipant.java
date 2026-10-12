@@ -12,6 +12,7 @@ import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.tx.CommitAuthorization;
 import org.techhouse.ops.tx.TransactionRecovery;
 
 public final class TwoPhaseParticipant {
@@ -25,7 +26,8 @@ public final class TwoPhaseParticipant {
     public static boolean prepare(UUID clientId, String coordinatorAddress, List<String> participants) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null || transaction.isAborted() || coordinator.hasNotTransactionQuorum()
-                || TransactionOperationHelper.ownershipMoved(transaction)) {
+                || TransactionOperationHelper.ownershipMoved(transaction)
+                || !CommitAuthorization.allows(transaction, clientTracker.getAuthenticatedUsername(clientId))) {
             return false;
         }
         try {

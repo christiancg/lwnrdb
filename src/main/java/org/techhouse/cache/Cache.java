@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -214,7 +215,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         if (resultStream != null) {
             return resultStream;
         }
-        return streamCollection(dbName, collName).map(DbEntry::getData);
+        return AggregateDeadline.watch(streamCollection(dbName, collName).map(DbEntry::getData));
     }
 
     private Map<String, DbEntry> readWholeCollection(String dbName, String collName) throws IOException {

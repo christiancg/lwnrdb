@@ -12,6 +12,8 @@ public final class AuthFailureThrottle {
     public static final long IDLE_EXPIRY_MILLIS = 10 * 60 * 1000L;
     private static final int MAX_SHIFT = 30;
     private static final char KEY_SEPARATOR = '|';
+    private static final String ADDRESS_WIDE = "*";
+    public static final int ADDRESS_FAILURE_GRACE = 20;
 
     private final LongSupplier clock;
     private final long baseMillis;
@@ -36,22 +38,46 @@ public final class AuthFailureThrottle {
         return address + KEY_SEPARATOR + truncated;
     }
 
+    public static String addressKeyOf(String address) {
+        return address + KEY_SEPARATOR + ADDRESS_WIDE;
+    }
+
+    public synchronized long reserve(String key) {
+        final var state = live(key);
+        if (state == null || state.failures <= state.grace) {
+            return 0;
+        }
+        final var now = clock.getAsLong();
+        final var start = Math.max(now, state.notBefore);
+        state.notBefore = start + delayFor(Math.min(state.failures - state.grace - 1, MAX_SHIFT));
+        return start - now;
+    }
+
     public synchronized long remainingDelayMillis(String key) {
         final var state = live(key);
         return state == null ? 0 : Math.max(0, state.notBefore - clock.getAsLong());
     }
 
     public synchronized void recordFailure(String key) {
+        recordFailure(key, 0);
+    }
+
+    public synchronized void recordAddressFailure(String address) {
+        recordFailure(addressKeyOf(address), ADDRESS_FAILURE_GRACE);
+    }
+
+    private void recordFailure(String key, int grace) {
         final var now = clock.getAsLong();
         var state = live(key);
         if (state == null) {
-            state = new State();
+            state = new State(grace);
             states.put(key, state);
         }
-        final var shift = Math.min(state.failures, MAX_SHIFT);
         state.failures++;
         state.lastFailure = now;
-        state.notBefore = now + delayFor(shift);
+        state.notBefore = state.failures <= state.grace
+                ? Math.max(now, state.notBefore)
+                : Math.max(state.notBefore, now + delayFor(Math.min(state.failures - state.grace - 1, MAX_SHIFT)));
     }
 
     public synchronized void recordSuccess(String key) {
@@ -76,9 +102,14 @@ public final class AuthFailureThrottle {
     }
 
     private static final class State {
+        private final int grace;
         private int failures;
         private long notBefore;
         private long lastFailure;
+
+        private State(int grace) {
+            this.grace = grace;
+        }
     }
 
     private static final class BoundedStates extends LinkedHashMap<String, State> {

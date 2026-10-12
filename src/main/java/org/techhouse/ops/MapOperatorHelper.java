@@ -288,6 +288,9 @@ public final class MapOperatorHelper {
             } else if (concatStep.isJsonNull()) {
                 result.append(concatTextOf(concatStep));
             }
+            if (EntrySizeGuard.exceedsMaxEntrySize(result)) {
+                throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
+            }
         }
         JsonUtils.setPath(obj, addFieldName, new JsonString(result.toString()));
         return obj;

@@ -34,6 +34,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScriptAdmission;
 import org.techhouse.ops.ScriptLoad;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class MembershipService {
     private final Logger logger = Logger.logFor(MembershipService.class);
@@ -401,6 +402,7 @@ public class MembershipService {
 
     private static void writeNodeIdAtomically(Path path, String nodeId) throws IOException {
         final var tmp = path.resolveSibling(path.getFileName() + ".tmp");
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(tmp);
         Files.writeString(tmp, nodeId, StandardCharsets.UTF_8);
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);

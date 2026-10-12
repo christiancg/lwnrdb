@@ -1,6 +1,8 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
@@ -12,6 +14,7 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.resp.OperationResponse;
@@ -43,6 +46,7 @@ public final class ClusterAdminHelper {
         if (!isCoordinatedAdminOp(request.getType())) {
             return null;
         }
+        RestampedRecords.begin();
         if (clusterConfig.isEnabled() && !ownershipManager.isAdminCoordinator()) {
             return new OperationResponse(request.getType(), ErrorCode.NOT_COLLECTION_OWNER);
         }
@@ -56,8 +60,15 @@ public final class ClusterAdminHelper {
         return null;
     }
 
+    private static List<AdminRecordKey> replicatedKeys(OperationRequest request, List<AdminRecordKey> restamped) {
+        final var keys = new ArrayList<>(AdminRecordKey.touchedBy(request));
+        keys.addAll(restamped);
+        return keys.stream().distinct().toList();
+    }
+
     public static OperationResponse afterAdminOp(OperationRequest request, OperationResponse response) {
         final var type = request.getType();
+        final var restamped = RestampedRecords.drain();
         if (!isCoordinatedAdminOp(type) || !clusterConfig.isEnabled() || response.getStatus() != OperationStatus.OK) {
             return response;
         }
@@ -65,7 +76,7 @@ public final class ClusterAdminHelper {
         try {
             outcome = type == OperationType.REINDEX
                     ? coordinator.broadcastReindex((ReindexRequest) request)
-                    : coordinator.replicateAdminRecords(AdminRecords.of(AdminRecordKey.touchedBy(request)));
+                    : coordinator.replicateAdminRecords(AdminRecords.of(replicatedKeys(request, restamped)));
         } catch (IOException unreadable) {
             logger.warning("The " + type + " committed here, but its admin records could not be read to replicate"
                     + " them; the admin anti-entropy sweep carries it: " + unreadable.getMessage());

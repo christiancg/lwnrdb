@@ -13,6 +13,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationStatus;
@@ -163,12 +164,13 @@ final class CollectionRecordApplier {
             return true;
         }
         if (live) {
-            return CollectionOperationHelper.dropCollection(dbName, collName, true).getStatus() == OperationStatus.OK;
+            return CollectionOperationHelper.dropCollection(dbName, collName, true, RewriteVersion.KEEP)
+                    .getStatus() == OperationStatus.OK;
         }
         if (!quarantine.dropCollection(dbName, collName, clusterConfig.replicationAckTimeoutMs())) {
             return false;
         }
-        GrantPruner.forDroppedCollection(dbName, collName);
+        GrantPruner.forDroppedCollection(dbName, collName, RewriteVersion.KEEP);
         return true;
     }
 

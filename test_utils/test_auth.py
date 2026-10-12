@@ -1014,6 +1014,25 @@ def test_a_deleted_user_can_still_roll_back(c):
     c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "after_rollback"})
 
 
+def test_a_collection_reader_cannot_list_database_wide_metadata(c):
+    section("A collection-only reader cannot list database-wide metadata by naming its collection")
+    check_status("AUTHENTICATE as 'coll_reader'", c.authenticate("coll_reader", "coll_reader1234"), "OK")
+    for request_type in ("LIST_PROCEDURES", "LIST_SCHEDULES", "LIST_COLLECTIONS"):
+        check_code(f"{request_type} with an injected collectionName (403-1)",
+                   c.send({"type": request_type, "databaseName": "auth_db", "collectionName": "allowed",
+                           "includeSource": True}),
+                   "FORBIDDEN", "403-1")
+
+
+def test_set_password_on_another_user_is_uniform(c):
+    section("SET_PASSWORD on another user answers the same whether or not that user exists")
+    check_status("AUTHENTICATE as 'db_reader'", c.authenticate("db_reader", "db_reader1234"), "OK")
+    for target in ("no_perms", "no_such_user_anywhere"):
+        check_code(f"SET_PASSWORD on '{target}' (403-1)",
+                   set_password(c, target, "another-password-1", current_password="x"),
+                   "FORBIDDEN", "403-1")
+
+
 def main():
     bu.banner("Authentication & Authorization test suite", HOST, PORT)
 
@@ -1116,6 +1135,12 @@ def main():
 
     with Conn() as c:
         test_a_deleted_user_can_still_roll_back(c)
+
+    with Conn() as c:
+        test_a_collection_reader_cannot_list_database_wide_metadata(c)
+
+    with Conn() as c:
+        test_set_password_on_another_user_is_uniform(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

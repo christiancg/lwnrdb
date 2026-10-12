@@ -43,7 +43,8 @@ Three things are deliberately left open, none of them engine work:
 
 1. **`scriptMaxMemoryBytes` is a bulk-allocation budget, not a live-heap cap.** A script that
    allocates a small object per instruction is bounded only by `scriptInstructionBudget`, so the
-   two must be sized together (see *Sandbox and resource limits*).
+   two must be sized together (see *Sandbox and resource limits*). The process-wide backstop for
+   what the budget cannot see is `scriptHeapCeilingPercent`.
 2. **Outbound `fetch` ships on, with its allowlist at `*`** — a capability behind a default-off
    flag is one nobody discovers. `*` means any **public** host: loopback, private, link-local
    (the 169.254.169.254 metadata endpoint), CGNAT, unique-local and the other non-public ranges
@@ -307,6 +308,45 @@ while `s = s + s` — the case `tick()` cannot see — has a delta equal to the 
 `db.cursor` batches are the one charge credited back, at a fixed deterministic release point.
 `OutOfMemoryError`/`StackOverflowError` are caught at the `SimpleJs.run` boundary as a last
 resort and reported as `ScriptMemoryError`.
+
+Outputs a script keeps by construction are charged in full: every piece `split` produces, every
+node `JSON.stringify` and the host-bound result conversion build (released once the text or the
+host value exists, so the charge is a peak guard), every element `flat` writes, the text of a
+`fetch` response, and `toHex`/`toBase64` output. A `RegExp` compiled at run time charges its parse
+for the duration of the parse, and the process-wide program cache keeps only patterns of at most
+4096 characters, evicting least recently used ones past one million cached source characters.
+`BigInt` parsing refuses more than `BigIntLimits.MAX_PARSE_DIGITS` (65 536) digits with a
+`RangeError` (the JDK's decimal parse is quadratic); a longer non-decimal `Number("0x…")` literal
+evaluates to `Infinity` without being parsed.
+
+What the static model still cannot see — many retained copies of a large string (`big + i`,
+`big.slice(1)`), a heap full of suspended coroutines — is caught by the **heap ceiling**
+(`scriptHeapCeilingPercent`, default `75`, `host/ScriptHeapGuard`). Every charge of at least
+64Kb, every string result of at least 32K characters and every 16 384th instruction check the
+JVM's used heap against that percentage of its maximum; past it, and if the live set measured
+after the last garbage collection is above half the ceiling (so a heap merely full of garbage is
+not mistaken for retention), the script is stopped with `ScriptMemoryError`. Charging every copy
+instead would make the accumulate-and-slice idioms the delta charge exists for quadratic. The
+server switches the ceiling on at startup (`Main` calls `ScriptHeapGuard.setCeilingPercent`); the
+engine itself reads no configuration, so SimpleJS embedded on its own (the test262 worker) runs
+without it.
+
+**Deadline granularity.** `tick()` checks the wall clock every 64 instructions, and every
+weighted `tick(n)` checks it unconditionally. Natives whose cost grows with their input pay a
+weighted tick before or right after the work (`InterpreterOps.paceWork`, one instruction per 1024
+units): `localeCompare`, `normalize`, case mapping, `trim`, `slice`/`substring`/`substr` on large
+strings, `BigInt.prototype.toString` (by bit length squared), `crypto.hash`, `toHex`/`toBase64`
+and a regex compile. A single such call can still overrun the deadline by its own duration, never
+by more. The regex matcher charges one step for every 64 characters a simple quantifier scans, so
+a pattern that rescans a long input from every start position (`/a{1000000}/` against 999 999
+`a`s) runs into the budget instead of spending minutes between deadline samples.
+
+**Coroutine teardown.** At the end of a run every suspended generator or `async` function is
+cancelled once; its `finally` blocks run as the language requires, but a `yield` or `await`
+reached after the cancellation throws immediately instead of suspending, so `finally { yield }`
+can no longer park a virtual thread (and the whole realm it references) forever. A parser
+`StackOverflowError` on a deeply nested source is answered as a syntax error (`400-9` for
+`RUN_SCRIPT`, `400-13` for `SAVE_PROCEDURE`) without logging a stack trace.
 
 **Native loops and recursion.** Work a builtin does in Java, not in interpreted code, is charged
 to the same machinery. A native loop over an array-like paces through `ArrayLike.has`/`get`/
@@ -835,6 +875,11 @@ failing function and line.
 Unless `scriptRunHistoryEnabled` is off, a finished run is recorded in the reserved `script_runs`
 collection **of the database it ran against**, so an operator asks what ran, what it cost and why
 it failed with an ordinary `AGGREGATE` under ordinary permissions instead of grepping the log.
+Those permissions are the database's: every user with `READ` on the database can read every row,
+including the error text, stack and (with `scriptRunHistoryIncludeLogs`) console output of runs
+by other users and of triggers and schedules that run with a definer's wider authority. Scripts
+must therefore never log or throw secrets — a token read from another collection, a `fetch`
+credential — because the history publishes them to every reader of the database.
 The collection is created **lazily** on the first row (creating it with the database would change
 `LIST_COLLECTIONS` for every database that never runs a script), is refused to client mutation
 while staying open to reads/`CREATE_INDEX`/`REINDEX`, and is skipped by trigger dispatch and
@@ -916,7 +961,7 @@ procedure/trigger/schedule code.
 | `Object.defineProperty` with a non-primitive `length` value throws `RangeError` | `defineOwnProperty` has no route to invoke user code for the coercion; threading `InterpreterOps` through would cascade into every override. |
 | `super.m()` on a native super is an explicit `TypeError` | There are no native method tables to chain into — a loud failure rather than a silent wrong answer. |
 | A function written inside a template substitution has no source text and no line/column | The lexer re-lexes each `${…}` into its own position-less token list, so there is no span to slice. Legal for `toString` (`HostHasSourceTextAvailable` is false); the frame degrades to a bare module name. |
-| Property escapes do not match the UCD exhaustively | `built-ins/RegExp/property-escapes/generated/` scores 66.31% (311/469) — a genuine per-code-point gap between our resolution of a property name and the exhaustive set the corpus asserts. Property data is the build JDK's (Unicode 17.0 on the pinned JDK 26 floor), so a future JDK will move these escapes with it. |
+| Property escapes do not match the UCD exhaustively | `built-ins/RegExp/property-escapes/generated/` scores 66.31% (311/469) — a genuine per-code-point gap between our resolution of a property name and the exhaustive set the corpus asserts. Property data is the build JDK's (Unicode 17.0 on the pinned JDK 27 floor), so a future JDK will move these escapes with it. |
 | `scriptMaxMemoryBytes` does not bound O(1)-per-instruction allocation | By design — see *Sandbox and resource limits*. Sizing it against `scriptInstructionBudget` is the operator's job. |
 | `localeCompare`/`toLocaleString` honour a locale but only part of `options` | The subset `java.text` can express without `Intl`: `sensitivity` maps onto `Collator`'s three strengths, and `usage`/`numeric`/`caseFirst`/`ignorePunctuation` are validated but not honoured. |
 | `Temporal` fixed offsets beyond ±18:00 are unsupported | `java.time.ZoneOffset` hard-caps there and `ZoneRules` is `final` with no factory past it; supporting it would mean reimplementing every zone computation against a hand-rolled abstraction, for an offset magnitude no real IANA zone uses. Ten test262 cases are excluded by exact path. |

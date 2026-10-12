@@ -4,6 +4,7 @@ import java.util.UUID;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.ioc.IocContainer;
@@ -81,9 +82,10 @@ public final class ScheduleDispatcher {
 
     private static ResourceLimits limits(ScheduleDefinition definition) {
         final var base = DatabaseHostBindings.limitsFromConfiguration();
-        final var timeout = definition.getTimeoutMs() > 0
+        final var requested = definition.getTimeoutMs() > 0
                 ? definition.getTimeoutMs()
                 : configuration.getScheduleTimeoutMs();
+        final var timeout = Math.min(requested, configuration.longValue(ConfigKey.SCHEDULE_MAX_TIMEOUT_MS));
         return new ResourceLimits(base.instructionBudget(), timeout, base.maxDepth(), base.reportUnhandledRejections(),
                 base.fetchEnabled(), base.fetchHostAllowlist(), base.maxResponseBytes(), base.fetchTimeoutMillis(),
                 base.strictScriptGoal(), base.textImportEnabled(), base.maxModuleDepth(), base.maxLogLines(),

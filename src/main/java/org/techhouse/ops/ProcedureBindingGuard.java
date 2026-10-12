@@ -38,6 +38,14 @@ public final class ProcedureBindingGuard {
         return null;
     }
 
+    static OperationResponse foreignDefinitionRefusal(OperationType type, String dbName, String definer,
+            String actingUser) {
+        if (definer == null || definer.equals(actingUser) || exempt(dbName, actingUser)) {
+            return null;
+        }
+        return new OperationResponse(type, ErrorCode.DEFINITION_OWNED_BY_OTHER_DEFINER);
+    }
+
     private static boolean exempt(String dbName, String actingUser) {
         if (actingUser == null) {
             return false;

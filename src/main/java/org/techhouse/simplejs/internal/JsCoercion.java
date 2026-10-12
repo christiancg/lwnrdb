@@ -8,6 +8,7 @@ import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
@@ -305,11 +306,35 @@ public final class JsCoercion {
         if (radix == 0) {
             return Double.NaN;
         }
+        final var digits = s.substring(2);
+        if (digits.length() > BigIntLimits.MAX_PARSE_DIGITS) {
+            return overlongRadixLiteral(digits, radix);
+        }
         try {
-            return new BigInteger(s.substring(2), radix).doubleValue();
+            return new BigInteger(digits, radix).doubleValue();
         } catch (NumberFormatException ignored) {
             return Double.NaN;
         }
+    }
+
+    private static double overlongRadixLiteral(String digits, int radix) {
+        var firstSignificant = -1;
+        for (var i = 0; i < digits.length(); i++) {
+            final var digit = Character.digit(digits.charAt(i), radix);
+            if (digit < 0) {
+                return Double.NaN;
+            }
+            if (firstSignificant < 0 && digit != 0) {
+                firstSignificant = i;
+            }
+        }
+        if (firstSignificant < 0) {
+            return 0.0;
+        }
+        final var significant = digits.substring(firstSignificant);
+        return significant.length() > BigIntLimits.MAX_PARSE_DIGITS
+                ? Double.POSITIVE_INFINITY
+                : new BigInteger(significant, radix).doubleValue();
     }
 
     private static int nonDecimalRadix(String s) {
@@ -330,6 +355,9 @@ public final class JsCoercion {
             return BigInteger.ZERO;
         }
         final var radix = nonDecimalRadix(s);
+        if (s.length() > BigIntLimits.MAX_PARSE_DIGITS + 2) {
+            throw new RangeErrorException(BigIntLimits.EXCEEDED);
+        }
         try {
             return radix == 0 ? new BigInteger(s) : new BigInteger(s.substring(2), radix);
         } catch (NumberFormatException ignored) {

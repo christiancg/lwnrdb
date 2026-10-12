@@ -89,5 +89,8 @@ public final class Globals {
     public static final int CLUSTER_MIN_SECRET_LENGTH = 32;
     public static final int CLUSTER_HANDSHAKE_MAX_LINE_BYTES = 4096;
     public static final int CLUSTER_MAX_UNAUTHENTICATED_CONNECTIONS = 64;
+    public static final int CLUSTER_MAX_UNAUTHENTICATED_PER_ADDRESS = 8;
     public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
+    public static final long HANDSHAKE_DEADLINE_GRACE_MS = 1000L;
+    public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
 }

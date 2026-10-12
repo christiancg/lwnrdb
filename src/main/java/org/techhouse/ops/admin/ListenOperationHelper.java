@@ -26,8 +26,16 @@ public final class ListenOperationHelper {
     public static OperationResponse processListenOperation(ListenRequest listenRequest, UUID clientId) {
         final var dbName = listenRequest.getDatabaseName();
         final var collName = listenRequest.getCollectionName();
+        if (!listenManager.hasCapacityFor(clientId)) {
+            return new OperationResponse(OperationType.LISTEN, ErrorCode.TOO_MANY_LISTENS);
+        }
         final var aggReq = new AggregateRequest(dbName, collName);
         aggReq.setAggregationSteps(listenRequest.getAggregationSteps());
+        final var notRegistered = CollectionReadinessGuard.precheckRead(OperationType.LISTEN, dbName,
+                AggregationOperationHelper.aggregateCollections(aggReq));
+        if (notRegistered != null) {
+            return notRegistered;
+        }
         return OperationLocks.withReadLocks(false, AggregationOperationHelper.aggregateLockSet(aggReq),
                 OperationType.LISTEN, ErrorCode.ERROR_LISTEN, () -> {
                     final var unregistered = CollectionReadinessGuard.checkRead(OperationType.LISTEN, dbName,

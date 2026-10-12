@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import time
 from typing import Callable
@@ -241,6 +242,33 @@ def test_transactional_save_answers_400_23(c):
     check("the hostile one did not", find_by_id(c, COLL, "tx-redos").get("status") == "NOT_FOUND")
 
 
+def test_large_unique_items_is_fast_or_budgeted(c):
+    section("uniqueItems over a large array answers quickly")
+    check_status("save a uniqueItems schema", save_schema(c, COLL, {
+        "type": "object", "properties": {"tags": {"type": "array", "uniqueItems": True}}}), "OK")
+    distinct = list(range(20000))
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "unique-big", "tags": distinct}))
+    check("20000 distinct items are accepted or refused by the budget",
+          resp.get("status") == "OK" or resp.get("errorCode") == "400-23", f"got {resp}")
+    check("inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "unique-dup", "tags": distinct[:-1] + [0]}))
+    check("a duplicate among 20000 items is refused",
+          resp.get("errorCode") in ("400-7", "400-23"), f"got {resp.get('errorCode')}")
+    check("inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check("the duplicated document was not persisted",
+          find_by_id(c, COLL, "unique-dup").get("status") == "NOT_FOUND")
+
+
+def test_the_reported_error_list_is_capped(c):
+    section("A document failing many times reports at most 100 errors")
+    check_status("save an items schema", save_schema(c, COLL, {
+        "type": "object", "properties": {"tags": {"type": "array", "items": {"type": "number"}}}}), "OK")
+    resp = save(c, COLL, {"_id": "many-errors", "tags": ["s"] * 500})
+    check_code("the document is refused", resp, "ERROR", "400-7")
+    check("the message names how many errors were left out", re.search(r"\.\.\. and \d+ more", resp.get("message") or "") is not None,
+          f"message tail={(resp.get('message') or '')[-80:]!r}")
+
+
 def test_complex_ref_chain_save_schema_is_refused(c):
     section("SAVE_SCHEMA refuses a $ref diamond that expands past the node limit")
     resp, elapsed = timed(lambda: save_schema(c, COLL, diamond_chain(28)))
@@ -389,6 +417,8 @@ def main():
         test_pattern_properties_redos_is_refused,
         test_bulk_save_with_one_redos_document_is_atomic,
         test_transactional_save_answers_400_23,
+        test_large_unique_items_is_fast_or_budgeted,
+        test_the_reported_error_list_is_capped,
         test_complex_ref_chain_save_schema_is_refused,
         test_diamond_chain_under_limit_is_accepted_and_bounded,
         test_invalid_schema_rejected,

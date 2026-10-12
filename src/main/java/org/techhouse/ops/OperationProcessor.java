@@ -134,11 +134,11 @@ public class OperationProcessor {
             case LIST_PROCEDURES -> processListProcedures((ListProceduresRequest) operationRequest);
             case CALL_PROCEDURE -> processCallProcedure((CallProcedureRequest) operationRequest, actingUser, clientId);
             case SAVE_TRIGGER -> processSaveTrigger((SaveTriggerRequest) operationRequest, actingUser);
-            case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest);
+            case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest, actingUser);
             case LIST_TRIGGERS -> processListTriggers((ListTriggersRequest) operationRequest);
             case TEST_TRIGGER -> processTestTrigger((TestTriggerRequest) operationRequest, actingUser);
             case SAVE_SCHEDULE -> processSaveSchedule((SaveScheduleRequest) operationRequest, actingUser);
-            case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest);
+            case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest, actingUser);
             case LIST_SCHEDULES -> processListSchedules((ListSchedulesRequest) operationRequest);
             case LIST_SCRIPTS -> processListScripts();
             case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
@@ -262,11 +262,11 @@ public class OperationProcessor {
                 ErrorCode.ERROR_SAVING_TRIGGER, () -> TriggerOperationHelper.executeSave(request, actingUser));
     }
 
-    private OperationResponse processDeleteTrigger(DeleteTriggerRequest request) {
+    private OperationResponse processDeleteTrigger(DeleteTriggerRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_TRIGGER,
-                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request));
+                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request, actingUser));
     }
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
@@ -283,9 +283,9 @@ public class OperationProcessor {
                 () -> ScheduleOperationHelper.executeSave(request, actingUser));
     }
 
-    private OperationResponse processDeleteSchedule(DeleteScheduleRequest request) {
+    private OperationResponse processDeleteSchedule(DeleteScheduleRequest request, String actingUser) {
         return OperationResponse.respondOrError(OperationType.DELETE_SCHEDULE, ErrorCode.ERROR_DELETING_SCHEDULE,
-                () -> ScheduleOperationHelper.executeDelete(request));
+                () -> ScheduleOperationHelper.executeDelete(request, actingUser));
     }
 
     private OperationResponse processListSchedules(ListSchedulesRequest request) {

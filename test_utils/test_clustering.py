@@ -1839,6 +1839,15 @@ def test_node_rejoin():
 DOWN_COLL = "changed_while_down"
 DOWN_PROC = "deleted_while_down"
 DOWN_USER = "changed_while_down_user"
+STALE_GRANT_COLL = "regranted_while_down"
+STALE_GRANTEE = "stale_grantee"
+STALE_GRANT_KEY = f"{DB}|{STALE_GRANT_COLL}"
+
+
+def _collection_grants_on(node, username):
+    users = op(node.client_port, {"type": "LIST_USERS"}).get("users") or []
+    entry = next((user for user in users if user.get("_id") == username), None)
+    return None if entry is None else (entry.get("collectionPermissions") or {})
 
 
 def _admin(payload: dict) -> dict:
@@ -1858,9 +1867,17 @@ def arrange_admin_changes_for_a_downed_node():
     check_status("CREATE_USER", _admin({"type": "CREATE_USER", "username": DOWN_USER,
                                          "password": "before_the_outage1", "admin": False, "globalPermissions": [],
                                          "databasePermissions": {DB: "READ"}, "collectionPermissions": {}}), "OK")
+    check_status("CREATE_COLLECTION for the collection-only grant",
+                 _admin({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL}), "OK")
+    _admin({"type": "DELETE_USER", "username": STALE_GRANTEE})
+    check_status("CREATE_USER holding only a grant on that collection",
+                 _admin({"type": "CREATE_USER", "username": STALE_GRANTEE, "password": "stale_grantee1",
+                         "admin": False, "globalPermissions": [], "databasePermissions": {},
+                         "collectionPermissions": {STALE_GRANT_KEY: "READ"}}), "OK")
     check("node-2 holds every record before the outage",
           wait_until(lambda: os.path.isfile(procedure_file(nodes[2], DOWN_PROC))
-                     and _authenticates(nodes[2].client_port, DOWN_USER, "before_the_outage1"), timeout_s=20.0))
+                     and _authenticates(nodes[2].client_port, DOWN_USER, "before_the_outage1")
+                     and STALE_GRANT_KEY in (_collection_grants_on(nodes[2], STALE_GRANTEE) or {}), timeout_s=20.0))
 
 
 def make_admin_changes_while_a_node_is_down():
@@ -1879,6 +1896,10 @@ def make_admin_changes_while_a_node_is_down():
                                                 "collectionPermissions": {}}), "OK")
     check_status("DROP_INDEX", _admin({"type": "DROP_INDEX", "databaseName": DB, "collectionName": DOWN_COLL,
                                         "fieldName": "f"}), "OK")
+    check_status("DROP_COLLECTION of the granted collection",
+                 _admin({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL}), "OK")
+    check_status("CREATE_COLLECTION re-creates it under the same name",
+                 _admin({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL}), "OK")
 
 
 def _schema_file(node) -> str:
@@ -1934,6 +1955,23 @@ def test_permission_changes_and_dropped_indexes_replicate():
 
     check("node-2 dropped the index removed during its outage", wait_until(_index_dropped_on_node_2, timeout_s=60.0))
     _admin({"type": "DELETE_USER", "username": DOWN_USER})
+
+
+def test_a_grant_on_a_collection_dropped_while_a_node_is_down_is_pruned_there():
+    section("A grant on a collection dropped and re-created while a node was down is pruned there too")
+
+    def _pruned_on(node):
+        grants = _collection_grants_on(node, STALE_GRANTEE)
+        return grants is not None and STALE_GRANT_KEY not in grants
+
+    check("the coordinator pruned the grant", _pruned_on(nodes[0]))
+    check("node-2 pruned the grant it held before its outage", wait_until(lambda: _pruned_on(nodes[2]),
+                                                                           timeout_s=60.0))
+    check("no node brings it back over several admin sweeps",
+          holds_throughout(lambda: all(_pruned_on(node) for node in nodes if node.alive),
+                           seconds=2 * ANTI_ENTROPY_INTERVAL_S))
+    _admin({"type": "DELETE_USER", "username": STALE_GRANTEE})
+    _admin({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL})
 
 
 def test_a_restarted_participant_does_not_commit_half_a_transaction():
@@ -2580,6 +2618,32 @@ def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
 
     check("a client-supplied triggerDepth is ignored and every write commits",
           wait_until(_all_accepted, timeout_s=30.0, interval_s=1.0))
+
+
+def test_an_escaped_trigger_depth_does_not_suppress_the_owners_trigger():
+    section("An escaped triggerDepth key does not survive forwarding to suppress the owner's trigger")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "escdepth")
+    host_index = next((index for index, names in owners.items() if len(names) >= 2), None)
+    if not check("found two collections owned by one node", host_index is not None, f"owners={owners}"):
+        return
+    host = nodes[host_index]
+    watched, marks = owners[host_index][0], owners[host_index][1]
+    install_marking_trigger(host, watched, marks, "escdepth", "store the marking procedure",
+                            "install the after trigger")
+
+    for node in (n for n in nodes if n is not host):
+        doc_id = f"esc{node.index}"
+        line = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + watched
+                + '","trigger\\u0044epth":99,"object":{"_id":"' + doc_id + '","v":1}}')
+        conn = authed(node.client_port)
+        try:
+            check_status(f"SAVE {doc_id} with an escaped triggerDepth through node-{node.index}",
+                         conn.send_raw(line), "OK")
+        finally:
+            conn.close()
+        check(f"the owner's trigger still ran for {doc_id}",
+              wait_until(lambda: runs_marked(host, marks, doc_id) >= 1, timeout_s=30.0))
 
 
 SCHEDULE_DB = DB
@@ -3444,6 +3508,7 @@ GROUPS = {
         test_admin_ops_replicate_in_commit_order,
         test_an_unreadable_definition_is_not_deleted_on_peers,
         test_forwarded_write_ignores_a_client_supplied_trigger_depth,
+        test_an_escaped_trigger_depth_does_not_suppress_the_owners_trigger,
     ],
     "scripts": [
         test_formation_and_quorum_writes,
@@ -3474,6 +3539,7 @@ GROUPS = {
         test_a_procedure_deleted_while_a_node_is_down_stays_deleted,
         test_a_password_changed_while_a_node_is_down_reaches_it,
         test_permission_changes_and_dropped_indexes_replicate,
+        test_a_grant_on_a_collection_dropped_while_a_node_is_down_is_pruned_there,
         test_schedule_rejoin_catch_up,
         test_a_restarted_participant_does_not_commit_half_a_transaction,
         test_restart_does_not_regress_write_versions,

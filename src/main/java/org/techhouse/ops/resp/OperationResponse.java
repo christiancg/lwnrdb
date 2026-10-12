@@ -1,5 +1,7 @@
 package org.techhouse.ops.resp;
 
+import org.techhouse.analyze.AggregateDeadline;
+import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -44,6 +46,10 @@ public class OperationResponse {
     public static OperationResponse respondOrError(OperationType type, ErrorCode errorCode, Attempt attempt) {
         try {
             return attempt.run();
+        } catch (AggregateLimitException limit) {
+            return new OperationResponse(type, limit.getErrorCode());
+        } catch (AggregateDeadline.Expired expired) {
+            return new OperationResponse(type, ErrorCode.AGGREGATE_TIMEOUT);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);

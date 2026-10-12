@@ -1844,6 +1844,44 @@ def regression_suite(c):
     probe_nearest_scores_huge_and_tiny_vectors(c)
 
 
+def limits_suite(c):
+    section("Request limits on custom literals, filter operands and MAP results")
+    over = "#vector(" + ",".join(["0.5"] * 16385) + ")"
+    refused = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                      "object": {"_id": "vec-over", "embedding": over}})
+    check("A vector past maxVectorDimensions is not a valid command",
+          refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid",
+          f"got={str(refused)[:200]}")
+    check_status("It was never stored",
+                 c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "vec-over"}),
+                 "NOT_FOUND")
+    check_code("IN with more than maxFilterOperands values -> 400-27",
+               agg(c, COLL, [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "category",
+                                                             "value": list(range(10001))}}]), "ERROR", "400-27")
+    check_status("IN at maxFilterOperands values still answers",
+                 agg(c, COLL, [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "category",
+                                                               "value": list(range(10000))}}, {"type": "COUNT"}]),
+                 "OK")
+    operators = [{"fieldName": "g0", "operator": {"type": "CONCAT", "operands": ["-AAAAAAAA", "-AAAAAAAA"]}}]
+    operators += [{"fieldName": f"g{i}", "operator": {"type": "CONCAT", "operands": [f"g{i - 1}", f"g{i - 1}"]}}
+                  for i in range(1, 31)]
+    check_code("A doubling CONCAT chain stops at the maximum entry size -> 400-28",
+               agg(c, COLL, [{"type": "LIMIT", "limit": 1}, {"type": "MAP", "operators": operators}]),
+               "ERROR", "400-28")
+    counted = agg(c, COLL, [{"type": "MAP", "operators": operators}, {"type": "COUNT"}])
+    scanned = agg(c, COLL, forced_scan([{"type": "MAP", "operators": operators}, {"type": "COUNT"}]))
+    check_code("[MAP doubling-CONCAT, COUNT] is refused like its scan, not counted from the index", counted,
+               "ERROR", "400-28")
+    check("and its forced-scan twin answers the same", scanned.get("errorCode") == counted.get("errorCode"),
+          f"index={counted.get('errorCode')} scan={scanned.get('errorCode')}")
+    check_status("A geo point written with a trailing comma is accepted",
+                 c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                         "object": {"_id": "geo-trailing", "location": "#geo(40.0,-74.0,)"}}), "OK")
+    check_status("and stays readable", c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                               "_id": "geo-trailing"}), "OK")
+    c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "geo-trailing"})
+
+
 def main():
     bu.banner("index-backed aggregation performance test suite", HOST, PORT)
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
@@ -1919,6 +1957,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         agreement_suite(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        limits_suite(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

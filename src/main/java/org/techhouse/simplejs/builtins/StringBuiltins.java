@@ -171,19 +171,19 @@ public final class StringBuiltins {
         }
         final var value = receiver.getValue();
         return switch (name) {
-            case "slice" -> new JsNativeFunction("slice", (_, args) -> new JsString(slice(value, args, ops)));
+            case "slice" -> new JsNativeFunction("slice", (_, args) -> produced(slice(value, args, ops), ops));
             case "substring" ->
-                new JsNativeFunction("substring", (_, args) -> new JsString(substring(value, args, ops)));
+                new JsNativeFunction("substring", (_, args) -> produced(substring(value, args, ops), ops));
             case "matchAll" -> new JsNativeFunction("matchAll", (_, args) -> {
                 requireGlobalRegExp(args, "matchAll", ops);
                 final var delegated = delegateToSymbol(value, args, ops, List.of());
                 return delegated != null ? delegated : viaRegExp(value, args, "g", JsSymbol.MATCH_ALL, ops);
             });
             case "toUpperCase" ->
-                new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
+                new JsNativeFunction("toUpperCase", (_, _) -> produced(value.toUpperCase(Locale.ROOT), ops));
             case "toLowerCase" -> new JsNativeFunction("toLowerCase",
-                    (_, _) -> new JsString(toLowerCaseWithFinalSigma(value, Locale.ROOT)));
-            case "trim" -> new JsNativeFunction("trim", (_, _) -> new JsString(trim(value, true, true)));
+                    (_, _) -> produced(toLowerCaseWithFinalSigma(value, Locale.ROOT), ops));
+            case "trim" -> new JsNativeFunction("trim", (_, _) -> produced(trim(value, true, true), ops));
             case "includes" -> new JsNativeFunction("includes", (_, args) -> {
                 requireNotRegExp(args, "includes", ops);
                 final var search = str(args, 0, ops);
@@ -209,24 +209,30 @@ public final class StringBuiltins {
             case "codePointAt" -> new JsNativeFunction("codePointAt", (_, args) -> codePointAt(value, args, ops));
             case "at" -> new JsNativeFunction("at", (_, args) -> at(value, args, ops));
             case "padEnd" -> new JsNativeFunction("padEnd", (_, args) -> new JsString(padEnd(value, args, ops)));
-            case "trimStart" -> new JsNativeFunction("trimStart", (_, _) -> new JsString(trim(value, true, false)));
-            case "trimEnd" -> new JsNativeFunction("trimEnd", (_, _) -> new JsString(trim(value, false, true)));
+            case "trimStart" -> new JsNativeFunction("trimStart", (_, _) -> produced(trim(value, true, false), ops));
+            case "trimEnd" -> new JsNativeFunction("trimEnd", (_, _) -> produced(trim(value, false, true), ops));
             case "normalize" ->
-                new JsNativeFunction("normalize", (_, args) -> new JsString(normalize(value, args, ops)));
+                new JsNativeFunction("normalize", (_, args) -> produced(normalize(value, args, ops), ops));
             case "localeCompare" ->
                 new JsNativeFunction("localeCompare", (_, args) -> new JsNumber(localeCompare(value, args, ops)));
             case "concat" -> new JsNativeFunction("concat", (_, args) -> new JsString(concat(value, args, ops)));
             case "isWellFormed" -> new JsNativeFunction("isWellFormed", (_, _) -> JsBoolean.of(isWellFormed(value)));
-            case "toWellFormed" -> new JsNativeFunction("toWellFormed", (_, _) -> new JsString(toWellFormed(value)));
-            case "substr" -> new JsNativeFunction("substr", (_, args) -> new JsString(substr(value, args, ops)));
+            case "toWellFormed" -> new JsNativeFunction("toWellFormed", (_, _) -> produced(toWellFormed(value), ops));
+            case "substr" -> new JsNativeFunction("substr", (_, args) -> produced(substr(value, args, ops), ops));
             case "toLocaleUpperCase" -> new JsNativeFunction("toLocaleUpperCase",
-                    (_, _) -> new JsString(value.toUpperCase(InterpreterOps.locale(ops))));
+                    (_, _) -> produced(value.toUpperCase(InterpreterOps.locale(ops)), ops));
             case "toLocaleLowerCase" -> new JsNativeFunction("toLocaleLowerCase",
-                    (_, _) -> new JsString(toLowerCaseWithFinalSigma(value, InterpreterOps.locale(ops))));
-            case "trimLeft" -> new JsNativeFunction("trimLeft", (_, _) -> new JsString(trim(value, true, false)));
-            case "trimRight" -> new JsNativeFunction("trimRight", (_, _) -> new JsString(trim(value, false, true)));
+                    (_, _) -> produced(toLowerCaseWithFinalSigma(value, InterpreterOps.locale(ops)), ops));
+            case "trimLeft" -> new JsNativeFunction("trimLeft", (_, _) -> produced(trim(value, true, false), ops));
+            case "trimRight" -> new JsNativeFunction("trimRight", (_, _) -> produced(trim(value, false, true), ops));
             default -> null;
         };
+    }
+
+    private static JsString produced(String result, InterpreterOps ops) {
+        InterpreterOps.paceWork(ops, result.length());
+        InterpreterOps.noteChars(ops, result.length());
+        return new JsString(result);
     }
 
     public static double rawLengthArg(List<JsValue> args, InterpreterOps ops) {

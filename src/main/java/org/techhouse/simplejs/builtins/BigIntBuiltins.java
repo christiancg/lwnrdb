@@ -22,6 +22,7 @@ public final class BigIntBuiltins {
 
     private static final int MIN_RADIX = 2;
     private static final int MAX_RADIX = 36;
+    private static final long TO_STRING_WORK_DIVISOR = 1L << 20;
 
     private BigIntBuiltins() {
     }
@@ -86,6 +87,8 @@ public final class BigIntBuiltins {
     }
 
     private static String toString(JsBigInt receiver, List<JsValue> args, InterpreterOps ops) {
+        final var bits = (long) receiver.getValue().bitLength();
+        InterpreterOps.paceWork(ops, bits * bits / TO_STRING_WORK_DIVISOR);
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
             return receiver.getValue().toString();
         }

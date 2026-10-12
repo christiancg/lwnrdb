@@ -9,6 +9,7 @@ import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.ScheduleDefinition;
@@ -78,6 +79,13 @@ public final class ScheduleOperationHelper {
             if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
+            final var foreign = existing == null
+                    ? null
+                    : ProcedureBindingGuard.foreignDefinitionRefusal(OperationType.SAVE_SCHEDULE, dbName,
+                            existing.getDefiner(), actingUser);
+            if (foreign != null) {
+                return foreign;
+            }
             final var scheduleNames = fs.listScheduleNames(dbName);
             if (existing == null && scheduleNames.size() >= configuration.getScheduleMaxPerDatabase()) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.TOO_MANY_SCHEDULES);
@@ -116,6 +124,12 @@ public final class ScheduleOperationHelper {
         if (request.getTimeoutMs() < 0) {
             return invalid("timeoutMs must not be negative");
         }
+        final var maxTimeout = configuration.longValue(ConfigKey.SCHEDULE_MAX_TIMEOUT_MS);
+        if (request.getTimeoutMs() > maxTimeout) {
+            return new OperationResponse(OperationType.SAVE_SCHEDULE,
+                    ErrorCode.SCHEDULE_TIMEOUT_TOO_LARGE.getDefaultMessage() + " (" + maxTimeout + " ms)",
+                    ErrorCode.SCHEDULE_TIMEOUT_TOO_LARGE);
+        }
         if (hasCron) {
             final CronExpression expression;
             try {
@@ -145,7 +159,7 @@ public final class ScheduleOperationHelper {
                 request.getDescription(), version, createdAt, updatedAt, actingUser);
     }
 
-    public static OperationResponse executeDelete(DeleteScheduleRequest request)
+    public static OperationResponse executeDelete(DeleteScheduleRequest request, String actingUser)
             throws IOException, InterruptedException {
         if (!configuration.isSchedulesEnabled()) {
             return new OperationResponse(OperationType.DELETE_SCHEDULE, ErrorCode.SCRIPTS_DISABLED);
@@ -157,6 +171,14 @@ public final class ScheduleOperationHelper {
         }
         locks.lock(dbName, Globals.SCHEDULES_FOLDER);
         try {
+            final var existing = cache.getSchedule(dbName, request.getName());
+            final var foreign = existing == null
+                    ? null
+                    : ProcedureBindingGuard.foreignDefinitionRefusal(OperationType.DELETE_SCHEDULE, dbName,
+                            existing.getDefiner(), actingUser);
+            if (foreign != null) {
+                return foreign;
+            }
             if (fs.deleteSchedule(dbName, request.getName())) {
                 AdminStamp.tombstone(AdminRecordKey.schedule(dbName, request.getName()));
             }

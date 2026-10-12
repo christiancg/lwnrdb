@@ -54,6 +54,9 @@ public class TwoPhaseParticipantFencingTest {
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
+        for (final var username : List.of("participant", "in-flight", "op-count", "op-count-ok")) {
+            TestUtils.ensureAdminUser(username);
+        }
     }
 
     @AfterEach

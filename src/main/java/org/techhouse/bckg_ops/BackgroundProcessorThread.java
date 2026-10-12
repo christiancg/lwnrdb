@@ -69,7 +69,7 @@ public class BackgroundProcessorThread implements Runnable {
                 requeued = deferred.size();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-            } catch (Exception e) {
+            } catch (Exception | Error e) {
                 logger.error("Error while processing background task: ", e);
             } finally {
                 inFlight.addAndGet(requeued - batch.size());

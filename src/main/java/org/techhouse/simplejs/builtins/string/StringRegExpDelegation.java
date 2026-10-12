@@ -48,7 +48,7 @@ public final class StringRegExpDelegation {
             InterpreterOps ops) {
         final var pattern = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var source = pattern instanceof JsUndefined ? "" : JsCoercion.toStr(pattern, ops);
-        final var regexp = RegexTranslator.compile(source, flags);
+        final var regexp = RegexTranslator.compile(source, flags, ops);
         return ops.call(ops.getMember(regexp, symbol), regexp, List.of(new JsString(value)));
     }
 
@@ -198,6 +198,8 @@ public final class StringRegExpDelegation {
         var from = 0;
         var index = value.indexOf(separator);
         while (index >= 0) {
+            InterpreterOps.chargeElements(ops, 1);
+            InterpreterOps.chargeChars(ops, index - from);
             result.push(new JsString(value.substring(from, index)));
             from = index + separator.length();
             index = value.indexOf(separator, from);
@@ -225,6 +227,7 @@ public final class StringRegExpDelegation {
             return new JsString(value);
         }
         final var piece = literalPiece(value, search, index, args, invoker, callable, replacement, ops);
+        InterpreterOps.noteChars(ops, (long) value.length() + piece.length());
         return new JsString(value.substring(0, index) + piece + value.substring(index + search.length()));
     }
 

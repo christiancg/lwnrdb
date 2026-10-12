@@ -151,6 +151,11 @@ public final class InterpreterOpsBridge implements org.techhouse.simplejs.builti
     }
 
     @Override
+    public void noteAllocation(long bytes) {
+        interp.noteAllocation(bytes);
+    }
+
+    @Override
     public void tick() {
         interp.tick();
     }

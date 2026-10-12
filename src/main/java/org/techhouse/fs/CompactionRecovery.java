@@ -11,6 +11,7 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.CompactionJournal.Kind;
 import org.techhouse.fs.CompactionJournal.Marker;
 import org.techhouse.log.Logger;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class CompactionRecovery {
     private static final Logger logger = Logger.logFor(CompactionRecovery.class);
@@ -163,6 +164,7 @@ final class CompactionRecovery {
         lock.lock();
         try {
             if (target.exists() && target.length() > marker.targetLengthBefore()) {
+                OwnerOnlyPermissions.ensureOwnerOnlyFile(target.toPath());
                 try (var writer = new RandomAccessFile(target, Globals.RW_PERMISSIONS)) {
                     writer.setLength(marker.targetLengthBefore());
                 }
@@ -175,6 +177,7 @@ final class CompactionRecovery {
     private static void restorePage(File page, Marker marker) throws IOException {
         final var tail = marker.tail();
         final var keptFrom = marker.kind() == Kind.DELETE ? (int) marker.removedLength() : 0;
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(page.toPath());
         try (var writer = new RandomAccessFile(page, Globals.RW_PERMISSIONS)) {
             writer.seek(marker.position());
             writer.write(tail, keptFrom, tail.length - keptFrom);

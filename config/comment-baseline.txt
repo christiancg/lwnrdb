@@ -138,7 +138,7 @@ src/test/java/org/techhouse/unit/cluster/membership/MembershipServiceTest.java 2
 src/test/java/org/techhouse/unit/concurrency/ResourceLockingTest.java 2
 src/test/java/org/techhouse/unit/config/ConfigurationValidatorTest.java 2
 src/test/java/org/techhouse/unit/conn/MessageProcessorCleanupTest.java 2
-src/test/java/org/techhouse/unit/conn/MessageProcessorTest.java 4
+src/test/java/org/techhouse/unit/conn/MessageProcessorTest.java 3
 src/test/java/org/techhouse/unit/conn/MessageProcessorTriggerDepthTest.java 1
 src/test/java/org/techhouse/unit/conn/ScriptAdmissionE2ETest.java 2
 src/test/java/org/techhouse/unit/conn/tls/DerWriterTest.java 4

@@ -88,6 +88,106 @@ The answer:
 {"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "The connection did not authenticate in time", "errorCode": "408-4"}
 ```
 
+With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that never sends its
+ClientHello, or drips it a byte at a time, is closed at `authTimeoutMs` plus one second without an answer.
+
+Any request other than `AUTHENTICATE` and `CLOSE_CONNECTION` sent before authenticating → `401-1`, without being
+validated, so an invalid one gets the same answer as a valid one:
+
+```json
+{"type": "SET_DATABASE_OWNERS", "databaseName": "test", "owners": ["nobody"]}
+```
+
+```json
+{"type": "SET_DATABASE_OWNERS", "status": "UNAUTHENTICATED", "message": "Must authenticate first", "errorCode": "401-1"}
+```
+
+More than `maxUnauthenticatedConnectionsPerAddress` (16 by default) unauthenticated connections from one
+address → the next one gets a single `CLOSE_CONNECTION` frame carrying `503-14` and is closed. Open 17
+connections from the same host and send nothing:
+
+```json
+{"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "Too many unauthenticated connections from this address", "errorCode": "503-14"}
+```
+
+`maxUnauthenticatedInvalidRequests` (5 by default) unparseable lines before authenticating close the
+connection after the fifth answer. Send `garbage` five times on a fresh connection.
+
+A non-admin `SET_PASSWORD` on another user → `403-1` whether or not that user exists:
+
+```json
+{"type": "SET_PASSWORD", "username": "someoneElse", "currentPassword": "x", "newPassword": "12345678"}
+```
+
+```json
+{"type": "SET_PASSWORD", "status": "FORBIDDEN", "message": "Action is forbidden, no permissions", "errorCode": "403-1"}
+```
+
+A user granted only one collection (`collectionPermissions: {"test|testCollection": "READ"}`) cannot list the
+database's procedures, schedules or collections by naming that collection → `403-1`:
+
+```json
+{"type": "LIST_PROCEDURES", "databaseName": "test", "collectionName": "testCollection", "includeSource": true}
+```
+
+More than `maxListensPerConnection` (64 by default) `LISTEN` registrations on one connection, or
+`maxListens` (10 000) on the server → `400-25`:
+
+```json
+{"type": "LISTEN", "status": "ERROR", "message": "Too many listen registrations", "errorCode": "400-25"}
+```
+
+A transaction that would buffer more than `transactionMaxOps` (100 000) operations or `transactionMaxBytes`
+(256Mb) → that write answers `400-26`; the transaction stays usable for commit or rollback:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The transaction would exceed its size limit", "errorCode": "400-26"}
+```
+
+A transaction older than `transactionMaxAgeMs` (10 minutes) is rolled back however busy it is, and the next
+request answers `408-5` once:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The transaction was rolled back after reaching its maximum age", "errorCode": "408-5"}
+```
+
+`COMMIT_TRANSACTION` after an admin revoked the user's write grant on a collection the transaction wrote →
+`403-1`, and nothing of the transaction is applied.
+
+An `IN`/`NOT_IN` list with more than `maxFilterOperands` (10 000) values, or a `within` polygon with more
+vertices → `400-27`:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The filter has more operands than allowed: IN operands exceed 10000", "errorCode": "400-27"}
+```
+
+A `MAP` `CONCAT` whose result grows past `maxEntrySize` (for example one that doubles a field 30 times) →
+`400-28`; a pipeline running longer than `aggregateTimeoutMs` (5 minutes) → `408-6`:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "A MAP result exceeds the maximum entry size", "errorCode": "400-28"}
+```
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The aggregation exceeded its time budget", "errorCode": "408-6"}
+```
+
+A `#vector(...)` literal with more than `maxVectorDimensions` (16 384) components is refused while the request
+is parsed: `The command is not valid`.
+
+`SAVE_SCHEDULE` with a `timeoutMs` above `scheduleMaxTimeoutMs` (300 000) → `400-29`:
+
+```json
+{"type": "SAVE_SCHEDULE", "status": "ERROR", "message": "The schedule timeout exceeds the allowed maximum (300000 ms)", "errorCode": "400-29"}
+```
+
+A `MANAGE` user replacing or deleting a trigger or schedule installed by another user (not a database owner
+or an admin) → `403-5`:
+
+```json
+{"type": "DELETE_TRIGGER", "status": "FORBIDDEN", "message": "The trigger or schedule belongs to another user; only that user, a database owner or an admin may change it", "errorCode": "403-5"}
+```
+
 Create database
 
 ```json

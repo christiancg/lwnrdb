@@ -89,6 +89,7 @@ public class TransactionTombstoneTest {
     public void test_delete_tombstones_are_written_before_the_ops_apply() throws Exception {
         saveGone();
         final var clientId = clientTracker.registerForwardedClient("tx");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         delete.set_id("gone");
@@ -128,6 +129,7 @@ public class TransactionTombstoneTest {
     public void test_a_replay_that_skips_a_delete_reserves_no_tombstone() throws Exception {
         save("survivor", "before");
         final var clientId = clientTracker.registerForwardedClient("tx");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
         final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -157,6 +159,7 @@ public class TransactionTombstoneTest {
     public void test_a_replay_that_applies_a_delete_still_reserves_its_tombstone() throws Exception {
         save("doomed", "before");
         final var clientId = clientTracker.registerForwardedClient("tx2");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
         final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -180,6 +183,7 @@ public class TransactionTombstoneTest {
     public void test_a_delete_reserves_its_own_op_version() throws Exception {
         saveGone();
         final var clientId = clientTracker.registerForwardedClient("own-version");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var transaction = clientTracker.getActiveTransaction(clientId);
         final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);

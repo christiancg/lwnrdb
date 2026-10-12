@@ -9,7 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -82,7 +85,8 @@ public final class AggregationOperationHelper {
     // A Stream is lazy, so a SCRIPT callable runs during toList(): the context must wrap the terminal op too.
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
             String dbName, String collName, Transaction transaction) throws IOException {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = new PipelineScriptContext();
+                var _ = AggregateDeadline.open(Configuration.getInstance().longValue(ConfigKey.AGGREGATE_TIMEOUT_MS))) {
             return applySteps(steps, initialStream, dbName, collName, context, transaction);
         }
     }
@@ -117,6 +121,7 @@ public final class AggregationOperationHelper {
                                 : resultStream,
                         dbName, collName, context);
             };
+            resultStream = AggregateDeadline.watch(resultStream);
         }
         try {
             if (resultStream == null) {

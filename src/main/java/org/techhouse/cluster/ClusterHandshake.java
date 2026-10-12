@@ -49,7 +49,7 @@ final class ClusterHandshake {
     private static boolean isHello(String line) {
         final ClusterMessage hello;
         try {
-            hello = eJson.fromJson(line, ClusterMessage.class);
+            hello = eJson.fromJson(line, ClusterMessage.class, Globals.MAX_REQUEST_NESTING_DEPTH);
         } catch (RuntimeException unparseable) {
             return false;
         }

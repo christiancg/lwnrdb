@@ -8,8 +8,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Client {
@@ -22,7 +22,7 @@ public class Client {
     private volatile Transaction activeTransaction;
     private volatile boolean hasLocalSlice;
     private volatile boolean remoteSliceFenced;
-    private final AtomicBoolean transactionReaped = new AtomicBoolean();
+    private final AtomicReference<TransactionReap> transactionReaped = new AtomicReference<>();
     private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
     private final Map<String, Set<String>> transactionWriteHolders = new ConcurrentHashMap<>();
     private final AtomicInteger failedAuthentications = new AtomicInteger();
@@ -95,12 +95,16 @@ public class Client {
         this.remoteSliceFenced = true;
     }
 
-    public void markTransactionReaped() {
-        transactionReaped.set(true);
+    public enum TransactionReap {
+        IDLE, MAX_AGE
     }
 
-    public boolean consumeTransactionReaped() {
-        return transactionReaped.getAndSet(false);
+    public void markTransactionReaped(TransactionReap reason) {
+        transactionReaped.set(reason);
+    }
+
+    public TransactionReap consumeTransactionReaped() {
+        return transactionReaped.getAndSet(null);
     }
 
     public Set<String> getTransactionParticipants() {

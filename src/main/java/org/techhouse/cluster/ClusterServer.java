@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.PreAuthSlots;
 import org.techhouse.log.Logger;
 
 public class ClusterServer {
@@ -23,6 +24,7 @@ public class ClusterServer {
     private volatile ServerSocket serverSocket;
     private volatile boolean running;
     private volatile boolean refusingWrites;
+    private final PreAuthSlots preAuthSlots = new PreAuthSlots(() -> Globals.CLUSTER_MAX_UNAUTHENTICATED_PER_ADDRESS);
 
     public ClusterServer(int port, String bindAddress, SSLServerSocketFactory sslServerSocketFactory) {
         this.port = port;
@@ -44,12 +46,18 @@ public class ClusterServer {
         while (running && !Thread.currentThread().isInterrupted()) {
             try {
                 final var socket = serverSocket.accept();
-                if (inHandshake.incrementAndGet() > Globals.CLUSTER_MAX_UNAUTHENTICATED_CONNECTIONS) {
-                    inHandshake.decrementAndGet();
+                final var address = socket.getInetAddress().getHostAddress();
+                if (!preAuthSlots.acquire(address)) {
                     socket.close();
                     continue;
                 }
-                pool.execute(new ClusterConnectionHandler(socket, this::isRefusingWrites, handshakeDone()));
+                if (inHandshake.incrementAndGet() > Globals.CLUSTER_MAX_UNAUTHENTICATED_CONNECTIONS) {
+                    inHandshake.decrementAndGet();
+                    preAuthSlots.release(address);
+                    socket.close();
+                    continue;
+                }
+                pool.execute(new ClusterConnectionHandler(socket, this::isRefusingWrites, handshakeDone(address)));
             } catch (IOException e) {
                 if (running) {
                     logger.warning("Cluster server accept failed: " + e.getMessage());
@@ -58,11 +66,12 @@ public class ClusterServer {
         }
     }
 
-    private Runnable handshakeDone() {
+    private Runnable handshakeDone(String address) {
         final var done = new AtomicBoolean();
         return () -> {
             if (done.compareAndSet(false, true)) {
                 inHandshake.decrementAndGet();
+                preAuthSlots.release(address);
             }
         };
     }

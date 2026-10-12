@@ -10,17 +10,22 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSocket;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterRouter;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.data.Client;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ex.RequestTooLargeException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
@@ -37,8 +42,10 @@ import org.techhouse.ops.resp.OperationResponse;
 
 public class MessageProcessor implements Runnable {
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final LogRateLimiter PARSE_FAILURE_LOG = new LogRateLimiter(Globals.LOG_RATE_LIMIT_PER_SECOND);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final PreAuthSlots preAuthSlots = IocContainer.get(PreAuthSlots.class);
     private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -47,9 +54,15 @@ public class MessageProcessor implements Runnable {
     private final Configuration configuration = Configuration.getInstance();
     private final Socket socket;
     private final UUID clientId;
+    private final String remoteHost;
+    private final boolean preAuthAdmitted;
     private final BooleanSupplier shuttingDown;
     private final long acceptedAtNanos = System.nanoTime();
     private boolean everAuthenticated;
+    private boolean holdingPreAuthSlot;
+    private volatile boolean serving;
+    private int unauthenticatedInvalidRequests;
+    private HandshakeDeadline.Armed deadline;
     private UUID unreapableTransaction;
 
     public MessageProcessor(Socket socket) {
@@ -60,14 +73,29 @@ public class MessageProcessor implements Runnable {
         this.socket = socket;
         this.shuttingDown = shuttingDown;
         this.clientId = clientTracker.addClient(socket);
+        this.remoteHost = hostOf(socket);
+        this.preAuthAdmitted = clientId != null && preAuthSlots.acquire(remoteHost);
+        this.holdingPreAuthSlot = preAuthAdmitted;
+    }
+
+    private static String hostOf(Socket socket) {
+        final var address = socket.getInetAddress();
+        return address == null ? "unknown" : address.getHostAddress();
     }
 
     @Override
     public void run() {
+        deadline = HandshakeDeadline.arm(socket, configuration.getAuthTimeoutMs() + Globals.HANDSHAKE_DEADLINE_GRACE_MS,
+                this::isStillConnecting);
         try (socket) {
+            completeTlsHandshake();
             final var writer = new BufferedWriter(
                     new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), Globals.BUFFER_SIZE);
-            if (clientId != null) {
+            if (clientId != null && !preAuthAdmitted) {
+                logger.warning(() -> "Refused a connection from " + remoteAddress() + ": " + remoteHost
+                        + " already holds the maximum number of unauthenticated connections");
+                refuse(writer, new ReentrantLock(), ErrorCode.TOO_MANY_UNAUTHENTICATED_CONNECTIONS);
+            } else if (clientId != null) {
                 clientTracker.registerWriter(clientId, writer);
                 final var writerLock = clientTracker.getWriterLock(clientId);
                 final var reader = new BoundedLineReader(socket.getInputStream(), socket::setSoTimeout);
@@ -88,7 +116,15 @@ public class MessageProcessor implements Runnable {
         } catch (SSLException e) {
             logger.warning("Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
         } catch (IOException e) {
-            logger.error("General error in MessageProcessor", e);
+            if (clientId != null && everAuthenticated()) {
+                logger.error("General error in MessageProcessor", e);
+            } else if (!deadline.hasFired()) {
+                final var entry = PARSE_FAILURE_LOG.admit("Dropped an unauthenticated connection from "
+                        + remoteAddress() + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                if (entry != null) {
+                    logger.warning(entry);
+                }
+            }
         } catch (RuntimeException e) {
             logger.error("Unexpected failure in MessageProcessor", e);
             throw e;
@@ -96,6 +132,8 @@ public class MessageProcessor implements Runnable {
             logger.error("Unexpected failure in MessageProcessor", new Exception(t));
             throw t;
         } finally {
+            deadline.disarm();
+            releasePreAuthSlot();
             if (clientId != null) {
                 try {
                     TransactionOperationHelper.cleanupOnDisconnect(clientId);
@@ -107,19 +145,41 @@ public class MessageProcessor implements Runnable {
         }
     }
 
+    private void completeTlsHandshake() throws IOException {
+        if (socket instanceof SSLSocket sslSocket) {
+            sslSocket.setSoTimeout((int) Math.clamp(authRemainingMillis(), 1L, Integer.MAX_VALUE));
+            sslSocket.startHandshake();
+        }
+    }
+
+    private boolean isStillConnecting() {
+        return !serving && (clientId == null || clientTracker.getAuthenticatedUsername(clientId) == null);
+    }
+
+    private void releasePreAuthSlot() {
+        if (holdingPreAuthSlot) {
+            holdingPreAuthSlot = false;
+            preAuthSlots.release(remoteHost);
+        }
+    }
+
     private String readNextLine(BoundedLineReader reader, BufferedWriter writer, ReentrantLock writerLock)
             throws IOException {
         while (true) {
             if (!everAuthenticated() && authRemainingMillis() <= 0) {
                 return closeUnauthenticated(writer, writerLock);
             }
+            if (transactionAgeRemainingMillis() <= 0) {
+                reapTransaction(Client.TransactionReap.MAX_AGE);
+            }
+            final var budget = nextReadBudget();
             try {
-                return reader.readLine(nextReadBudgetMillis(), nextLineLimitBytes());
+                return reader.readLine(budget.millis(), nextLineLimitBytes());
             } catch (SocketTimeoutException timeout) {
                 if (!everAuthenticated()) {
                     return closeUnauthenticated(writer, writerLock);
                 }
-                reapIdleTransaction();
+                reapTransaction(budget.reapReason());
             } catch (RequestTooLargeException tooLarge) {
                 logger.warning("Closed a connection from " + remoteAddress() + ": " + tooLarge.getMessage());
                 refuse(writer, writerLock, ErrorCode.REQUEST_TOO_LARGE);
@@ -138,6 +198,8 @@ public class MessageProcessor implements Runnable {
     private boolean everAuthenticated() {
         if (!everAuthenticated && clientTracker.getAuthenticatedUsername(clientId) != null) {
             everAuthenticated = true;
+            deadline.disarm();
+            releasePreAuthSlot();
         }
         return everAuthenticated;
     }
@@ -146,11 +208,28 @@ public class MessageProcessor implements Runnable {
         return configuration.getAuthTimeoutMs() - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - acceptedAtNanos);
     }
 
-    private long nextReadBudgetMillis() {
+    private record ReadBudget(long millis, Client.TransactionReap reapReason) {
+    }
+
+    private ReadBudget nextReadBudget() {
         if (!everAuthenticated()) {
-            return authRemainingMillis();
+            return new ReadBudget(authRemainingMillis(), Client.TransactionReap.IDLE);
         }
-        return hasTimedTransaction() ? configuration.getTransactionIdleTimeoutMs() : 0L;
+        if (lacksTimedTransaction()) {
+            return new ReadBudget(0L, Client.TransactionReap.IDLE);
+        }
+        final var ageRemaining = transactionAgeRemainingMillis();
+        final var idleTimeout = configuration.getTransactionIdleTimeoutMs();
+        return new ReadBudget(Math.clamp(ageRemaining, 1L, idleTimeout),
+                ageRemaining < idleTimeout ? Client.TransactionReap.MAX_AGE : Client.TransactionReap.IDLE);
+    }
+
+    private long transactionAgeRemainingMillis() {
+        final var maxAge = configuration.longValue(ConfigKey.TRANSACTION_MAX_AGE_MS);
+        if (maxAge == 0 || lacksTimedTransaction()) {
+            return Long.MAX_VALUE;
+        }
+        return maxAge - clientTracker.getActiveTransaction(clientId).ageMillis();
     }
 
     private int nextLineLimitBytes() {
@@ -158,21 +237,23 @@ public class MessageProcessor implements Runnable {
         return (int) Math.min(configuration.getMaxRequestSize(), ceiling);
     }
 
-    private boolean hasTimedTransaction() {
+    private boolean lacksTimedTransaction() {
         final var transaction = clientTracker.getActiveTransaction(clientId);
-        return transaction != null && !transaction.getTransactionId().equals(unreapableTransaction)
-                && TransactionOperationHelper.isReapable(clientId);
+        return transaction == null || transaction.getTransactionId().equals(unreapableTransaction)
+                || !TransactionOperationHelper.isReapable(clientId);
     }
 
-    private void reapIdleTransaction() {
-        if (!hasTimedTransaction()) {
+    private void reapTransaction(Client.TransactionReap reason) {
+        if (lacksTimedTransaction()) {
             return;
         }
         final var transactionId = clientTracker.getActiveTransaction(clientId).getTransactionId();
         if (TransactionOperationHelper.reapIdleTransaction(clientId)) {
-            clientTracker.markTransactionReaped(clientId);
+            clientTracker.markTransactionReaped(clientId, reason);
             logger.info("Rolled back transaction " + transactionId + " of " + remoteAddress() + " after "
-                    + configuration.getTransactionIdleTimeoutMs() + " ms without a request");
+                    + (reason == Client.TransactionReap.MAX_AGE
+                            ? "reaching transactionMaxAgeMs"
+                            : configuration.getTransactionIdleTimeoutMs() + " ms without a request"));
         } else {
             unreapableTransaction = transactionId;
             logger.warning("Could not roll back idle transaction " + transactionId + " of " + remoteAddress()
@@ -206,6 +287,7 @@ public class MessageProcessor implements Runnable {
     private boolean serveLine(String message, int maxTokens, BufferedWriter writer, ReentrantLock writerLock)
             throws IOException {
         var close = false;
+        serving = true;
         inFlightRequests.enter();
         try {
             String response;
@@ -214,58 +296,18 @@ public class MessageProcessor implements Runnable {
             try {
                 final var parsedMessage = RequestParser.parseRequest(message, maxTokens);
                 requestType = parsedMessage.getType();
-                final var validationResult = RequestValidator.validate(parsedMessage);
-                if (!validationResult.isValid()) {
-                    response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
-                            validationResult.getErrorMessage(), validationResult.getErrorCode()));
-                } else if (isRefusedDuringShutdown(parsedMessage.getType())) {
-                    response = eJson
-                            .toJson(new OperationResponse(parsedMessage.getType(), ErrorCode.SERVER_SHUTTING_DOWN));
-                } else if (isFirstRequestAfterReap(parsedMessage.getType())) {
-                    response = eJson
-                            .toJson(new OperationResponse(parsedMessage.getType(), ErrorCode.TRANSACTION_IDLE_TIMEOUT));
-                } else {
-                    final var type = parsedMessage.getType();
-                    final var isPublicOperation = type == OperationType.AUTHENTICATE
-                            || type == OperationType.CLOSE_CONNECTION;
-
-                    if (isPublicOperation) {
-                        final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
-                        if (closesConnection(responseObj)) {
-                            close = true;
-                        }
-                        response = eJson.toJson(responseObj);
-                    } else if (isOwnTransactionRollback(type, clientId)) {
-                        final var handled = handleAuthorized(parsedMessage, message, clientId);
-                        response = handled.response();
-                        deliveredListen = handled.deliveredListen();
-                    } else {
-                        final var username = clientTracker.getAuthenticatedUsername(clientId);
-                        if (username == null) {
-                            response = eJson.toJson(new OperationResponse(type, ErrorCode.MUST_AUTHENTICATE_FIRST));
-                        } else {
-                            final var user = cache.getAdminUserEntry(username);
-                            if (user == null) {
-                                response = eJson.toJson(new OperationResponse(type, ErrorCode.USER_NO_LONGER_EXISTS));
-                            } else {
-                                final var authResult = AuthorizationChecker.check(parsedMessage, user);
-                                if (!authResult.isAllowed()) {
-                                    response = eJson.toJson(new OperationResponse(type, ErrorCode.NO_PERMISSIONS));
-                                } else {
-                                    final var handled = handleAuthorized(parsedMessage, message, clientId);
-                                    response = handled.response();
-                                    deliveredListen = handled.deliveredListen();
-                                    if (handled.close()) {
-                                        close = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                final var handled = dispatch(parsedMessage, message);
+                response = handled.response();
+                deliveredListen = handled.deliveredListen();
+                close = handled.close();
             } catch (InvalidCommandException exception) {
-                logger.warning("Refused an unparseable request: " + causeMessageOf(exception));
+                final var entry = PARSE_FAILURE_LOG.admit(
+                        "Refused an unparseable request from " + remoteAddress() + ": " + causeMessageOf(exception));
+                if (entry != null) {
+                    logger.warning(entry);
+                }
                 response = exception.getMessage();
+                close = exhaustedUnauthenticatedInvalidRequests();
             } catch (RuntimeException exception) {
                 logger.error("Request handling failed unexpectedly", exception);
                 response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
@@ -284,12 +326,85 @@ public class MessageProcessor implements Runnable {
             }
         } finally {
             inFlightRequests.exit();
+            serving = false;
         }
         return close;
     }
 
-    private boolean isFirstRequestAfterReap(OperationType type) {
-        return type != OperationType.CLOSE_CONNECTION && clientTracker.consumeTransactionReaped(clientId);
+    private boolean exhaustedUnauthenticatedInvalidRequests() {
+        if (everAuthenticated()) {
+            return false;
+        }
+        final var limit = configuration.intValue(ConfigKey.MAX_UNAUTHENTICATED_INVALID_REQUESTS);
+        unauthenticatedInvalidRequests++;
+        return limit != 0 && unauthenticatedInvalidRequests >= limit;
+    }
+
+    private Handled dispatch(OperationRequest parsedMessage, String rawMessage) {
+        final var type = parsedMessage.getType();
+        if (isRefusedDuringShutdown(type)) {
+            return refusal(type, ErrorCode.SERVER_SHUTTING_DOWN);
+        }
+        if (type == OperationType.AUTHENTICATE || type == OperationType.CLOSE_CONNECTION) {
+            return admitted(parsedMessage, () -> publicOperation(parsedMessage));
+        }
+        if (isOwnTransactionRollback(type, clientId)) {
+            return admitted(parsedMessage, () -> handleAuthorized(parsedMessage, rawMessage, clientId));
+        }
+        final var username = clientTracker.getAuthenticatedUsername(clientId);
+        if (username == null) {
+            return refusal(type, ErrorCode.MUST_AUTHENTICATE_FIRST);
+        }
+        return admitted(parsedMessage, () -> authorized(parsedMessage, rawMessage, username));
+    }
+
+    private Handled admitted(OperationRequest parsedMessage, Supplier<Handled> next) {
+        final var type = parsedMessage.getType();
+        final var validationResult = RequestValidator.validate(parsedMessage);
+        if (!validationResult.isValid()) {
+            return new Handled(eJson.toJson(
+                    new OperationResponse(type, validationResult.getErrorMessage(), validationResult.getErrorCode())),
+                    false, null);
+        }
+        final var reaped = firstRequestAfterReap(type);
+        if (reaped != null) {
+            return refusal(type, reaped);
+        }
+        return next.get();
+    }
+
+    private Handled publicOperation(OperationRequest parsedMessage) {
+        final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
+        return new Handled(eJson.toJson(responseObj), closesConnection(responseObj), null);
+    }
+
+    private Handled authorized(OperationRequest parsedMessage, String rawMessage, String username) {
+        final var type = parsedMessage.getType();
+        final var user = cache.getAdminUserEntry(username);
+        if (user == null) {
+            return refusal(type, ErrorCode.USER_NO_LONGER_EXISTS);
+        }
+        if (!AuthorizationChecker.check(parsedMessage, user).isAllowed()) {
+            return refusal(type, ErrorCode.NO_PERMISSIONS);
+        }
+        return handleAuthorized(parsedMessage, rawMessage, clientId);
+    }
+
+    private static Handled refusal(OperationType type, ErrorCode code) {
+        return new Handled(eJson.toJson(new OperationResponse(type, code)), false, null);
+    }
+
+    private ErrorCode firstRequestAfterReap(OperationType type) {
+        if (type == OperationType.CLOSE_CONNECTION) {
+            return null;
+        }
+        final var reaped = clientTracker.consumeTransactionReaped(clientId);
+        if (reaped == null) {
+            return null;
+        }
+        return reaped == Client.TransactionReap.MAX_AGE
+                ? ErrorCode.TRANSACTION_TOO_OLD
+                : ErrorCode.TRANSACTION_IDLE_TIMEOUT;
     }
 
     private record Handled(String response, boolean close, UUID deliveredListen) {
@@ -310,17 +425,13 @@ public class MessageProcessor implements Runnable {
         return cause == null ? exception.getMessage() : cause.getClass().getSimpleName() + ": " + cause.getMessage();
     }
 
-    private static String withoutTriggerDepth(String rawMessage) {
-        if (rawMessage == null || !rawMessage.contains(Globals.TRIGGER_DEPTH_FIELD)) {
+    private static String withoutTriggerDepth(String rawMessage, int wireDepth) {
+        if (rawMessage == null || wireDepth == 0) {
             return rawMessage;
         }
-        try {
-            final var root = eJson.fromJson(rawMessage, JsonObject.class);
-            root.remove(Globals.TRIGGER_DEPTH_FIELD);
-            return eJson.toJson(root);
-        } catch (Exception e) {
-            return rawMessage;
-        }
+        final var root = eJson.fromJson(rawMessage, JsonObject.class);
+        root.remove(Globals.TRIGGER_DEPTH_FIELD);
+        return eJson.toJson(root);
     }
 
     private boolean isOwnTransactionRollback(OperationType type, UUID clientId) {
@@ -328,13 +439,14 @@ public class MessageProcessor implements Runnable {
     }
 
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
+        final var wireDepth = parsedMessage.getTriggerDepth();
         // A cascade depth that arrived on the wire is never trusted: only a running trigger may set one.
         parsedMessage.setTriggerDepth(0);
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
         if (schemaError != null) {
             return new Handled(eJson.toJson(schemaError), false, null);
         }
-        final var forwarded = clusterRouter.forward(parsedMessage, withoutTriggerDepth(rawMessage),
+        final var forwarded = clusterRouter.forward(parsedMessage, withoutTriggerDepth(rawMessage, wireDepth),
                 clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
                 clientId);
         if (forwarded != null) {

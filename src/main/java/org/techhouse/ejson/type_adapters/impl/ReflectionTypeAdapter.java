@@ -3,16 +3,20 @@ package org.techhouse.ejson.type_adapters.impl;
 import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.ReflectionUtils;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
+import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 
 public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
     private static final Map<Class<?>, Boolean> genericTypes = new ConcurrentHashMap<>();
+    private static final LogRateLimiter DESERIALISATION_FAILURE_LOG = new LogRateLimiter(
+            Globals.LOG_RATE_LIMIT_PER_SECOND);
 
     private final Logger logger = Logger.logFor(ReflectionTypeAdapter.class);
     private final Class<T> clazz;
@@ -89,7 +93,11 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             }
             return clazz.cast(instance);
         } catch (Exception e) {
-            logger.error(e.getMessage(), e);
+            final var entry = DESERIALISATION_FAILURE_LOG.admit("Could not read a " + clazz.getSimpleName() + ": "
+                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+            if (entry != null) {
+                logger.warning(entry);
+            }
             return null;
         }
     }

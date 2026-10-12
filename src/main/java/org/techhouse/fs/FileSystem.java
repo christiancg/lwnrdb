@@ -104,13 +104,13 @@ public class FileSystem {
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
             if (collectionFolder.mkdir()) {
-                return collectionFile.createNewFile();
+                return OwnerOnlyPermissions.createNewOwnerOnlyFile(collectionFile.toPath());
             } else {
                 return false;
             }
         } else {
             if (!collectionFile.exists()) {
-                return collectionFile.createNewFile();
+                return OwnerOnlyPermissions.createNewOwnerOnlyFile(collectionFile.toPath());
             }
             return true;
         }
@@ -229,6 +229,7 @@ public class FileSystem {
                 final var pageEntries = groupedEntry.getValue();
                 final var file = paths.collectionPage(dbName, collName, page);
                 final var lock = FileLocks.lockFor(file).writeLock();
+                OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
                 lock.lock();
                 try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
                         Globals.BUFFER_SIZE)) {
@@ -306,6 +307,7 @@ public class FileSystem {
     }
 
     private void appendToPage(File file, String strData) throws IOException {
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
         try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
             writer.append(strData);
         }

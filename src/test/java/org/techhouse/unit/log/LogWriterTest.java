@@ -16,6 +16,7 @@ import java.util.Objects;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.log.LogWriter;
@@ -229,5 +230,49 @@ public class LogWriterTest {
         LogWriter.writeLogEntry("");
         String fileContent = Files.readString(logFile.toPath());
         assertEquals("", fileContent);
+    }
+
+    @Test
+    public void test_the_days_file_rolls_once_it_passes_max_log_file_size() throws Exception {
+        final var config = Configuration.getInstance();
+        final var logFile = new File(TestGlobals.LOG_PATH + Globals.FILE_SEPARATOR + logFileName(LocalDate.now()));
+        final var rolled = new File(TestGlobals.LOG_PATH + Globals.FILE_SEPARATOR
+                + LocalDate.now().format(java.time.format.DateTimeFormatter.ISO_DATE) + ".1.log");
+        TestUtils.setPrivateField(config, "maxLogFileSize", "1Kb");
+        try {
+            LogWriter.flushAndClose();
+            for (var i = 0; i < 40; i++) {
+                LogWriter.writeLogEntry("entry-" + i + "-" + "x".repeat(80));
+            }
+            LogWriter.flushAndClose();
+            assertTrue(rolled.exists());
+            assertTrue(logFile.length() <= 1024 + 120, "current file is " + logFile.length() + " bytes");
+            assertTrue(java.nio.file.Files.readString(logFile.toPath()).contains("entry-39"));
+        } finally {
+            TestUtils.setPrivateField(config, "maxLogFileSize", ConfigKey.MAX_LOG_FILE_SIZE.defaultValue());
+            LogWriter.flushAndClose();
+            java.nio.file.Files.deleteIfExists(rolled.toPath());
+        }
+    }
+
+    @Test
+    public void test_rolled_files_are_kept_and_expired_with_their_day() throws Exception {
+        final var config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "maxLogFiles", 1);
+        final var dir = new File(TestGlobals.LOG_PATH);
+        final var keptRolled = new File(dir,
+                LocalDate.now().minusDays(1).format(java.time.format.DateTimeFormatter.ISO_DATE) + ".1.log");
+        final var expiredRolled = new File(dir,
+                LocalDate.now().minusDays(5).format(java.time.format.DateTimeFormatter.ISO_DATE) + ".1.log");
+        assertTrue(keptRolled.createNewFile() || keptRolled.exists());
+        assertTrue(expiredRolled.createNewFile() || expiredRolled.exists());
+        try {
+            LogWriter.deleteOldLogFiles(dir);
+            assertTrue(keptRolled.exists());
+            assertFalse(expiredRolled.exists());
+        } finally {
+            java.nio.file.Files.deleteIfExists(keptRolled.toPath());
+            java.nio.file.Files.deleteIfExists(expiredRolled.toPath());
+        }
     }
 }

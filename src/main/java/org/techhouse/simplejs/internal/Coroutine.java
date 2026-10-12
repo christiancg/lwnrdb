@@ -52,6 +52,7 @@ public final class Coroutine {
     private final AtomicBoolean running = new AtomicBoolean();
     private volatile boolean started;
     private volatile boolean done;
+    private volatile boolean cancelled;
 
     private JsValue sent = JsUndefined.getInstance();
     private RuntimeException inject;
@@ -155,6 +156,7 @@ public final class Coroutine {
             done = true;
             return;
         }
+        this.cancelled = true;
         this.inject = new CancelSignal();
         this.injectReturn = false;
         resume();
@@ -256,6 +258,9 @@ public final class Coroutine {
     }
 
     private JsValue pause() {
+        if (cancelled) {
+            throw new CancelSignal();
+        }
         boolean doReturn;
         JsValue returnValue;
         RuntimeException error;

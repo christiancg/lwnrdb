@@ -15,7 +15,7 @@ class SchemaArrayValidator {
     void validateArray(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path, List<String> errors) {
         final var array = instance.asJsonArray();
         validateItemCounts(array, obj, path, errors);
-        validateUniqueItems(array, obj, path, errors);
+        validateUniqueItems(array, obj, schema, path, errors);
         validateItems(array, obj, schema, path, errors);
         validateContains(array, obj, schema, path, errors);
     }
@@ -33,18 +33,24 @@ class SchemaArrayValidator {
         }
     }
 
-    private void validateUniqueItems(JsonArray array, JsonObject obj, String path, List<String> errors) {
+    private void validateUniqueItems(JsonArray array, JsonObject obj, JsonSchema schema, String path,
+            List<String> errors) {
         final var uniqueItems = obj.get(SchemaKeywords.UNIQUE_ITEMS);
         if (uniqueItems == null || !uniqueItems.asJsonBoolean().getValue()) {
             return;
         }
-        for (int i = 0; i < array.size(); i++) {
-            for (int j = i + 1; j < array.size(); j++) {
-                if (array.get(i).equals(array.get(j))) {
+        final var byHash = new java.util.HashMap<Integer, List<JsonBaseElement>>();
+        for (final var item : array) {
+            schema.charge();
+            final var sameHash = byHash.computeIfAbsent(item.hashCode(), _ -> new java.util.ArrayList<>());
+            for (final var earlier : sameHash) {
+                schema.charge();
+                if (earlier.equals(item)) {
                     errors.add(SchemaValidator.at(path) + ": array items must be unique");
                     return;
                 }
             }
+            sameHash.add(item);
         }
     }
 

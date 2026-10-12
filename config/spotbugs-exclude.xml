@@ -35,6 +35,7 @@
             <Class name="org.techhouse.ejson.elements.JsonNumber"/>
             <Class name="org.techhouse.ejson.custom_types.JsonGeo"/>
             <Class name="org.techhouse.ejson.custom_types.JsonVector"/>
+            <Class name="org.techhouse.ejson.validate.CappedErrors"/>
         </Or>
         <Bug pattern="EQ_DOESNT_OVERRIDE_EQUALS"/>
     </Match>

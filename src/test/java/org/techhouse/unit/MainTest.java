@@ -20,6 +20,7 @@ import org.techhouse.ex.InvalidPortException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.ScriptRunHistory;
+import org.techhouse.simplejs.host.ScriptHeapGuard;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -45,6 +46,7 @@ public class MainTest {
         IocContainer.get(TriggerExecutor.class).stop();
         IocContainer.get(ScheduleExecutor.class).stop();
         IocContainer.get(ScriptRunHistory.class).stopSweep();
+        ScriptHeapGuard.setCeilingPercent(ScriptHeapGuard.OFF);
         final var dbPath = new File(TestGlobals.PATH);
         if (dbPath.exists()) {
             TestUtils.deleteFolder(dbPath);

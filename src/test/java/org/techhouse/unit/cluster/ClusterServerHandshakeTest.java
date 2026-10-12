@@ -199,9 +199,9 @@ public class ClusterServerHandshakeTest {
     private boolean eventuallyServed() throws Exception {
         final var deadline = System.currentTimeMillis() + READ_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
-            final var socket = authenticated();
-            send(socket, message(ClusterMessageType.GOSSIP, ClusterTestHarness.SECRET));
             try {
+                final var socket = authenticated();
+                send(socket, message(ClusterMessageType.GOSSIP, ClusterTestHarness.SECRET));
                 final var line = new BufferedReader(
                         new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8)).readLine();
                 if (line != null) {
@@ -212,5 +212,25 @@ public class ClusterServerHandshakeTest {
             }
         }
         return false;
+    }
+
+    @Test
+    public void aDeeplyNestedFirstLineIsClosedWithoutAReply() throws Exception {
+        final var socket = connect();
+        sendRaw(socket, "[".repeat(2000) + "]".repeat(2000) + "\n");
+        assertTrue(closedWithoutReply(socket));
+    }
+
+    @Test
+    @SuppressWarnings("resource")
+    public void oneAddressCannotHoldMoreThanItsShareOfPreAuthenticationSlots() throws Exception {
+        for (var i = 0; i < Globals.CLUSTER_MAX_UNAUTHENTICATED_PER_ADDRESS; i++) {
+            connect();
+        }
+        Thread.sleep(200);
+        final var refused = connect();
+        final var start = System.currentTimeMillis();
+        assertTrue(closedWithoutReply(refused));
+        assertTrue(System.currentTimeMillis() - start < 2_000, "the extra connection was held, not refused");
     }
 }

@@ -38,7 +38,7 @@ public final class RegexSymbolMethods {
         final var flags = JsCoercion.toStr(ops.getMember(rx, new JsString("flags")), ops);
         final var species = speciesConstructor(rx, regexpProto, ops);
         final var matcher = species == null
-                ? RegexTranslator.compile(sourceOf(rx, ops), flags)
+                ? RegexTranslator.compile(sourceOf(rx, ops), flags, ops)
                 : ops.construct(species, List.of(rx, new JsString(flags)));
         writeLastIndex(matcher, (int) toLength(readLastIndex(rx, ops), ops), ops);
         return createStringIterator(matcher, s, flags.indexOf('g') >= 0,
@@ -333,7 +333,7 @@ public final class RegexSymbolMethods {
         final var unicodeMatching = flags.indexOf('u') >= 0 || flags.indexOf('v') >= 0;
         final var newFlags = flags.indexOf('y') >= 0 ? flags : flags + "y";
         final var splitter = species == null
-                ? RegexTranslator.compile(sourceOf(rx, ops), newFlags)
+                ? RegexTranslator.compile(sourceOf(rx, ops), newFlags, ops)
                 : ops.construct(species, List.of(rx, new JsString(newFlags)));
         final var result = new JsArray();
         final var limit = limitValue instanceof JsUndefined

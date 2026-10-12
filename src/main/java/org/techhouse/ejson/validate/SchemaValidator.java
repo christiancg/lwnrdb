@@ -1,6 +1,5 @@
 package org.techhouse.ejson.validate;
 
-import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBaseElement.JsonType;
@@ -13,9 +12,9 @@ public class SchemaValidator {
     private final SchemaScalarValidator scalarValidator = new SchemaScalarValidator();
 
     public SchemaValidationResult validate(JsonBaseElement instance, JsonSchema schema) {
-        final var errors = new ArrayList<String>();
+        final var errors = new CappedErrors();
         validateNode(instance, schema.getRoot(), schema, "", errors);
-        return errors.isEmpty() ? SchemaValidationResult.valid() : SchemaValidationResult.invalid(errors);
+        return errors.isEmpty() ? SchemaValidationResult.valid() : SchemaValidationResult.invalid(errors.reported());
     }
 
     void validateNode(JsonBaseElement instance, JsonBaseElement schemaNode, JsonSchema schema, String path,
@@ -39,7 +38,7 @@ public class SchemaValidator {
         }
         validateType(instance, obj, path, errors);
         validateCustomType(instance, obj, path, errors);
-        validateEnumAndConst(instance, obj, path, errors);
+        validateEnumAndConst(instance, obj, schema, path, errors);
         applicatorValidator.validateApplicators(instance, obj, schema, path, errors);
         dispatchByType(instance, obj, schema, path, errors);
     }
@@ -120,11 +119,13 @@ public class SchemaValidator {
         }
     }
 
-    private void validateEnumAndConst(JsonBaseElement instance, JsonObject obj, String path, List<String> errors) {
+    private void validateEnumAndConst(JsonBaseElement instance, JsonObject obj, JsonSchema schema, String path,
+            List<String> errors) {
         final var enumValues = obj.get(SchemaKeywords.ENUM);
         if (enumValues != null && enumValues.isJsonArray()) {
             var found = false;
             for (final var candidate : enumValues.asJsonArray()) {
+                schema.charge();
                 if (candidate.equals(instance)) {
                     found = true;
                     break;
@@ -141,7 +142,7 @@ public class SchemaValidator {
     }
 
     boolean isValid(JsonBaseElement instance, JsonBaseElement schemaNode, JsonSchema schema) {
-        final var errors = new ArrayList<String>();
+        final var errors = new CappedErrors();
         validateNode(instance, schemaNode, schema, "", errors);
         return errors.isEmpty();
     }

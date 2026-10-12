@@ -34,8 +34,8 @@ public final class Uint8Base64 {
     public static JsValue uint8Method(JsTypedArray receiver, String name, InterpreterOps ops) {
         return switch (name) {
             case "toBase64" ->
-                new JsNativeFunction("toBase64", (_, args) -> new JsString(toBase64(receiver, args, ops)));
-            case "toHex" -> new JsNativeFunction("toHex", (_, _) -> new JsString(toHex(receiver)));
+                new JsNativeFunction("toBase64", (_, args) -> encoded(toBase64(receiver, args, ops), ops));
+            case "toHex" -> new JsNativeFunction("toHex", (_, _) -> encoded(toHex(receiver), ops));
             case "setFromBase64" ->
                 new JsNativeFunction("setFromBase64", (_, args) -> setFrom(receiver, args, ops, Uint8Base64::base64));
             case "setFromHex" ->
@@ -51,6 +51,12 @@ public final class Uint8Base64 {
             bytes[i] = (byte) (int) JsCoercion.toNumber(typed.getElement(i));
         }
         return bytes;
+    }
+
+    private static JsString encoded(String text, InterpreterOps ops) {
+        InterpreterOps.paceWork(ops, text.length());
+        InterpreterOps.chargeChars(ops, text.length());
+        return new JsString(text);
     }
 
     public static String toBase64(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {

@@ -14,13 +14,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.File;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.MembershipView;
@@ -28,16 +31,26 @@ import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.Replicator;
+import org.techhouse.cluster.admin.AdminRecord;
+import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.ClusterAdminHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.GrantPruner;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteUserRequest;
+import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
@@ -218,6 +231,63 @@ public class ClusterAdminHelperTest {
         assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(),
                 ClusterAdminHelper.afterAdminOp(adminOp(), ok(OperationType.CREATE_COLLECTION)).getErrorCode());
         verify(replicator, never()).broadcastAdmin(any());
+    }
+
+    private List<String> shippedKeys(OperationRequest request, OperationType type) {
+        when(replicator.broadcastAdmin(any())).thenReturn(ReplicationOutcome.QUORUM_MET);
+        ClusterAdminHelper.afterAdminOp(request, ok(type));
+        final var shipped = ArgumentCaptor.forClass(AdminSnapshotPayload.class);
+        verify(replicator).broadcastAdmin(shipped.capture());
+        return shipped.getValue().getRecords().stream().map(AdminRecord::rawKey).toList();
+    }
+
+    private static AdminUserEntry grantedOnTheTestCollection(String username) {
+        return new AdminUserEntry(username, "hash", false, new HashSet<>(), Map.of(),
+                Map.of(TestGlobals.DB + "|" + TestGlobals.COLL, PermissionLevel.READ), Map.of());
+    }
+
+    @Test
+    public void test_a_coordinator_drop_ships_exactly_the_users_its_prune_restamped() throws Exception {
+        enable(1, true);
+        AdminOperationHelper.saveUserEntry(grantedOnTheTestCollection("pruned_user"));
+        AdminOperationHelper.saveUserEntry(
+                new AdminUserEntry("untouched_user", "hash", false, new HashSet<>(), Map.of(), Map.of(), Map.of()));
+        final var request = new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL);
+        ClusterAdminHelper.guard(request);
+        GrantPruner.forDroppedCollection(TestGlobals.DB, TestGlobals.COLL, RewriteVersion.RESTAMP);
+
+        final var keys = shippedKeys(request, OperationType.DROP_COLLECTION);
+
+        assertTrue(keys.contains(AdminRecordKey.user("pruned_user").id()), keys.toString());
+        assertFalse(keys.contains(AdminRecordKey.user("untouched_user").id()), keys.toString());
+    }
+
+    @Test
+    public void test_a_prune_that_keeps_versions_ships_nothing_extra() throws Exception {
+        enable(1, true);
+        AdminOperationHelper.saveUserEntry(grantedOnTheTestCollection("kept_user"));
+        final var request = new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL);
+        ClusterAdminHelper.guard(request);
+        GrantPruner.forDroppedCollection(TestGlobals.DB, TestGlobals.COLL, RewriteVersion.KEEP);
+
+        final var keys = shippedKeys(request, OperationType.DROP_COLLECTION);
+
+        assertEquals(List.of(AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL).id()), keys);
+    }
+
+    @Test
+    public void test_a_deleted_owner_ships_the_database_its_owner_strip_restamped() throws Exception {
+        enable(1, true);
+        AdminOperationHelper.saveUserEntry(grantedOnTheTestCollection("owner_user"));
+        assertTrue(AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of("owner_user")));
+        final var request = new DeleteUserRequest();
+        request.setUsername("owner_user");
+        ClusterAdminHelper.guard(request);
+        GrantPruner.forDeletedUser("owner_user", RewriteVersion.RESTAMP);
+
+        final var keys = shippedKeys(request, OperationType.DELETE_USER);
+
+        assertTrue(keys.contains(AdminRecordKey.database(TestGlobals.DB).id()), keys.toString());
     }
 
     @Test

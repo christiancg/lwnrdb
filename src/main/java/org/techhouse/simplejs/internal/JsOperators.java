@@ -154,6 +154,7 @@ public final class JsOperators {
             final var leftText = JsCoercion.toStr(leftPrim);
             final var rightText = JsCoercion.toStr(rightPrim);
             InterpreterOps.chargeChars(ops, rightText.length());
+            InterpreterOps.noteChars(ops, (long) leftText.length() + rightText.length());
             return new JsString(leftText + rightText);
         }
         if (leftPrim instanceof JsBigInt && rightPrim instanceof JsBigInt) {

@@ -93,7 +93,7 @@ public final class GlobalScope {
         define(global, "isFinite", NumberBuiltins.isFiniteFunction(ops));
         define(global, "eval", evalStub());
         GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops, intrinsics);
-        FetchBuiltins.install(global, eventLoop, network, limits, intrinsics);
+        FetchBuiltins.install(global, eventLoop, network, limits, intrinsics, ops);
         define(global, "globalThis", globalThis);
         applyStaticLengths(global);
         return globalThis;

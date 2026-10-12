@@ -65,6 +65,10 @@ public final class ProcedureOperationHelper {
             return new OperationResponse(OperationType.SAVE_PROCEDURE,
                     ErrorCode.INVALID_PROCEDURE.getDefaultMessage() + ": " + parseFailure.getMessage(),
                     ErrorCode.INVALID_PROCEDURE);
+        } catch (StackOverflowError tooDeep) {
+            return new OperationResponse(OperationType.SAVE_PROCEDURE,
+                    ErrorCode.INVALID_PROCEDURE.getDefaultMessage() + ": " + CompiledScriptCache.NESTING_TOO_DEEP,
+                    ErrorCode.INVALID_PROCEDURE);
         }
         final var missingImport = firstUnresolvableImport(request, dbName, compiled);
         if (missingImport != null) {

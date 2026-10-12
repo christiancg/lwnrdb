@@ -12,6 +12,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.log.Logger;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class CompactionJournal {
     static final String MARKER_EXTENSION = ".compacting";
@@ -48,6 +49,7 @@ final class CompactionJournal {
         final var marker = new Marker(kind, removed.getDatabaseName(), removed.getCollectionName(), removed.getPage(),
                 removed.getPosition(), originalLength, removed.getLength(), removed.getValue(), removed.getVersion(),
                 NO_TARGET, 0L, tail);
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(markerFile(marker).toPath());
         Files.write(markerFile(marker).toPath(), encode(marker), StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
         return marker;
@@ -69,6 +71,7 @@ final class CompactionJournal {
     }
 
     private static void emptyInPlace(File file, IOException deleteFailure) {
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             writer.setLength(0);
             logger.warning("Could not remove the compaction marker " + file.getName()

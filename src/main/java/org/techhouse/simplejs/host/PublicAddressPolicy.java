@@ -35,7 +35,7 @@ public final class PublicAddressPolicy {
             range("100.64.0.0", 10), range("127.0.0.0", 8), range("169.254.0.0", 16), range("172.16.0.0", 12),
             range("192.0.0.0", 24), range("192.168.0.0", 16), range("198.18.0.0", 15), range("224.0.0.0", 4),
             range("240.0.0.0", 4), range("::", 128), range("::1", 128), range("fc00::", 7), range("fe80::", 10),
-            range("fec0::", 10), range("ff00::", 8));
+            range("fec0::", 10), range("ff00::", 8), range("2001::", 32), range("64:ff9b:1::", 48));
 
     private static final List<Range> EMBEDDING_AT_TAIL = List.of(range("::ffff:0:0", 96), range("::", 96),
             range("64:ff9b::", 96));

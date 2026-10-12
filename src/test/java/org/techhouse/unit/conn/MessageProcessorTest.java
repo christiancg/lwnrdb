@@ -126,19 +126,23 @@ public class MessageProcessorTest {
 
     @Test
     public void test_invalid_request_validation_fails_sends_error_response() throws Exception {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        // SAVE with a 2-char databaseName violates the naming rule
-        String msg = "{\"type\":\"SAVE\",\"databaseName\":\"ab\",\"collectionName\":\"myColl\",\"object\":{}}\n";
-        Socket socket = TestUtils.clientSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
+        createAnalyzeAdmin("validation_admin");
+        final var response = runMessages("""
+                {"type":"AUTHENTICATE","username":"validation_admin","password":"password123"}
+                {"type":"SAVE","databaseName":"ab","collectionName":"myColl","object":{}}
+                """);
 
-        MessageProcessor mp = new MessageProcessor(socket);
-        Thread t = new Thread(mp);
-        t.start();
-        t.join(3000);
+        assertTrue(response.contains("\"type\":\"SAVE\",\"status\":\"ERROR\""), response);
+        assertTrue(response.contains("400-1"), response);
+    }
 
-        String response = out.toString(StandardCharsets.UTF_8);
-        assertTrue(response.contains("ERROR"), "Validation failure should return ERROR status");
-        assertTrue(response.contains("SAVE"), "Response type should echo the operation type");
+    @Test
+    public void test_an_unauthenticated_invalid_request_is_not_validated() throws Exception {
+        final var response = runMessages(
+                "{\"type\":\"SAVE\",\"databaseName\":\"ab\",\"collectionName\":\"myColl\",\"object\":{}}\n");
+
+        assertTrue(response.contains("401-1"), response);
+        assertFalse(response.contains("400-1"), response);
     }
 
     @Test

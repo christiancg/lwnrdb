@@ -387,6 +387,38 @@ def test_native_loops_are_budgeted(conn: Conn):
     check_result("the server is still serving", conn.run("return [1, 2, 3].indexOf(3);"), 2)
 
 
+def test_unbudgeted_native_work_is_bounded(conn: Conn):
+    section("Native work that used to escape the budgets is bounded")
+    check_failed_script("a BigInt parse past 65536 digits is a RangeError",
+                        conn.run("return BigInt('9'.repeat(70000)).toString().length;"), "400-9")
+    check_result("a BigInt parse at 65536 digits still works",
+                 conn.run("return BigInt('9'.repeat(65536)).toString().length;"), 65536)
+    started = time.monotonic()
+    compare = conn.run("const s = 'x'.repeat(1 << 18), t = s + 'y'; while (true) { s.localeCompare(t); }")
+    elapsed = time.monotonic() - started
+    check("a localeCompare loop over large strings ends with the instruction budget or the deadline",
+          compare.get("status") == "ERROR" and compare.get("errorCode") in ("400-11", "408-1"),
+          f"got {compare.get('errorCode')} msg={compare.get('message')!r}")
+    check("and inside scriptTimeoutMs plus slack", elapsed < TIMEOUT_MS / 1000 + 5, f"elapsed={elapsed:.1f}s")
+    dag = "let a = [1]; for (let i = 0; i < 40; i++) { a = [a, a]; }"
+    check_code("stringifying a shared-reference DAG exceeds the memory budget",
+               conn.run(dag + " return JSON.stringify(a).length;"), "ERROR", "400-12")
+    check_code("returning a shared-reference DAG exceeds the memory budget",
+               conn.run(dag + " return a;"), "ERROR", "400-12")
+    started = time.monotonic()
+    check_result("a generator that yields in finally does not park the run",
+                 conn.run("function* g() { try { yield 1; } finally { yield 99; } }"
+                          " const it = g(); it.next(); return 7;"), 7)
+    check("… and it returns promptly", time.monotonic() - started < 5,
+          f"took {time.monotonic() - started:.2f}s")
+    check_result("the server is still serving", conn.run("return 1 + 1;"), 2)
+    for attempt in range(3):
+        check_failed_script(f"source nested past the parser limit is a SyntaxError (run {attempt + 1})",
+                            conn.run("return " + "(" * 400 + "1" + ")" * 400 + ";"), "400-9", "levels deep")
+    check_result("nesting well inside the limit still runs",
+                 conn.run("return " + "(" * 100 + "1" + ")" * 100 + ";"), 1)
+
+
 def test_run_metrics(conn: Conn):
     section("Run metrics")
     ok = conn.run("let total = 0;\nfor (let i = 0; i < 500; i++) total += i;\nreturn total;")
@@ -1729,6 +1761,7 @@ def main():
             test_sandbox_limits(conn)
             test_native_recursion_is_an_error_not_a_hang(conn)
             test_native_loops_are_budgeted(conn)
+            test_unbudgeted_native_work_is_bounded(conn)
             test_run_metrics(conn)
             test_history_kinds(conn)
             test_a_script_cannot_mutate_the_run_history(conn)

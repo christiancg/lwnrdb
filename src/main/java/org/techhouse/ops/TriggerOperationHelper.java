@@ -107,6 +107,13 @@ public final class TriggerOperationHelper {
         if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
             return new OperationResponse(OperationType.SAVE_TRIGGER, ErrorCode.PROCEDURE_VERSION_CONFLICT);
         }
+        final var foreign = existing == null
+                ? null
+                : ProcedureBindingGuard.foreignDefinitionRefusal(OperationType.SAVE_TRIGGER, dbName,
+                        existing.getDefiner(), actingUser);
+        if (foreign != null) {
+            return foreign;
+        }
         final var definition = newDefinition(request, existing, actingUser, mode, timing, events);
         existingList.removeIf(trigger -> trigger.getName().equals(definition.getName()));
         existingList.add(definition);
@@ -217,7 +224,7 @@ public final class TriggerOperationHelper {
         }
     }
 
-    public static OperationResponse executeDelete(DeleteTriggerRequest request) throws IOException {
+    public static OperationResponse executeDelete(DeleteTriggerRequest request, String actingUser) throws IOException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (cache.getAdminCollectionEntry(dbName, collName) == null) {
@@ -225,6 +232,14 @@ public final class TriggerOperationHelper {
                     ErrorCode.DATABASE_NOT_FOUND);
         }
         final var remaining = new ArrayList<>(cache.getTriggersFor(dbName, collName));
+        final var existing = findByName(remaining, request.getName());
+        final var foreign = existing == null
+                ? null
+                : ProcedureBindingGuard.foreignDefinitionRefusal(OperationType.DELETE_TRIGGER, dbName,
+                        existing.getDefiner(), actingUser);
+        if (foreign != null) {
+            return foreign;
+        }
         remaining.removeIf(trigger -> trigger.getName().equals(request.getName()));
         persist(dbName, collName, remaining);
         return OperationResponse.ok(OperationType.DELETE_TRIGGER, "Trigger deleted successfully");

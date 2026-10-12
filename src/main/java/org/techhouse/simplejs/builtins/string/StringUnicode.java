@@ -113,6 +113,7 @@ public final class StringUnicode {
 
     public static String normalize(String value, List<JsValue> args, InterpreterOps ops) {
         final var form = args.isEmpty() || args.getFirst() instanceof JsUndefined ? "NFC" : str(args, 0, ops);
+        InterpreterOps.paceWork(ops, value.length());
         try {
             return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.valueOf(form));
         } catch (IllegalArgumentException invalidForm) {
@@ -123,6 +124,7 @@ public final class StringUnicode {
 
     public static int localeCompare(String value, List<JsValue> args, InterpreterOps ops) {
         final var that = str(args, 0, ops);
+        InterpreterOps.paceWork(ops, (long) value.length() + that.length());
         final var collator = java.text.Collator.getInstance(LocaleResolver.resolve(args, 1, ops));
         collator.setDecomposition(java.text.Collator.CANONICAL_DECOMPOSITION);
         final var sensitivity = LocaleResolver.sensitivity(args, 2, ops);

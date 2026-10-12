@@ -62,4 +62,15 @@ public class LogSanitizerTest {
         assertEquals(big.length() + 200_000, neutralised.length());
         assertTrue(neutralised.indexOf('\n') < 0);
     }
+
+    @Test
+    public void c1_controls_are_escaped() {
+        assertEquals("a\\u009b31mb\\u009dc\\u0085", LogSanitizer.neutralise("a\u009b31mb\u009dc\u0085"));
+    }
+
+    @Test
+    public void the_first_printable_latin1_character_is_left_alone() {
+        final var text = "café \u00a0";
+        assertSame(text, LogSanitizer.neutralise(text));
+    }
 }

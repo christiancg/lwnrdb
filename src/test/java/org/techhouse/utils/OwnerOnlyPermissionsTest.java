@@ -149,4 +149,32 @@ public class OwnerOnlyPermissionsTest {
 
         assertFalse(OwnerOnlyPermissions.isAccessibleByOthers(withMode(file, "rwxrwxrwx"), false));
     }
+
+    @Test
+    public void ensure_owner_only_file_creates_a_missing_file_as_0600_and_leaves_an_existing_one() throws IOException {
+        final var file = tmp.resolve("ensured.dat");
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(file);
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+        Files.writeString(file, "kept");
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(file);
+        assertEquals("kept", Files.readString(file));
+    }
+
+    @Test
+    public void create_new_owner_only_file_reports_whether_it_created_the_file() throws IOException {
+        final var file = tmp.resolve("created.dat");
+        assertTrue(OwnerOnlyPermissions.createNewOwnerOnlyFile(file));
+        assertFalse(OwnerOnlyPermissions.createNewOwnerOnlyFile(file));
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+    }
+
+    @Test
+    public void the_quiet_variant_creates_0600_and_swallows_a_failure() throws IOException {
+        final var file = tmp.resolve("quiet.log");
+        OwnerOnlyPermissions.ensureOwnerOnlyFileQuietly(file);
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+        final var unreachable = tmp.resolve("missing-parent").resolve("quiet.log");
+        OwnerOnlyPermissions.ensureOwnerOnlyFileQuietly(unreachable);
+        assertFalse(Files.exists(unreachable));
+    }
 }

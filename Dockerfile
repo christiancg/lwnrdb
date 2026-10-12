@@ -38,6 +38,12 @@ WORKDIR /app
 
 COPY lwnrdb.cfg /app
 
+RUN addgroup -S lwnrdb && adduser -S -G lwnrdb lwnrdb \
+    && mkdir -p /app/db /app/logs /app/certs \
+    && chown -R lwnrdb:lwnrdb /app
+
+USER lwnrdb
+
 VOLUME /app/db
 VOLUME /app/logs
 

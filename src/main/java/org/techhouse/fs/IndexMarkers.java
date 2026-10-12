@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 public final class IndexMarkers {
     private static final String BUILDING_SUFFIX = ".building";
@@ -164,6 +165,7 @@ public final class IndexMarkers {
 
     private static void touch(File marker) throws IOException {
         if (!marker.exists()) {
+            OwnerOnlyPermissions.ensureOwnerOnlyFile(marker.toPath());
             Files.writeString(marker.toPath(), Long.toString(System.currentTimeMillis()));
         }
     }

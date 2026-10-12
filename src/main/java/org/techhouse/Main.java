@@ -22,6 +22,7 @@ import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.admin.AdminRecords;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.tls.TlsContextFactory;
@@ -42,6 +43,7 @@ import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
+import org.techhouse.simplejs.host.ScriptHeapGuard;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -84,6 +86,8 @@ public class Main {
     public static void main(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
         AdminPasswordGuard.refuseShippedPassword();
+        FetchPinningGuard.refuseUnpinnedFetch();
+        ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         final var recoveredDeletes = fs.recoverInterruptedCompactions();

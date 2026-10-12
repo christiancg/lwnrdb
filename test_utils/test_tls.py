@@ -3,6 +3,8 @@ import socket
 import ssl
 import stat
 import tempfile
+import threading
+import time
 
 import base_utils as bu
 from base_utils import Conn, check, check_status, section
@@ -12,6 +14,8 @@ PORT = int(os.environ.get("TLS_TEST_PORT", "9443"))
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
 KEYSTORE_PASSWORD = "changeit"
+AUTH_TIMEOUT_S = 2.0
+PRE_AUTH_PER_ADDRESS = 4
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -29,7 +33,75 @@ def tls_socket(verify: bool):
 
 def write_config(work_dir: str):
     bu.write_config(work_dir, PORT, tlsEnabled=True, tlsKeystorePath="certs/lwnrdb.p12",
-                    tlsKeystorePassword=KEYSTORE_PASSWORD)
+                    tlsKeystorePassword=KEYSTORE_PASSWORD, authTimeoutMs=int(AUTH_TIMEOUT_S * 1000),
+                    maxUnauthenticatedConnectionsPerAddress=PRE_AUTH_PER_ADDRESS)
+
+
+def closed_by_server_within(sock: socket.socket, seconds: float) -> bool:
+    sock.settimeout(seconds)
+    try:
+        while sock.recv(4096):
+            pass
+        return True
+    except (ConnectionResetError, BrokenPipeError):
+        return True
+    except OSError:
+        return False
+
+
+def test_a_silent_peer_is_closed_at_the_handshake_deadline():
+    section("A peer that never starts the TLS handshake is closed at the deadline")
+    with socket.create_connection((HOST, PORT), timeout=10) as silent:
+        started = time.time()
+        closed = closed_by_server_within(silent, AUTH_TIMEOUT_S + 4)
+        check("The server closes it", closed)
+        check("Within authTimeoutMs plus slack", time.time() - started < AUTH_TIMEOUT_S + 4,
+              f"after {time.time() - started:.1f}s")
+
+
+def test_a_dripped_client_hello_is_closed_at_the_handshake_deadline():
+    section("A ClientHello dripped a byte at a time does not outlive the deadline")
+    with socket.create_connection((HOST, PORT), timeout=10) as dripping:
+        dripping.sendall(bytes([0x16, 0x03, 0x01, 0x01, 0xF0]))
+        stop = threading.Event()
+
+        def drip():
+            while not stop.wait(0.3):
+                try:
+                    dripping.sendall(b"\x01")
+                except OSError:
+                    return
+
+        dripper = threading.Thread(target=drip, daemon=True)
+        dripper.start()
+        started = time.time()
+        closed = closed_by_server_within(dripping, AUTH_TIMEOUT_S + 4)
+        stop.set()
+        check("The server closes the dripping peer", closed)
+        check("Within authTimeoutMs plus slack", time.time() - started < AUTH_TIMEOUT_S + 4,
+              f"after {time.time() - started:.1f}s")
+
+
+def test_one_address_cannot_hold_every_unauthenticated_slot():
+    section("One address holds at most maxUnauthenticatedConnectionsPerAddress unauthenticated connections")
+    holders = [socket.create_connection((HOST, PORT), timeout=10) for _ in range(PRE_AUTH_PER_ADDRESS)]
+    try:
+        time.sleep(0.3)
+        frame = None
+        with tls_socket(verify=False) as extra:
+            extra.settimeout(5)
+            raw = extra.makefile("rb").readline()
+            frame = raw.decode("utf-8", errors="replace").strip() if raw else None
+        check("The next connection from the same address gets 503-14", frame is not None and "503-14" in frame,
+              f"got={frame!r}")
+    finally:
+        for holder in holders:
+            holder.close()
+    time.sleep(AUTH_TIMEOUT_S + 1.5)
+    with tls_socket(verify=False) as fresh:
+        conn = Conn(sock=fresh)
+        conn.authenticate()
+        check_status("Once they are gone a new client authenticates", conn.send({"type": "LIST_DATABASES"}), "OK")
 
 
 def test_keystore_generated(work_dir: str, log_path: str):
@@ -256,6 +328,9 @@ def main():
         test_self_signed_is_untrusted()
         test_tls_roundtrip()
         test_plaintext_rejected()
+        test_a_silent_peer_is_closed_at_the_handshake_deadline()
+        test_a_dripped_client_hello_is_closed_at_the_handshake_deadline()
+        test_one_address_cannot_hold_every_unauthenticated_slot()
     finally:
         bu.stop_server(proc)
 

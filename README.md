@@ -69,10 +69,12 @@ A request may nest objects and arrays at most 128 levels deep, counted from the 
 
 Each request is one line terminated by `\n`; a single `\r` right before it is stripped. A lone `\r` does **not** end a line (it used to): it is kept as part of the request.
 
-- **Line size.** A line may be at most `maxRequestSize` bytes (default `64Mb`) once the connection has authenticated, and at most **64Kb** before that (only `AUTHENTICATE`, `LIST_DATABASES` and `CLOSE_CONNECTION` can succeed unauthenticated, and each is a few hundred bytes). The server refuses as soon as the unterminated bytes pass the limit, without waiting for the newline: it answers one `CLOSE_CONNECTION` frame with `400-22` and closes the connection, because the rest of an oversized line cannot be skipped safely.
+- **Line size.** A line may be at most `maxRequestSize` bytes (default `64Mb`) once the connection has authenticated, and at most **64Kb** before that (only `AUTHENTICATE` and `CLOSE_CONNECTION` are served unauthenticated, and each is a few hundred bytes; any other request is answered `401-1` without being validated). The server refuses as soon as the unterminated bytes pass the limit, without waiting for the newline: it answers one `CLOSE_CONNECTION` frame with `400-22` and closes the connection, because the rest of an oversized line cannot be skipped safely.
 - **Token budget.** A line is also refused if it is denser than one JSON token per 4 bytes of the line limit (a 64Kb unauthenticated line may hold 16 384 tokens, a 64Mb one 16 777 216). Real documents, vectors and pipelines average well above 4 bytes per token; a huge flat array such as `[1,1,1,...]` does not. Such a line is answered `The command is not valid` and the connection stays open.
-- **Authentication deadline.** A connection must authenticate within `authTimeoutMs` (default `10000`) of being accepted. The deadline is absolute: traffic, blank lines and failed `AUTHENTICATE` attempts do not extend it. When it expires the server answers one `CLOSE_CONNECTION` frame with `408-4` and closes the connection. Once authenticated, a connection is never closed for being idle.
-- **Idle transactions.** A connection holding an open transaction must send its next request within `transactionIdleTimeoutMs` (default `30000`); see [Transactions](#transactions).
+- **Authentication deadline.** A connection must authenticate within `authTimeoutMs` (default `10000`) of being accepted. The deadline is absolute: traffic, blank lines and failed `AUTHENTICATE` attempts do not extend it. When it expires the server answers one `CLOSE_CONNECTION` frame with `408-4` and closes the connection. With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that stalls or drips its handshake is closed at `authTimeoutMs` plus one second, and so is a connection refused at `maxConnections` that never completes its handshake. Once authenticated, a connection is never closed for being idle.
+- **Unauthenticated connections per address.** One remote address may hold at most `maxUnauthenticatedConnectionsPerAddress` (default `16`) connections that have not authenticated yet; the next one is answered `503-14` and closed. Authenticating frees the slot. Clients behind one NAT address share the allowance.
+- **Unparseable lines before authentication.** A connection that sends `maxUnauthenticatedInvalidRequests` (default `5`) unparseable lines before it authenticates is closed after the last answer.
+- **Idle transactions.** A connection holding an open transaction must send its next request within `transactionIdleTimeoutMs` (default `30000`), and a transaction is rolled back once it is older than `transactionMaxAgeMs` (default `600000`) however busy it is; see [Transactions](#transactions).
 - `maxConnections` counts client sockets only; forwarded cluster requests and transaction sessions no longer take a slot.
 
 ```jsonl
@@ -187,6 +189,7 @@ Read operations accept an optional `"dirtyRead": true` (default `false`); see [C
 #### `AGGREGATE`
 Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
 Also accepts an optional top-level `"analyze": true` (default `false`); see [Explain / Analyze](#explain--analyze).
+A pipeline is stopped with `408-6` once it has run for `aggregateTimeoutMs` (default `300000`, `0` = no limit). An `IN`/`NOT_IN` list or a `within` polygon may hold at most `maxFilterOperands` (default `10000`) operands, refused with `400-27` past it, and a `MAP` `fieldName` may nest at most 128 levels.
 
 ```json
 {
@@ -246,7 +249,7 @@ A `MAP` `ADD_FIELD` may carry a `CAST` mid-operator (`fieldName`, `toType`, plus
 
 #### The `CONCAT` mid-operator
 
-`CONCAT` joins its operands into one string. A top-level string operand is a **field path** unless it carries the string-literal prefix `-`; a string inside an array operand is always a literal. A `null` operand contributes the text `null`, and so does a top-level field path the document does not hold — in both operand positions, and whether the null was written literally or read from a null-valued field.
+`CONCAT` joins its operands into one string, which may be at most `maxEntrySize` characters long; a longer result stops the pipeline with `400-28`. A top-level string operand is a **field path** unless it carries the string-literal prefix `-`; a string inside an array operand is always a literal. A `null` operand contributes the text `null`, and so does a top-level field path the document does not hold — in both operand positions, and whether the null was written literally or read from a null-valued field.
 
 #### Script operators (SimpleJS in the pipeline)
 
@@ -457,7 +460,7 @@ Removes the collection's schema, so writes are no longer validated. Idempotent �
 
 Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
 
-Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection.
+Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection. A connection may hold at most `maxListensPerConnection` (default `64`) registrations and the server at most `maxListens` (default `10000`); past either, `LISTEN` answers `400-25` without running the query.
 
 ```json
 {
@@ -538,6 +541,12 @@ If the connection closes with a transaction still open, it is automatically roll
 ```json
 {"type":"SAVE","status":"ERROR","message":"The transaction was rolled back after being idle too long","errorCode":"409-16"}
 ```
+
+**Maximum age.** A transaction older than `transactionMaxAgeMs` (default `600000`, `0` = no limit) is rolled back the same way however busy the connection is, so a client cannot hold its write locks forever by sending a request every few seconds. Its next request is answered `408-5` once and not executed, exactly like the idle case.
+
+**Size.** One transaction may buffer at most `transactionMaxOps` operations (default `100000`; a `BULK_SAVE` counts one per document) and `transactionMaxBytes` of documents (default `256Mb`). The write that would pass either is refused with `400-26`; nothing of it is buffered and the transaction stays usable, so the client can still commit what it buffered or roll back.
+
+**Grants are checked again at commit.** Every operation is authorized when it is buffered, and `COMMIT_TRANSACTION` authorizes every collection the transaction writes once more against the user's current grants. If a grant was revoked in between, the commit is refused with `403-1`, the whole transaction is rolled back and nothing is applied.
 
 ##### `START_TRANSACTION`
 ```json
@@ -883,7 +892,7 @@ Runs a `before` trigger against a document you supply and reports what it would 
 ```json
 {"type":"DELETE_TRIGGER","databaseName":"mydb","collectionName":"orders","name":"auditWrites"}
 ```
-Idempotent — succeeds whether or not the trigger existed. Requires admin privileges, ownership, or `MANAGE` with `READ_WRITE` on the collection.
+Idempotent — succeeds whether or not the trigger existed. Requires admin privileges, ownership, or `MANAGE` with `READ_WRITE` on the collection. A trigger installed by another user can only be deleted by that user (its `definer`), a database owner or an admin; anyone else is refused with `403-5`. The same rule applies to [`SAVE_TRIGGER`](#save_trigger) replacing an existing trigger of the same name.
 
 #### `LIST_TRIGGERS`
 ```json
@@ -913,20 +922,21 @@ Runs a stored procedure **on a clock**. Requires admin privileges, ownership, or
 ```
 
 - **Exactly one of `cron` and `intervalMs`.** `intervalMs` fires every so many milliseconds; `cron` fires on the standard five-field expression `minute hour day-of-month month day-of-week`, supporting the wildcard, a single value, `a-b` ranges, `*/n` and `a-b/n` steps, comma lists, and three-letter month/day names (`JAN`, `MON`; `7` is Sunday). When both day fields are restricted they are OR-ed, the conventional cron rule. The expression is evaluated in the configured `scriptTimeZone`, not the JVM default, so `0 3 * * *` means the same instant on every node.
-- **Runs with the installer's authority** (`definer`), like a trigger and for the same reason: a scheduled run has no caller, so running it as the installer makes it behave identically regardless of who happens to be connected. Re-saving re-stamps the definer to the saving user. If the definer is deleted the schedule stops firing (it never falls back to an admin).
+- **Runs with the installer's authority** (`definer`), like a trigger and for the same reason: a scheduled run has no caller, so running it as the installer makes it behave identically regardless of who happens to be connected. Re-saving re-stamps the definer to the saving user. Only the definer, a database owner or an admin may replace or delete an existing schedule; anyone else is refused with `403-5`. If the definer is deleted the schedule stops firing (it never falls back to an admin).
 - **Not transactional.** A trigger runs inside a transaction because its pending-run record must be consumed atomically with its effects; a schedule has no run record, so a scheduled procedure that wants atomicity opens its own `db.transaction(...)` — which, unlike inside a trigger, is permitted.
 - `args` is the object handed to the procedure as its `args` module, exactly as with [`CALL_PROCEDURE`](#call_procedure). Because a schedule is a separate record from the procedure, one procedure can carry several schedules with different arguments.
-- `timeoutMs` bounds one run's wall clock; omit it (or `0`) to use `scheduleTimeoutMs`. Everything else — instruction budget, depth, memory, log caps — comes from the `script*` keys.
+- `timeoutMs` bounds one run's wall clock; omit it (or `0`) to use `scheduleTimeoutMs`. It may not exceed `scheduleMaxTimeoutMs` (default `300000`); a larger value is refused with `400-29`. Everything else — instruction budget, depth, memory, log caps — comes from the `script*` keys.
 - `enabled` defaults to `true`. `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Use `0` to require that the schedule does not exist yet.
 - **Delivery is at-most-once per due instant.** Firing is never finer-grained than `scheduleTickMs`, a run still executing when the next occurrence is due is skipped rather than queued twice, and **missed runs while a node was down are skipped, not caught up** — a job that must not miss an occurrence should be idempotent and driven off data, not off the clock. Under clustering each schedule is owned by exactly one node through the consistent-hash ring, so a schedule fires once per due instant across the cluster and fails over automatically; a membership change during a tick may drop that tick rather than run it twice (see [docs/clustering.md](docs/clustering.md) → *Scheduled procedures*).
 - A schedule is stored **with its database**, in `{filePath}/{database}/.schedules/{name}.json`, so dropping the database removes it.
-- **Errors**: `403-2` schedules disabled, `403-1` not permitted, `404-4` unknown database, `404-8` unknown procedure, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`), `400-16` neither or both of `cron`/`intervalMs`, a malformed cron, or a negative `timeoutMs`, `400-17` past `scheduleMaxPerDatabase`, `409-8` version conflict.
+- **Errors**: `403-2` schedules disabled, `403-1` not permitted, `403-5` replacing another user's schedule, `404-4` unknown database, `404-8` unknown procedure, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`), `400-16` neither or both of `cron`/`intervalMs`, a malformed cron, or a negative `timeoutMs`, `400-17` past `scheduleMaxPerDatabase`, `400-29` a `timeoutMs` past `scheduleMaxTimeoutMs`, `409-8` version conflict.
+- **A full schedule queue never drops another database's run.** When `scheduleQueueSize` is reached, the oldest queued run of the same database is dropped to make room; if that database has nothing queued, the new run is the one dropped. Triggers follow the same rule on `triggerQueueSize`.
 
 #### `DELETE_SCHEDULE`
 ```json
 {"type":"DELETE_SCHEDULE","databaseName":"mydb","name":"nightlyRollup"}
 ```
-Idempotent — succeeds whether or not the schedule existed. A [`DELETE_PROCEDURE`](#delete_procedure) is refused with `400-16` while a schedule still references it (the message names the schedule).
+Idempotent — succeeds whether or not the schedule existed. A schedule installed by another user can only be deleted by its definer, a database owner or an admin (`403-5`). A [`DELETE_PROCEDURE`](#delete_procedure) is refused with `400-16` while a schedule still references it (the message names the schedule).
 
 #### `LIST_SCHEDULES`
 ```json
@@ -1026,7 +1036,7 @@ Replaces all permissions for the user in full.
 ```
 
 #### `SET_PASSWORD`
-A user can change their own password by providing `currentPassword` for verification. An admin can change any user's password without supplying `currentPassword`. Non-admins cannot change another user's password.
+A user can change their own password by providing `currentPassword` for verification. An admin can change any user's password without supplying `currentPassword`. Non-admins cannot change another user's password: such a request answers `403-1` whether or not the target user exists, so it cannot be used to discover usernames.
 
 A successful change signs the user out of every other connection: their next request answers `401-1` until they
 authenticate with the new password. The connection that made the change stays authenticated only when it changed
@@ -1289,6 +1299,11 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-22` | `ERROR` | The request line exceeds the size limit (`maxRequestSize`, or 64Kb before authentication); sent as a `CLOSE_CONNECTION` frame and the connection is closed |
 | `400-23` | `ERROR` | Schema validation exceeded its evaluation budget |
 | `400-24` | `ERROR` | The schema expands past the complexity limit |
+| `400-25` | `ERROR` | Too many listen registrations — the connection already holds `maxListensPerConnection`, or the server `maxListens` |
+| `400-26` | `ERROR` | The transaction would exceed its size limit (`transactionMaxOps` or `transactionMaxBytes`); the write is refused and the transaction stays usable for `ROLLBACK_TRANSACTION` |
+| `400-27` | `ERROR` | The filter has more operands than allowed — an `IN`/`NOT_IN` list or a `within` polygon past `maxFilterOperands` |
+| `400-28` | `ERROR` | A MAP result exceeds the maximum entry size — a `CONCAT` built a string longer than `maxEntrySize` |
+| `400-29` | `ERROR` | The schedule timeout exceeds the allowed maximum (`scheduleMaxTimeoutMs`) |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -1297,6 +1312,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `403-2` | `FORBIDDEN` | Script execution is disabled on this server |
 | `403-3` | `FORBIDDEN` | Fault injection is disabled on this server — a [fault injection](#fault-injection-testing-and-debugging-only) operation on a server without `faultInjectionEnabled=true` |
 | `403-4` | `FORBIDDEN` | Procedure is bound by a trigger or schedule that runs as another user — a [`SAVE_PROCEDURE`](#save_procedure) or [`DELETE_PROCEDURE`](#delete_procedure) by someone other than the binding's definer, a database owner or an admin |
+| `403-5` | `FORBIDDEN` | The trigger or schedule belongs to another user — a `SAVE_TRIGGER`, `DELETE_TRIGGER`, `SAVE_SCHEDULE` or `DELETE_SCHEDULE` replacing or removing a definition by someone other than its definer, a database owner or an admin |
 | `404-1` | `NOT_FOUND` | User not found |
 | `404-2` | `NOT_FOUND` | Entry not found |
 | `404-3` | `NOT_FOUND` | No results |
@@ -1311,6 +1327,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `408-2` | `ERROR` | Script was cancelled |
 | `408-3` | `ERROR` | The armed fault point was not reached in time (`AWAIT_FAULT`, testing only) |
 | `408-4` | `ERROR` | The connection did not authenticate within `authTimeoutMs`; sent as a `CLOSE_CONNECTION` frame and the connection is closed |
+| `408-5` | `ERROR` | The transaction was rolled back after reaching `transactionMaxAgeMs`, however active it was; answered to the next request |
+| `408-6` | `ERROR` | The aggregation exceeded its time budget (`aggregateTimeoutMs`) |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
 | `409-3` | `ERROR` | A transaction is already in progress for this connection |
@@ -1372,6 +1390,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-9` | `ERROR` | The admin coordinator could not be resolved, retry shortly *(a coordinated admin op is never applied locally when no coordinator can be reached: an unreplicated DDL answered with `OK` would diverge the cluster silently)* |
 | `503-10` | `ERROR` | The collection has not reached this node yet, retry shortly *(a write routed to the collection's owner can arrive before the `CREATE_COLLECTION` that created it, since admin replication only waits for a quorum and the owner need not be in it — retryable, not a server fault)* |
 | `503-13` | `ERROR` | The server is shutting down, retry against another node or later *(answered to every request on an already-open connection once shutdown has begun, except `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION`; a write acknowledged before this point is indexed and durable, and one refused with it was not applied)* |
+| `503-14` | `ERROR` | Too many unauthenticated connections from this address (`maxUnauthenticatedConnectionsPerAddress`); sent as a `CLOSE_CONNECTION` frame and the connection is closed |
 
 ### Running the server
 
@@ -1393,6 +1412,9 @@ configuration stops at startup with the `FATAL` message instead of coming up wit
 docker build -t lwnrdb .
 docker run -p 8989:8989 -v ./db:/app/db -v ./lwnrdb.cfg:/app/lwnrdb.cfg:ro lwnrdb
 ```
+
+The image runs as the unprivileged `lwnrdb` user, not root. A host directory mounted over `/app/db`, `/app/logs` or
+`/app/certs` must be writable by that user's uid (`docker run --rm --entrypoint id lwnrdb` prints it).
 
 The integration suites in `test_utils/` authenticate with `base_utils.PASSWORD` (`Tst-Admin-9xQ2mV`): a server the
 suites do not start themselves must have `defaultAdminPassword=Tst-Admin-9xQ2mV` in its `lwnrdb.cfg`, which is what
@@ -1511,6 +1533,9 @@ Every value is **validated at startup**. If any value is invalid, the server log
 port=8989
 # 0 = unlimited connections
 maxConnections=100
+# unauthenticated connections one address may hold (503-14), and unparseable lines before authenticating
+maxUnauthenticatedConnectionsPerAddress=16
+maxUnauthenticatedInvalidRequests=5
 maxFailedAuthAttempts=5
 authFailureDelayBaseMs=250
 authFailureDelayMaxMs=30000
@@ -1533,6 +1558,17 @@ maxRequestSize=64Mb
 # ms a new connection has to authenticate (408-4), and ms an open transaction may sit idle (409-16)
 authTimeoutMs=10000
 transactionIdleTimeoutMs=30000
+# per-transaction ceilings (400-26) and maximum age however busy (408-5)
+transactionMaxOps=100000
+transactionMaxBytes=256Mb
+transactionMaxAgeMs=600000
+# LISTEN registrations per connection and per server (400-25)
+maxListensPerConnection=64
+maxListens=10000
+# IN/NOT_IN operands and within-polygon vertices (400-27), #vector components, AGGREGATE wall clock (408-6)
+maxFilterOperands=10000
+maxVectorDimensions=16384
+aggregateTimeoutMs=300000
 # TLS: when enabled, plaintext clients are rejected at the handshake
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
@@ -1544,6 +1580,8 @@ scriptTimeoutMs=5000
 scriptMaxDepth=200
 scriptMaxSourceBytes=256Kb
 scriptMaxMemoryBytes=64Mb
+# % of max heap the post-GC live set may reach before a script allocating more is stopped
+scriptHeapCeilingPercent=75
 scriptMaxResultBytes=16Mb
 scriptCursorBatchSize=500
 scriptCursorMaxBatchSize=5000

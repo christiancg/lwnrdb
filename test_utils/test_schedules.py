@@ -432,6 +432,30 @@ def test_permissions():
                    "UNAUTHENTICATED", "401-1")
 
 
+def test_a_manager_cannot_change_a_schedule_defined_by_someone_else():
+    section("A MANAGE user cannot replace or delete a schedule another user defined")
+    with admin_conn() as admin:
+        check_status("the admin installs a schedule", admin.save_schedule("byAdmin", "counter", cron="0 3 * * *"),
+                     "OK")
+        with user_conn(MANAGER) as manager:
+            check_code("the manager may not replace it",
+                       manager.save_schedule("byAdmin", "counter", cron="0 4 * * *"), "FORBIDDEN", "403-5")
+            check_code("nor delete it", manager.delete_schedule("byAdmin"), "FORBIDDEN", "403-5")
+        stored = next((entry for entry in admin.list_schedules().get("schedules", [])
+                       if entry.get("name") == "byAdmin"), {})
+        check("the schedule is unchanged", stored.get("cron") == "0 3 * * *", f"got {stored}")
+        check_status("the admin may still delete it", admin.delete_schedule("byAdmin"), "OK")
+
+
+def test_a_schedule_timeout_past_the_ceiling_is_refused(conn: Conn):
+    section("A schedule timeout past scheduleMaxTimeoutMs is refused")
+    check_code("timeoutMs one past the ceiling -> 400-29",
+               conn.save_schedule("tooSlow", "counter", cron="0 3 * * *", timeoutMs=300001), "ERROR", "400-29")
+    check_status("timeoutMs at the ceiling is accepted",
+                 conn.save_schedule("atCeiling", "counter", cron="0 3 * * *", timeoutMs=300000), "OK")
+    conn.delete_schedule("atCeiling")
+
+
 def test_storage_placement(conn: Conn, work_dir: str):
     section("Storage placement")
     check_status("save a schedule to place", conn.save_schedule("placed", "counter", cron="0 3 * * *"), "OK")
@@ -510,12 +534,14 @@ def main():
             test_listing(conn)
             test_schedule_name_case_variants(conn)
             test_validation(conn)
+            test_a_schedule_timeout_past_the_ceiling_is_refused(conn)
             test_import_failure(conn)
             test_failure_logs_a_stack(conn, log_path)
             test_run_history(conn)
             test_referential_integrity(conn)
         test_permissions()
         test_a_client_cannot_forge_the_stamped_definer()
+        test_a_manager_cannot_change_a_schedule_defined_by_someone_else()
         with admin_conn() as conn:
             test_storage_placement(conn, work_dir)
             test_stats(conn)

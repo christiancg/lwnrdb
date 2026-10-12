@@ -612,6 +612,36 @@ def test_disconnect_cleanup(writer: Conn):
     check_code("STOP_LISTEN after disconnect → NOT_FOUND", r_stop, "NOT_FOUND", "404-7")
 
 
+def test_a_connection_cannot_register_past_its_listen_limit():
+    section("LISTEN: one connection is capped at maxListensPerConnection registrations")
+
+    per_connection_limit = 64
+    with Conn() as tmp:
+        tmp.authenticate()
+        steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "capped"}}]
+        statuses = [listen(tmp, steps).get("status") for _ in range(per_connection_limit)]
+        check(f"The first {per_connection_limit} registrations succeed", statuses.count("OK") == per_connection_limit,
+              f"statuses={statuses}")
+        check_code("The next one -> 400-25", listen(tmp, steps), "ERROR", "400-25")
+    with Conn() as fresh:
+        fresh.authenticate()
+        steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "capped"}}]
+        check_status("Another connection still registers", listen(fresh, steps), "OK")
+
+
+def test_a_listen_whose_map_exceeds_the_entry_size_answers_400_28(admin: Conn):
+    section("LISTEN: a MAP refused for its result size answers its own code")
+
+    operators = [{"fieldName": "g0", "operator": {"type": "CONCAT", "operands": ["-AAAAAAAA", "-AAAAAAAA"]}}]
+    operators += [{"fieldName": f"g{i}", "operator": {"type": "CONCAT", "operands": [f"g{i - 1}", f"g{i - 1}"]}}
+                  for i in range(1, 31)]
+    save_doc(admin, {"_id": "concat-seed", "kind": "concat"})
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "concat"}},
+             {"type": "MAP", "operators": operators}]
+    check_code("LISTEN with a doubling CONCAT -> 400-28", listen(admin, steps), "ERROR", "400-28")
+    delete_doc(admin, "concat-seed")
+
+
 def test_unauthenticated_listen():
     section("LISTEN: unauthenticated client is rejected")
 
@@ -748,6 +778,7 @@ def main():
             test_initial_response(admin_conn)
             test_no_push_on_unrelated_write(admin_conn)
             test_aggregate_vector_nearest(admin_conn)
+            test_a_listen_whose_map_exceeds_the_entry_size_answers_400_28(admin_conn)
 
             with Conn() as writer_conn, Conn() as listener_conn:
                 writer_conn.authenticate()
@@ -775,6 +806,7 @@ def main():
                 test_dropping_a_joined_collection_ends_the_listen(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)
 
+            test_a_connection_cannot_register_past_its_listen_limit()
             test_unauthenticated_listen()
 
         finally:

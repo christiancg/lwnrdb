@@ -1,9 +1,6 @@
 package org.techhouse.log;
 
 public final class LogSanitizer {
-    private static final char FIRST_PRINTABLE = 0x20;
-    private static final char DELETE = 0x7f;
-    private static final char NEXT_LINE = 0x85;
     private static final char LINE_SEPARATOR = 0x2028;
     private static final char PARAGRAPH_SEPARATOR = 0x2029;
     private static final String HEX_DIGITS = "0123456789abcdef";
@@ -37,7 +34,7 @@ public final class LogSanitizer {
     }
 
     private static boolean needsEscape(char c) {
-        return c < FIRST_PRINTABLE || c == DELETE || c == NEXT_LINE || c == LINE_SEPARATOR || c == PARAGRAPH_SEPARATOR;
+        return Character.isISOControl(c) || c == LINE_SEPARATOR || c == PARAGRAPH_SEPARATOR;
     }
 
     private static void appendEscape(StringBuilder out, char c) {

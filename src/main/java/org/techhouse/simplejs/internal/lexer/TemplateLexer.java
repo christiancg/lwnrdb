@@ -13,10 +13,27 @@ import org.techhouse.simplejs.elements.JsBaseElement.JsType;
 import org.techhouse.simplejs.elements.JsEOF;
 import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsTemplateString;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnterminatedTemplateException;
 
 public final class TemplateLexer {
+    private static final int MAX_TEMPLATE_NESTING = 64;
+    private static final ThreadLocal<int[]> NESTING = ThreadLocal.withInitial(() -> new int[1]);
+
     public static Lexed lexTemplate(String src, int start) {
+        final var depth = NESTING.get();
+        if (depth[0] >= MAX_TEMPLATE_NESTING) {
+            throw new SyntaxErrorException("Template literals nest more than " + MAX_TEMPLATE_NESTING + " levels deep");
+        }
+        depth[0]++;
+        try {
+            return lexTemplateLevel(src, start);
+        } finally {
+            depth[0]--;
+        }
+    }
+
+    private static Lexed lexTemplateLevel(String src, int start) {
         final var n = src.length();
         final var quasis = new ArrayList<String>();
         final var rawQuasis = new ArrayList<String>();

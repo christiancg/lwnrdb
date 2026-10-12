@@ -14,6 +14,8 @@ PORT = int(os.environ.get("CONNLIMIT_TEST_PORT", "9444"))
 AUTH_TIMEOUT_S = 1.5
 IDLE_TIMEOUT_S = 1.5
 MAX_CONNECTIONS = 6
+TRANSACTION_MAX_OPS = 20
+TRANSACTION_MAX_AGE_S = 6.0
 DB = "connlimits_db"
 COLL = "items"
 
@@ -23,7 +25,8 @@ bu.configure(host=HOST, port=PORT)
 def write_config(work_dir: str):
     bu.write_config(work_dir, PORT, maxRequestSize="128Kb", maxEntrySize="64Kb", maxPageSize="256Kb",
                     authTimeoutMs=int(AUTH_TIMEOUT_S * 1000), transactionIdleTimeoutMs=int(IDLE_TIMEOUT_S * 1000),
-                    maxConnections=MAX_CONNECTIONS)
+                    maxConnections=MAX_CONNECTIONS, transactionMaxOps=TRANSACTION_MAX_OPS,
+                    transactionMaxAgeMs=int(TRANSACTION_MAX_AGE_S * 1000))
 
 
 def raw_socket(timeout: float = 10.0) -> socket.socket:
@@ -314,6 +317,57 @@ def test_close_connection_is_always_accepted_after_a_reap():
         holder.close()
 
 
+def test_a_transaction_past_its_operation_limit_is_refused():
+    section("A transaction refuses the write that would take it past transactionMaxOps")
+    with Conn.authenticated() as holder:
+        check_status("START_TRANSACTION", holder.send({"type": "START_TRANSACTION"}), "OK")
+        objects = [{"_id": f"many-{i}", "n": i} for i in range(TRANSACTION_MAX_OPS)]
+        check_status(f"BULK_SAVE of {TRANSACTION_MAX_OPS} documents fits",
+                     holder.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+                                  "objects": objects}), "OK")
+        check_code("One more SAVE -> 400-26", holder.send(save("many-overflow")), "ERROR", "400-26")
+        check_status("The transaction still commits what fitted", holder.send({"type": "COMMIT_TRANSACTION"}), "OK")
+        check_status("A fitted document is durable", holder.send(find("many-0")), "OK")
+        check_status("The refused one was never written", holder.send(find("many-overflow")), "NOT_FOUND")
+
+
+def test_a_busy_transaction_is_still_reaped_at_its_maximum_age():
+    section("A transaction that keeps sending requests is rolled back at transactionMaxAgeMs")
+    holder = open_transaction_with_one_write("aged-1")
+    try:
+        answers = []
+        end = time.time() + TRANSACTION_MAX_AGE_S + 4
+        while time.time() < end:
+            answer = holder.send(find("aged-1"))
+            answers.append(answer.get("errorCode") or answer.get("status"))
+            if answer.get("errorCode") == "408-5":
+                break
+            time.sleep(0.5)
+        check("A keepalive request is answered 408-5 once the age passes", "408-5" in answers, f"answers={answers}")
+        check_status("The aged transaction's document was discarded", holder.send(find("aged-1")), "NOT_FOUND")
+    finally:
+        holder.close()
+
+
+def test_unparseable_lines_before_authentication_close_the_connection():
+    section("Five unparseable lines before authenticating close the connection")
+    with raw_socket() as sock:
+        sock.sendall(b"garbage\n" * 6)
+        answers = [read_frame(sock, 3.0) for _ in range(5)]
+        check("The first five are answered", all(answer is not None for answer in answers), f"answers={answers}")
+        check("Then the server closes the connection", reaches_eof(sock))
+
+
+def test_an_unauthenticated_request_is_answered_401_1_without_validation():
+    section("A request before authenticating is answered 401-1, never validated")
+    with raw_socket() as sock:
+        sock.sendall(b'{"type":"SET_DATABASE_OWNERS","databaseName":"anyDb","owners":["nobodyHere"]}\n')
+        frame = read_frame(sock, 3.0) or {}
+        check_code("SET_DATABASE_OWNERS with an unknown owner", frame, "UNAUTHENTICATED", "401-1")
+        check("The answer does not reveal whether the owner exists", "does not exist" not in json.dumps(frame),
+              f"got={frame}")
+
+
 def test_max_connections_admits_exactly_the_limit_under_concurrency():
     section("maxConnections admits exactly the limit under a concurrent burst")
     time.sleep(0.5)
@@ -375,6 +429,10 @@ def main():
         test_a_busy_transaction_is_not_reaped()
         test_a_dribbling_transaction_holder_is_reaped()
         test_close_connection_is_always_accepted_after_a_reap()
+        test_a_transaction_past_its_operation_limit_is_refused()
+        test_a_busy_transaction_is_still_reaped_at_its_maximum_age()
+        test_unparseable_lines_before_authentication_close_the_connection()
+        test_an_unauthenticated_request_is_answered_401_1_without_validation()
         test_max_connections_admits_exactly_the_limit_under_concurrency()
     finally:
         bu.stop_server(proc, port=PORT, wait_for_port=False)

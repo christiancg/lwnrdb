@@ -27,6 +27,7 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
+import org.techhouse.ops.tx.CommitAuthorization;
 import org.techhouse.ops.tx.SliceCommit;
 import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.ops.tx.TransactionBuffer;
@@ -151,7 +152,7 @@ public final class TransactionOperationHelper {
         final var decided = decidedElsewhere || isDecided(transaction.getTransactionId().toString());
         var fenced = decided;
         try {
-            final var refusal = decided ? null : preApplyRefusal(transaction);
+            final var refusal = decided ? null : commitRefusal(transaction, clientId);
             if (refusal != null) {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, refusal);
@@ -183,6 +184,16 @@ public final class TransactionOperationHelper {
                 releaseAndDeregister(transaction, clientId);
             }
         }
+    }
+
+    private static ErrorCode commitRefusal(Transaction transaction, UUID clientId) {
+        final var refusal = preApplyRefusal(transaction);
+        if (refusal != null) {
+            return refusal;
+        }
+        return CommitAuthorization.allows(transaction, clientTracker.getAuthenticatedUsername(clientId))
+                ? null
+                : ErrorCode.NO_PERMISSIONS;
     }
 
     public static void abortInPlace(UUID clientId) {

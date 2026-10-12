@@ -60,7 +60,7 @@ public class ScheduleExecutor {
         }
         try {
             tick(System.currentTimeMillis());
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             logger.error("Error while looking for due schedules: ", e);
         }
     }
@@ -68,8 +68,8 @@ public class ScheduleExecutor {
     private void refreshRegistry() {
         try {
             registry.loadAll();
-        } catch (Exception e) {
-            logger.warning("Failed to refresh the schedule registry: " + e.getMessage());
+        } catch (Exception | Error e) {
+            logger.error("Failed to refresh the schedule registry: ", e);
         }
     }
 
@@ -108,21 +108,39 @@ public class ScheduleExecutor {
             return;
         }
         while (!queue.offer(entry)) {
-            final var evicted = queue.poll();
+            final var evicted = oldestQueuedFor(entry.getDbName());
             if (evicted == null) {
-                continue;
+                if (!queue.offer(entry)) {
+                    drop(entry, "the newest");
+                }
+                return;
             }
-            dropped.increment();
-            running.remove(evicted.key());
-            logger.warning("Schedule queue full; dropped the oldest queued run of '" + evicted.key() + "'");
+            if (queue.remove(evicted)) {
+                drop(evicted, "the oldest queued");
+            }
         }
+    }
+
+    private ScheduleRegistry.Entry oldestQueuedFor(String dbName) {
+        for (final var queued : queue) {
+            if (dbName.equals(queued.getDbName())) {
+                return queued;
+            }
+        }
+        return null;
+    }
+
+    private void drop(ScheduleRegistry.Entry entry, String which) {
+        dropped.increment();
+        running.remove(entry.key());
+        logger.warning("Schedule queue full; dropped " + which + " run of '" + entry.key() + "'");
     }
 
     private void dispatch(ScheduleRegistry.Entry entry) {
         try {
             dispatcher.accept(entry);
             fired.increment();
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             failed.increment();
             logger.error("Error while dispatching a scheduled run: ", e);
         } finally {

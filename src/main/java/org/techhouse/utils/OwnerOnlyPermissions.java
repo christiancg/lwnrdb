@@ -71,6 +71,29 @@ public final class OwnerOnlyPermissions {
         return Files.newOutputStream(file);
     }
 
+    public static void ensureOwnerOnlyFile(Path file) {
+        if (POSIX && !Files.exists(file)) {
+            createOwnerOnlyFile(file);
+        }
+    }
+
+    public static void ensureOwnerOnlyFileQuietly(Path file) {
+        if (POSIX && !Files.exists(file)) {
+            try {
+                Files.createFile(file, PosixFilePermissions.asFileAttribute(FILE));
+            } catch (IOException | UnsupportedOperationException ignored) {
+            }
+        }
+    }
+
+    public static boolean createNewOwnerOnlyFile(Path file) throws IOException {
+        if (Files.exists(file)) {
+            return false;
+        }
+        ensureOwnerOnlyFile(file);
+        return Files.exists(file) || file.toFile().createNewFile();
+    }
+
     private static void createOwnerOnlyFile(Path file) {
         try {
             Files.createFile(file, PosixFilePermissions.asFileAttribute(FILE));

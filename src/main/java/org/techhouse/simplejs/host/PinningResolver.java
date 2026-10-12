@@ -14,10 +14,21 @@ import java.util.List;
 import java.util.stream.Stream;
 
 public final class PinningResolver implements InetAddressResolver {
+    private static final String SELF_CHECK_HOST = "lwnrdb-pinning-self-check.invalid";
+    private static final String SELF_CHECK_ADDRESS = "192.0.2.1";
     private final InetAddressResolver delegate;
 
     public PinningResolver(InetAddressResolver delegate) {
         this.delegate = delegate;
+    }
+
+    public static boolean isInstalled() {
+        final var expected = InetAddress.ofLiteral(SELF_CHECK_ADDRESS);
+        try (var _ = PinnedResolution.pin(SELF_CHECK_HOST, List.of(expected))) {
+            return List.of(InetAddress.getAllByName(SELF_CHECK_HOST)).contains(expected);
+        } catch (UnknownHostException notPinned) {
+            return false;
+        }
     }
 
     @Override

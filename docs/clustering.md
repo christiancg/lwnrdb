@@ -457,6 +457,11 @@ anti-entropy round, and it is decided per record:
   incarnation, quarantines a stale incarnation's folder, and builds or drops the indexes that
   differ from the record's index set — each under its `.building` marker. Removing a user prunes
   its database ownerships; removing a database or collection prunes the grants that named it.
+  Those local prunes keep each record's version. The coordinator's own `DROP_DATABASE`,
+  `DROP_COLLECTION` and `DELETE_USER` instead write the pruned user (or database) records at a new
+  version and replicate them with the drop, every user record for a drop and every database record
+  for a user removal. A node that missed both a drop and the re-create of the same name never
+  receives the tombstone, so only that newer version reaches it and removes the old grant.
 - **A changed password signs the user out on that node.** Installing a user record whose password
   hash differs from the one this node held deauthenticates every socket connection of that user on
   this node (their next request answers `401-1`), the same as `SET_PASSWORD` does on the node that
@@ -883,8 +888,10 @@ inbound messages whose `secret` does not match `clusterSecret` are rejected.
 frame carrying the secret, sent without waiting for an answer. The listener reads that first line
 under a 4 KB cap and within `clusterHandshakeTimeoutMs`; a connection that stays silent, sends a
 longer line, sends anything other than a `HELLO`, or presents the wrong secret is closed without
-a reply. At most 64 connections may be in that pre-authentication state at once; the next one is
-closed on accept. Only after the handshake does the frame loop start, and every later line, in
+a reply. At most 64 connections may be in that pre-authentication state at once, and at most 8 of
+them from one remote address; the next one is closed on accept. The per-address share keeps one
+flooding host from holding every slot while a restarted peer tries to rejoin. The `HELLO` line is
+parsed with the same 128-level nesting limit as a client request. Only after the handshake does the frame loop start, and every later line, in
 either direction, is capped at `clusterMaxFrameSize` (a larger frame closes the connection; the
 peer reconnects). The per-frame `secret` is still checked on every message. The secret must be at
 least 32 characters and is compared in constant time (`MessageDigest.isEqual`).

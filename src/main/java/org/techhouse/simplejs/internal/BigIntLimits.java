@@ -7,6 +7,7 @@ import org.techhouse.simplejs.exceptions.RangeErrorException;
 public final class BigIntLimits {
     public static final long MAX_BITS = 1L << 24;
     public static final String EXCEEDED = "Maximum BigInt size exceeded";
+    public static final int MAX_PARSE_DIGITS = 65_536;
 
     private static final long FREE_BITS = Long.SIZE;
 

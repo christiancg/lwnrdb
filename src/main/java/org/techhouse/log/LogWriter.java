@@ -5,12 +5,15 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.locks.ReentrantLock;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.utils.OwnerOnlyPermissions;
@@ -18,9 +21,11 @@ import org.techhouse.utils.OwnerOnlyPermissions;
 public class LogWriter {
     private static final Configuration config = Configuration.getInstance();
     private static final ReentrantLock WRITER_LOCK = new ReentrantLock();
+    private static final String ROLLED_SUFFIX = ".1";
     private static BufferedWriter openWriter;
     private static String openPath;
     private static boolean needsLeadingNewline;
+    private static long openBytes;
 
     public static void createLogPathAndRemoveOldFiles() throws IOException {
         final var logPath = config.getLogPath();
@@ -49,7 +54,8 @@ public class LogWriter {
     private static void createCurrentLogFileIfNecessary() throws IOException {
         final var currentLogFile = currentLogFile();
         if (!currentLogFile.exists()) {
-            if (!currentLogFile.createNewFile()) {
+            OwnerOnlyPermissions.ensureOwnerOnlyFileQuietly(currentLogFile.toPath());
+            if (!currentLogFile.exists() && !currentLogFile.createNewFile()) {
                 System.out.println("Error creating log file");
             }
         }
@@ -65,6 +71,7 @@ public class LogWriter {
             for (var i = 1; i <= maxLogFiles; i++) {
                 fileNames.add(logFileName(now.minusDays(i)));
             }
+            fileNames.addAll(fileNames.stream().map(LogWriter::rolledName).toList());
             final var toDelete = Arrays.stream(allFiles).filter(LogWriter::isDatedLogFile)
                     .filter(file -> !fileNames.contains(file.getName())).toList();
             for (var fileToDelete : toDelete) {
@@ -80,9 +87,12 @@ public class LogWriter {
         if (!file.isFile() || !name.endsWith(Globals.LOG_FILE_EXTENSION)) {
             return false;
         }
+        var stem = name.substring(0, name.length() - Globals.LOG_FILE_EXTENSION.length());
+        if (stem.endsWith(ROLLED_SUFFIX)) {
+            stem = stem.substring(0, stem.length() - ROLLED_SUFFIX.length());
+        }
         try {
-            LocalDate.parse(name.substring(0, name.length() - Globals.LOG_FILE_EXTENSION.length()),
-                    DateTimeFormatter.ISO_DATE);
+            LocalDate.parse(stem, DateTimeFormatter.ISO_DATE);
             return true;
         } catch (DateTimeParseException e) {
             return false;
@@ -95,6 +105,11 @@ public class LogWriter {
 
     private static String logFileName(LocalDate date) {
         return date.format(DateTimeFormatter.ISO_DATE) + Globals.LOG_FILE_EXTENSION;
+    }
+
+    private static String rolledName(String logFileName) {
+        return logFileName.substring(0, logFileName.length() - Globals.LOG_FILE_EXTENSION.length()) + ROLLED_SUFFIX
+                + Globals.LOG_FILE_EXTENSION;
     }
 
     public static void writeLogEntry(String logEntry) {
@@ -111,15 +126,27 @@ public class LogWriter {
         try {
             final var file = currentLogFile();
             ensureWriterFor(file, file.getAbsolutePath());
+            if (openBytes > 0 && openBytes + logEntry.length() > config.sizeValue(ConfigKey.MAX_LOG_FILE_SIZE)) {
+                roll(file);
+                ensureWriterFor(file, file.getAbsolutePath());
+            }
             if (needsLeadingNewline) {
                 openWriter.write(Globals.NEWLINE);
+                openBytes += Globals.NEWLINE.length();
             }
             openWriter.append(logEntry);
             openWriter.flush();
+            openBytes += logEntry.length();
             needsLeadingNewline = true;
         } finally {
             WRITER_LOCK.unlock();
         }
+    }
+
+    private static void roll(File file) throws IOException {
+        closeQuietly();
+        final var rolled = file.toPath().resolveSibling(rolledName(file.getName()));
+        Files.move(file.toPath(), rolled, StandardCopyOption.REPLACE_EXISTING);
     }
 
     public static void flushAndClose() {
@@ -141,7 +168,9 @@ public class LogWriter {
         }
         closeQuietly();
         needsLeadingNewline = file.exists() && file.length() > 0;
+        openBytes = file.exists() ? file.length() : 0L;
         openPath = path;
+        OwnerOnlyPermissions.ensureOwnerOnlyFileQuietly(file.toPath());
         openWriter = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE);
     }
 

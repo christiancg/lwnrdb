@@ -68,10 +68,10 @@ public final class RegexBuiltins {
             final var flags = explicitFlags
                     ? JsCoercion.toStr(flagsArg, ops)
                     : JsCoercion.toStr(ops.getMember(first, new JsString("flags")), ops);
-            return RegexTranslator.compile(source, flags);
+            return RegexTranslator.compile(source, flags, ops);
         }
         final var source = first instanceof JsUndefined ? "" : JsCoercion.toStr(first, ops);
-        return RegexTranslator.compile(source, explicitFlags ? JsCoercion.toStr(flagsArg, ops) : "");
+        return RegexTranslator.compile(source, explicitFlags ? JsCoercion.toStr(flagsArg, ops) : "", ops);
     }
 
     public static boolean isRegExp(JsValue value, InterpreterOps ops) {

@@ -414,6 +414,26 @@ def test_a_non_admin_user_can_use_transactions(c):
         c.send({"type": "DELETE_USER", "username": name})
 
 
+def test_a_commit_after_the_write_grant_is_revoked_is_refused(c):
+    section("COMMIT_TRANSACTION re-checks the write grant and rolls back once it was revoked")
+
+    c.send({"type": "DELETE_USER", "username": "txn_revoked"})
+    check_status("CREATE_USER 'txn_revoked' with READ_WRITE",
+                 create_user(c, "txn_revoked", "txn_revoked1234", "READ_WRITE"), "OK")
+    with Conn.authenticated("txn_revoked", "txn_revoked1234") as writer:
+        check_status("START_TRANSACTION", start_txn(writer), "OK")
+        check_status("SAVE inside it", save(writer, {"_id": "revoked_commit", "v": 1}), "OK")
+        check_status("The admin lowers the grant to READ",
+                     c.send({"type": "CHANGE_PERMISSIONS", "username": "txn_revoked", "admin": False,
+                             "globalPermissions": [], "databasePermissions": {DB: "READ"},
+                             "collectionPermissions": {}}), "OK")
+        check_code("COMMIT_TRANSACTION -> 403-1", commit_txn(writer), "FORBIDDEN", "403-1")
+    check_status("The buffered write never landed", find_by_id(c, "revoked_commit"), "NOT_FOUND")
+    check_status("The collection lock was released", save(c, {"_id": "after_revoke", "v": 1}), "OK")
+    delete(c, "after_revoke")
+    c.send({"type": "DELETE_USER", "username": "txn_revoked"})
+
+
 def test_entry_size_is_checked_after_the_id_is_assigned(c):
     section("An oversized-once-identified document is refused at buffer time")
 
@@ -584,6 +604,8 @@ def main():
         test_entry_size_is_checked_after_the_id_is_assigned(c)
     with authed_conn() as (c):
         test_a_non_admin_user_can_use_transactions(c)
+    with authed_conn() as (c):
+        test_a_commit_after_the_write_grant_is_revoked_is_refused(c)
     test_auto_rollback_on_disconnect()
     test_a_committed_transaction_survives_the_disconnect()
 

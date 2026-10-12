@@ -160,6 +160,7 @@ public final class ArraySort {
                 element = invoker.call(mapper, self, List.of(element, new JsNumber(i), source.value()));
             }
             if (depth > 0 && isArray(element)) {
+                InterpreterOps.tick(ops);
                 final var nested = new ArrayLike(element, ops);
                 NativeDepth.enter(ops);
                 try {
@@ -171,6 +172,7 @@ public final class ArraySort {
                 if (written >= MAX_SAFE_INTEGER_LONG) {
                     throw new TypeErrorException("Invalid array length");
                 }
+                InterpreterOps.chargeElements(ops, 1);
                 createDataPropertyOrThrow(result, written, element, ops);
                 written++;
             }

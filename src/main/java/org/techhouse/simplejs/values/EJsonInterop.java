@@ -43,13 +43,26 @@ public final class EJsonInterop {
     }
 
     public static JsonBaseElement toHostEjson(JsValue value, InterpreterOps ops) {
-        return convert(value, new Conversion(true, new IdentityHashMap<>(), ops), "");
+        final var converted = convert(value, new Conversion(true, new IdentityHashMap<>(), ops), "");
+        InterpreterOps.release(ops, nodeCount(converted) * InterpreterOps.BYTES_PER_ELEMENT);
+        return converted;
+    }
+
+    public static long nodeCount(JsonBaseElement element) {
+        return switch (element) {
+            case null -> 0L;
+            case JsonArray array -> 1L + array.asList().stream().mapToLong(EJsonInterop::nodeCount).sum();
+            case JsonObject object ->
+                1L + object.entrySet().stream().mapToLong(entry -> nodeCount(entry.getValue())).sum();
+            default -> 1L;
+        };
     }
 
     private record Conversion(boolean hostMode, Map<JsValue, Boolean> visited, InterpreterOps ops) {
     }
 
     private static JsonBaseElement convert(JsValue value, Conversion mode, String path) {
+        InterpreterOps.chargeElements(mode.ops(), 1);
         return switch (value) {
             case JsNumber n -> numberToEjson(n, mode, path);
             case JsBigInt bigInt -> bigIntToEjson(bigInt, mode, path);

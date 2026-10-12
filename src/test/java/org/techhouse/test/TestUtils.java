@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -33,6 +34,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
@@ -330,6 +332,22 @@ public class TestUtils {
             }
         }
         return result;
+    }
+
+    public static void ensureAdminUser(String username) {
+        final var cache = IocContainer.get(Cache.class);
+        if (username == null || cache.getAdminUserEntry(username) != null) {
+            return;
+        }
+        try {
+            AdminOperationHelper.saveUserEntry(
+                    new AdminUserEntry(username, "unused", true, Set.of(), new HashMap<>(), new HashMap<>()));
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     public static OperationResponse createAdmin(String username) {

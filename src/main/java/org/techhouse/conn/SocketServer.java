@@ -7,9 +7,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
+import org.techhouse.config.Globals;
+import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 
 public class SocketServer {
+    private static final long ACCEPT_FAILURE_PAUSE_MS = 100L;
+    private static final LogRateLimiter ACCEPT_FAILURE_LOG = new LogRateLimiter(Globals.LOG_RATE_LIMIT_PER_SECOND);
     private final Logger logger = Logger.logFor(SocketServer.class);
     private final int port;
     private final ExecutorService pool;
@@ -31,17 +35,39 @@ public class SocketServer {
         try (ServerSocket socketForServing = createServerSocket()) {
             serverSocket = socketForServing;
             logger.info("Server is listening on port " + port + (sslServerSocketFactory != null ? " (TLS)" : ""));
-            while (!Thread.currentThread().isInterrupted()) {
-                Socket socket = socketForServing.accept();
-                disableNagle(socket);
-                pool.execute(new MessageProcessor(socket, this::isStopping));
+            while (!stopping && !socketForServing.isClosed() && !Thread.currentThread().isInterrupted()) {
+                acceptOne(socketForServing);
             }
+            logger.info("Stopped accepting new connections on port " + port);
         } catch (IOException ex) {
-            if (stopping) {
-                logger.info("Stopped accepting new connections on port " + port);
-                return;
-            }
             logger.fatal("I/O error while starting server on port " + port, ex);
+        }
+    }
+
+    private void acceptOne(ServerSocket socketForServing) {
+        final Socket socket;
+        try {
+            socket = socketForServing.accept();
+        } catch (IOException ex) {
+            if (!stopping) {
+                final var entry = ACCEPT_FAILURE_LOG
+                        .admit("Could not accept a connection on port " + port + ": " + ex.getMessage());
+                if (entry != null) {
+                    logger.warning(entry);
+                }
+                pauseAfterAcceptFailure();
+            }
+            return;
+        }
+        disableNagle(socket);
+        pool.execute(new MessageProcessor(socket, this::isStopping));
+    }
+
+    private static void pauseAfterAcceptFailure() {
+        try {
+            Thread.sleep(ACCEPT_FAILURE_PAUSE_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

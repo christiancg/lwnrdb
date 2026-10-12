@@ -23,6 +23,22 @@ public final class CollectionReadinessGuard {
                 : new OperationResponse(type, ErrorCode.COLLECTION_NOT_FOUND);
     }
 
+    public static OperationResponse precheck(OperationType type, String dbName, String collName) {
+        try {
+            return check(type, dbName, collName);
+        } catch (RuntimeException deferredToTheLockedCheck) {
+            return null;
+        }
+    }
+
+    public static OperationResponse precheckRead(OperationType type, String dbName, List<String> collNames) {
+        try {
+            return checkRead(type, dbName, collNames);
+        } catch (RuntimeException deferredToTheLockedCheck) {
+            return null;
+        }
+    }
+
     public static OperationResponse checkRead(OperationType type, String dbName, List<String> collNames) {
         if (isAdminDatabase(dbName)) {
             return null;

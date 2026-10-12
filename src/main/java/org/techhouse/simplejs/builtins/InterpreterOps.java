@@ -55,6 +55,9 @@ public interface InterpreterOps {
     default void release(long bytes) {
     }
 
+    default void noteAllocation(long bytes) {
+    }
+
     default void tick() {
     }
 
@@ -90,6 +93,18 @@ public interface InterpreterOps {
     static void release(InterpreterOps ops, long bytes) {
         if (ops != null) {
             ops.release(bytes);
+        }
+    }
+
+    static void paceWork(InterpreterOps ops, long units) {
+        if (ops != null && units > PACE_MASK) {
+            ops.tick(units / (PACE_MASK + 1));
+        }
+    }
+
+    static void noteChars(InterpreterOps ops, long chars) {
+        if (ops != null) {
+            ops.noteAllocation(chars * STRING_BYTES_PER_CHAR);
         }
     }
 

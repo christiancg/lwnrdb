@@ -38,15 +38,19 @@ public final class FetchBuiltins {
     }
 
     public static void install(Environment global, EventLoop eventLoop, NetworkAccess network, ResourceLimits limits,
-            Intrinsics intrinsics) {
+            Intrinsics intrinsics, InterpreterOps ops) {
         final var inFlight = new AtomicInteger();
         final var fetch = new JsNativeFunction("fetch",
-                (_, args) -> fetch(eventLoop, network, limits, args, intrinsics, inFlight));
+                (_, args) -> fetch(eventLoop, network, limits, args, new Settlement(intrinsics, ops), inFlight));
         global.declareBuiltin("fetch", fetch);
     }
 
+    private record Settlement(Intrinsics intrinsics, InterpreterOps ops) {
+    }
+
     private static JsValue fetch(EventLoop eventLoop, NetworkAccess network, ResourceLimits limits, List<JsValue> args,
-            Intrinsics intrinsics, AtomicInteger inFlight) {
+            Settlement settlement, AtomicInteger inFlight) {
+        final var intrinsics = settlement.intrinsics();
         final var promise = new JsPromise(eventLoop);
         if (network == null || !limits.fetchEnabled()) {
             promise.reject(error("fetch is not available", intrinsics));
@@ -66,12 +70,12 @@ public final class FetchBuiltins {
             promise.reject(error("fetch: too many concurrent requests", intrinsics));
             return promise;
         }
-        runAsync(eventLoop, promise, network, request, intrinsics, inFlight);
+        runAsync(eventLoop, promise, network, request, settlement, inFlight);
         return promise;
     }
 
     private static void runAsync(EventLoop eventLoop, JsPromise promise, NetworkAccess network, FetchRequest request,
-            Intrinsics intrinsics, AtomicInteger inFlight) {
+            Settlement settlement, AtomicInteger inFlight) {
         eventLoop.beginAsyncJob();
         Thread.ofVirtual().start(() -> {
             final var outcome = new FetchOutcome();
@@ -80,7 +84,7 @@ public final class FetchBuiltins {
             } finally {
                 eventLoop.completeAsyncJob(() -> {
                     inFlight.decrementAndGet();
-                    settle(promise, outcome, request.maxResponseBytes(), eventLoop, intrinsics);
+                    settle(promise, outcome, request.maxResponseBytes(), eventLoop, settlement);
                 });
             }
         });
@@ -113,7 +117,8 @@ public final class FetchBuiltins {
     }
 
     private static void settle(JsPromise promise, FetchOutcome outcome, long maxResponseBytes, EventLoop eventLoop,
-            Intrinsics intrinsics) {
+            Settlement settlement) {
+        final var intrinsics = settlement.intrinsics();
         if (outcome.timedOut) {
             promise.reject(error("fetch timed out", intrinsics));
             return;
@@ -132,6 +137,7 @@ public final class FetchBuiltins {
             promise.reject(error(TOO_LARGE, intrinsics));
             return;
         }
+        InterpreterOps.chargeChars(settlement.ops(), body.length());
         promise.resolve(makeResponse(outcome.response, body, eventLoop, intrinsics));
     }
 

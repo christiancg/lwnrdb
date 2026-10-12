@@ -9,6 +9,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 
 public final class GrantPruner {
     private static final Logger logger = Logger.logFor(GrantPruner.class);
@@ -16,30 +17,37 @@ public final class GrantPruner {
     private GrantPruner() {
     }
 
-    public static void forDroppedDatabase(String dbName) {
+    public static void forDroppedDatabase(String dbName, RewriteVersion version) {
         final var collectionPrefix = dbName + "|";
-        pruneGrants(dbName,
+        pruneGrants(dbName, version,
                 user -> withoutGrants(user, dbName::equals, key -> key.startsWith(collectionPrefix), dbName::equals));
     }
 
-    public static void forDroppedCollection(String dbName, String collName) {
+    public static void forDroppedCollection(String dbName, String collName, RewriteVersion version) {
         final var collectionKey = dbName + "|" + collName;
-        pruneGrants(dbName + "|" + collName,
+        pruneGrants(dbName + "|" + collName, version,
                 user -> withoutGrants(user, _ -> false, collectionKey::equals, _ -> false));
     }
 
-    public static void forDeletedUser(String username) {
+    public static void forDeletedUser(String username, RewriteVersion version) {
         try {
-            AdminOperationHelper.rewriteDatabases(database -> withoutOwner(database, username));
+            final var rewritten = AdminOperationHelper.rewriteDatabases(database -> withoutOwner(database, username),
+                    version);
+            if (version == RewriteVersion.RESTAMP) {
+                rewritten.forEach(dbName -> RestampedRecords.add(AdminRecordKey.database(dbName)));
+            }
         } catch (Exception failure) {
             logger.error("Could not remove deleted user '" + username + "' from the database owners; a user "
                     + "created later under that name would inherit them", failure);
         }
     }
 
-    private static void pruneGrants(String target, UnaryOperator<AdminUserEntry> prune) {
+    private static void pruneGrants(String target, RewriteVersion version, UnaryOperator<AdminUserEntry> prune) {
         try {
-            AdminOperationHelper.rewriteUsers(prune);
+            final var rewritten = AdminOperationHelper.rewriteUsers(prune, version);
+            if (version == RewriteVersion.RESTAMP) {
+                rewritten.forEach(username -> RestampedRecords.add(AdminRecordKey.user(username)));
+            }
         } catch (Exception failure) {
             logger.error("Could not remove the permission grants naming '" + target + "'; a database or collection "
                     + "created later under that name would inherit them", failure);

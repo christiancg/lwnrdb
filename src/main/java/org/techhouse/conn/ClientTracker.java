@@ -114,16 +114,16 @@ public class ClientTracker {
         }
     }
 
-    public void markTransactionReaped(UUID clientId) {
+    public void markTransactionReaped(UUID clientId, Client.TransactionReap reason) {
         final var client = clientId != null ? clients.get(clientId) : null;
         if (client != null) {
-            client.markTransactionReaped();
+            client.markTransactionReaped(reason);
         }
     }
 
-    public boolean consumeTransactionReaped(UUID clientId) {
+    public Client.TransactionReap consumeTransactionReaped(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
-        return client != null && client.consumeTransactionReaped();
+        return client != null ? client.consumeTransactionReaped() : null;
     }
 
     public void markRemoteSliceFenced(UUID clientId) {

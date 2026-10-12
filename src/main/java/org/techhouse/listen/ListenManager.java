@@ -14,6 +14,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.techhouse.bckg_ops.RestartablePool;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
@@ -38,6 +40,18 @@ public class ListenManager {
     private final ApplyTracker applyTracker = new ApplyTracker();
     private final Set<UUID> heldBack = ConcurrentHashMap.newKeySet();
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+
+    public boolean hasCapacityFor(UUID clientId) {
+        final var configuration = Configuration.getInstance();
+        final var globalLimit = configuration.intValue(ConfigKey.MAX_LISTENS);
+        if (globalLimit != 0 && registrations.size() >= globalLimit) {
+            return false;
+        }
+        final var perConnection = configuration.intValue(ConfigKey.MAX_LISTENS_PER_CONNECTION);
+        return perConnection == 0
+                || registrations.values().stream().filter(registration -> registration.clientId().equals(clientId))
+                        .limit(perConnection).count() < perConnection;
+    }
 
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
         final var listenId = UUID.randomUUID();

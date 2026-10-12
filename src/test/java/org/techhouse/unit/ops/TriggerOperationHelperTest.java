@@ -2,7 +2,9 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +13,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
@@ -181,23 +184,29 @@ public class TriggerOperationHelperTest {
     }
 
     @Test
-    public void test_re_save_re_stamps_definer() throws Exception {
+    public void test_re_save_by_an_admin_re_stamps_definer() throws Exception {
         save(request("audit"));
-        TriggerOperationHelper.executeSave(request("audit"), "bob");
-        assertEquals("bob", cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst().getDefiner());
+        AdminOperationHelper
+                .saveUserEntry(new AdminUserEntry("bob", "h", true, Set.of(), new HashMap<>(), new HashMap<>()));
+        try {
+            TriggerOperationHelper.executeSave(request("audit"), "bob");
+            assertEquals("bob", cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst().getDefiner());
+        } finally {
+            AdminOperationHelper.deleteUserEntry("bob");
+        }
     }
 
     @Test
     public void test_delete_is_idempotent_when_absent() throws Exception {
         assertEquals(OperationStatus.OK, TriggerOperationHelper
-                .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "never")).getStatus());
+                .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "never"), ACTOR).getStatus());
     }
 
     @Test
     public void test_delete_removes_the_trigger_and_the_file_when_last() throws Exception {
         save(request("audit"));
         assertEquals(OperationStatus.OK, TriggerOperationHelper
-                .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "audit")).getStatus());
+                .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "audit"), ACTOR).getStatus());
         assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
         assertNull(fs.readTriggers(TestGlobals.DB, TestGlobals.COLL));
     }
@@ -205,7 +214,7 @@ public class TriggerOperationHelperTest {
     @Test
     public void test_delete_rejects_unknown_collection() throws Exception {
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), TriggerOperationHelper
-                .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, "missingColl", "t")).getErrorCode());
+                .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, "missingColl", "t"), ACTOR).getErrorCode());
     }
 
     @Test

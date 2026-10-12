@@ -4,12 +4,14 @@ import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
+import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.cache.Cache;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.resp.ListenEndedResponse;
@@ -38,7 +40,7 @@ public class ListenProcessorThread implements Runnable {
                 processListen(listenId);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-            } catch (Exception e) {
+            } catch (Exception | Error e) {
                 logger.error("Error in listen processor thread: ", e);
             }
         }
@@ -80,6 +82,9 @@ public class ListenProcessorThread implements Runnable {
         final List<JsonObject> results;
         try {
             results = AggregationOperationHelper.processAggregation(registration.request());
+        } catch (AggregateDeadline.Expired | AggregateLimitException refused) {
+            logger.warning("Listen " + listenId + " was not re-run: " + refused.getMessage());
+            return null;
         } catch (Exception e) {
             logger.error("Error re-running listen query for " + listenId, e);
             return null;

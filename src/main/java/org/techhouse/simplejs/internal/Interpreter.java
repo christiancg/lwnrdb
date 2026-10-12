@@ -429,6 +429,10 @@ public final class Interpreter {
         lifecycle.release(bytes);
     }
 
+    public void noteAllocation(long bytes) {
+        lifecycle.noteAllocation(bytes);
+    }
+
     public void cancelPendingCoroutines() {
         lifecycle.cancelPendingCoroutines();
     }

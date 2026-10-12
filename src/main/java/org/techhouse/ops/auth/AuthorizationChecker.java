@@ -99,7 +99,7 @@ public final class AuthorizationChecker {
         }
 
         final var requiredLevel = getRequiredPermissionLevel(type);
-        final var collName = req.getCollectionName();
+        final var collName = type.scope() == OperationType.Scope.DATABASE ? null : req.getCollectionName();
 
         if (lacksCollectionAccess(user, dbName, collName, requiredLevel)) {
             return AuthorizationResult.deny("action is forbidden, no permissions");
@@ -127,6 +127,20 @@ public final class AuthorizationChecker {
         }
 
         return AuthorizationResult.allow();
+    }
+
+    public static boolean mayWrite(AdminUserEntry user, String dbName, String collName) {
+        if (user == null) {
+            return false;
+        }
+        if (user.isAdmin()) {
+            return true;
+        }
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        if (dbEntry != null && dbEntry.isOwner(user.get_id())) {
+            return true;
+        }
+        return !lacksCollectionAccess(user, dbName, collName, PermissionLevel.READ_WRITE);
     }
 
     private static boolean allowsScriptManagement(AdminUserEntry user, String dbName, OperationRequest req) {

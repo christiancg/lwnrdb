@@ -7,8 +7,10 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 
 public class CompiledScriptCache {
+    public static final String NESTING_TOO_DEEP = "The script is nested too deeply to compile";
     private final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private final Configuration configuration = Configuration.getInstance();
     private final Map<String, CachedCompilation> cache = new LinkedHashMap<>(16, 0.75f, true);
@@ -50,6 +52,8 @@ public class CompiledScriptCache {
             return new CachedCompilation(simpleJs.compile(source, false), null);
         } catch (RuntimeException failure) {
             return new CachedCompilation(null, failure);
+        } catch (StackOverflowError tooDeep) {
+            return new CachedCompilation(null, new SyntaxErrorException(NESTING_TOO_DEEP));
         }
     }
 

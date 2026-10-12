@@ -17,6 +17,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
@@ -150,7 +151,7 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
-        final var dropped = dropDatabase(dbName, false);
+        final var dropped = dropDatabase(dbName, false, RewriteVersion.RESTAMP);
         if (dropped.getStatus() == OperationStatus.OK) {
             return OperationResponse.respondOrError(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE,
                     () -> {
@@ -161,7 +162,7 @@ public final class DatabaseOperationHelper {
         return dropped;
     }
 
-    public static OperationResponse dropDatabase(String dbName, boolean bounded) {
+    public static OperationResponse dropDatabase(String dbName, boolean bounded, RewriteVersion grantVersion) {
         final var deadline = System.currentTimeMillis() + OperationLocks.lockBudgetMillis(bounded);
         var barrierHeld = false;
         try {
@@ -174,7 +175,7 @@ public final class DatabaseOperationHelper {
                 return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
             }
             return locks.withRetiringCollectionLocks(dbName, dbEntry.getCollections(), remainingUntil(deadline),
-                    () -> deleteDatabaseUnderLocks(dbName));
+                    () -> deleteDatabaseUnderLocks(dbName, grantVersion));
         } catch (CollectionBusyException busy) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
         } catch (InterruptedException exception) {
@@ -190,7 +191,8 @@ public final class DatabaseOperationHelper {
         }
     }
 
-    private static OperationResponse deleteDatabaseUnderLocks(String dbName) throws Exception {
+    private static OperationResponse deleteDatabaseUnderLocks(String dbName, RewriteVersion grantVersion)
+            throws Exception {
         if (!fs.deleteDatabase(dbName)) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         }
@@ -200,7 +202,7 @@ public final class DatabaseOperationHelper {
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);
         listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
-        GrantPruner.forDroppedDatabase(dbName);
+        GrantPruner.forDroppedDatabase(dbName, grantVersion);
         return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
     }
 

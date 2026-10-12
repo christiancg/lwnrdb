@@ -87,10 +87,10 @@ public class EnforcingDatabaseAccessUserDeletedTest {
     }
 
     @Test
-    public void test_a_commit_after_the_user_vanished_leaves_no_lock_behind() throws Exception {
+    public void test_a_commit_after_the_user_vanished_is_refused_and_leaves_no_lock_behind() throws Exception {
         final var database = transactionHoldingTheCollectionLock();
 
-        assertDoesNotThrow(database::commitTransaction);
+        assertThrows(JsThrowException.class, database::commitTransaction);
 
         assertTrue(collectionWriteLockIsFreeForAnotherThread());
     }

@@ -209,21 +209,21 @@ public class ScheduleOperationHelperTest {
     public void test_delete_is_idempotent_and_refreshes_the_registry() throws Exception {
         save(intervalRequest("s"));
         assertNotNull(registry.get(TestGlobals.DB, "s"));
-        assertEquals(OperationStatus.OK,
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s")).getStatus());
+        assertEquals(OperationStatus.OK, ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR).getStatus());
         assertNull(cache.getSchedule(TestGlobals.DB, "s"));
         assertNull(registry.get(TestGlobals.DB, "s"));
-        assertEquals(OperationStatus.OK,
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s")).getStatus());
+        assertEquals(OperationStatus.OK, ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR).getStatus());
     }
 
     @Test
     public void test_delete_rejects_an_unknown_database_and_a_disabled_feature() throws Exception {
-        assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(),
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest("missingDb", "s")).getErrorCode());
+        assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest("missingDb", "s"), ACTOR).getErrorCode());
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
-        assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(),
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s")).getErrorCode());
+        assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(), ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR).getErrorCode());
     }
 
     @Test
@@ -235,7 +235,7 @@ public class ScheduleOperationHelperTest {
         assertTrue(response.getMessage().contains("'s'"), response.getMessage());
         assertNotNull(cache.getProcedure(TestGlobals.DB, PROCEDURE));
 
-        ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"));
+        ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR);
         assertEquals(OperationStatus.OK, ProcedureOperationHelper
                 .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE), ACTOR).getStatus());
     }

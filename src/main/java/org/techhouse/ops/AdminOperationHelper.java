@@ -29,6 +29,10 @@ import org.techhouse.ops.admin.AdminUsageHelper;
 import org.techhouse.ops.resp.OperationResponse;
 
 public final class AdminOperationHelper {
+    public enum RewriteVersion {
+        KEEP, RESTAMP
+    }
+
     private AdminOperationHelper() {
     }
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -210,8 +214,12 @@ public final class AdminOperationHelper {
     }
 
     private static void publishDatabaseEntry(AdminDbEntry updated) throws IOException {
+        publishDatabaseEntry(updated, RewriteVersion.KEEP);
+    }
+
+    private static void publishDatabaseEntry(AdminDbEntry updated, RewriteVersion version) throws IOException {
         final var pk = cache.getPkIndexAdminDbEntry(updated.get_id());
-        updated.setVersion(versionOf(pk));
+        updated.setVersion(version == RewriteVersion.KEEP ? versionOf(pk) : 0L);
         cache.putAdminDbEntry(updated, writeAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, updated, pk));
     }
 
@@ -303,37 +311,47 @@ public final class AdminOperationHelper {
         }
     }
 
-    public static void rewriteUsers(UnaryOperator<AdminUserEntry> rewrite) throws IOException, InterruptedException {
+    public static List<String> rewriteUsers(UnaryOperator<AdminUserEntry> rewrite, RewriteVersion version)
+            throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
         try {
+            final var rewrittenIds = new ArrayList<String>();
             for (final var user : new ArrayList<>(cache.getAllAdminUserEntries())) {
                 final var rewritten = rewrite.apply(user);
                 if (rewritten != null) {
-                    rewritten.setVersion(versionOf(cache.getPkIndexAdminUserEntry(user.get_id())));
+                    rewritten.setVersion(version == RewriteVersion.KEEP
+                            ? versionOf(cache.getPkIndexAdminUserEntry(user.get_id()))
+                            : 0L);
                     saveUserEntry(rewritten);
+                    rewrittenIds.add(user.get_id());
                 }
             }
+            return rewrittenIds;
         } finally {
             releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
         }
     }
 
-    public static void rewriteDatabases(UnaryOperator<AdminDbEntry> rewrite) throws IOException, InterruptedException {
+    public static List<String> rewriteDatabases(UnaryOperator<AdminDbEntry> rewrite, RewriteVersion version)
+            throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         try {
+            final var rewrittenIds = new ArrayList<String>();
             for (final var database : new ArrayList<>(cache.getAllAdminDbEntries())) {
                 final var rewritten = rewrite.apply(database);
                 if (rewritten != null) {
-                    publishDatabaseEntry(rewritten);
+                    publishDatabaseEntry(rewritten, version);
+                    rewrittenIds.add(database.get_id());
                 }
             }
+            return rewrittenIds;
         } finally {
             releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         }
     }
 
     public static void relistUnlistedCollections() throws IOException, InterruptedException {
-        rewriteDatabases(AdminOperationHelper::withRegisteredCollectionsListed);
+        rewriteDatabases(AdminOperationHelper::withRegisteredCollectionsListed, RewriteVersion.KEEP);
     }
 
     private static AdminDbEntry withRegisteredCollectionsListed(AdminDbEntry database) {

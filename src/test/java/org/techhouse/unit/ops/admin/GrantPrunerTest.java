@@ -19,6 +19,7 @@ import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.admin.CollectionOperationHelper;
@@ -127,6 +128,46 @@ public class GrantPrunerTest {
                 .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, "unrelatedcollection"));
 
         assertEquals(before.getDatabasePermissions(), bob().getDatabasePermissions());
+    }
+
+    private long bobVersion() {
+        return AdminOperationHelper.versionOf(cache.getPkIndexAdminUserEntry(BOB));
+    }
+
+    @Test
+    public void test_a_coordinator_drop_writes_the_pruned_grant_at_a_new_version() {
+        final var before = bobVersion();
+
+        CollectionOperationHelper
+                .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL));
+
+        assertFalse(bob().getCollectionPermissions().containsKey(TestGlobals.DB + "|" + TestGlobals.COLL));
+        assertTrue(bobVersion() > before, "the coordinator's prune must outrank the grant a lagging node kept");
+    }
+
+    @Test
+    public void test_a_replicated_drop_prunes_at_the_version_the_user_already_had() {
+        final var before = bobVersion();
+
+        final var response = CollectionOperationHelper.dropCollection(TestGlobals.DB, TestGlobals.COLL, true,
+                RewriteVersion.KEEP);
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertFalse(bob().getCollectionPermissions().containsKey(TestGlobals.DB + "|" + TestGlobals.COLL));
+        assertEquals(before, bobVersion());
+    }
+
+    @Test
+    public void test_a_coordinator_user_delete_writes_the_owner_strip_at_a_new_version() throws Exception {
+        makeCarolOwnerOfTheTestDatabase();
+        final var before = AdminOperationHelper.versionOf(cache.getPkIndexAdminDbEntry(TestGlobals.DB));
+        final var request = new DeleteUserRequest();
+        request.setUsername(CAROL);
+
+        UserOperationHelper.processDeleteUser(request);
+
+        assertEquals(List.of(), cache.getAdminDbEntry(TestGlobals.DB).getOwners());
+        assertTrue(AdminOperationHelper.versionOf(cache.getPkIndexAdminDbEntry(TestGlobals.DB)) > before);
     }
 
     private void makeCarolOwnerOfTheTestDatabase() throws Exception {

@@ -14,6 +14,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.GrantPruner;
@@ -47,14 +48,15 @@ public class UserOperationHelper {
         return OperationResponse.respondOrError(OperationType.AUTHENTICATE, ErrorCode.AUTHENTICATION_ERROR, () -> {
             final var username = request.getUsername();
             final var password = request.getPassword();
-            final var key = AuthFailureThrottle.keyOf(clientTracker.addressOf(clientId), username);
-            pauseFor(key);
+            final var address = clientTracker.addressOf(clientId);
+            final var key = AuthFailureThrottle.keyOf(address, username);
+            pauseFor(key, AuthFailureThrottle.addressKeyOf(address));
             final var user = cache.getAdminUserEntry(username);
             final boolean verified = passwordCheckGate.run(() -> user == null
                     ? PasswordHasher.dummyVerify(password)
                     : PasswordHasher.verify(password, user.getPasswordHash()));
             if (!verified) {
-                return failedAttempt(key, clientId);
+                return failedAttempt(key, address, clientId);
             }
             final var verifiedHash = user.getPasswordHash();
             final var bound = AdminOperationHelper.withUsersLock(() -> {
@@ -66,22 +68,23 @@ public class UserOperationHelper {
                 return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
             });
             if (bound == null) {
-                return failedAttempt(key, clientId);
+                return failedAttempt(key, address, clientId);
             }
             authFailureThrottle.recordSuccess(key);
             return bound;
         });
     }
 
-    private static void pauseFor(String key) throws InterruptedException {
-        final var delay = authFailureThrottle.remainingDelayMillis(key);
+    private static void pauseFor(String key, String addressKey) throws InterruptedException {
+        final var delay = Math.max(authFailureThrottle.reserve(key), authFailureThrottle.reserve(addressKey));
         if (delay > 0) {
             Thread.sleep(delay);
         }
     }
 
-    private static OperationResponse failedAttempt(String key, UUID clientId) {
+    private static OperationResponse failedAttempt(String key, String address, UUID clientId) {
         authFailureThrottle.recordFailure(key);
+        authFailureThrottle.recordAddressFailure(address);
         final var failures = clientTracker.recordFailedAuthentication(clientId);
         final var cap = configuration.getMaxFailedAuthAttempts();
         if (cap > 0 && failures >= cap) {
@@ -118,7 +121,7 @@ public class UserOperationHelper {
                     }
                     AdminOperationHelper.deleteUserEntry(username);
                     AdminStamp.tombstone(AdminRecordKey.user(username));
-                    GrantPruner.forDeletedUser(username);
+                    GrantPruner.forDeletedUser(username, RewriteVersion.RESTAMP);
                     return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
                 }));
     }
@@ -128,15 +131,15 @@ public class UserOperationHelper {
             final var callerUsername = clientTracker.getAuthenticatedUsername(clientId);
             final var targetUsername = request.getUsername();
             final var caller = cache.getAdminUserEntry(callerUsername);
+            if (!caller.isAdmin() && !callerUsername.equals(targetUsername)) {
+                return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.NO_PERMISSIONS);
+            }
             final var target = cache.getAdminUserEntry(targetUsername);
             if (target == null) {
                 return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.USER_NOT_FOUND);
             }
             final var verifiedHash = target.getPasswordHash();
             if (!caller.isAdmin()) {
-                if (!callerUsername.equals(targetUsername)) {
-                    return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.NO_PERMISSIONS);
-                }
                 final boolean current = passwordCheckGate
                         .run(() -> PasswordHasher.verify(request.getCurrentPassword(), verifiedHash));
                 if (!current) {

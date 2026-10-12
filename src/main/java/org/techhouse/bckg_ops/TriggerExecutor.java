@@ -38,17 +38,34 @@ public class TriggerExecutor {
             return;
         }
         while (!queue.offer(event)) {
-            final var evicted = queue.poll();
+            final var evicted = oldestQueuedFor(event.getDbName());
             if (evicted == null) {
-                continue;
+                if (!queue.offer(event)) {
+                    drop(event, "the newest");
+                }
+                return;
             }
-            dropped.increment();
-            TriggerRunLog.markAttempt(evicted.getRunId(), TriggerRunStatus.DEAD, evicted.getAttempt(),
-                    "dropped: trigger queue full", 0L);
-            logger.warning(
-                    "Trigger queue full; dropped the oldest queued trigger '" + evicted.getTriggerName() + "' for "
-                            + evicted.getDbName() + "|" + evicted.getCollName() + " (event " + evicted.getType() + ")");
+            if (queue.remove(evicted)) {
+                drop(evicted, "the oldest queued");
+            }
         }
+    }
+
+    private TriggerEvent oldestQueuedFor(String dbName) {
+        for (final var queued : queue) {
+            if (dbName.equals(queued.getDbName())) {
+                return queued;
+            }
+        }
+        return null;
+    }
+
+    private void drop(TriggerEvent event, String which) {
+        dropped.increment();
+        TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, event.getAttempt(),
+                "dropped: trigger queue full", 0L);
+        logger.warning("Trigger queue full; dropped " + which + " trigger '" + event.getTriggerName() + "' for "
+                + event.getDbName() + "|" + event.getCollName() + " (event " + event.getType() + ")");
     }
 
     public void submitAfter(TriggerEvent event, long delayMillis) {
@@ -95,7 +112,7 @@ public class TriggerExecutor {
         try {
             dispatcher.accept(event);
             fired.increment();
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             failed.increment();
             logger.error("Error while dispatching a trigger: ", e);
         }

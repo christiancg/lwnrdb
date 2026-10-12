@@ -92,6 +92,7 @@ public class ConfigReaderTest {
         expectedConfig.put("antiEntropyIntervalMs", "60000");
         expectedConfig.put("tombstoneRetentionMs", "86400000");
         putScriptingDefaults(expectedConfig);
+        putSecurityLimitDefaults(expectedConfig);
 
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();
 
@@ -248,5 +249,21 @@ public class ConfigReaderTest {
             final var deleted = configFile.delete();
             assertTrue(deleted);
         }
+    }
+
+    private static void putSecurityLimitDefaults(Map<String, String> expectedConfig) {
+        expectedConfig.put("maxUnauthenticatedConnectionsPerAddress", "16");
+        expectedConfig.put("maxUnauthenticatedInvalidRequests", "5");
+        expectedConfig.put("maxLogFileSize", "100Mb");
+        expectedConfig.put("transactionMaxOps", "100000");
+        expectedConfig.put("transactionMaxBytes", "256Mb");
+        expectedConfig.put("transactionMaxAgeMs", "600000");
+        expectedConfig.put("maxListensPerConnection", "64");
+        expectedConfig.put("maxListens", "10000");
+        expectedConfig.put("maxFilterOperands", "10000");
+        expectedConfig.put("maxVectorDimensions", "16384");
+        expectedConfig.put("aggregateTimeoutMs", "300000");
+        expectedConfig.put("scriptHeapCeilingPercent", "75");
+        expectedConfig.put("scheduleMaxTimeoutMs", "300000");
     }
 }

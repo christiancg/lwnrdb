@@ -243,7 +243,7 @@ public class MessageProcessorTimeoutTest {
             assertTrue(connection.timeoutsFired() <= 1);
             assertFalse(collectionIsWritable());
             assertSame(transaction, clientTracker.getActiveTransaction(connection.clientId()));
-            assertFalse(clientTracker.consumeTransactionReaped(connection.clientId()));
+            assertNull(clientTracker.consumeTransactionReaped(connection.clientId()));
         } finally {
             TxCommitLog.clearLocalCommit(txId);
         }
@@ -264,7 +264,7 @@ public class MessageProcessorTimeoutTest {
 
             assertEquals(1, connection.timeoutsFired());
             assertSame(transaction, clientTracker.getActiveTransaction(connection.clientId()));
-            assertFalse(clientTracker.consumeTransactionReaped(connection.clientId()));
+            assertNull(clientTracker.consumeTransactionReaped(connection.clientId()));
         } finally {
             locks.releaseWrite(strandedLock);
         }

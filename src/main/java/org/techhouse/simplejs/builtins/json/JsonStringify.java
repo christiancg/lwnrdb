@@ -45,6 +45,7 @@ public final class JsonStringify {
             return JsUndefined.getInstance();
         }
         final var text = EJSON.toJson(tree, indentFor(args, ops));
+        InterpreterOps.release(ops, EJsonInterop.nodeCount(tree) * InterpreterOps.BYTES_PER_ELEMENT);
         InterpreterOps.chargeChars(ops, text.length());
         return new JsString(text);
     }
@@ -57,6 +58,8 @@ public final class JsonStringify {
             Set<JsValue> seen, InterpreterOps ops, Invoker invoker) {
         NativeDepth.enter(ops);
         try {
+            InterpreterOps.tick(ops);
+            InterpreterOps.chargeElements(ops, 1);
             return treeOf(raw, holder, key, replacer, seen, ops, invoker);
         } finally {
             NativeDepth.leave(ops);

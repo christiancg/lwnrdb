@@ -573,6 +573,20 @@ def test_a_procedure_bound_by_another_definer_is_protected():
                      intruder.save_procedure("guard_free", "return 2;"), "OK")
 
 
+def test_a_manager_cannot_change_a_trigger_defined_by_someone_else():
+    section("A MANAGE user cannot replace or delete a trigger another user defined")
+    delete_foreign = {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "foreign_owned"}
+    with user_conn(MANAGER) as manager, user_conn(MANAGER_TWO) as intruder:
+        check_status("MANAGER installs a trigger", manager.save_trigger("foreign_owned", ["CREATED"], "greet"), "OK")
+        check_code("another MANAGE user may not replace it",
+                   intruder.save_trigger("foreign_owned", ["DELETED"], "greet"), "FORBIDDEN", "403-5")
+        check_code("nor delete it", intruder.send(delete_foreign), "FORBIDDEN", "403-5")
+        listed = manager.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": COLL})
+        stored = next((t for t in (listed.get("triggers") or []) if t.get("name") == "foreign_owned"), {})
+        check("the trigger is unchanged", stored.get("events") == ["CREATED"], f"got {stored}")
+        check_status("its definer may delete it", manager.send(delete_foreign), "OK")
+
+
 def test_a_client_cannot_forge_a_definer():
     section("A client cannot forge the coordinator's stamp")
     forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
@@ -1994,6 +2008,7 @@ def main():
         test_definer_rights()
         test_a_procedure_bound_by_another_definer_is_protected()
         test_a_client_cannot_forge_a_definer()
+        test_a_manager_cannot_change_a_trigger_defined_by_someone_else()
         with admin_conn() as conn:
             test_procedure_imports(conn)
             test_trigger_imports(conn)

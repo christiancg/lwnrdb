@@ -2,6 +2,8 @@ package org.techhouse.ejson.internal;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -35,11 +37,12 @@ public final class Lexer {
         final var length = input.length();
         final var tokens = new ArrayList<JsonBaseElement>(
                 (int) Math.min(length / ESTIMATED_CHARS_PER_TOKEN + 16L, maxTokens + 1L));
+        final var budget = new TokenBudget(maxTokens);
         var i = 0;
         while (i < length) {
             final var c = input.charAt(i);
             if (c == '"') {
-                i = lexString(input, i, tokens);
+                i = lexString(input, i, tokens, budget);
             } else if (isNumberCharacter(c)) {
                 i = lexNumber(input, i, tokens);
             } else if (input.regionMatches(i, TRUE_LITERAL, 0, TRUE_LEN)) {
@@ -59,9 +62,7 @@ public final class Lexer {
             } else {
                 throw new UnexpectedCharacterException(c, i);
             }
-            if (tokens.size() > maxTokens) {
-                throw new MalformedJsonException("JSON has more tokens than the allowed limit");
-            }
+            budget.check(tokens.size());
         }
         return tokens;
     }
@@ -78,7 +79,34 @@ public final class Lexer {
         return c == ',' || c == ':' || c == '[' || c == ']' || c == '{' || c == '}';
     }
 
-    private static int lexString(String input, int start, List<JsonBaseElement> tokens) {
+    private static final class TokenBudget {
+        private final int maxTokens;
+        private long customComponents;
+
+        private TokenBudget(int maxTokens) {
+            this.maxTokens = maxTokens;
+        }
+
+        private boolean bounded() {
+            return maxTokens != Integer.MAX_VALUE;
+        }
+
+        private void check(int tokens) {
+            if (tokens + customComponents > maxTokens) {
+                throw new MalformedJsonException("JSON has more tokens than the allowed limit");
+            }
+        }
+
+        private void chargeCustom(String literal) {
+            final var components = literal.chars().filter(c -> c == ',').count() + 1;
+            if (components > Configuration.getInstance().intValue(ConfigKey.MAX_VECTOR_DIMENSIONS)) {
+                throw new MalformedJsonException("A custom value has more components than the allowed limit");
+            }
+            customComponents += components;
+        }
+    }
+
+    private static int lexString(String input, int start, List<JsonBaseElement> tokens, TokenBudget budget) {
         final var builder = new StringBuilder();
         final var length = input.length();
         var i = start + 1;
@@ -86,7 +114,12 @@ public final class Lexer {
             final var c = input.charAt(i);
             if (c == '"') {
                 final var str = new JsonString(builder.toString());
-                tokens.add(JsonCustom.isJsonCustom(str) ? CustomTypeFactory.getCustomTypeInstance(str) : str);
+                final var custom = JsonCustom.isJsonCustom(str);
+                if (custom && budget.bounded()) {
+                    budget.chargeCustom(str.getValue());
+                    budget.check(tokens.size());
+                }
+                tokens.add(custom ? CustomTypeFactory.getCustomTypeInstance(str) : str);
                 return i + 1;
             }
             if (c == '\\' && i + 1 < length) {

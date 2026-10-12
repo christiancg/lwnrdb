@@ -40,7 +40,7 @@ public final class CountOperatorHelper {
     public static FastCount tryIndexOnlyCount(List<BaseAggregationStep> steps, String dbName, String collName)
             throws IOException {
         final var countIndex = indexOfFirstCount(steps);
-        if (countIndex < 1 || AggregationStepValidator.containsScript(steps.subList(0, countIndex))) {
+        if (countIndex < 1 || AggregationStepValidator.canFailWhileRunning(steps.subList(0, countIndex))) {
             return null;
         }
         final var filterSets = new ArrayList<Set<String>>();

@@ -401,14 +401,16 @@ public class ClientTrackerTest {
         final var clientTracker = new ClientTracker();
         final var clientId = clientTracker.addClient(TestUtils.clientSocket());
 
-        assertFalse(clientTracker.consumeTransactionReaped(clientId));
-        clientTracker.markTransactionReaped(clientId);
-        assertTrue(clientTracker.consumeTransactionReaped(clientId));
-        assertFalse(clientTracker.consumeTransactionReaped(clientId));
-        assertDoesNotThrow(() -> clientTracker.markTransactionReaped(null));
-        assertDoesNotThrow(() -> clientTracker.markTransactionReaped(UUID.randomUUID()));
-        assertFalse(clientTracker.consumeTransactionReaped(null));
-        assertFalse(clientTracker.consumeTransactionReaped(UUID.randomUUID()));
+        assertNull(clientTracker.consumeTransactionReaped(clientId));
+        clientTracker.markTransactionReaped(clientId, Client.TransactionReap.IDLE);
+        assertEquals(Client.TransactionReap.IDLE, clientTracker.consumeTransactionReaped(clientId));
+        assertNull(clientTracker.consumeTransactionReaped(clientId));
+        clientTracker.markTransactionReaped(clientId, Client.TransactionReap.MAX_AGE);
+        assertEquals(Client.TransactionReap.MAX_AGE, clientTracker.consumeTransactionReaped(clientId));
+        assertDoesNotThrow(() -> clientTracker.markTransactionReaped(null, Client.TransactionReap.IDLE));
+        assertDoesNotThrow(() -> clientTracker.markTransactionReaped(UUID.randomUUID(), Client.TransactionReap.IDLE));
+        assertNull(clientTracker.consumeTransactionReaped(null));
+        assertNull(clientTracker.consumeTransactionReaped(UUID.randomUUID()));
         clientTracker.removeById(clientId);
     }
 
