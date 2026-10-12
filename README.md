@@ -1632,7 +1632,7 @@ To auto-format your changes before committing:
 mvn spotless:apply
 ```
 
-> **Build JDK: JDK 26 or newer is required** (matching the project's compiler
+> **Build JDK: JDK 27 or newer is required** (matching the project's compiler
 > target and CI); `mvn verify` fails on anything older. The floor is not
 > arbitrary: the SimpleJS regex engine resolves `\p{...}` property escapes
 > against the JDK's own Unicode data, so an older JDK ships an older UCD and the

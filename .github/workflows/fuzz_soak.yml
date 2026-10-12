@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
         with:
-          java-version: '26'
+          java-version: '27'
           distribution: 'temurin'
           architecture: x64
           cache: maven
@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
         with:
-          java-version: '26'
+          java-version: '27'
           distribution: 'temurin'
           architecture: x64
       - name: Download jar

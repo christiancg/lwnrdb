@@ -216,7 +216,7 @@ Unicode property escapes resolve a name to a `CodePointSet` using `java.util.reg
 one-time per-property **oracle** (compiled once, every code point tested, cached) — never as the
 matching engine. Properties *of strings* (`\p{RGI_Emoji}` and siblings) have no JDK data at all
 and are expanded from `src/main/resources/simplejs/emoji-sequences.txt`, which is ours and
-pinned to Unicode 17.0. This is why the build JDK is pinned at 26 or newer: the UCD comes from
+pinned to Unicode 17.0. This is why the build JDK is pinned at 27 or newer: the UCD comes from
 the JDK, and two JDK versions would make `\p{…}` answer differently on two nodes of one cluster.
 
 ### Numbers
