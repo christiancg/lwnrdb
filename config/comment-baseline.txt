@@ -5,7 +5,6 @@ src/main/java/org/techhouse/bckg_ops/PendingIndexWrites.java 1
 src/main/java/org/techhouse/cache/AdminCache.java 8
 src/main/java/org/techhouse/cache/AdminPageCache.java 1
 src/main/java/org/techhouse/cache/Cache.java 3
-src/main/java/org/techhouse/cache/CacheSizeEstimator.java 2
 src/main/java/org/techhouse/cache/DefinitionCache.java 3
 src/main/java/org/techhouse/cache/UserCache.java 8
 src/main/java/org/techhouse/cluster/ClusterConnectionHandler.java 8

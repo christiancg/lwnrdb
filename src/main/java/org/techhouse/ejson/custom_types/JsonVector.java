@@ -97,6 +97,10 @@ public class JsonVector extends JsonCustom<double[]> {
         return customValue;
     }
 
+    public String cachedSimHash() {
+        return signature;
+    }
+
     public String simHash() {
         var cached = signature;
         if (cached == null) {

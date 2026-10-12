@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -69,7 +70,7 @@ public class UserCacheFootprintTest {
         }
         var total = 0L;
         for (final var dbEntry : cached.values()) {
-            total += dbEntry.byteSize();
+            total += CacheSizeEstimator.estimateCollectionEntry(dbEntry);
         }
         return total;
     }
@@ -165,7 +166,7 @@ public class UserCacheFootprintTest {
     }
 
     private static final String FIELD = "status";
-    private static final long COUNT_ONLY_BYTES_PER_ENTRY = 64L;
+    private static final long COUNT_ONLY_BYTES_PER_ENTRY = CacheSizeEstimator.estimateFieldIndexSizeByCount(1);
 
     private static final AtomicInteger FIELD_INDEX_ITERATIONS = new AtomicInteger();
 
