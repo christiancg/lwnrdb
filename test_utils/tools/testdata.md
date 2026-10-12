@@ -1336,7 +1336,7 @@ Allocating past `scriptMaxMemoryBytes` (`64Mb` by default) → `400-12`
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "const parts = [];\nwhile (true) { parts.push('x'.repeat(1000000)); }"}
 ```
 
-Native recursion over deeply nested data stops at 512 levels with a catchable RangeError → `400-9`,
+Native recursion over deeply nested data stops at 256 levels with a catchable RangeError → `400-9`,
 `"message": "RangeError: Maximum nesting depth exceeded"` (the same for `JSON.stringify`, `structuredClone`,
 `flat(Infinity)` and `String()` of nested arrays)
 

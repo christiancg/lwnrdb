@@ -360,9 +360,9 @@ def test_native_recursion_is_an_error_not_a_hang(conn: Conn):
                             "Maximum nesting depth exceeded")
     check_result("the RangeError is catchable",
                  conn.run(nest + "try { JSON.stringify(a); } catch (e) { return e.name; }"), "RangeError")
-    check_result("500 levels of JSON still parse",
-                 conn.run("let d = 0;\nfor (let x = JSON.parse('['.repeat(500) + ']'.repeat(500)); "
-                          "Array.isArray(x); x = x[0]) d++;\nreturn d;"), 500)
+    check_result("250 levels of JSON still parse",
+                 conn.run("let d = 0;\nfor (let x = JSON.parse('['.repeat(250) + ']'.repeat(250)); "
+                          "Array.isArray(x); x = x[0]) d++;\nreturn d;"), 250)
     for _ in range(20):
         conn.run(cases[3][1])
     check_result("capacity is intact after more hostile runs than maxConcurrentScripts", conn.run("return 7;"), 7)

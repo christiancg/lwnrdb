@@ -317,9 +317,9 @@ four billion holes, while a scan shorter than 1024 elements costs nothing extra.
 bypasses `ArrayLike` (the typed-array scans, `fill`, `copyWithin`, `join`) calls
 `InterpreterOps.pace` itself. Native recursion over script data — `JSON.parse` and its reviver,
 `JSON.stringify`, `structuredClone`, `flat`, `join`/`String()` of nested arrays — is bounded by
-`NativeDepth.MAX = 512` levels, and every native call counts one level, so native-to-native
+`NativeDepth.MAX = 256` levels, and every native call counts one level, so native-to-native
 recursion through `toString`/`toJSON` is bounded without touching each builtin; past it a
-**catchable** `RangeError: Maximum nesting depth exceeded` is thrown (512 levels fit a
+**catchable** `RangeError: Maximum nesting depth exceeded` is thrown (256 levels fit a
 virtual-thread stack under the deepest `scriptMaxDepth` call stack; a test pins it). BigInt
 results are sized **before** they are computed (`internal/BigIntLimits`): a result over 2^24 bits
 (2 MiB) throws a catchable `RangeError: Maximum BigInt size exceeded`, a result above 64 bits is

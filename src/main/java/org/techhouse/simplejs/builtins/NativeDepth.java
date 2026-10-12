@@ -1,7 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 public final class NativeDepth {
-    public static final int MAX = 512;
+    public static final int MAX = 256;
     public static final String EXCEEDED = "Maximum nesting depth exceeded";
 
     private NativeDepth() {
