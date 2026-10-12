@@ -113,6 +113,7 @@ public class StartupWarningsTest {
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.warnIfXmxExceedsMaxMemory();
             assertLogged(logWriter, "more than 2x the configured maxMemory");
+            assertLogged(logWriter, "keep maxMemory around half of -Xmx");
         }
     }
 

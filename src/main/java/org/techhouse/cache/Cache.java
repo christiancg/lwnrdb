@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -25,7 +24,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private static final Comparator<DbEntry> BY_ID = Comparator.comparing(DbEntry::get_id);
     private static final Comparator<DbEntry> BY_PAGE_THEN_ID = Comparator.comparingLong(DbEntry::getPage)
             .thenComparing(DbEntry::get_id);
-    private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final AdminCache adminCache = IocContainer.get(AdminCache.class);
     private final UserCache userCache = IocContainer.get(UserCache.class);
@@ -194,15 +192,13 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
                     ? fs.streamPages(dbName, collName).flatMap(page -> orderedPage(page.values(), true))
                     : fs.streamEntries(dbName, collName);
         }
-        final var maxPageBytes = configuration.getMaxPageSize();
         final var sortedPages = collPages.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).toList();
         // flatMap keeps this lazy, so only one page map is resident at a time.
         return sortedPages.stream().flatMap(pageEntry -> {
-            final var estimate = pageEntry.getPageSize() > 0 ? pageEntry.getPageSize() : maxPageBytes;
-            memoryManagement.ensureHeadroomForBytes(estimate);
             try {
-                return orderedPage(fs.readWholeCollectionPage(dbName, collName, pageEntry.getPage()).values(),
-                        inScanOrder);
+                final var page = fs.readWholeCollectionPage(dbName, collName, pageEntry.getPage()).values();
+                memoryManagement.ensureHeadroomForBytes(CacheSizeEstimator.estimatePageHeap(page));
+                return orderedPage(page, inScanOrder);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }

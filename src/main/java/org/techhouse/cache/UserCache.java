@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -28,15 +28,14 @@ public class UserCache {
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
-    private final Map<String, AtomicLong> collectionBytes = new ConcurrentHashMap<>();
+    private final UserCacheSizes sizes = new UserCacheSizes();
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
             final var fromDisk = fs.readWholePkIndexFile(dbName, collName);
-            if (rl.holdsCollectionLock(dbName, collName)
-                    && shouldCache(dbName, CacheSizeEstimator.estimatePkIndexSize(fromDisk))) {
-                pkIndexMap.put(collectionIdentifier, fromDisk);
+            if (!isCachingDisabled(dbName) && rl.holdsCollectionLock(dbName, collName)) {
+                admitPkIndex(dbName, collectionIdentifier, fromDisk);
             }
             return fromDisk;
         }
@@ -44,6 +43,14 @@ public class UserCache {
             return primaryKeyIndex;
         }
         return snapshotForLockFreeReader(dbName, collName, primaryKeyIndex);
+    }
+
+    private void admitPkIndex(String dbName, String collectionIdentifier, List<PkIndexEntry> fromDisk) {
+        final var bytesPerEntry = CacheSizeEstimator.pkIndexBytesPerEntry(fromDisk);
+        if (shouldCache(dbName, () -> bytesPerEntry * fromDisk.size())) {
+            sizes.recordPkBytesPerEntry(collectionIdentifier, bytesPerEntry);
+            pkIndexMap.put(collectionIdentifier, fromDisk);
+        }
     }
 
     private List<PkIndexEntry> snapshotForLockFreeReader(String dbName, String collName, List<PkIndexEntry> shared)
@@ -85,14 +92,14 @@ public class UserCache {
         return Globals.ADMIN_DB_NAME.equals(dbName) || Globals.ADMIN_PAGES_DB_NAME.equals(dbName);
     }
 
-    private boolean shouldCache(String dbName, long estimatedBytes) {
+    private boolean shouldCache(String dbName, LongSupplier estimatedBytes) {
         if (isCachingDisabled(dbName)) {
             return false;
         }
         if (configuration.isCacheUnlimited()) {
             return true;
         }
-        return footprintBytes() + estimatedBytes <= configuration.getMaxMemoryBytes();
+        return footprintBytes() + estimatedBytes.getAsLong() <= configuration.getMaxMemoryBytes();
     }
 
     private long footprintBytes() {
@@ -101,31 +108,6 @@ public class UserCache {
             total += resource.estimatedSizeBytes();
         }
         return total;
-    }
-
-    private void trackPut(String collId, DbEntry previous, DbEntry added) {
-        final var delta = (long) added.byteSize() - (previous == null ? 0L : previous.byteSize());
-        collectionBytes.computeIfAbsent(collId, _ -> new AtomicLong()).addAndGet(delta);
-    }
-
-    private void trackRemoved(String collId, DbEntry removed) {
-        if (removed != null) {
-            collectionBytes.computeIfAbsent(collId, _ -> new AtomicLong()).addAndGet(-removed.byteSize());
-        }
-    }
-
-    private long trackedBytes(String collId) {
-        final var tracked = collectionBytes.get(collId);
-        if (tracked != null) {
-            return tracked.get();
-        }
-        final var coll = collectionMap.get(collId);
-        if (coll == null) {
-            return 0L;
-        }
-        final var measured = CacheSizeEstimator.estimateCollectionSize(coll);
-        final var raced = collectionBytes.putIfAbsent(collId, new AtomicLong(measured));
-        return raced != null ? raced.get() : measured;
     }
 
     // Callers must hold the field's index lock (read for queries, write for the background index
@@ -163,8 +145,8 @@ public class UserCache {
             if (indexEntries == null) {
                 return null;
             }
-            if (admit && rl.holdsCollectionLock(dbName, collName)
-                    && shouldCache(dbName, CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
+            if (admit && rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName,
+                    () -> CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
                 fieldIndexMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>()).put(indexIdentifier,
                         new ArrayList<>(indexEntries));
             }
@@ -218,14 +200,14 @@ public class UserCache {
         // Refreshing a resident document must be unconditional: the admission check governs only new
         // residents, and skipping the refresh would leave a stale copy behind.
         if (existing != null && existing.containsKey(entry.get_id())) {
-            trackPut(collId, existing.put(entry.get_id(), entry), entry);
+            sizes.trackPut(collId, existing.put(entry.get_id(), entry), entry);
             return;
         }
-        if (!shouldCache(dbName, entry.byteSize())) {
+        if (!shouldCache(dbName, () -> CacheSizeEstimator.estimateCollectionEntry(entry))) {
             return;
         }
         final var target = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
-        trackPut(collId, target.put(entry.get_id(), entry), entry);
+        sizes.trackPut(collId, target.put(entry.get_id(), entry), entry);
     }
 
     public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
@@ -237,7 +219,7 @@ public class UserCache {
         final var newEntries = new ArrayList<DbEntry>();
         for (var e : entries) {
             if (existing != null && existing.containsKey(e.get_id())) {
-                trackPut(collId, existing.put(e.get_id(), e), e);
+                sizes.trackPut(collId, existing.put(e.get_id(), e), e);
             } else {
                 newEntries.add(e);
             }
@@ -245,16 +227,12 @@ public class UserCache {
         if (newEntries.isEmpty()) {
             return;
         }
-        long total = 0L;
-        for (var e : newEntries) {
-            total += e.byteSize();
-        }
-        if (!shouldCache(dbName, total)) {
+        if (!shouldCache(dbName, () -> collectionEntriesSize(newEntries))) {
             return;
         }
         final var target = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         for (var e : newEntries) {
-            trackPut(collId, target.put(e.get_id(), e), e);
+            sizes.trackPut(collId, target.put(e.get_id(), e), e);
         }
     }
 
@@ -268,8 +246,10 @@ public class UserCache {
         var entry = coll.get(pk);
         if (entry == null) {
             entry = fs.getById(idxEntry);
-            if (rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName, entry.byteSize())) {
-                trackPut(collectionIdentifier, coll.put(pk, entry), entry);
+            final var fetched = entry;
+            if (rl.holdsCollectionLock(dbName, collName)
+                    && shouldCache(dbName, () -> CacheSizeEstimator.estimateCollectionEntry(fetched))) {
+                sizes.trackPut(collectionIdentifier, coll.put(pk, entry), entry);
             }
         }
         return entry;
@@ -283,10 +263,10 @@ public class UserCache {
         if (!isCachingDisabled(dbName)) {
             final var asMap = new ConcurrentHashMap<>(loaded);
             final var size = CacheSizeEstimator.estimateCollectionSize(asMap);
-            if (shouldCache(dbName, size)) {
+            if (shouldCache(dbName, () -> size)) {
                 final var collId = Cache.getCollectionIdentifier(dbName, collName);
                 collectionMap.put(collId, asMap);
-                collectionBytes.put(collId, new AtomicLong(size));
+                sizes.resetCollectionBytes(collId, size);
                 return asMap;
             }
         }
@@ -329,25 +309,29 @@ public class UserCache {
         final var read = fs.getByIndexEntries(toRead);
         result.addAll(read);
         if (!cachingDisabled && rl.holdsCollectionLock(dbName, collName)) {
-            long bytes = 0L;
-            for (var e : read) {
-                bytes += e.byteSize();
-            }
-            if (shouldCache(dbName, bytes)) {
+            if (shouldCache(dbName, () -> collectionEntriesSize(read))) {
                 final var coll = collectionMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>());
                 for (var e : read) {
-                    trackPut(collectionIdentifier, coll.put(e.get_id(), e), e);
+                    sizes.trackPut(collectionIdentifier, coll.put(e.get_id(), e), e);
                 }
             }
         }
         return result;
     }
 
+    private static long collectionEntriesSize(List<DbEntry> entries) {
+        var total = 0L;
+        for (final var e : entries) {
+            total += CacheSizeEstimator.estimateCollectionEntry(e);
+        }
+        return total;
+    }
+
     public void evictEntry(String dbName, String collName, String pk) {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var coll = collectionMap.get(collectionIdentifier);
         if (coll != null) {
-            trackRemoved(collectionIdentifier, coll.remove(pk));
+            sizes.trackRemoved(collectionIdentifier, coll.remove(pk));
         }
     }
 
@@ -355,8 +339,8 @@ public class UserCache {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
         removeByPrefix(pkIndexMap, prefix);
         removeByPrefix(collectionMap, prefix);
-        removeByPrefix(collectionBytes, prefix);
         removeByPrefix(fieldIndexMap, prefix);
+        sizes.forgetByPrefix(prefix);
     }
 
     private static void removeByPrefix(Map<String, ?> map, String prefix) {
@@ -367,19 +351,20 @@ public class UserCache {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         pkIndexMap.remove(collIdentifier);
         collectionMap.remove(collIdentifier);
-        collectionBytes.remove(collIdentifier);
         fieldIndexMap.remove(collIdentifier);
+        sizes.forgetCollection(collIdentifier);
     }
 
     public void evictCollectionDocuments(String dbName, String collName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         collectionMap.remove(collIdentifier);
-        collectionBytes.remove(collIdentifier);
+        sizes.forgetCollectionDocuments(collIdentifier);
     }
 
     public void evictPkIndex(String dbName, String collName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         pkIndexMap.remove(collIdentifier);
+        sizes.forgetPkIndex(collIdentifier);
     }
 
     public void evictFieldIndex(String dbName, String collName, String indexKey) {
@@ -387,6 +372,7 @@ public class UserCache {
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
             indexes.remove(indexKey);
+            sizes.forgetFieldIndex(collIdentifier, indexKey);
             if (indexes.isEmpty()) {
                 fieldIndexMap.remove(collIdentifier);
             }
@@ -401,6 +387,7 @@ public class UserCache {
         if (indexes != null) {
             final var prefix = fieldName + Globals.COLL_IDENTIFIER_SEPARATOR;
             indexes.keySet().removeIf(key -> key.equals(fieldName) || key.startsWith(prefix));
+            sizes.forgetFieldIndexAllTypes(collIdentifier, fieldName);
             if (indexes.isEmpty()) {
                 fieldIndexMap.remove(collIdentifier);
             }
@@ -414,14 +401,14 @@ public class UserCache {
             if (parts.length < 2)
                 continue;
             result.add(new CacheableResource(AccessKind.PK_INDEX, parts[0], parts[1], null,
-                    CacheSizeEstimator.estimatePkIndexSize(entry.getValue())));
+                    sizes.pkIndexBytes(entry.getKey(), entry.getValue().size())));
         }
         for (var entry : collectionMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
             if (parts.length < 2)
                 continue;
             result.add(new CacheableResource(AccessKind.COLLECTION, parts[0], parts[1], null,
-                    trackedBytes(entry.getKey())));
+                    sizes.trackedBytes(entry.getKey(), entry.getValue())));
         }
         for (var entry : fieldIndexMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
@@ -438,11 +425,12 @@ public class UserCache {
     private long estimateFieldIndexUnderLock(String dbName, String collName, String indexKey,
             List<FieldIndexEntry<?>> entries) {
         final var fieldName = CacheableResource.indexedFieldOf(indexKey);
+        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         if (!rl.tryLockIndexRead(dbName, collName, fieldName)) {
-            return CacheSizeEstimator.estimateFieldIndexSizeByCount(entries.size());
+            return sizes.rememberedFieldIndexBytes(collIdentifier, indexKey, entries.size());
         }
         try {
-            return CacheSizeEstimator.estimateFieldIndexSize(entries);
+            return sizes.measureFieldIndex(collIdentifier, indexKey, entries);
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
         }

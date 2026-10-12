@@ -1,5 +1,7 @@
 import os
 import random
+import re
+import shutil
 import string
 import subprocess
 import sys
@@ -22,6 +24,9 @@ BULK_BATCH_SIZE = int(os.environ.get("MEM_TEST_BATCH_SIZE", "250"))
 INDEXED_FIELDS = ["category", "score"]
 
 CACHE_CAP_TOLERANCE = 1.25
+ACCOUNTING_DOCS = int(os.environ.get("MEM_TEST_ACCOUNTING_DOCS", "20000"))
+ACCOUNTING_COLL = "accounting"
+ACCOUNTING_RATIO_BOUNDS = (0.75, 1.25)
 LATENCY_BUDGET_MS = 3_000
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -68,6 +73,82 @@ def fmt_snap(s, pid=None):
             f"cache={cache:.2f}MB (cap {cap:.0f}MB)  "
             f"onDisk={on_disk:.1f}MB  "
             f"entries={tot.get('entryCount', 0)}{rss}")
+
+
+def live_heap_bytes(pid):
+    try:
+        out = subprocess.check_output(["jcmd", str(pid), "GC.class_histogram"], text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    total = re.search(r"(?m)^Total\s+\d+\s+(\d+)", out)
+    return int(total.group(1)) if total else None
+
+
+def small_doc(i):
+    return {
+        "_id": f"acc_{i:06d}",
+        "v": i,
+        "category": random.choice(["alpha", "beta", "gamma", "delta", "epsilon"]),
+        "score": random.randint(0, 1000),
+        "name": rand_str(12),
+        "active": random.random() < 0.5,
+        "tags": [rand_str(5) for _ in range(3)],
+        "addr": {"city": rand_str(8), "zip": random.randint(1000, 9999)},
+    }
+
+
+def count_query(c, operator):
+    return c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": ACCOUNTING_COLL,
+                   "aggregationSteps": [{"type": "FILTER", "operator": operator}, {"type": "COUNT"}]},
+                  timeout=120)
+
+
+def accounting_accuracy(c, pid):
+    section(f"Accounting accuracy: {ACCOUNTING_DOCS} small docs, userCacheBytes vs live heap")
+    if shutil.which("jcmd") is None:
+        warn("jcmd is not on PATH — accounting accuracy skipped")
+        return
+    baseline_heap = live_heap_bytes(pid)
+    if baseline_heap is None:
+        warn("jcmd could not read the server's class histogram — accounting accuracy skipped")
+        return
+    baseline_cache = snapshot(c).get("memory", {}).get("userCacheBytes", 0)
+
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": ACCOUNTING_COLL})
+    loaded = True
+    for start in range(0, ACCOUNTING_DOCS, BULK_BATCH_SIZE):
+        batch = [small_doc(i) for i in range(start, min(start + BULK_BATCH_SIZE, ACCOUNTING_DOCS))]
+        r = c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": ACCOUNTING_COLL,
+                    "objects": batch}, timeout=120)
+        loaded = loaded and r.get("status") == "OK"
+    check(f"{ACCOUNTING_DOCS} small docs loaded into {ACCOUNTING_COLL}", loaded)
+    for fld in INDEXED_FIELDS:
+        r = c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": ACCOUNTING_COLL,
+                    "fieldName": fld}, timeout=120)
+        check(f"CREATE_INDEX {ACCOUNTING_COLL}.{fld}", r.get("status") == "OK",
+              detail=str(r) if r.get("status") != "OK" else "")
+    time.sleep(3)
+    warmed = all(count_query(c, operator).get("status") == "OK" for operator in (
+        {"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "v", "value": 0},
+        {"fieldOperatorType": "EQUALS", "field": "category", "value": "alpha"},
+        {"fieldOperatorType": "GREATER_THAN", "field": "score", "value": 500}))
+    check("full scan and indexed queries warm the accounting collection", warmed)
+    time.sleep(3)
+
+    cache_delta = snapshot(c).get("memory", {}).get("userCacheBytes", 0) - baseline_cache
+    loaded_heap = live_heap_bytes(pid)
+    if loaded_heap is None:
+        warn("jcmd could not read the loaded server's class histogram — accounting accuracy skipped")
+        return
+    heap_delta = loaded_heap - baseline_heap
+    ratio = cache_delta / heap_delta if heap_delta > 0 else float("inf")
+    low, high = ACCOUNTING_RATIO_BOUNDS
+    check(f"userCacheBytes tracks live heap: cache delta={cache_delta/1024/1024:.1f}MB "
+          f"live heap delta={heap_delta/1024/1024:.1f}MB ratio={ratio:.2f} within [{low}, {high}]",
+          low <= ratio <= high,
+          detail="the cache's modelled heap matches what the documents and indexes really hold"
+          if low <= ratio <= high else "THE CACHE ACCOUNTING DOES NOT TRACK REAL HEAP")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": ACCOUNTING_COLL})
 
 
 def setup(c):
@@ -280,6 +361,8 @@ def main():
     s = snapshot(c)
     cap_bytes = s.get("memory", {}).get("maxMemoryBytes", 0)
     print(f"  configured cap = {cap_bytes/1024/1024:.0f}MB")
+
+    accounting_accuracy(c, pid)
 
     rss_samples, cache_samples, heap_samples = [], [], []
 

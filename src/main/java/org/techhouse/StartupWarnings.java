@@ -110,9 +110,9 @@ public final class StartupWarnings {
         final var cap = config.getMaxMemoryBytes();
         if (xmx > cap * 2L) {
             logger.warning("JVM -Xmx (" + xmx + " bytes) is more than 2x the configured maxMemory (" + cap
-                    + " bytes). The cap drives in-memory eviction but cannot constrain heap the JVM keeps "
-                    + "committed; set -Xmx close to maxMemory so the OS-visible process size "
-                    + "matches the configured budget.");
+                    + " bytes). maxMemory bounds the user cache's modelled heap, and the collector, scan pages and "
+                    + "requests need the rest; keep maxMemory around half of -Xmx so the heap the JVM commits "
+                    + "stays close to what the cache is allowed to hold.");
         }
     }
 }

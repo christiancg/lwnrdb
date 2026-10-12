@@ -12,6 +12,7 @@ public abstract class JsonDocumentEntry extends CollectionScopedEntry {
     protected JsonObject data;
     protected long previousByteSize;
     protected int cachedByteSize = -1;
+    protected long cachedHeapBytes = -1;
 
     public String toFileEntry() {
         if (_id == null) {
@@ -28,6 +29,7 @@ public abstract class JsonDocumentEntry extends CollectionScopedEntry {
     public void set_id(String _id) {
         this._id = _id;
         this.cachedByteSize = -1;
+        this.cachedHeapBytes = -1;
     }
 
     public JsonObject getData() {
@@ -37,6 +39,15 @@ public abstract class JsonDocumentEntry extends CollectionScopedEntry {
     public void setData(JsonObject data) {
         this.data = data;
         this.cachedByteSize = -1;
+        this.cachedHeapBytes = -1;
+    }
+
+    public long getCachedHeapBytes() {
+        return cachedHeapBytes;
+    }
+
+    public void setCachedHeapBytes(long cachedHeapBytes) {
+        this.cachedHeapBytes = cachedHeapBytes;
     }
 
     public long getPreviousByteSize() {

@@ -110,6 +110,10 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
         };
     }
 
+    public String cachedGeoHash() {
+        return orderHash;
+    }
+
     public String geoHash() {
         var cached = orderHash;
         if (cached == null) {
