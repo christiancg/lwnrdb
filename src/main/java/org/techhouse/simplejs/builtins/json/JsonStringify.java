@@ -44,10 +44,34 @@ public final class JsonStringify {
         if (tree == null) {
             return JsUndefined.getInstance();
         }
-        final var text = EJSON.toJson(tree, indentFor(args, ops));
-        InterpreterOps.release(ops, EJsonInterop.nodeCount(tree) * InterpreterOps.BYTES_PER_ELEMENT);
+        final var indent = indentFor(args, ops);
+        final var renderingChars = chargeRendering(tree, indent == null ? 0 : indent.length(), 0, ops);
+        final var text = EJSON.toJson(tree, indent);
+        InterpreterOps.release(ops, EJsonInterop.nodeCount(tree) * InterpreterOps.BYTES_PER_ELEMENT
+                + renderingChars * InterpreterOps.STRING_BYTES_PER_CHAR);
         InterpreterOps.chargeChars(ops, text.length());
         return new JsString(text);
+    }
+
+    static long chargeRendering(JsonBaseElement element, int indentLength, int depth, InterpreterOps ops) {
+        var total = renderedChars(element, indentLength, depth);
+        InterpreterOps.chargeChars(ops, total);
+        if (element instanceof JsonArray array) {
+            for (final var child : array) {
+                total += chargeRendering(child, indentLength, depth + 1, ops);
+            }
+        } else if (element instanceof JsonObject object) {
+            for (final var entry : object.entrySet()) {
+                InterpreterOps.chargeChars(ops, entry.getKey().length());
+                total += entry.getKey().length() + chargeRendering(entry.getValue(), indentLength, depth + 1, ops);
+            }
+        }
+        return total;
+    }
+
+    private static long renderedChars(JsonBaseElement element, int indentLength, int depth) {
+        final var indentation = indentLength == 0 ? 0L : 1L + (long) indentLength * depth;
+        return element.isJsonString() ? indentation + element.asJsonString().getValue().length() : indentation;
     }
 
     public static Set<JsValue> newSeen() {

@@ -35,7 +35,7 @@ public final class EJsonInterop {
     }
 
     public static JsonBaseElement toEjson(JsValue value) {
-        return convert(value, new Conversion(false, new IdentityHashMap<>(), null), "");
+        return convert(value, new Conversion(false, new IdentityHashMap<>(), null, null), "");
     }
 
     public static JsonBaseElement toHostEjson(JsValue value) {
@@ -43,8 +43,16 @@ public final class EJsonInterop {
     }
 
     public static JsonBaseElement toHostEjson(JsValue value, InterpreterOps ops) {
-        final var converted = convert(value, new Conversion(true, new IdentityHashMap<>(), ops), "");
+        final var converted = convert(value, new Conversion(true, new IdentityHashMap<>(), ops, null), "");
         InterpreterOps.release(ops, nodeCount(converted) * InterpreterOps.BYTES_PER_ELEMENT);
+        return converted;
+    }
+
+    public static JsonBaseElement toHostPayload(JsValue value, InterpreterOps ops) {
+        final var tally = new CharTally();
+        final var converted = convert(value, new Conversion(true, new IdentityHashMap<>(), ops, tally), "");
+        InterpreterOps.release(ops, nodeCount(converted) * InterpreterOps.BYTES_PER_ELEMENT
+                + tally.chars * InterpreterOps.STRING_BYTES_PER_CHAR);
         return converted;
     }
 
@@ -58,7 +66,17 @@ public final class EJsonInterop {
         };
     }
 
-    private record Conversion(boolean hostMode, Map<JsValue, Boolean> visited, InterpreterOps ops) {
+    private record Conversion(boolean hostMode, Map<JsValue, Boolean> visited, InterpreterOps ops, CharTally tally) {
+        void chargeChars(String text) {
+            if (tally != null) {
+                InterpreterOps.chargeChars(ops, text.length());
+                tally.chars += text.length();
+            }
+        }
+    }
+
+    private static final class CharTally {
+        private long chars;
     }
 
     private static JsonBaseElement convert(JsValue value, Conversion mode, String path) {
@@ -69,10 +87,6 @@ public final class EJsonInterop {
             case JsString s -> stringToEjson(s.getValue(), mode, path);
             case JsBoolean b -> new JsonBoolean(b.getValue());
             case JsNull ignored -> JsonNull.INSTANCE;
-            case JsUndefined ignored -> null;
-            case JsFunction ignored -> null;
-            case JsNativeFunction ignored -> null;
-            case JsClass ignored -> null;
             case JsArray array -> arrayToEjson(array, mode, path);
             case JsObject wrapper when wrapper.getPrimitive() != null -> convert(wrapper.getPrimitive(), mode, path);
             case JsObject object -> objectToEjson(object, mode, path);
@@ -113,6 +127,7 @@ public final class EJsonInterop {
     }
 
     private static JsonBaseElement stringToEjson(String value, Conversion mode, String path) {
+        mode.chargeChars(value);
         final var asString = new JsonString(value);
         if (!mode.hostMode() || !JsonCustom.isJsonCustom(asString)) {
             return asString;
@@ -231,6 +246,7 @@ public final class EJsonInterop {
                 continue;
             }
             refuseUnreadableKey(name.getValue(), mode, memberPath(path, name.getValue()));
+            mode.chargeChars(name.getValue());
             final var converted = convert(ops.getMember(proxy, name), mode, memberPath(path, name.getValue()));
             if (converted != null) {
                 result.add(name.getValue(), converted);
@@ -252,6 +268,7 @@ public final class EJsonInterop {
                 continue;
             }
             refuseUnreadableKey(key, mode, memberPath(path, key));
+            mode.chargeChars(key);
             final var converted = convert(ownValue(object, key, mode.ops()), mode, memberPath(path, key));
             if (converted != null) {
                 result.add(key, converted);

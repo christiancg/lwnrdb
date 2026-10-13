@@ -11,6 +11,7 @@ import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.PreAuthSlots;
+import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.log.Logger;
 
 public class ClusterServer {
@@ -105,7 +106,7 @@ public class ClusterServer {
         if (sslServerSocketFactory != null) {
             final var sslServerSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(port, BACKLOG,
                     address);
-            sslServerSocket.setEnabledProtocols(new String[]{"TLSv1.3", "TLSv1.2"});
+            sslServerSocket.setEnabledProtocols(TlsContextFactory.enabledProtocols());
             sslServerSocket.setNeedClientAuth(true);
             return sslServerSocket;
         }

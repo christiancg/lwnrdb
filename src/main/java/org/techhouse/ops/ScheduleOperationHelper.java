@@ -5,6 +5,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -35,6 +36,7 @@ public final class ScheduleOperationHelper {
     private static final ScheduleRegistry registry = IocContainer.get(ScheduleRegistry.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private static final Configuration configuration = Configuration.getInstance();
+    private static final ReentrantLock definerQuota = new ReentrantLock();
 
     private ScheduleOperationHelper() {
     }
@@ -94,15 +96,35 @@ public final class ScheduleOperationHelper {
             if (colliding != null) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
             }
-            final var definition = newDefinition(request, existing, actingUser);
-            StoredDefinitions.writeSchedule(dbName, definition.getName(), definition.toJsonObject());
-            cache.putSchedule(dbName, definition);
-            registry.reload(dbName);
-            return new SaveScheduleResponse("Schedule saved successfully", definition.getVersion());
+            definerQuota.lock();
+            try {
+                if (takesANewDefinerSlot(existing, actingUser)
+                        && registry.countDefinedBy(actingUser) >= maxSchedulesPerUser()) {
+                    return new OperationResponse(OperationType.SAVE_SCHEDULE,
+                            ErrorCode.TOO_MANY_SCHEDULES_FOR_USER.getDefaultMessage() + " (" + maxSchedulesPerUser()
+                                    + ")",
+                            ErrorCode.TOO_MANY_SCHEDULES_FOR_USER);
+                }
+                final var definition = newDefinition(request, existing, actingUser);
+                StoredDefinitions.writeSchedule(dbName, definition.getName(), definition.toJsonObject());
+                cache.putSchedule(dbName, definition);
+                registry.reload(dbName);
+                return new SaveScheduleResponse("Schedule saved successfully", definition.getVersion());
+            } finally {
+                definerQuota.unlock();
+            }
         } finally {
             locks.release(dbName, Globals.PROCEDURES_FOLDER);
             locks.release(dbName, Globals.SCHEDULES_FOLDER);
         }
+    }
+
+    private static boolean takesANewDefinerSlot(ScheduleDefinition existing, String actingUser) {
+        return actingUser != null && (existing == null || !actingUser.equals(existing.getDefiner()));
+    }
+
+    private static int maxSchedulesPerUser() {
+        return configuration.intValue(ConfigKey.SCHEDULE_MAX_TOTAL_PER_USER);
     }
 
     private static OperationResponse procedureNotFound(SaveScheduleRequest request) {
@@ -120,6 +142,12 @@ public final class ScheduleOperationHelper {
         final var hasInterval = request.getIntervalMs() > 0;
         if (hasCron == hasInterval) {
             return invalid("exactly one of 'cron' and 'intervalMs' is required");
+        }
+        final var minInterval = configuration.longValue(ConfigKey.SCHEDULE_MIN_INTERVAL_MS);
+        if (hasInterval && request.getIntervalMs() < minInterval) {
+            return new OperationResponse(OperationType.SAVE_SCHEDULE,
+                    ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getDefaultMessage() + " (" + minInterval + " ms)",
+                    ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL);
         }
         if (request.getTimeoutMs() < 0) {
             return invalid("timeoutMs must not be negative");
@@ -225,6 +253,34 @@ public final class ScheduleOperationHelper {
             json.addProperty("owner", owner);
         }
         return json;
+    }
+
+    public static boolean disable(String dbName, ScheduleDefinition dispatched, String reason)
+            throws IOException, InterruptedException {
+        final var budget = OperationLocks.lockBudgetMillis(false);
+        if (!locks.tryLockDatabaseShared(dbName, budget)) {
+            return false;
+        }
+        try {
+            if (!locks.tryLockWrite(dbName, Globals.SCHEDULES_FOLDER, budget)) {
+                return false;
+            }
+            try {
+                final var existing = cache.getSchedule(dbName, dispatched.getName());
+                if (existing == null || !existing.isEnabled() || existing.getVersion() != dispatched.getVersion()) {
+                    return false;
+                }
+                final var disabled = existing.disabledCopy(reason, System.currentTimeMillis());
+                StoredDefinitions.writeSchedule(dbName, disabled.getName(), disabled.toJsonObject());
+                cache.putSchedule(dbName, disabled);
+                registry.reload(dbName);
+                return true;
+            } finally {
+                locks.release(dbName, Globals.SCHEDULES_FOLDER);
+            }
+        } finally {
+            locks.releaseDatabaseShared(dbName);
+        }
     }
 
     public static List<ScheduleDefinition> schedulesIn(String dbName) throws IOException {

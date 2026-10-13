@@ -3,8 +3,6 @@ package org.techhouse.unit.conn;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.auth.AuthFailureThrottle;
+import org.techhouse.test.ResponseLines;
 import org.techhouse.test.TestUtils;
 
 public class MessageProcessorAuthLimitTest {
@@ -21,8 +20,7 @@ public class MessageProcessorAuthLimitTest {
     private static final String PASSWORD = "password123";
     private final AuthFailureThrottle throttle = IocContainer.get(AuthFailureThrottle.class);
     private final PipedOutputStream toServer = new PipedOutputStream();
-    private final PipedInputStream fromServer = new PipedInputStream(1 << 16);
-    private BufferedReader responses;
+    private final ResponseLines responses = new ResponseLines();
     private Thread connection;
     private long originalBase;
 
@@ -32,9 +30,7 @@ public class MessageProcessorAuthLimitTest {
         TestUtils.createAdmin(USERNAME);
         originalBase = TestUtils.getPrivateField(throttle, "baseMillis", Long.class);
         TestUtils.setPrivateField(throttle, "baseMillis", 0L);
-        final var socket = TestUtils.clientSocket(new PipedInputStream(toServer, 1 << 16),
-                new PipedOutputStream(fromServer));
-        responses = new BufferedReader(new InputStreamReader(fromServer, StandardCharsets.UTF_8));
+        final var socket = TestUtils.clientSocket(new PipedInputStream(toServer, 1 << 16), responses);
         connection = new Thread(new MessageProcessor(socket));
         connection.start();
     }
@@ -51,7 +47,7 @@ public class MessageProcessorAuthLimitTest {
     private String send(String message) throws Exception {
         toServer.write((message + "\n").getBytes(StandardCharsets.UTF_8));
         toServer.flush();
-        return responses.readLine();
+        return responses.next();
     }
 
     private static String authenticate(String password) {

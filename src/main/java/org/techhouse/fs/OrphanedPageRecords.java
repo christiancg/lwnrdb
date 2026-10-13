@@ -122,8 +122,7 @@ final class OrphanedPageRecords {
 
     static PageRecordScan scanRecords(File page, String dbName, String collName, long pageNumber, long fromOffset)
             throws IOException {
-        final var lock = FileLocks.lockFor(page).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(page);
         try {
             if (!page.exists() || page.length() <= fromOffset) {
                 return PageRecordScan.EMPTY;

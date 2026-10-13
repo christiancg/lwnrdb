@@ -1,6 +1,5 @@
 package org.techhouse.data;
 
-import java.io.BufferedWriter;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashSet;
@@ -11,13 +10,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import org.techhouse.conn.OutboundQueue;
 
 public class Client {
     private final String address;
     private final LocalDateTime connectionTime = LocalDateTime.now();
     private LocalDateTime lastCommandTime;
     private String authenticatedUsername;
-    private volatile BufferedWriter writer;
+    private volatile OutboundQueue outbound;
     private final ReentrantLock writerLock = new ReentrantLock();
     private volatile Transaction activeTransaction;
     private volatile boolean hasLocalSlice;
@@ -59,12 +59,12 @@ public class Client {
         this.authenticatedUsername = authenticatedUsername;
     }
 
-    public BufferedWriter getWriter() {
-        return writer;
+    public OutboundQueue getOutbound() {
+        return outbound;
     }
 
-    public void setWriter(BufferedWriter writer) {
-        this.writer = writer;
+    public void setOutbound(OutboundQueue outbound) {
+        this.outbound = outbound;
     }
 
     public ReentrantLock getWriterLock() {

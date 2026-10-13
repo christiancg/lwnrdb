@@ -114,6 +114,12 @@ public class ScheduleDefinition extends StoredDefinition {
         return definer;
     }
 
+    public ScheduleDefinition disabledCopy(String reason, long at) {
+        final var copy = fromJsonObject(toJsonObject());
+        copy.markDisabled(reason, at);
+        return copy;
+    }
+
     public String getDescription() {
         return description;
     }

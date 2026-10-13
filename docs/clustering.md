@@ -888,7 +888,11 @@ inbound messages whose `secret` does not match `clusterSecret` are rejected.
 frame carrying the secret, sent without waiting for an answer. The listener reads that first line
 under a 4 KB cap and within `clusterHandshakeTimeoutMs`; a connection that stays silent, sends a
 longer line, sends anything other than a `HELLO`, or presents the wrong secret is closed without
-a reply. At most 64 connections may be in that pre-authentication state at once, and at most 8 of
+a reply. That read deadline is backed by an absolute one: a timer closes any connection still in
+its handshake at `clusterHandshakeTimeoutMs` plus one second, because a TLS handshake runs inside
+the first read and a peer dripping it one record at a time would otherwise reset the read timeout
+forever. Handshake failures are logged through the same rate limiter as the client port's
+pre-authentication warnings. At most 64 connections may be in that pre-authentication state at once, and at most 8 of
 them from one remote address; the next one is closed on accept. The per-address share keeps one
 flooding host from holding every slot while a restarted peer tries to rejoin. The `HELLO` line is
 parsed with the same 128-level nesting limit as a client request. Only after the handshake does the frame loop start, and every later line, in
@@ -899,7 +903,8 @@ least 32 characters and is compared in constant time (`MessageDigest.isEqual`).
 **Mutual TLS.** With `clusterTlsEnabled=true` the cluster listener requires a client certificate
 (`needClientAuth`) and trusts exactly what the shared keystore trusts, which is also the key every
 node presents. A process without a certificate from that keystore (or its CA) fails the TLS
-handshake and is logged as `Rejected cluster connection: TLS handshake failed`. Hostname
+handshake and is logged as `Rejected cluster connection: TLS handshake failed`. Outbound peer
+sockets pin the same protocols as the listeners (`TLSv1.3`, `TLSv1.2`). Hostname
 verification stays off, since nodes connect by advertised address; the guarantee is "holds a
 certificate the shared keystore trusts". With `clusterTlsEnabled=false` on a clustered node,
 startup logs a `SECURITY WARNING`.

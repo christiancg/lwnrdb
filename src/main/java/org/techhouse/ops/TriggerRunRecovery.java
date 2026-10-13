@@ -20,6 +20,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
 public final class TriggerRunRecovery {
+    public static final long STANDALONE_SWEEP_INTERVAL_MS = 60_000L;
     private static final Logger logger = Logger.logFor(TriggerRunRecovery.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -169,6 +170,11 @@ public final class TriggerRunRecovery {
         } catch (Exception e) {
             logger.warning("Failed to inspect pending trigger runs: " + e.getMessage());
         }
+    }
+
+    public static void sweep() {
+        warnAboutStrandedRuns();
+        garbageCollect();
     }
 
     public static void garbageCollect() {

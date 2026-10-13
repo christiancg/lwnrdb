@@ -51,11 +51,14 @@ held when the first admin was bootstrapped; these examples use the integration s
 ```
 
 Startup refusal (no wire example: the server never opens its port). With `defaultAdminPassword=administrator` in
-`lwnrdb.cfg` (whether or not an admin already exists), or with a blank/missing `defaultAdminPassword` while no admin
+`lwnrdb.cfg` (any letter case, whether or not an admin already exists), a commonly used password such as
+`password123`, the same value as `defaultAdminUsername`, or a blank/missing `defaultAdminPassword` while no admin
 user exists yet, the process logs one FATAL line and exits non-zero:
 
 ```
 FATAL-org.techhouse.AdminPasswordGuard - Insecure configuration, the application will not start: defaultAdminPassword is the well-known shipped value 'administrator'. Set a different password in lwnrdb.cfg, or remove the key if an admin user already exists.
+FATAL-org.techhouse.AdminPasswordGuard - Insecure configuration, the application will not start: defaultAdminPassword is one of the most commonly used passwords. Set a stronger one in lwnrdb.cfg, or remove the key if an admin user already exists.
+FATAL-org.techhouse.AdminPasswordGuard - Insecure configuration, the application will not start: defaultAdminPassword is the same as defaultAdminUsername. Set a different password in lwnrdb.cfg, or remove the key if an admin user already exists.
 FATAL-org.techhouse.AdminPasswordGuard - Insecure configuration, the application will not start: no admin user exists and defaultAdminPassword is not set. Set defaultAdminPassword in lwnrdb.cfg (at least 8 characters) to create the first admin.
 ```
 
@@ -90,6 +93,8 @@ The answer:
 
 With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that never sends its
 ClientHello, or drips it a byte at a time, is closed at `authTimeoutMs` plus one second without an answer.
+A TLS connection that would be refused with `503-1` or `503-14` is closed before its handshake instead, with no
+frame: the client sees the handshake fail.
 
 Any request other than `AUTHENTICATE` and `CLOSE_CONNECTION` sent before authenticating → `401-1`, without being
 validated, so an invalid one gets the same answer as a valid one:
@@ -110,8 +115,19 @@ connections from the same host and send nothing:
 {"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "Too many unauthenticated connections from this address", "errorCode": "503-14"}
 ```
 
-`maxUnauthenticatedInvalidRequests` (5 by default) unparseable lines before authenticating close the
-connection after the fifth answer. Send `garbage` five times on a fresh connection.
+`maxUnauthenticatedInvalidRequests` (5 by default) requests before authenticating that are not a
+successful `AUTHENTICATE` close the connection after the fifth answer: unparseable lines, requests answered
+`401-1` and failed attempts all count. Send `garbage` (or `{"type": "LIST_DATABASES"}`) five times on a
+fresh connection.
+
+A connection that stops reading while its responses pile up past `clientOutboundQueueMaxBytes` (16Mb by
+default) → its backlog is dropped, its listens end, and a single `CLOSE_CONNECTION` frame carrying `413-1`
+is queued before the connection is closed. Authenticate, then pipeline a few hundred large `AGGREGATE`
+requests without reading; a client that catches up within a second reads this as its last frame:
+
+```json
+{"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "The connection's outbound buffer overflowed", "errorCode": "413-1"}
+```
 
 A non-admin `SET_PASSWORD` on another user → `403-1` whether or not that user exists:
 
@@ -154,8 +170,9 @@ request answers `408-5` once:
 `COMMIT_TRANSACTION` after an admin revoked the user's write grant on a collection the transaction wrote →
 `403-1`, and nothing of the transaction is applied.
 
-An `IN`/`NOT_IN` list with more than `maxFilterOperands` (10 000) values, or a `within` polygon with more
-vertices → `400-27`:
+An `IN`/`NOT_IN` list with more than `maxFilterOperands` (10 000) values, a `within` polygon with more
+vertices, a conjunction with more operands, a `FILTER` step whose operator tree has more nodes, or a `MAP` step
+with more operators plus mid-operator operands → `400-27`:
 
 ```json
 {"type": "AGGREGATE", "status": "ERROR", "message": "The filter has more operands than allowed: IN operands exceed 10000", "errorCode": "400-27"}
@@ -166,6 +183,14 @@ A `MAP` `CONCAT` whose result grows past `maxEntrySize` (for example one that do
 
 ```json
 {"type": "AGGREGATE", "status": "ERROR", "message": "A MAP result exceeds the maximum entry size", "errorCode": "400-28"}
+```
+
+The same `400-28` answers a `MAP` step whose `CONCAT`s and string `CAST`s add more than `maxEntrySize` bytes to one
+document in total (4 000 `CONCAT`s that each copy a 500-byte field), and a `JOIN` whose joined array for one row is
+larger than `maxEntrySize` (a key shared by a few thousand remote documents), indexed remote field or not:
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "orders", "aggregationSteps": [{"type": "JOIN", "joinCollection": "lines", "localField": "region", "remoteField": "region", "asField": "lines"}]}
 ```
 
 ```json
@@ -181,11 +206,65 @@ is parsed: `The command is not valid`.
 {"type": "SAVE_SCHEDULE", "status": "ERROR", "message": "The schedule timeout exceeds the allowed maximum (300000 ms)", "errorCode": "400-29"}
 ```
 
+`SAVE_TRIGGER` creating one more trigger on a collection that already holds `triggerMaxPerCollection` (50) →
+`400-32` (replacing an existing trigger of the same name still succeeds):
+
+```json
+{"type": "SAVE_TRIGGER", "status": "ERROR", "message": "The collection has the maximum number of triggers (50)", "errorCode": "400-32"}
+```
+
+`SAVE_SCHEDULE` by a user who already defines `scheduleMaxTotalPerUser` (500) schedules across every database →
+`400-33`:
+
+```json
+{"type": "SAVE_SCHEDULE", "status": "ERROR", "message": "The user has the maximum number of schedules (500)", "errorCode": "400-33"}
+```
+
+`SAVE_PROCEDURE` creating one more procedure in a database that already holds `maxProceduresPerDatabase` (500) →
+`400-34`:
+
+```json
+{"type": "SAVE_PROCEDURE", "status": "ERROR", "message": "The database has the maximum number of procedures (500)", "errorCode": "400-34"}
+```
+
+`SAVE_SCHEDULE` with an `intervalMs` below `scheduleMinIntervalMs` (1 000) → `400-35`:
+
+```json
+{"type": "SAVE_SCHEDULE", "databaseName": "test", "name": "tooFast", "procedureName": "recalcTotals", "intervalMs": 100}
+```
+
+```json
+{"type": "SAVE_SCHEDULE", "status": "ERROR", "message": "The schedule interval is below the allowed minimum (1000 ms)", "errorCode": "400-35"}
+```
+
+A trigger or schedule whose definer loses script `RUN` on the database (or, for a trigger, `READ` on its
+collection) is skipped the next time it fires and disabled: `LIST_TRIGGERS`/`LIST_SCHEDULES` then show it with
+`"enabled": false` and a `disabledReason` such as `definer 'bob' no longer holds script RUN on database 'test'`.
+Re-granting does not revive it; the owner re-saves it.
+
 A `MANAGE` user replacing or deleting a trigger or schedule installed by another user (not a database owner
 or an admin) → `403-5`:
 
 ```json
 {"type": "DELETE_TRIGGER", "status": "FORBIDDEN", "message": "The trigger or schedule belongs to another user; only that user, a database owner or an admin may change it", "errorCode": "403-5"}
+```
+
+A user with `READ` on the database but not script `MANAGE` (nor ownership, nor admin) asking for procedure source
+→ `403-6`; the same request without `includeSource` answers the summary:
+
+```json
+{"type": "LIST_PROCEDURES", "databaseName": "test", "includeSource": true}
+```
+
+```json
+{"type": "LIST_PROCEDURES", "status": "FORBIDDEN", "message": "Procedure source requires script MANAGE", "errorCode": "403-6"}
+```
+
+That user's `RUN_SCRIPT` still runs an imported procedure, but cannot print it: this answers
+`"function recalc() { [native code] }"` instead of the source.
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import { recalc } from 'procedures/libTotals'; return String(recalc);"}
 ```
 
 Create database
@@ -1506,6 +1585,21 @@ A result larger than `scriptMaxResultBytes` (`16Mb` by default) → `400-15`
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 'x'.repeat(17000000);"}
 ```
 
+An array-like whose `length` is above `scriptMaxArrayLength` (`16777216` by default) handed to `apply`,
+`Reflect.apply`/`construct`, `Vector.from` or `Array.fromAsync` → `400-30`, before anything is allocated (the
+abort is not catchable)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return Math.max.apply(null, { length: 2 ** 30 });"}
+```
+
+Growing an array to a huge dense length (`a.length = N`, `a[N - 1] = x`), a shared string saved through `db.save`
+many times over, or an indented `JSON.stringify` of a deep tree is charged before it allocates → `400-12`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "const a = []; a.length = 1 << 24; return a.length;"}
+```
+
 A source larger than `scriptMaxSourceBytes` (`256Kb` by default) → `400-10`, before anything is parsed. The
 same cap refuses a `SAVE_PROCEDURE` and a pipeline `SCRIPT` operator. To try it by hand, set
 `scriptMaxSourceBytes=1Kb` in `lwnrdb.cfg` and send any script over a kilobyte.
@@ -1690,8 +1784,9 @@ cluster it is the executing node's `host:clusterPort`.
 
 While it runs, admission is also visible. With `maxConcurrentScripts=1` in `lwnrdb.cfg`, a second script on
 connection B waits `scriptQueueWaitMs` (250 ms by default) for a permit and is then refused → `503-6`. The
-message names the limit that refused it; `maxConcurrentScriptsPerUser` and `maxConcurrentScriptsPerDatabase`
-refuse the same way.
+message names the limit that refused it; `maxConcurrentScriptsPerUser` (4 by default) and
+`maxConcurrentScriptsPerDatabase` (8 by default) refuse the same way, without waiting. A fifth concurrent script
+by the same user answers `503-6` with `(user limit)` at once, even while node-wide permits are free.
 
 ```json
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 1;"}
@@ -2047,6 +2142,17 @@ are past the limit, 12 would be accepted
 {"type": "SAVE_SCHEMA", "status": "ERROR", "message": "The schema expands past the complexity limit: it expands to more than 100000 schema nodes once its references are followed", "errorCode": "400-24"}
 ```
 
+A schema holding a `pattern` value or a `patternProperties` key longer than `schemaMaxPatternLength` (4096
+characters) is refused at save → `400-31`, and the schema in force is unchanged. Save one whose `pattern` is 4097
+`a`s (build it with `"a" * 4097` in a script; it is too long to show here)
+
+```json
+{"type": "SAVE_SCHEMA", "status": "ERROR", "message": "A schema regular expression exceeds the maximum length: a pattern is longer than 4096 characters", "errorCode": "400-31"}
+```
+
+The budget covers the whole request, so a `BULK_SAVE` shares one `schemaValidationBudget` across its documents:
+documents that each pass alone can together exhaust it → `400-23`, and nothing of the batch is written.
+
 A catastrophic `RegExp` in a script is bounded by the script's instruction budget, deadline and cancellation like
 any runaway loop → `408-1` after `scriptTimeoutMs` with the shipped defaults (`400-11` when `scriptInstructionBudget` runs out
 first; regex work costs one instruction per 64 matcher steps), instead of running unbounded
@@ -2358,7 +2464,7 @@ List them — metadata only
 {"type": "LIST_PROCEDURES", "databaseName": "test"}
 ```
 
-`includeSource` adds the body
+`includeSource` adds the body (needs script `MANAGE`, ownership or admin; `READ` alone answers `403-6`)
 
 ```json
 {"type": "LIST_PROCEDURES", "databaseName": "test", "includeSource": true}
@@ -2758,6 +2864,17 @@ A malformed cron is refused at save time → `400-16`
 
 ```json
 {"type": "SAVE_SCHEDULE", "databaseName": "test", "name": "badCron", "procedureName": "beat", "cron": "99 * * * *"}
+```
+
+A step past the 32-bit range is refused the same way, while the largest 32-bit step is valid and fires once per
+range (here at minute 0):
+
+```json
+{"type": "SAVE_SCHEDULE", "databaseName": "test", "name": "badCron", "procedureName": "beat", "cron": "*/2147483648 * * * *"}
+```
+
+```json
+{"type": "SAVE_SCHEDULE", "databaseName": "test", "name": "hugeStep", "procedureName": "beat", "cron": "*/2147483647 * * * *"}
 ```
 
 A procedure that does not exist → `404-8`

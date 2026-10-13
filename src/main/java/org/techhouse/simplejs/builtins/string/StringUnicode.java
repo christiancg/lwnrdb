@@ -13,6 +13,10 @@ public final class StringUnicode {
     private static final int GREEK_CAPITAL_SIGMA = 0x03A3;
     private static final int GREEK_SMALL_SIGMA = 0x03C3;
     private static final int GREEK_SMALL_FINAL_SIGMA = 0x03C2;
+    private static final char LAST_ASCII = 0x7F;
+    private static final long NFC_MAX_EXPANSION = 3L;
+    private static final long NFD_MAX_EXPANSION = 4L;
+    private static final long COMPATIBILITY_MAX_EXPANSION = 18L;
 
     public static boolean isWellFormed(String value) {
         for (var i = 0; i < value.length(); i++) {
@@ -114,12 +118,35 @@ public final class StringUnicode {
     public static String normalize(String value, List<JsValue> args, InterpreterOps ops) {
         final var form = args.isEmpty() || args.getFirst() instanceof JsUndefined ? "NFC" : str(args, 0, ops);
         InterpreterOps.paceWork(ops, value.length());
+        final java.text.Normalizer.Form normalForm;
         try {
-            return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.valueOf(form));
+            normalForm = java.text.Normalizer.Form.valueOf(form);
         } catch (IllegalArgumentException invalidForm) {
             throw new org.techhouse.simplejs.exceptions.RangeErrorException(
                     "The normalization form should be one of NFC, NFD, NFKC, NFKD.");
         }
+        final var expansion = expansionBound(value, normalForm);
+        InterpreterOps.chargeChars(ops, expansion);
+        try {
+            return java.text.Normalizer.normalize(value, normalForm);
+        } finally {
+            InterpreterOps.release(ops, expansion * InterpreterOps.STRING_BYTES_PER_CHAR);
+        }
+    }
+
+    static long expansionBound(String value, java.text.Normalizer.Form form) {
+        final var factor = switch (form) {
+            case NFC -> NFC_MAX_EXPANSION;
+            case NFD -> NFD_MAX_EXPANSION;
+            case NFKC, NFKD -> COMPATIBILITY_MAX_EXPANSION;
+        };
+        var nonAscii = 0L;
+        for (var i = 0; i < value.length(); i++) {
+            if (value.charAt(i) > LAST_ASCII) {
+                nonAscii++;
+            }
+        }
+        return nonAscii * (factor - 1);
     }
 
     public static int localeCompare(String value, List<JsValue> args, InterpreterOps ops) {

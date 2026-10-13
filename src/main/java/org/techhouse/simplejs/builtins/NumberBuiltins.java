@@ -3,14 +3,12 @@ package org.techhouse.simplejs.builtins;
 import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER;
 
 import java.math.BigInteger;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.BigIntLimits;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -293,28 +291,11 @@ public final class NumberBuiltins {
         return negative ? "-" + sb : sb.toString();
     }
 
-    private static final Map<InterpreterOps, JsNativeFunction> PARSE_FLOAT_CACHE = Collections
-            .synchronizedMap(new WeakHashMap<>());
-    private static final Map<InterpreterOps, JsNativeFunction> PARSE_INT_CACHE = Collections
-            .synchronizedMap(new WeakHashMap<>());
-
-    public static JsNativeFunction parseFloatFunction(InterpreterOps ops) {
-        return ops == null
-                ? newParseFloatFunction(null)
-                : PARSE_FLOAT_CACHE.computeIfAbsent(ops, NumberBuiltins::newParseFloatFunction);
-    }
-
-    private static JsNativeFunction newParseFloatFunction(InterpreterOps ops) {
+    private static JsNativeFunction parseFloatFunction(InterpreterOps ops) {
         return new JsNativeFunction("parseFloat", (_, args) -> new JsNumber(parseFloat(text(args, ops))));
     }
 
-    public static JsNativeFunction parseIntFunction(InterpreterOps ops) {
-        return ops == null
-                ? newParseIntFunction(null)
-                : PARSE_INT_CACHE.computeIfAbsent(ops, NumberBuiltins::newParseIntFunction);
-    }
-
-    private static JsNativeFunction newParseIntFunction(InterpreterOps ops) {
+    private static JsNativeFunction parseIntFunction(InterpreterOps ops) {
         return new JsNativeFunction("parseInt", (_, args) -> new JsNumber(parseInt(text(args, ops), radix(args, ops))));
     }
 
@@ -445,11 +426,29 @@ public final class NumberBuiltins {
         if (index == digitsStart) {
             return Double.NaN;
         }
-        try {
-            return sign * Long.parseLong(s.substring(digitsStart, index), radix);
-        } catch (NumberFormatException ignored) {
-            return sign * new java.math.BigInteger(s.substring(digitsStart, index), radix).doubleValue();
+        final var digits = s.substring(digitsStart, index);
+        if (digits.length() > BigIntLimits.MAX_PARSE_DIGITS) {
+            return sign * overlongDigits(digits, radix);
         }
+        try {
+            return sign * Long.parseLong(digits, radix);
+        } catch (NumberFormatException ignored) {
+            return sign * new BigInteger(digits, radix).doubleValue();
+        }
+    }
+
+    private static double overlongDigits(String digits, int radix) {
+        var firstSignificant = 0;
+        while (firstSignificant < digits.length() && digits.charAt(firstSignificant) == '0') {
+            firstSignificant++;
+        }
+        final var significant = digits.length() - firstSignificant;
+        if (significant == 0) {
+            return 0.0;
+        }
+        return significant > BigIntLimits.MAX_PARSE_DIGITS
+                ? Double.POSITIVE_INFINITY
+                : new BigInteger(digits.substring(firstSignificant), radix).doubleValue();
     }
 
     private static boolean isRadixDigit(char c, int radix) {

@@ -16,6 +16,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 import org.techhouse.config.Globals;
@@ -41,8 +42,7 @@ final class FileLocks {
     }
 
     static <E> Parsed<E> readHealing(File file, Parser<E> parser) throws IOException {
-        final var readLock = lockFor(file).readLock();
-        readLock.lock();
+        final var readLock = lockRead(file);
         final Parsed<E> parsed;
         try {
             parsed = parser.parse(file);
@@ -52,8 +52,7 @@ final class FileLocks {
         if (parsed == null || parsed.unrecognised() || !parsed.dropped()) {
             return parsed;
         }
-        final var writeLock = lockFor(file).writeLock();
-        writeLock.lock();
+        final var writeLock = lockWrite(file);
         try {
             final var reparsed = parser.parse(file);
             if (reparsed != null && reparsed.dropped() && !reparsed.unrecognised()) {
@@ -67,8 +66,7 @@ final class FileLocks {
 
     static <T> void appendLines(File file, List<T> rows, Function<T, String> toLine, String rollbackFailure)
             throws IOException {
-        final var lock = lockFor(file).writeLock();
-        lock.lock();
+        final var lock = lockWrite(file);
         try {
             final var lengthBeforeAppend = file.length();
             var appended = false;
@@ -99,9 +97,57 @@ final class FileLocks {
         return fileLocks.computeIfAbsent(file.getAbsolutePath(), _ -> new ReentrantReadWriteLock());
     }
 
+    static Lock lockRead(File file) {
+        return acquire(file, ReentrantReadWriteLock::readLock);
+    }
+
+    static Lock lockWrite(File file) {
+        return acquire(file, ReentrantReadWriteLock::writeLock);
+    }
+
+    private static Lock acquire(File file, Function<ReentrantReadWriteLock, Lock> side) {
+        final var path = file.getAbsolutePath();
+        while (true) {
+            final var registered = fileLocks.computeIfAbsent(path, _ -> new ReentrantReadWriteLock());
+            final var lock = side.apply(registered);
+            lock.lock();
+            if (fileLocks.get(path) == registered) {
+                return lock;
+            }
+            lock.unlock();
+        }
+    }
+
+    static void evictIfUnused(File file) {
+        evictIfUnused(file.getAbsolutePath());
+    }
+
+    static void evictAllUnder(File folder) {
+        final var prefix = folder.getAbsolutePath() + File.separator;
+        for (final var path : List.copyOf(fileLocks.keySet())) {
+            if (path.startsWith(prefix)) {
+                evictIfUnused(path);
+            }
+        }
+    }
+
+    private static void evictIfUnused(String path) {
+        final var retired = new ReentrantReadWriteLock[1];
+        fileLocks.computeIfPresent(path, (_, lock) -> {
+            if (lock.isWriteLocked() || lock.getReadLockCount() > 0 || lock.hasQueuedThreads()
+                    || !lock.writeLock().tryLock()) {
+                return lock;
+            }
+            retired[0] = lock;
+            return null;
+        });
+        if (retired[0] != null) {
+            retired[0].writeLock().unlock();
+        }
+    }
+
     static List<String> readAllLinesIfExists(File file) throws IOException {
-        final var lock = lockFor(file).readLock();
-        lock.lock();
+        final var lock = lockRead(file);
         try {
             return decodeLines(Files.readAllBytes(file.toPath()));
         } catch (NoSuchFileException e) {
@@ -112,8 +158,7 @@ final class FileLocks {
     }
 
     static List<String> readAllLinesLocked(File file) throws IOException {
-        final var lock = lockFor(file).readLock();
-        lock.lock();
+        final var lock = lockRead(file);
         try {
             return decodeLines(Files.readAllBytes(file.toPath()));
         } finally {

@@ -17,8 +17,12 @@ public class JsonSchema {
     }
 
     public JsonSchema(JsonBaseElement root, long stepBudget) {
+        this(root, new SchemaBudget(stepBudget));
+    }
+
+    public JsonSchema(JsonBaseElement root, SchemaBudget sharedBudget) {
         this.root = root;
-        this.budget = new SchemaBudget(stepBudget);
+        this.budget = sharedBudget;
     }
 
     RegexStepBudget budget() {

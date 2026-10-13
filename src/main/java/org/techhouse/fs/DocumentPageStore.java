@@ -35,8 +35,7 @@ final class DocumentPageStore {
     DbEntry getById(PkIndexEntry pkIndexEntry) throws IOException {
         final var file = paths.collectionPage(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
                 pkIndexEntry.getPage());
-        final var lock = FileLocks.lockFor(file).readLock();
-        lock.lock();
+        final var lock = FileLocks.lockRead(file);
         try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
             return readEntryFromOpenFile(reader, pkIndexEntry);
         } finally {
@@ -56,8 +55,7 @@ final class DocumentPageStore {
                     pageGroup.getKey());
             final var pageEntries = pageGroup.getValue().stream()
                     .sorted(Comparator.comparingLong(PkIndexEntry::getPosition)).toList();
-            final var lock = FileLocks.lockFor(file).readLock();
-            lock.lock();
+            final var lock = FileLocks.lockRead(file);
             try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
                 for (var pkEntry : pageEntries) {
                     result.add(readEntryFromOpenFile(reader, pkEntry));

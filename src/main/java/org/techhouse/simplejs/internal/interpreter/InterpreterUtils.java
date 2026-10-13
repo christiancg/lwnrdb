@@ -67,11 +67,10 @@ public final class InterpreterUtils {
 
     public static boolean isAnonymousFunctionDefinition(JsNode node) {
         return switch (node) {
-            case null -> false;
             case ArrowFunctionExpression ignored -> true;
             case FunctionExpression function -> function.getName() == null;
             case ClassExpression classExpression -> classExpression.getId() == null;
-            default -> false;
+            case null, default -> false;
         };
     }
 
@@ -207,6 +206,10 @@ public final class InterpreterUtils {
     }
 
     public static List<JsValue> arrayLikeElements(JsValue value) {
+        return primitiveArrayLikeElements(value, null);
+    }
+
+    private static List<JsValue> primitiveArrayLikeElements(JsValue value, InterpreterOps ops) {
         if (value instanceof JsArray array) {
             return array.getElements();
         }
@@ -214,7 +217,7 @@ public final class InterpreterUtils {
             return arguments.snapshot();
         }
         if (value instanceof JsTypedArray typed) {
-            return TypedArrayBuiltins.elements(typed);
+            return TypedArrayBuiltins.elements(typed, ops);
         }
         if (value instanceof JsString string) {
             final var chars = new ArrayList<JsValue>();
@@ -228,7 +231,7 @@ public final class InterpreterUtils {
 
     public static List<JsValue> arrayLikeElements(JsValue value, InterpreterOps ops, boolean fromEnd) {
         if (ops == null || !(value instanceof JsObject || value instanceof JsProxy)) {
-            return arrayLikeElements(value);
+            return primitiveArrayLikeElements(value, ops);
         }
         final var length = toLength(ops.getMember(value, new JsString("length")), ops);
         InterpreterOps.chargeElements(ops, length);

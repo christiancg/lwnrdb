@@ -49,6 +49,17 @@ public class OwnerOnlyPermissionsTest {
     }
 
     @Test
+    public void test_create_directory_makes_one_owner_only_level_like_mkdir() throws IOException {
+        final var level = tmp.resolve("single");
+        assertTrue(OwnerOnlyPermissions.createDirectory(level));
+        assertEquals(OWNER_DIRECTORY, modeOf(level));
+        assertFalse(OwnerOnlyPermissions.createDirectory(level));
+        assertFalse(OwnerOnlyPermissions.createDirectory(tmp.resolve("missing").resolve("child")));
+        assertTrue(OwnerOnlyPermissions.createDirectory(tmp.resolve("plain"), false));
+        assertTrue(Files.isDirectory(tmp.resolve("plain")));
+    }
+
+    @Test
     public void test_existing_directories_keep_their_mode() throws IOException {
         final var parent = withMode(Files.createDirectory(tmp.resolve("shared")), "rwxr-xr-x");
 

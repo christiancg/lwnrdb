@@ -36,13 +36,18 @@ public final class MapOperatorHelper {
     }
 
     public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineScriptContext context) {
+        return processOperator(operator, toMap, context, new MapResultBudget());
+    }
+
+    static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineScriptContext context,
+            MapResultBudget budget) {
         final var condition = operator.getCondition();
         boolean continueProcessing = true;
         if (condition != null) {
             continueProcessing = filterCondition(condition, toMap, context);
         }
         return continueProcessing ? switch (operator.getType()) {
-            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context);
+            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context, budget);
             case REMOVE_FIELD -> removeField((RemoveFieldMapOperator) operator, toMap);
         } : toMap;
     }
@@ -105,7 +110,8 @@ public final class MapOperatorHelper {
         return test.test(toMap, fieldName);
     }
 
-    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineScriptContext context) {
+    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineScriptContext context,
+            MapResultBudget budget) {
         final var addFieldName = operator.getFieldName();
         final var midOperator = operator.getOperator();
         return switch (midOperator.getType()) {
@@ -120,8 +126,8 @@ public final class MapOperatorHelper {
             case ROOT -> root((ArrayParamMidOperator) midOperator, addFieldName, toMap);
             case ABS -> abs((OneParamMidOperator) midOperator, addFieldName, toMap);
             case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
-            case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap);
+            case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap, budget);
+            case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap, budget);
             case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context);
         };
     }
@@ -263,7 +269,8 @@ public final class MapOperatorHelper {
         return obj;
     }
 
-    private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+    private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj,
+            MapResultBudget budget) {
         final var operands = midOperator.getOperands();
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
@@ -292,6 +299,7 @@ public final class MapOperatorHelper {
                 throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
             }
         }
+        budget.charge(result);
         JsonUtils.setPath(obj, addFieldName, new JsonString(result.toString()));
         return obj;
     }
@@ -344,7 +352,8 @@ public final class MapOperatorHelper {
         return "false".equalsIgnoreCase(text) ? new JsonBoolean(false) : JsonNull.INSTANCE;
     }
 
-    private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj) {
+    private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj,
+            MapResultBudget budget) {
         final var fieldName = midOperator.getFieldName();
         final var type = midOperator.getToType();
         final var field = JsonUtils.getFromPath(obj, fieldName);
@@ -402,6 +411,9 @@ public final class MapOperatorHelper {
                     yield JsonNull.INSTANCE;
                 }
             };
+        }
+        if (casted instanceof JsonCustom<?> || casted.isJsonString()) {
+            budget.charge(concatTextOf(casted));
         }
         JsonUtils.setPath(obj, addFieldName, casted);
         return obj;

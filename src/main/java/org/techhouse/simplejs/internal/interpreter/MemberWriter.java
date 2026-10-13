@@ -72,7 +72,9 @@ final class MemberWriter {
     boolean setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
         if (!object.has(key) && "length".equals(key) && receiver == object
                 && object.getPrimitive() instanceof JsArray primitiveArray) {
-            return primitiveArray.setLength(requireLength(value, interp.ops()));
+            final var newLength = requireLength(value, interp.ops());
+            primitiveArray.chargeDenseGrowth(interp.ops(), newLength);
+            return primitiveArray.setLength(newLength);
         }
         if (!object.has(key) && object.getPrimitive() instanceof JsTypedArray primitiveTyped
                 && primitiveTyped.hasCanonicalNumericIndex(new JsString(key))) {
@@ -328,7 +330,9 @@ final class MemberWriter {
 
     boolean setArrayMember(JsArray array, String key, JsValue value) {
         if ("length".equals(key)) {
-            return array.setLength(requireLength(value, interp.ops()));
+            final var newLength = requireLength(value, interp.ops());
+            array.chargeDenseGrowth(interp.ops(), newLength);
+            return array.setLength(newLength);
         }
         if (array.hasPropAccessor(key)) {
             final var setter = array.getPropAccessorSetter(key);
@@ -355,6 +359,7 @@ final class MemberWriter {
             }
         }
         if (index != null) {
+            array.chargeDenseGrowth(interp.ops(), index + 1L);
             return array.set(index, value);
         }
         return wideIndex != null ? array.setWideIndex(wideIndex, value) : array.setProperty(key, value);

@@ -1,6 +1,5 @@
 package org.techhouse.listen;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -123,9 +122,9 @@ public class ListenProcessorThread implements Runnable {
     }
 
     private void push(UUID listenId, UUID clientId, OperationResponse frame, ListenRegistration expected) {
-        final var writer = clientTracker.getWriter(clientId);
+        final var outbound = clientTracker.getOutbound(clientId);
         final var writerLock = clientTracker.getWriterLock(clientId);
-        if (writer == null || writerLock == null) {
+        if (outbound == null || writerLock == null) {
             manager.unregister(listenId);
             return;
         }
@@ -134,11 +133,9 @@ public class ListenProcessorThread implements Runnable {
             if (expected != null && manager.getRegistration(listenId) != expected) {
                 return;
             }
-            writer.write(eJson.toJson(frame));
-            writer.newLine();
-            writer.flush();
-        } catch (IOException e) {
-            manager.unregister(listenId);
+            if (!outbound.offer(eJson.toJson(frame))) {
+                manager.unregister(listenId);
+            }
         } finally {
             writerLock.unlock();
         }

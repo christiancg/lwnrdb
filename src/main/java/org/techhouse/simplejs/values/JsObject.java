@@ -23,6 +23,7 @@ public final class JsObject extends JsValue {
     private JsValue proto;
     private boolean protoExplicitlyNull;
     private JsValue primitive;
+    private Object internalSlot;
 
     @Override
     public PropertyTable ownProperties() {
@@ -168,6 +169,14 @@ public final class JsObject extends JsValue {
 
     public void setSymbolFlags(JsSymbol key, PropertyFlags flags) {
         table.setSymbolFlags(key, flags);
+    }
+
+    public Object getInternalSlot() {
+        return internalSlot;
+    }
+
+    public void setInternalSlot(Object internalSlot) {
+        this.internalSlot = internalSlot;
     }
 
     public JsValue getPrimitive() {

@@ -1,14 +1,17 @@
 package org.techhouse.bckg_ops;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 import org.techhouse.bckg_ops.events.TriggerEvent;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.log.Logger;
@@ -27,6 +30,8 @@ public class TriggerExecutor {
     private volatile boolean draining;
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     private volatile ScheduledExecutorService retryScheduler;
+    private volatile ScheduledExecutorService sweepScheduler;
+    private final AtomicLong queuedBytes = new AtomicLong();
     private volatile Consumer<TriggerEvent> dispatcher;
 
     public TriggerExecutor() {
@@ -37,18 +42,55 @@ public class TriggerExecutor {
         if (dispatcher == null || draining) {
             return;
         }
-        while (!queue.offer(event)) {
-            final var evicted = oldestQueuedFor(event.getDbName());
+        final var queued = event.withIdsOnly();
+        final var bytes = queued.queuedBytes();
+        while (cannotEnqueue(queued, bytes)) {
+            final var evicted = oldestQueuedFor(queued.getDbName());
             if (evicted == null) {
-                if (!queue.offer(event)) {
-                    drop(event, "the newest");
+                if (cannotEnqueue(queued, bytes)) {
+                    drop(queued, "the newest");
                 }
                 return;
             }
-            if (queue.remove(evicted)) {
+            if (dequeue(evicted)) {
                 drop(evicted, "the oldest queued");
             }
         }
+    }
+
+    private boolean cannotEnqueue(TriggerEvent event, long bytes) {
+        final var total = queuedBytes.addAndGet(bytes);
+        final var overBudget = total > Configuration.getInstance().sizeValue(ConfigKey.TRIGGER_QUEUE_MAX_BYTES)
+                && total != bytes;
+        if (overBudget || !queue.offer(event)) {
+            queuedBytes.addAndGet(-bytes);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean dequeue(TriggerEvent event) {
+        if (!queue.remove(event)) {
+            return false;
+        }
+        queuedBytes.addAndGet(-event.queuedBytes());
+        return true;
+    }
+
+    public int discardQueuedFor(String dbName, String collName) {
+        var discarded = 0;
+        for (final var queued : List.copyOf(queue)) {
+            final var matches = dbName.equals(queued.getDbName())
+                    && (collName == null || collName.equals(queued.getCollName()));
+            if (matches && dequeue(queued)) {
+                discarded++;
+            }
+        }
+        return discarded;
+    }
+
+    public long getQueuedBytes() {
+        return queuedBytes.get();
     }
 
     private TriggerEvent oldestQueuedFor(String dbName) {
@@ -109,6 +151,7 @@ public class TriggerExecutor {
     }
 
     private void dispatch(TriggerEvent event) {
+        queuedBytes.addAndGet(-event.queuedBytes());
         try {
             dispatcher.accept(event);
             fired.increment();
@@ -150,6 +193,31 @@ public class TriggerExecutor {
             scheduler.shutdownNow();
         }
         scheduled.set(0);
+        final var sweep = sweepScheduler;
+        sweepScheduler = null;
+        if (sweep != null) {
+            sweep.shutdownNow();
+        }
+    }
+
+    public synchronized void sweepPeriodically(Runnable sweep, long periodMillis) {
+        if (dispatcher == null || sweepScheduler != null) {
+            return;
+        }
+        sweepScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            final var thread = new Thread(runnable, "trigger-run-sweep");
+            thread.setDaemon(true);
+            return thread;
+        });
+        sweepScheduler.scheduleWithFixedDelay(() -> runSweep(sweep), periodMillis, periodMillis, TimeUnit.MILLISECONDS);
+    }
+
+    private void runSweep(Runnable sweep) {
+        try {
+            sweep.run();
+        } catch (Exception | Error e) {
+            logger.error("Trigger run sweep failed: ", e);
+        }
     }
 
     public synchronized void stop() {
@@ -157,6 +225,7 @@ public class TriggerExecutor {
         cancelPendingRetries();
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Trigger");
         queue.clear();
+        queuedBytes.set(0L);
         dispatcher = null;
         logger.info("Stopped listening for triggers");
     }

@@ -10,6 +10,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
 import org.techhouse.ejson.exceptions.SchemaBudgetExceededException;
+import org.techhouse.ejson.validate.SchemaBudget;
 import org.techhouse.ejson.validate.SchemaValidationResult;
 import org.techhouse.ex.MetadataReadException;
 import org.techhouse.ioc.IocContainer;
@@ -26,7 +27,16 @@ public final class SchemaValidationHelper {
     private static final Configuration configuration = Configuration.getInstance();
     private static final Map<String, CheckedSchema> checkedSchemas = new ConcurrentHashMap<>();
 
+    private static final ThreadLocal<CheckedWrite> lastChecked = new ThreadLocal<>();
+
     private record CheckedSchema(WeakReference<JsonObject> source, SchemaValidationResult metaResult) {
+    }
+
+    private record CheckedWrite(WeakReference<OperationRequest> request, WeakReference<Object> payload,
+            WeakReference<JsonObject> schema, SchemaBudget budget) {
+        boolean covers(OperationRequest candidate, Object candidatePayload, JsonObject currentSchema) {
+            return request.get() == candidate && payload.get() == candidatePayload && schema.get() == currentSchema;
+        }
     }
 
     private SchemaValidationHelper() {
@@ -59,8 +69,15 @@ public final class SchemaValidationHelper {
     }
 
     private static OperationResponse checkSave(SaveRequest request) {
-        final var errors = schemaErrors(request.getDatabaseName(), request.getCollectionName(), request.getObject());
+        final var schema = governingSchema(request.getDatabaseName(), request.getCollectionName());
+        final var document = request.getObject();
+        if (schema == null || alreadyChecked(request, document, schema)) {
+            return null;
+        }
+        final var budget = newBudget();
+        final var errors = errorsAgainst(schema, document, budget);
         if (errors == null) {
+            rememberChecked(request, document, schema, budget);
             return null;
         }
         return new OperationResponse(OperationType.SAVE,
@@ -69,8 +86,14 @@ public final class SchemaValidationHelper {
     }
 
     private static OperationResponse checkBulkSave(BulkSaveRequest request) {
-        for (final var object : request.getObjects()) {
-            final var errors = schemaErrors(request.getDatabaseName(), request.getCollectionName(), object);
+        final var schema = governingSchema(request.getDatabaseName(), request.getCollectionName());
+        final var documents = request.getObjects();
+        if (schema == null || alreadyChecked(request, documents, schema)) {
+            return null;
+        }
+        final var budget = newBudget();
+        for (final var object : documents) {
+            final var errors = errorsAgainst(schema, object, budget);
             if (errors != null) {
                 return new OperationResponse(
                         OperationType.BULK_SAVE, ErrorCode.SCHEMA_VALIDATION_FAILED.getDefaultMessage()
@@ -78,18 +101,47 @@ public final class SchemaValidationHelper {
                         ErrorCode.SCHEMA_VALIDATION_FAILED);
             }
         }
+        rememberChecked(request, documents, schema, budget);
         return null;
     }
 
     // Also re-validates a before-hook's replacement document: the checks above run at the edge, before the hook.
-    public static String schemaErrors(String dbName, String collName, JsonObject object) {
+    public static String schemaErrors(String dbName, String collName, JsonObject object, SchemaBudget budget) {
+        final var schema = governingSchema(dbName, collName);
+        return schema == null ? null : errorsAgainst(schema, object, budget);
+    }
+
+    public static SchemaBudget budgetFor(OperationRequest request) {
+        final var checked = lastChecked.get();
+        return checked != null && checked.request().get() == request ? checked.budget() : newBudget();
+    }
+
+    private static JsonObject governingSchema(String dbName, String collName) {
         final var schema = cache.getCollectionSchema(dbName, collName);
-        if (schema == null) {
-            return null;
+        if (schema != null) {
+            requireValidSchema(dbName, collName, schema);
         }
-        requireValidSchema(dbName, collName, schema);
-        final var result = eJson.validateInstance(withoutId(object), schema, configuration.getSchemaValidationBudget());
+        return schema;
+    }
+
+    public static SchemaBudget newBudget() {
+        return new SchemaBudget(configuration.getSchemaValidationBudget());
+    }
+
+    private static String errorsAgainst(JsonObject schema, JsonObject object, SchemaBudget budget) {
+        final var result = eJson.validateInstance(withoutId(object), schema, budget);
         return result.isValid() ? null : String.join("; ", result.getErrors());
+    }
+
+    private static boolean alreadyChecked(OperationRequest request, Object payload, JsonObject schema) {
+        final var checked = lastChecked.get();
+        return checked != null && checked.covers(request, payload, schema);
+    }
+
+    private static void rememberChecked(OperationRequest request, Object payload, JsonObject schema,
+            SchemaBudget budget) {
+        lastChecked.set(new CheckedWrite(new WeakReference<>(request), new WeakReference<>(payload),
+                new WeakReference<>(schema), budget));
     }
 
     private static void requireValidSchema(String dbName, String collName, JsonObject schema) {

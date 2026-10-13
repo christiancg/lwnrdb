@@ -286,6 +286,33 @@ def test_diamond_chain_under_limit_is_accepted_and_bounded(c):
     check("and answers inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
 
 
+def test_an_oversized_pattern_is_refused_at_save(c):
+    section("SAVE_SCHEMA refuses a regular expression longer than schemaMaxPatternLength")
+    check_code("a 4097-character pattern is refused with 400-31",
+               save_schema(c, COLL, {"type": "object", "properties": {"p": {"pattern": "a" * 4097}}}), "ERROR", "400-31")
+    check_code("so is a 4097-character patternProperties key nested in $defs",
+               save_schema(c, COLL, {"$defs": {"d": {"patternProperties": {"b" * 4097: {}}}}}), "ERROR", "400-31")
+    check_status("nothing was stored: an unconstrained save passes", save(c, COLL, {"_id": "free-pattern", "p": 1}), "OK")
+    check_status("a 4096-character pattern is accepted",
+                 save_schema(c, COLL, {"type": "object", "properties": {"p": {"pattern": "a" * 4096}}}), "OK")
+
+
+def test_bulk_save_shares_one_budget(c):
+    section("A BULK_SAVE spends one validation budget across all its documents")
+    check_status("save a schema whose pattern costs millions of steps to reject",
+                 save_schema(c, COLL, {"type": "object", "properties": {"name": {"not": {"pattern": "(x+x+)+y"}}}}),
+                 "OK")
+    costly = "x" * 90 + "!"
+    check_status("one costly document fits the budget on its own", save(c, COLL, {"_id": "costly-1", "name": costly}),
+                 "OK")
+    resp, elapsed = timed(lambda: bulk_save(c, COLL, [{"_id": "costly-2", "name": costly},
+                                                      {"_id": "costly-3", "name": costly}]))
+    check_code("two of them in one BULK_SAVE exhaust it -> 400-23", resp, "ERROR", "400-23")
+    check("and are refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check("nothing of the batch was written",
+          all(find_by_id(c, COLL, _id).get("status") == "NOT_FOUND" for _id in ("costly-2", "costly-3")))
+
+
 def test_invalid_schema_rejected(c):
     section("Invalid schema rejected")
     check_code("schema with a bad keyword value is rejected",
@@ -421,6 +448,8 @@ def main():
         test_the_reported_error_list_is_capped,
         test_complex_ref_chain_save_schema_is_refused,
         test_diamond_chain_under_limit_is_accepted_and_bounded,
+        test_an_oversized_pattern_is_refused_at_save,
+        test_bulk_save_shares_one_budget,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,
         test_ref_targets_are_checked,

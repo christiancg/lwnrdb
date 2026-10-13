@@ -19,6 +19,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.BeforeHookContext;
 import org.techhouse.ops.BulkBeforeHooks;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.test.TestGlobals;
 
@@ -43,7 +44,8 @@ public class BulkBeforeHooksTest {
     @Test
     public void test_no_hooks_accepts_the_document_unchanged() {
         final var document = BeforeHookTestSupport.document("h1");
-        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR)) {
+        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR,
+                SchemaValidationHelper.newBudget())) {
             final var created = hooks.apply(false, document, "h1", OperationType.BULK_SAVE);
             final var updated = hooks.apply(true, document, "h1", OperationType.BULK_SAVE);
             assertFalse(created.isRejected());
@@ -58,7 +60,8 @@ public class BulkBeforeHooksTest {
                 EventType.CREATED);
         BeforeHookTestSupport.installHook("onUpdate", "onupdate", "export default (d) => ({ ...d, via: 'update' });",
                 EventType.UPDATED);
-        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR)) {
+        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR,
+                SchemaValidationHelper.newBudget())) {
             final var created = hooks.apply(false, BeforeHookTestSupport.document("h2"), "h2", OperationType.BULK_SAVE);
             final var updated = hooks.apply(true, BeforeHookTestSupport.document("h3"), "h3", OperationType.BULK_SAVE);
             assertEquals("create", created.document().get("via").asJsonString().getValue());
@@ -71,7 +74,8 @@ public class BulkBeforeHooksTest {
         BeforeHookTestSupport.installHook("both", "both", "export default (d) => d;", EventType.CREATED,
                 EventType.UPDATED);
         final var before = runRegistry.size();
-        final var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR);
+        final var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR,
+                SchemaValidationHelper.newBudget());
         assertEquals(before + 2, runRegistry.size());
 
         hooks.close();
@@ -86,11 +90,11 @@ public class BulkBeforeHooksTest {
                 EventType.UPDATED);
         final var before = runRegistry.size();
         try (var contexts = mockStatic(BeforeHookContext.class, CALLS_REAL_METHODS)) {
-            contexts.when(() -> BeforeHookContext.open(anyString(), anyString(), eq(EventType.UPDATED), any()))
+            contexts.when(() -> BeforeHookContext.open(anyString(), anyString(), eq(EventType.UPDATED), any(), any()))
                     .thenThrow(new IllegalStateException("unreadable triggers"));
 
-            assertThrows(IllegalStateException.class,
-                    () -> BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR));
+            assertThrows(IllegalStateException.class, () -> BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL,
+                    BeforeHookTestSupport.ACTOR, SchemaValidationHelper.newBudget()));
         }
         assertEquals(before, runRegistry.size());
     }

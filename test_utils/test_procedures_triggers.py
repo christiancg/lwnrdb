@@ -24,6 +24,9 @@ RETRY_COLL = "retry_shutdown"
 BATCH_DELETE_COLL = "batch_deletes"
 TWIN_FAILING_COLL = "twin_failing"
 TWIN_AUDITED_COLL = "twin_audited"
+CAP_COLL = "trigger_cap"
+REVOKE_COLL = "revoke_source"
+DROPPED_RUNS_COLL = "dropped_runs"
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -31,6 +34,7 @@ MANAGER_TWO = "proc_manager_two"
 PROC_OWNER = "proc_owner"
 WRITER = "proc_writer"
 LEGACY = "proc_legacy"
+REVOKED_DEFINER = "proc_revoked_definer"
 USER_PASSWORD = "password123"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -47,6 +51,7 @@ BEFORE_HOOK_BUDGET = 200_000
 BEFORE_HOOK_TIMEOUT_MS = 500
 
 SHUTDOWN_BUDGET_MS = 15_000
+TRIGGER_MAX_PER_COLLECTION = 12
 LONG_RETRY_BACKOFF_MS = 60_000
 SHUTDOWN_CEILING_SECONDS = 7.0
 
@@ -133,6 +138,7 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                     triggersEnabled=triggers_enabled,
                     triggerThreads=2,
                     triggerQueueSize=1000,
+                    triggerMaxPerCollection=TRIGGER_MAX_PER_COLLECTION,
                     triggerMaxDepth=TRIGGER_MAX_DEPTH,
                     triggerTimeoutMs=TRIGGER_TIMEOUT_MS,
                     beforeHookInstructionBudget=BEFORE_HOOK_BUDGET,
@@ -606,6 +612,36 @@ def test_a_client_cannot_forge_a_definer():
         check_code("a forged stamp does not skip the import check",
                    manager.save_procedure("forged_import", "import { x } from 'procedures/not_there'; return x;",
                                           stampedVersion=5), "ERROR", "400-18")
+
+
+def test_procedure_source_requires_manage():
+    section("Procedure source is readable only with script MANAGE")
+    show = "import { secret } from 'procedures/lib_hidden'; return [String(secret), secret(1)].join('|');"
+    with admin_conn() as admin:
+        check_status("install a library", admin.save_procedure(
+            "lib_hidden", "export function secret(x) { return x + 1; }"), "OK")
+    with user_conn(RUNNER) as runner:
+        check_code("a READ/RUN user asking for the source is refused (403-6)",
+                   runner.send({"type": "LIST_PROCEDURES", "databaseName": DB, "includeSource": True}),
+                   "FORBIDDEN", "403-6")
+        summary = runner.send({"type": "LIST_PROCEDURES", "databaseName": DB})
+        check_status("the summary still lists for that user", summary, "OK")
+        check("the summary carries no source",
+              all("source" not in p for p in (summary.get("procedures") or [])), str(summary)[:300])
+        check_result("an imported function prints as a native stub for a RUN-only user",
+                     runner.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": show}),
+                     "function secret() { [native code] }|2")
+    with user_conn(MANAGER) as manager:
+        listed = manager.send({"type": "LIST_PROCEDURES", "databaseName": DB, "includeSource": True})
+        sources = {p.get("name"): p.get("source") for p in (listed.get("procedures") or [])}
+        check("a MANAGE user lists the source",
+              sources.get("lib_hidden") == "export function secret(x) { return x + 1; }", f"got {sources}")
+        check_result("and prints the imported function's source",
+                     manager.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": show}),
+                     "function secret(x) { return x + 1; }|2")
+    with admin_conn() as admin:
+        check_status("drop the library", admin.send({"type": "DELETE_PROCEDURE", "databaseName": DB,
+                                                     "name": "lib_hidden"}), "OK")
 
 
 def test_procedure_imports(conn: Conn):
@@ -1908,6 +1944,101 @@ def test_stats(conn: Conn):
           f"got {triggers}")
 
 
+def test_triggers_per_collection_are_capped(conn: Conn):
+    section("A collection holds at most triggerMaxPerCollection triggers")
+    check_status("create a collection to fill",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CAP_COLL}), "OK")
+    check_status("store a no-op procedure", conn.save_procedure("cap_noop", "return 1;"), "OK")
+    saved = [conn.save_trigger(f"cap{i}", ["CREATED"], "cap_noop", coll=CAP_COLL).get("status")
+             for i in range(TRIGGER_MAX_PER_COLLECTION)]
+    check("every trigger up to the cap is saved", saved == ["OK"] * TRIGGER_MAX_PER_COLLECTION, f"statuses {saved}")
+    check_code("one more -> 400-32", conn.save_trigger("capOver", ["CREATED"], "cap_noop", coll=CAP_COLL),
+               "ERROR", "400-32")
+    check_status("replacing an existing trigger is never refused",
+                 conn.save_trigger("cap0", ["UPDATED"], "cap_noop", coll=CAP_COLL), "OK")
+    check_status("drop the filled collection",
+                 conn.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": CAP_COLL}), "OK")
+
+
+def trigger_entry(conn: Conn, coll: str, name: str) -> dict:
+    listed = conn.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": coll})
+    return next((entry for entry in listed.get("triggers") or [] if entry.get("name") == name), {})
+
+
+def set_revoked_definer_grants(admin: Conn, source_access: bool) -> dict:
+    database_permissions = {DB: "READ_WRITE"} if source_access else {}
+    return admin.send({"type": "CHANGE_PERMISSIONS", "username": REVOKED_DEFINER,
+                       "databasePermissions": database_permissions,
+                       "collectionPermissions": {f"{DB}|{AUDIT}": "READ_WRITE"},
+                       "scriptPermissions": {DB: "MANAGE"}})
+
+
+def test_a_trigger_whose_definer_lost_collection_read_is_disabled():
+    section("A trigger whose definer loses READ on its collection is skipped and disabled")
+    with admin_conn() as admin:
+        check_status("create the source collection",
+                     admin.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REVOKE_COLL}),
+                     "OK")
+        check_status("create a definer with MANAGE", admin.send({
+            "type": "CREATE_USER", "username": REVOKED_DEFINER, "password": USER_PASSWORD, "admin": False,
+            "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}), "OK")
+        with user_conn(REVOKED_DEFINER) as definer:
+            check_status("the definer stores an auditing procedure", definer.save_procedure(
+                "revocable_audit", "import db from 'db'; import args from 'args';"
+                " db.save(db.name, '" + AUDIT + "', { _id: 'revocable-' + args.id }); return 1;"), "OK")
+            check_status("and binds a trigger to the source collection",
+                         definer.save_trigger("revocable", ["CREATED"], "revocable_audit", coll=REVOKE_COLL), "OK")
+        check_status("a write fires it", admin.save_doc({"_id": "r1"}, coll=REVOKE_COLL), "OK")
+        check("while the definer holds READ the trigger runs", await_doc(admin, "revocable-r1").get("status") == "OK",
+              "the audit row never appeared")
+        check_status("narrow the definer to the audit collection only", set_revoked_definer_grants(admin, False),
+                     "OK")
+        check_status("another write", admin.save_doc({"_id": "r2"}, coll=REVOKE_COLL), "OK")
+        disabled = bu.wait_until(lambda: trigger_entry(admin, REVOKE_COLL, "revocable").get("enabled") is False,
+                                 10.0, 0.2)
+        stored = trigger_entry(admin, REVOKE_COLL, "revocable")
+        check("the trigger is disabled", disabled, f"got {stored}")
+        check("with the reason recorded", f"READ on collection '{REVOKE_COLL}'" in str(stored.get("disabledReason")),
+              f"got {stored}")
+        check("the definer never received the document",
+              await_absent(admin, "revocable-r2").get("status") == "NOT_FOUND", "the audit row for r2 was written")
+        check_status("give the grant back", set_revoked_definer_grants(admin, True), "OK")
+        check_status("a write after the re-grant", admin.save_doc({"_id": "r3"}, coll=REVOKE_COLL), "OK")
+        check("re-granting alone does not revive the trigger",
+              await_absent(admin, "revocable-r3").get("status") == "NOT_FOUND", "the audit row for r3 was written")
+        check_status("the admin re-saves the trigger",
+                     admin.save_trigger("revocable", ["CREATED"], "revocable_audit", coll=REVOKE_COLL), "OK")
+        check("which re-enables it and clears the reason",
+              trigger_entry(admin, REVOKE_COLL, "revocable").get("enabled") is True
+              and "disabledReason" not in trigger_entry(admin, REVOKE_COLL, "revocable"),
+              f"got {trigger_entry(admin, REVOKE_COLL, 'revocable')}")
+        check_status("a write after the re-save", admin.save_doc({"_id": "r4"}, coll=REVOKE_COLL), "OK")
+        check("fires again", await_doc(admin, "revocable-r4").get("status") == "OK", "the audit row never appeared")
+        admin.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": REVOKE_COLL})
+        admin.send({"type": "DELETE_USER", "username": REVOKED_DEFINER})
+
+
+def test_dropping_a_collection_discards_its_dead_letters(conn: Conn):
+    section("Dropping a collection discards its pending and dead-lettered trigger runs")
+    check_status("create a collection whose runs will die",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DROPPED_RUNS_COLL}),
+                 "OK")
+    arrange_failing_trigger(conn, "dropping", "dropping_boom", "install a trigger whose procedure always throws",
+                            "throw new Error('dropping boom');", ["CREATED"], "dropped-doc", coll=DROPPED_RUNS_COLL)
+    check("the run is dead-lettered", len(await_dead_letters(conn, "dropping")) == 1,
+          f"runs={dead_letters_for(conn, 'dropping')!r}")
+    check_status("drop the collection",
+                 conn.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": DROPPED_RUNS_COLL}), "OK")
+    check("its dead letter is gone with it", not dead_letters_for(conn, "dropping"),
+          f"runs={dead_letters_for(conn, 'dropping')!r}")
+    check_status("re-create a collection of the same name",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DROPPED_RUNS_COLL}),
+                 "OK")
+    check("which inherits no run of the dropped one", not dead_letters_for(conn, "dropping"),
+          f"runs={dead_letters_for(conn, 'dropping')!r}")
+    remove_failing_trigger(conn, "dropping", "remove the dropping trigger", coll=DROPPED_RUNS_COLL)
+
+
 def test_cascade_deletes(conn: Conn, work_dir: str):
     section("Cascade deletes")
     db_root = os.path.join(work_dir, "db")
@@ -1981,6 +2112,7 @@ def main():
             test_procedure_validation(conn)
             test_procedure_name_case_collision(conn)
         test_permissions()
+        test_procedure_source_requires_manage()
         with admin_conn() as conn:
             test_triggers(conn)
             test_a_transaction_reports_only_its_net_effect(conn)
@@ -2009,6 +2141,7 @@ def main():
         test_a_procedure_bound_by_another_definer_is_protected()
         test_a_client_cannot_forge_a_definer()
         test_a_manager_cannot_change_a_trigger_defined_by_someone_else()
+        test_a_trigger_whose_definer_lost_collection_read_is_disabled()
         with admin_conn() as conn:
             test_procedure_imports(conn)
             test_trigger_imports(conn)
@@ -2020,6 +2153,7 @@ def main():
             test_batch_mode(conn)
             test_batch_deleted_trigger_fires_once_per_transaction(conn)
             test_cascade(conn)
+            test_triggers_per_collection_are_capped(conn)
             test_stats(conn)
             test_storage_placement(work_dir)
             test_cascade_deletes(conn, work_dir)
@@ -2049,6 +2183,7 @@ def main():
             test_an_unparseable_definition_is_answered_not_dropped(conn, work_dir)
             test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
+            test_dropping_a_collection_discards_its_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)
             test_same_named_triggers_in_one_transaction_dead_letter_their_own_run(conn)
             test_a_host_call_with_too_few_arguments_dead_letters(conn)

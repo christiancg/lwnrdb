@@ -108,4 +108,15 @@ public class RegexMatcherBudgetTest {
         assertNotNull(match);
         assertEquals(2, match.end());
     }
+
+    @Test
+    public void test_each_start_position_is_charged_per_capture_group() {
+        final var input = "b".repeat(100);
+        final var ungrouped = stepsFor("a".repeat(1000) + "x", input);
+        final var grouped = stepsFor("(a)".repeat(1000) + "x", input);
+        final var resetStepsPerStart = 1 + 2 * 1001 / 64;
+        assertTrue(grouped >= (long) input.length() * resetStepsPerStart, "grouped steps: " + grouped);
+        assertTrue(grouped - ungrouped >= (long) input.length() * (resetStepsPerStart - 1),
+                "grouped " + grouped + " vs ungrouped " + ungrouped);
+    }
 }

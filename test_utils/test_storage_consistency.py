@@ -22,6 +22,7 @@ RECREATE_DB = "recreate_db"
 SCHEMA_COLL = "schema_guarded"
 LOCK_COLL = "items"
 DIRTY_COLL = "dirty_index_docs"
+DIRTY_BATCH = 200
 HEAL_COLL = "heal_race_docs"
 SCRIPT_COLL = "script_written"
 NON_FINITE_COLL = "non_finite_numbers"
@@ -392,7 +393,13 @@ def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, wo
     oversized = oversized_pages(work_dir, GROWTH_COLL, MAX_PAGE_BYTES)
     check("no page grew past maxPageSize", not oversized, f"oversized: {oversized}")
 
-    drifted = occupancy_drift(recorded_pages(work_dir, DB, GROWTH_COLL), actual_pages(work_dir, DB, GROWTH_COLL))
+    drifted = ["unchecked"]
+
+    def settled() -> bool:
+        drifted[:] = occupancy_drift(recorded_pages(work_dir, DB, GROWTH_COLL), actual_pages(work_dir, DB, GROWTH_COLL))
+        return not drifted
+
+    bu.wait_until(settled, timeout_s=15, interval_s=0.2)
     check("the recorded page occupancy still matches the pages on disk", not drifted, "; ".join(drifted))
 
     pk = conn.count_via_pk(coll=GROWTH_COLL)
@@ -1630,10 +1637,12 @@ def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
 
     def writer():
         with admin_conn() as writer_conn:
-            index = 0
+            batch = 0
             while not stop.is_set():
-                writer_conn.save({"_id": f"d{index:05d}", "n": index, "pad": PAD}, coll=DIRTY_COLL)
-                index += 1
+                writer_conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": DIRTY_COLL,
+                                  "objects": [{"_id": f"d{batch:04d}-{i:03d}", "n": batch * DIRTY_BATCH + i,
+                                               "pad": PAD} for i in range(DIRTY_BATCH)]})
+                batch += 1
 
     thread = threading.Thread(target=writer, daemon=True)
     thread.start()

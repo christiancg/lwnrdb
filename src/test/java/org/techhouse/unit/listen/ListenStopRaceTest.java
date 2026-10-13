@@ -72,7 +72,7 @@ public class ListenStopRaceTest {
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
         final var written = new StringWriter();
-        clientTracker.registerWriter(clientId, new BufferedWriter(written));
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(new BufferedWriter(written)));
         final var manager = new StoppedDuringRerun();
         final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of());

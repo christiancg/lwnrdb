@@ -8,10 +8,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.MessageProcessor;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.test.TestGlobals;
@@ -115,15 +117,17 @@ public class MessageProcessorListenTest {
     }
 
     @Test
-    public void test_the_listen_is_delivered_only_after_its_response_is_written() throws Exception {
+    public void test_the_listen_is_delivered_only_after_its_response_is_queued() throws Exception {
         createListenAdmin("listen_delivery_admin");
         final var out = new ByteArrayOutputStream();
         final var writtenAtDelivery = new ArrayList<String>();
         final var deliveredIds = new ArrayList<UUID>();
+        final var processorRef = new AtomicReference<MessageProcessor>();
         final var recording = new ListenManager() {
             @Override
             public void markDelivered(UUID listenId) {
                 deliveredIds.add(listenId);
+                queuedOutboundOf(processorRef.get()).awaitDrained(3000);
                 writtenAtDelivery.add(out.toString(StandardCharsets.UTF_8));
             }
         };
@@ -139,6 +143,7 @@ public class MessageProcessorListenTest {
         } finally {
             swapListenManager(original);
         }
+        processorRef.set(processor);
         final var thread = new Thread(processor);
         thread.start();
         thread.join(3000);
@@ -147,7 +152,15 @@ public class MessageProcessorListenTest {
         final var listenLine = writtenAtDelivery.getFirst().lines().filter(line -> line.contains("listenId"))
                 .findFirst().orElseThrow();
         assertTrue(listenLine.contains(deliveredIds.getFirst().toString()),
-                "the listen must be delivered after the response naming it was written");
+                "the listen must be delivered after the response naming it was queued");
+    }
+
+    private static OutboundQueue queuedOutboundOf(MessageProcessor processor) {
+        try {
+            return TestUtils.getPrivateField(processor, "outbound", OutboundQueue.class);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @SuppressWarnings("unchecked")

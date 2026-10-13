@@ -51,7 +51,7 @@ public final class TypedArrayMutation {
         if (comparator != null && !InterpreterUtils.isCallable(comparator)) {
             throw new TypeErrorException("The comparison function must be either a function or undefined");
         }
-        final var items = new ArrayList<>(elements(validate(receiver)));
+        final var items = elements(validate(receiver), ops);
         if (comparator == null) {
             items.sort(TypedArrayMutation::compareNumeric);
         } else {
@@ -72,7 +72,7 @@ public final class TypedArrayMutation {
     }
 
     public static JsValue toReversed(JsTypedArray receiver, InterpreterOps ops) {
-        final var items = new ArrayList<>(elements(receiver));
+        final var items = elements(receiver, ops);
         java.util.Collections.reverse(items);
         return fromItems(receiver.kind(), items, ops);
     }
@@ -221,21 +221,21 @@ public final class TypedArrayMutation {
         validate(receiver);
         final var targetLength = receiver.length();
         if (source instanceof JsTypedArray typed) {
-            return setFromTypedArray(receiver, typed, offsetValue, targetLength);
+            return setFromTypedArray(receiver, typed, offsetValue, targetLength, ops);
         }
         return setFromArrayLike(receiver, source, offsetValue, targetLength, ops);
     }
 
-    public static JsValue setFromTypedArray(JsTypedArray receiver, JsTypedArray source, double offset,
-            int targetLength) {
+    public static JsValue setFromTypedArray(JsTypedArray receiver, JsTypedArray source, double offset, int targetLength,
+            InterpreterOps ops) {
         validate(source);
         if (isBigIntKind(receiver.kind()) != isBigIntKind(source.kind())) {
             throw new TypeErrorException("Cannot mix BigInt and other types in a typed array set");
         }
-        final var items = elements(source);
-        if (offset + items.size() > targetLength) {
+        if (offset + source.length() > targetLength) {
             throw new RangeErrorException("Source is too large");
         }
+        final var items = elements(source, ops);
         for (var i = 0; i < items.size(); i++) {
             receiver.setElement((int) offset + i, items.get(i));
         }

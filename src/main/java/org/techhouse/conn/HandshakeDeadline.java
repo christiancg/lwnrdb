@@ -1,6 +1,5 @@
 package org.techhouse.conn;
 
-import java.io.IOException;
 import java.net.Socket;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -35,12 +34,9 @@ public final class HandshakeDeadline {
             return;
         }
         fired.set(true);
-        logger.warning("Closed a connection from " + socket.getRemoteSocketAddress()
+        ConnectionLog.warn(logger, "Closed a connection from " + socket.getRemoteSocketAddress()
                 + " that was still connecting or unauthenticated at its deadline");
-        try {
-            socket.close();
-        } catch (IOException ignored) {
-        }
+        SocketClosing.closeInBackground(socket);
     }
 
     public record Armed(ScheduledFuture<?> closer, AtomicBoolean fired) {

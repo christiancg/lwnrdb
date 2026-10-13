@@ -6,12 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import javax.net.ssl.SSLSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
@@ -25,6 +28,7 @@ public class MessageProcessorPreAuthTest {
     private static final String AUTHENTICATE = "{\"type\":\"AUTHENTICATE\",\"username\":\"" + USERNAME
             + "\",\"password\":\"password123\"}";
     private static final String GARBAGE = "garbage";
+    private static final String LIST_DATABASES = "{\"type\":\"LIST_DATABASES\"}";
     private final Configuration config = Configuration.getInstance();
     private final PreAuthSlots preAuthSlots = IocContainer.get(PreAuthSlots.class);
 
@@ -98,6 +102,41 @@ public class MessageProcessorPreAuthTest {
         TestUtils.setPrivateField(config, "maxUnauthenticatedInvalidRequests", 0);
         final var responses = run(GARBAGE, GARBAGE, GARBAGE, GARBAGE, GARBAGE, GARBAGE, AUTHENTICATE);
         assertEquals(7, responses.size(), responses.toString());
+    }
+
+    @Test
+    public void test_well_formed_pre_auth_requests_count_toward_the_invalid_cap() throws Exception {
+        TestUtils.setPrivateField(config, "maxUnauthenticatedInvalidRequests", 3);
+        final var responses = run(LIST_DATABASES, LIST_DATABASES, LIST_DATABASES, LIST_DATABASES, AUTHENTICATE);
+        assertEquals(3, responses.size(), responses.toString());
+        assertTrue(responses.getLast().contains("401-1"), responses.getLast());
+    }
+
+    @Test
+    public void test_a_successful_authentication_does_not_count_toward_the_invalid_cap() throws Exception {
+        TestUtils.setPrivateField(config, "maxUnauthenticatedInvalidRequests", 1);
+        final var responses = run(AUTHENTICATE, LIST_DATABASES);
+        assertEquals(2, responses.size(), responses.toString());
+        assertTrue(responses.get(1).contains("\"status\":\"OK\""), responses.get(1));
+    }
+
+    @Test
+    public void test_an_over_cap_tls_connection_is_closed_before_the_handshake() throws Exception {
+        TestUtils.setPrivateField(config, "maxUnauthenticatedConnectionsPerAddress", 1);
+        final var socket = Mockito.mock(SSLSocket.class);
+        final var address = Mockito.mock(InetAddress.class);
+        Mockito.when(socket.getInetAddress()).thenReturn(address);
+        Mockito.when(address.getHostAddress()).thenReturn(ADDRESS);
+        assertTrue(preAuthSlots.acquire(ADDRESS));
+        try {
+            new MessageProcessor(socket).run();
+        } finally {
+            preAuthSlots.release(ADDRESS);
+        }
+        Mockito.verify(socket, Mockito.never()).startHandshake();
+        Mockito.verify(socket, Mockito.never()).getOutputStream();
+        Mockito.verify(socket).close();
+        assertEquals(0, preAuthSlots.heldBy(ADDRESS));
     }
 
     @Test

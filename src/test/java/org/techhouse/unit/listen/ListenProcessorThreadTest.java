@@ -17,6 +17,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
@@ -211,7 +212,7 @@ public class ListenProcessorThreadTest {
         dirtyReq.setDirtyRead(true);
         final var listenId = registerDelivered(manager, UUID.randomUUID(), dirtyReq, "stale-hash-for-lock-null-test");
 
-        final var stubWriter = new BufferedWriter(new StringWriter());
+        final var stubOutbound = TestUtils.inlineOutbound(new BufferedWriter(new StringWriter()));
         final var stub = new ClientTracker() {
             @Override
             public String getAuthenticatedUsername(UUID clientId) {
@@ -219,8 +220,8 @@ public class ListenProcessorThreadTest {
             }
 
             @Override
-            public BufferedWriter getWriter(UUID clientId) {
-                return stubWriter;
+            public OutboundQueue getOutbound(UUID clientId) {
+                return stubOutbound;
             }
 
             @Override
@@ -261,7 +262,7 @@ public class ListenProcessorThreadTest {
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
         final var stringWriter = new StringWriter();
         final var bufferedWriter = new BufferedWriter(stringWriter);
-        clientTracker.registerWriter(clientId, bufferedWriter);
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(bufferedWriter));
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
                 registration.collectionKeys(), registration.lastHash(), registration.delivered());
@@ -321,7 +322,7 @@ public class ListenProcessorThreadTest {
             public void close() {
             }
         });
-        clientTracker.registerWriter(clientId, throwingWriter);
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(throwingWriter));
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
                 registration.collectionKeys(), registration.lastHash(), registration.delivered());

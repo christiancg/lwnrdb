@@ -178,7 +178,7 @@ public record FunctionInvoker(Interpreter interp) {
 
     public JsValue makeGenerator(JsFunction function, Environment activation) {
         final var coroutine = new Coroutine();
-        interp.coroutines.add(coroutine);
+        interp.registerCoroutine(coroutine);
         coroutine.markGenerator();
         ownStackSegment(coroutine, function);
         coroutine.prime(() -> {
@@ -194,7 +194,7 @@ public record FunctionInvoker(Interpreter interp) {
     public JsValue runAsync(JsFunction function, Environment activation, List<JsValue> args) {
         final var promise = new JsPromise(interp.eventLoop);
         final var coroutine = new Coroutine();
-        interp.coroutines.add(coroutine);
+        interp.registerCoroutine(coroutine);
         coroutine.markAsync();
         ownStackSegment(coroutine, function);
         coroutine.startAsync(() -> {
@@ -213,7 +213,7 @@ public record FunctionInvoker(Interpreter interp) {
 
     public JsValue makeAsyncGenerator(JsFunction function, Environment activation) {
         final var coroutine = new Coroutine();
-        interp.coroutines.add(coroutine);
+        interp.registerCoroutine(coroutine);
         final var generator = new JsAsyncGenerator(coroutine);
         coroutine.markAsync();
         coroutine.markGenerator();

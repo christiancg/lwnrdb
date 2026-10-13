@@ -78,6 +78,26 @@ public final class JsArray extends JsValue {
         return !hasValueAt(index);
     }
 
+    public List<Integer> populatedIndices() {
+        final var indices = new ArrayList<Integer>();
+        final var dense = (int) Math.min(elements.size(), length);
+        for (var i = 0; i < dense; i++) {
+            if (elements.get(i) != HOLE) {
+                indices.add(i);
+            }
+        }
+        if (sparseValues != null && !sparseValues.isEmpty()) {
+            final var sparseKeys = new ArrayList<>(sparseValues.keySet());
+            sparseKeys.sort(null);
+            for (final var key : sparseKeys) {
+                if (key >= elements.size() && key < length) {
+                    indices.add(key);
+                }
+            }
+        }
+        return indices;
+    }
+
     public void pushHole() {
         if (!frozen) {
             final var newLength = length + 1;
@@ -126,6 +146,12 @@ public final class JsArray extends JsValue {
 
     public void defineIndexValue(int index, JsValue value) {
         storeIndexValue(index, value);
+    }
+
+    public void chargeDenseGrowth(InterpreterOps ops, long newLength) {
+        if (newLength <= MAX_DENSE_LENGTH && newLength > elements.size()) {
+            InterpreterOps.chargeElements(ops, newLength - elements.size());
+        }
     }
 
     private void storeIndexValue(int index, JsValue value) {

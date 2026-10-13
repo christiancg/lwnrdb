@@ -101,7 +101,9 @@ final class RunLifecycle {
     }
 
     void cancelPendingCoroutines() {
-        for (final var pending : interpreter.coroutines) {
+        var next = 0;
+        while (next < interpreter.coroutines.size()) {
+            final var pending = interpreter.coroutines.get(next++);
             if (!pending.isDone()) {
                 cancelQuietly(pending);
             }

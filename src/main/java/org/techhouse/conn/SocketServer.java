@@ -1,6 +1,7 @@
 package org.techhouse.conn;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
@@ -8,14 +9,17 @@ import java.util.concurrent.Executors;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 
 public class SocketServer {
     private static final long ACCEPT_FAILURE_PAUSE_MS = 100L;
+    private static final int DEFAULT_BACKLOG = 50;
     private static final LogRateLimiter ACCEPT_FAILURE_LOG = new LogRateLimiter(Globals.LOG_RATE_LIMIT_PER_SECOND);
     private final Logger logger = Logger.logFor(SocketServer.class);
     private final int port;
+    private final String bindAddress;
     private final ExecutorService pool;
     private final SSLServerSocketFactory sslServerSocketFactory;
     private volatile ServerSocket serverSocket;
@@ -26,7 +30,12 @@ public class SocketServer {
     }
 
     public SocketServer(int port, SSLServerSocketFactory sslServerSocketFactory) {
+        this(port, "", sslServerSocketFactory);
+    }
+
+    public SocketServer(int port, String bindAddress, SSLServerSocketFactory sslServerSocketFactory) {
         this.port = port;
+        this.bindAddress = bindAddress;
         this.pool = Executors.newVirtualThreadPerTaskExecutor();
         this.sslServerSocketFactory = sslServerSocketFactory;
     }
@@ -59,7 +68,7 @@ public class SocketServer {
             }
             return;
         }
-        disableNagle(socket);
+        configureAccepted(socket);
         pool.execute(new MessageProcessor(socket, this::isStopping));
     }
 
@@ -87,20 +96,23 @@ public class SocketServer {
         }
     }
 
-    private void disableNagle(Socket socket) {
+    private void configureAccepted(Socket socket) {
         try {
             socket.setTcpNoDelay(true);
+            SocketClosing.boundTlsClose(socket);
         } catch (IOException e) {
-            logger.warning("Could not disable Nagle on an accepted connection: " + e.getMessage());
+            logger.warning("Could not configure an accepted connection: " + e.getMessage());
         }
     }
 
     private ServerSocket createServerSocket() throws IOException {
+        final var address = bindAddress == null || bindAddress.isBlank() ? null : InetAddress.getByName(bindAddress);
         if (sslServerSocketFactory != null) {
-            final var sslServerSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(port);
-            sslServerSocket.setEnabledProtocols(new String[]{"TLSv1.3", "TLSv1.2"});
+            final var sslServerSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(port,
+                    DEFAULT_BACKLOG, address);
+            sslServerSocket.setEnabledProtocols(TlsContextFactory.enabledProtocols());
             return sslServerSocket;
         }
-        return new ServerSocket(port);
+        return new ServerSocket(port, DEFAULT_BACKLOG, address);
     }
 }

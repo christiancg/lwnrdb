@@ -84,7 +84,7 @@ public class ListenEndedTest {
     private UUID connectedClient(String username) {
         final var id = clientTracker.registerForwardedClient(username);
         written = new StringWriter();
-        clientTracker.registerWriter(id, new BufferedWriter(written));
+        clientTracker.registerOutbound(id, TestUtils.inlineOutbound(new BufferedWriter(written)));
         return id;
     }
 

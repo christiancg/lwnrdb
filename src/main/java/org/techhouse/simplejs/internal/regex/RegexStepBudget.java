@@ -6,4 +6,10 @@ public interface RegexStepBudget {
     };
 
     void step();
+
+    default void steps(int count) {
+        for (var i = 0; i < count; i++) {
+            step();
+        }
+    }
 }

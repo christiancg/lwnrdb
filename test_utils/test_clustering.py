@@ -414,6 +414,8 @@ class Node:
             scriptTimeoutMs=20000,
             scriptRoutingEnabled=self.index != 2,
             scriptLocalityWeight=100 if self.index == 0 else 0,
+            maxConcurrentScriptsPerUser=0,
+            maxConcurrentScriptsPerDatabase=0,
             triggersEnabled=True,
             beforeHookInstructionBudget=200000,
             beforeHookTimeoutMs=2000,

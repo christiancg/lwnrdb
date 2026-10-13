@@ -13,6 +13,10 @@ public interface DatabaseAccess {
         return null;
     }
 
+    default boolean mayReadProcedureSource() {
+        return false;
+    }
+
     JsonObject findById(String db, String coll, String id);
 
     List<JsonObject> aggregate(String db, String coll, JsonArray pipeline);

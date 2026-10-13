@@ -78,8 +78,7 @@ final class PageCompactor {
     private Compacted removeFromPage(Kind kind, PkIndexEntry pkIndexEntry) throws IOException {
         final var file = paths.collectionPage(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
                 pkIndexEntry.getPage());
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(file);
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
             requireWithinPage(pkIndexEntry, totalFileLength);
@@ -160,8 +159,7 @@ final class PageCompactor {
     UpdateResult update(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
         final var page = entry.getPage();
         final var file = paths.collectionPage(entry.getDatabaseName(), entry.getCollectionName(), page);
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(file);
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
             requireWithinPage(pkIndexEntry, totalFileLength);

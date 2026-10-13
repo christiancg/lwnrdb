@@ -153,6 +153,38 @@ def summary(on_failure: Optional[Callable] = None, suffix: str = "") -> None:
     sys.exit(0 if _failures == 0 else 1)
 
 
+def non_reading_conn(receive_buffer: int = 8192) -> "Conn":
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, receive_buffer)
+    sock.settimeout(60.0)
+    sock.connect((HOST, PORT))
+    conn = Conn(sock=sock)
+    conn.authenticate()
+    return conn
+
+
+def send_without_reading(conn: "Conn", payload: dict) -> bool:
+    try:
+        conn.s.sendall((json.dumps(payload) + "\n").encode())
+        return True
+    except OSError:
+        return False
+
+
+def read_until_closed(conn: "Conn", timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        ready, _, _ = select.select([conn.s], [], [], max(deadline - time.time(), 0))
+        if not ready:
+            return False
+        try:
+            if not conn.s.recv(1 << 20):
+                return True
+        except OSError:
+            return True
+    return False
+
+
 UNPARSED = "unparsed"
 
 

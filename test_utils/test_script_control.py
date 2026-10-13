@@ -126,7 +126,8 @@ def write_config(work_dir: str):
                     scriptLocale="en-US", procedureCacheSize=16, triggersEnabled=True, triggerThreads=2,
                     triggerQueueSize=1000, triggerMaxDepth=3, triggerTimeoutMs=TIMEOUT_MS,
                     triggerRunLogEnabled=True, schedulesEnabled=True, scheduleTickMs=TICK_MS,
-                    scheduleRefreshMs=2000, scheduleTimeoutMs=TIMEOUT_MS, maxConcurrentScripts=8)
+                    scheduleRefreshMs=2000, scheduleTimeoutMs=TIMEOUT_MS, maxConcurrentScripts=8,
+                    scheduleMinIntervalMs=100)
 
 
 def setup_data(conn: Conn):

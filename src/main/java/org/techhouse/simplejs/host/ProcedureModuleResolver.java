@@ -13,9 +13,15 @@ public final class ProcedureModuleResolver implements ModuleResolver {
     public static final String SPECIFIER_PREFIX = ModuleReferences.PROCEDURE_SPECIFIER_PREFIX;
 
     private final String scopedDatabase;
+    private final boolean revealsSource;
 
     public ProcedureModuleResolver(String scopedDatabase) {
+        this(scopedDatabase, true);
+    }
+
+    public ProcedureModuleResolver(String scopedDatabase, boolean revealsSource) {
         this.scopedDatabase = scopedDatabase;
+        this.revealsSource = revealsSource;
     }
 
     @Override
@@ -30,6 +36,9 @@ public final class ProcedureModuleResolver implements ModuleResolver {
         }
         final var version = definition.getVersion();
         final var source = definition.getSource();
+        if (!revealsSource) {
+            return ResolvedModule.withHiddenSource(moduleId(name, version), source, SPECIFIER_PREFIX + name);
+        }
         return new ResolvedModule(moduleId(name, version), source,
                 compiledProcedures.get(scopedDatabase, name, version, source), SPECIFIER_PREFIX + name);
     }

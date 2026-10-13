@@ -45,6 +45,30 @@ public class ClusterConfigurationValidatorTest {
     }
 
     @Test
+    public void test_cluster_tls_only_validates_the_keystore(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "false");
+        config.put("clusterTlsEnabled", "true");
+        config.put("tlsKeystorePath", " ");
+        config.put("tlsKeystorePassword", "");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.startsWith("tlsKeystorePath must be a non-blank path")),
+                errors::toString);
+        assertTrue(errors.stream().anyMatch(e -> e.startsWith("tlsKeystorePassword must be a non-blank")),
+                errors::toString);
+    }
+
+    @Test
+    public void test_cluster_without_tls_skips_the_keystore_checks(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "false");
+        config.put("clusterTlsEnabled", "false");
+        config.put("tlsKeystorePath", " ");
+        config.put("tlsKeystorePassword", "");
+        assertFalse(ConfigurationValidator.validate(config).stream().anyMatch(e -> e.startsWith("tlsKeystore")));
+    }
+
+    @Test
     public void test_invalid_cluster_port(@TempDir Path tempDir) {
         assertError(tempDir, "clusterPort", "0", "clusterPort");
         assertError(tempDir, "clusterPort", "70000", "clusterPort");

@@ -15,6 +15,8 @@ import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 
 public final class JsPromise extends JsValue {
+    private static final long PROMISE_BYTES = 96L;
+
     private PropertyTable table;
 
     public enum State {
@@ -32,6 +34,7 @@ public final class JsPromise extends JsValue {
 
     public JsPromise(EventLoop eventLoop) {
         this.eventLoop = eventLoop;
+        InterpreterOps.charge(eventLoop.ops(), PROMISE_BYTES);
         eventLoop.registerPromise(this);
     }
 

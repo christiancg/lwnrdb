@@ -6,8 +6,10 @@ import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.ListProceduresRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
@@ -105,6 +107,12 @@ public final class AuthorizationChecker {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
+        if (req instanceof ListProceduresRequest listRequest && listRequest.isIncludeSource()
+                && !user.canManageScripts(dbName)) {
+            return AuthorizationResult.deny("procedure source requires script MANAGE",
+                    ErrorCode.SOURCE_REQUIRES_MANAGE);
+        }
+
         final java.util.List<org.techhouse.ops.req.agg.BaseAggregationStep> stepsToCheck;
         if (req instanceof AggregateRequest aggReq && aggReq.getAggregationSteps() != null) {
             stepsToCheck = aggReq.getAggregationSteps();
@@ -141,6 +149,32 @@ public final class AuthorizationChecker {
             return true;
         }
         return !lacksCollectionAccess(user, dbName, collName, PermissionLevel.READ_WRITE);
+    }
+
+    public static boolean mayRunAsDefiner(AdminUserEntry user, String dbName, String collName) {
+        if (user == null) {
+            return false;
+        }
+        if (user.isAdmin()) {
+            return true;
+        }
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        if (dbEntry != null && dbEntry.isOwner(user.get_id())) {
+            return true;
+        }
+        return user.canRunScripts(dbName)
+                && (collName == null || !lacksCollectionAccess(user, dbName, collName, PermissionLevel.READ));
+    }
+
+    public static boolean mayReadProcedureSource(AdminUserEntry user, String dbName) {
+        if (user == null) {
+            return false;
+        }
+        if (user.isAdmin() || user.canManageScripts(dbName)) {
+            return true;
+        }
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        return dbEntry != null && dbEntry.isOwner(user.get_id());
     }
 
     private static boolean allowsScriptManagement(AdminUserEntry user, String dbName, OperationRequest req) {

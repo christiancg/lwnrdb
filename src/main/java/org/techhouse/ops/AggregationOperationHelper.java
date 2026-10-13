@@ -21,6 +21,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.AggregateRequest;
@@ -178,8 +179,9 @@ public final class AggregationOperationHelper {
         final var operators = mapStep.getOperators();
         return resultStream.map(jsonObject -> {
             var mapped = jsonObject.deepCopy();
+            final var budget = new MapResultBudget();
             for (var step : operators) {
-                mapped = MapOperatorHelper.processOperator(step, mapped, context);
+                mapped = MapOperatorHelper.processOperator(step, mapped, context, budget);
             }
             return mapped;
         });
@@ -271,15 +273,24 @@ public final class AggregationOperationHelper {
         }
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
                 joinCollectionLocalField, transaction);
+        final var withinEntrySize = new HashMap<JsonBaseElement, Boolean>();
         return leftEntries.stream().map(jsonObject -> {
             final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
             if (localValue != null) {
+                final var joined = joinedCollection.get(localValue);
+                if (joined != null && !withinEntrySize.computeIfAbsent(localValue, _ -> fitsAnEntry(joined))) {
+                    throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
+                }
                 final var copy = jsonObject.deepCopy();
-                JsonUtils.setPath(copy, as, joinedCollection.get(localValue));
+                JsonUtils.setPath(copy, as, joined);
                 return copy;
             }
             return jsonObject;
         });
+    }
+
+    private static boolean fitsAnEntry(JsonArray joined) {
+        return !EntrySizeGuard.exceedsMaxEntrySize(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(joined));
     }
 
     private static Map<JsonBaseElement, JsonArray> buildJoinLookup(String dbName, String joinCollectionName,

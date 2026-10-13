@@ -7,8 +7,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
 import javax.net.SocketFactory;
+import javax.net.ssl.SSLSocket;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.SocketClosing;
 import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.ioc.IocContainer;
 
@@ -41,6 +43,9 @@ public class PeerConnectionPool {
             // Connect with a bounded timeout so a hanging connect to one peer (e.g. a black-holed host)
             // holds the pool lock for at most replicationAckTimeoutMs instead of the OS default.
             final var socket = socketFactory().createSocket();
+            if (socket instanceof SSLSocket sslSocket) {
+                sslSocket.setEnabledProtocols(TlsContextFactory.enabledProtocols());
+            }
             try {
                 socket.connect(new InetSocketAddress(address.getHost(), address.getPort()),
                         (int) clusterConfig.replicationAckTimeoutMs());
@@ -50,6 +55,7 @@ public class PeerConnectionPool {
                 throw new PeerUnreachableException("Could not connect to " + address, e);
             }
             socket.setTcpNoDelay(true);
+            SocketClosing.boundTlsClose(socket);
             connection = new PeerConnection(socket);
             connections.put(address, connection);
             return connection;

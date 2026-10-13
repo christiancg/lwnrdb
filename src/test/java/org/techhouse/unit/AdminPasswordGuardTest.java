@@ -13,6 +13,8 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.techhouse.AdminPasswordGuard;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
@@ -53,7 +55,7 @@ public class AdminPasswordGuardTest {
         TestUtils.setPrivateField(config, "defaultAdminPassword", "administrator");
         try (var logWriter = mockStatic(LogWriter.class)) {
             final var refusal = assertThrows(InvalidConfigurationException.class,
-                    AdminPasswordGuard::refuseShippedPassword);
+                    AdminPasswordGuard::refuseWeakPassword);
             assertTrue(refusal.getMessage().contains("defaultAdminPassword"));
             logWriter.verify(() -> LogWriter
                     .writeLogEntry(argThat(entry -> entry.contains("FATAL") && entry.contains("will not start"))));
@@ -64,19 +66,49 @@ public class AdminPasswordGuardTest {
     @Test
     public void test_a_custom_password_passes_the_shipped_check() throws Exception {
         TestUtils.setPrivateField(config, "defaultAdminPassword", TestGlobals.ADMIN_PASSWORD);
-        assertDoesNotThrow(AdminPasswordGuard::refuseShippedPassword);
+        assertDoesNotThrow(AdminPasswordGuard::refuseWeakPassword);
     }
 
     @Test
-    public void test_shipped_password_comparison_is_exact() throws Exception {
+    public void test_shipped_password_comparison_ignores_case() throws Exception {
         TestUtils.setPrivateField(config, "defaultAdminPassword", "Administrator");
-        assertDoesNotThrow(AdminPasswordGuard::refuseShippedPassword);
+        try (var _ = mockStatic(LogWriter.class)) {
+            final var refusal = assertThrows(InvalidConfigurationException.class,
+                    AdminPasswordGuard::refuseWeakPassword);
+            assertTrue(refusal.getMessage().contains("well-known shipped value"));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"password123", "Passw0rd", "CHANGEME", "12345678", "admin1234", "qwertyuiop"})
+    public void test_a_weak_admin_password_is_refused(String weak) throws Exception {
+        TestUtils.setPrivateField(config, "defaultAdminPassword", weak);
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            final var refusal = assertThrows(InvalidConfigurationException.class,
+                    AdminPasswordGuard::refuseWeakPassword);
+            assertTrue(refusal.getMessage().contains("most commonly used passwords"));
+            logWriter.verify(() -> LogWriter.writeLogEntry(argThat(entry -> entry.contains("FATAL"))));
+        }
+    }
+
+    @Test
+    public void test_an_admin_password_equal_to_the_username_is_refused() throws Exception {
+        final var origUsername = config.getDefaultAdminUsername();
+        TestUtils.setPrivateField(config, "defaultAdminUsername", "operator1");
+        TestUtils.setPrivateField(config, "defaultAdminPassword", "OPERATOR1");
+        try (var _ = mockStatic(LogWriter.class)) {
+            final var refusal = assertThrows(InvalidConfigurationException.class,
+                    AdminPasswordGuard::refuseWeakPassword);
+            assertTrue(refusal.getMessage().contains("same as defaultAdminUsername"));
+        } finally {
+            TestUtils.setPrivateField(config, "defaultAdminUsername", origUsername);
+        }
     }
 
     @Test
     public void test_a_blank_password_passes_the_shipped_check() throws Exception {
         TestUtils.setPrivateField(config, "defaultAdminPassword", "");
-        assertDoesNotThrow(AdminPasswordGuard::refuseShippedPassword);
+        assertDoesNotThrow(AdminPasswordGuard::refuseWeakPassword);
     }
 
     @Test

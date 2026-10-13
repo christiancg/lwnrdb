@@ -25,7 +25,6 @@ import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ex.RequestTooLargeException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
-import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
@@ -42,7 +41,7 @@ import org.techhouse.ops.resp.OperationResponse;
 
 public class MessageProcessor implements Runnable {
     private static final EJson eJson = IocContainer.get(EJson.class);
-    private static final LogRateLimiter PARSE_FAILURE_LOG = new LogRateLimiter(Globals.LOG_RATE_LIMIT_PER_SECOND);
+    private static final long FINAL_FRAMES_WAIT_MS = 1000L;
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final PreAuthSlots preAuthSlots = IocContainer.get(PreAuthSlots.class);
@@ -64,6 +63,8 @@ public class MessageProcessor implements Runnable {
     private int unauthenticatedInvalidRequests;
     private HandshakeDeadline.Armed deadline;
     private UUID unreapableTransaction;
+    private OutboundQueue outbound;
+    private ReentrantLock writerLock;
 
     public MessageProcessor(Socket socket) {
         this(socket, () -> false);
@@ -88,43 +89,25 @@ public class MessageProcessor implements Runnable {
         deadline = HandshakeDeadline.arm(socket, configuration.getAuthTimeoutMs() + Globals.HANDSHAKE_DEADLINE_GRACE_MS,
                 this::isStillConnecting);
         try (socket) {
+            if (refusedBeforeTlsHandshake()) {
+                return;
+            }
             completeTlsHandshake();
             final var writer = new BufferedWriter(
                     new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), Globals.BUFFER_SIZE);
             if (clientId != null && !preAuthAdmitted) {
-                logger.warning(() -> "Refused a connection from " + remoteAddress() + ": " + remoteHost
+                ConnectionLog.warn(logger, "Refused a connection from " + remoteAddress() + ": " + remoteHost
                         + " already holds the maximum number of unauthenticated connections");
-                refuse(writer, new ReentrantLock(), ErrorCode.TOO_MANY_UNAUTHENTICATED_CONNECTIONS);
+                OutboundQueue.sendDirectly(writer, ErrorCode.TOO_MANY_UNAUTHENTICATED_CONNECTIONS);
             } else if (clientId != null) {
-                clientTracker.registerWriter(clientId, writer);
-                final var writerLock = clientTracker.getWriterLock(clientId);
-                final var reader = new BoundedLineReader(socket.getInputStream(), socket::setSoTimeout);
-                var close = false;
-                while (!close) {
-                    final var message = readNextLine(reader, writer, writerLock);
-                    if (message == null) {
-                        break;
-                    }
-                    if (!message.isBlank()) {
-                        close = serveLine(message, nextLineLimitBytes() / Globals.MIN_BYTES_PER_REQUEST_TOKEN, writer,
-                                writerLock);
-                    }
-                }
+                serveConnection(writer);
             } else {
-                refuse(writer, new ReentrantLock(), ErrorCode.MAX_CONNECTIONS_REACHED);
+                OutboundQueue.sendDirectly(writer, ErrorCode.MAX_CONNECTIONS_REACHED);
             }
         } catch (SSLException e) {
-            logger.warning("Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
+            ConnectionLog.warn(logger, "Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
         } catch (IOException e) {
-            if (clientId != null && everAuthenticated()) {
-                logger.error("General error in MessageProcessor", e);
-            } else if (!deadline.hasFired()) {
-                final var entry = PARSE_FAILURE_LOG.admit("Dropped an unauthenticated connection from "
-                        + remoteAddress() + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
-                if (entry != null) {
-                    logger.warning(entry);
-                }
-            }
+            reportDroppedConnection(e);
         } catch (RuntimeException e) {
             logger.error("Unexpected failure in MessageProcessor", e);
             throw e;
@@ -145,6 +128,55 @@ public class MessageProcessor implements Runnable {
         }
     }
 
+    private void serveConnection(BufferedWriter writer) throws IOException {
+        outbound = new OutboundQueue(writer, socket, configuration.sizeValue(ConfigKey.CLIENT_OUTBOUND_QUEUE_MAX_BYTES),
+                OutboundQueue.VIRTUAL_DRAINER, this::outboundOverflowed);
+        clientTracker.registerOutbound(clientId, outbound);
+        writerLock = clientTracker.getWriterLock(clientId);
+        final var reader = new BoundedLineReader(socket.getInputStream(), socket::setSoTimeout);
+        var close = false;
+        while (!close && outbound.isOpen()) {
+            final var message = readNextLine(reader);
+            if (message == null || !outbound.isOpen()) {
+                break;
+            }
+            if (!message.isBlank()) {
+                close = serveLine(message, nextLineLimitBytes() / Globals.MIN_BYTES_PER_REQUEST_TOKEN);
+            }
+        }
+        outbound.awaitDrained(FINAL_FRAMES_WAIT_MS);
+    }
+
+    private void outboundOverflowed() {
+        listenManager.unregisterAllForClient(clientId);
+        logger.warning("Closing the connection from " + remoteAddress() + ": its unread responses exceeded "
+                + ConfigKey.CLIENT_OUTBOUND_QUEUE_MAX_BYTES.key() + " (" + ErrorCode.OUTBOUND_BACKLOG.getCode() + ")");
+    }
+
+    private void reportDroppedConnection(IOException e) {
+        if (outbound != null && !outbound.isOpen()) {
+            return;
+        }
+        if (clientId != null && everAuthenticated()) {
+            logger.error("General error in MessageProcessor", e);
+        } else if (!deadline.hasFired()) {
+            ConnectionLog.warn(logger, "Dropped an unauthenticated connection from " + remoteAddress() + ": "
+                    + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+
+    private boolean refusedBeforeTlsHandshake() {
+        if (!(socket instanceof SSLSocket) || clientId != null && preAuthAdmitted) {
+            return false;
+        }
+        ConnectionLog.warn(logger,
+                "Closed a TLS connection from " + remoteAddress() + " before its handshake: "
+                        + (clientId == null
+                                ? "the server already holds maxConnections connections"
+                                : remoteHost + " already holds the maximum number of unauthenticated connections"));
+        return true;
+    }
+
     private void completeTlsHandshake() throws IOException {
         if (socket instanceof SSLSocket sslSocket) {
             sslSocket.setSoTimeout((int) Math.clamp(authRemainingMillis(), 1L, Integer.MAX_VALUE));
@@ -163,11 +195,10 @@ public class MessageProcessor implements Runnable {
         }
     }
 
-    private String readNextLine(BoundedLineReader reader, BufferedWriter writer, ReentrantLock writerLock)
-            throws IOException {
+    private String readNextLine(BoundedLineReader reader) throws IOException {
         while (true) {
             if (!everAuthenticated() && authRemainingMillis() <= 0) {
-                return closeUnauthenticated(writer, writerLock);
+                return closeUnauthenticated();
             }
             if (transactionAgeRemainingMillis() <= 0) {
                 reapTransaction(Client.TransactionReap.MAX_AGE);
@@ -177,21 +208,22 @@ public class MessageProcessor implements Runnable {
                 return reader.readLine(budget.millis(), nextLineLimitBytes());
             } catch (SocketTimeoutException timeout) {
                 if (!everAuthenticated()) {
-                    return closeUnauthenticated(writer, writerLock);
+                    return closeUnauthenticated();
                 }
                 reapTransaction(budget.reapReason());
             } catch (RequestTooLargeException tooLarge) {
-                logger.warning("Closed a connection from " + remoteAddress() + ": " + tooLarge.getMessage());
-                refuse(writer, writerLock, ErrorCode.REQUEST_TOO_LARGE);
+                ConnectionLog.warn(logger,
+                        "Closed a connection from " + remoteAddress() + ": " + tooLarge.getMessage());
+                enqueue(OutboundQueue.closeFrame(ErrorCode.REQUEST_TOO_LARGE));
                 return null;
             }
         }
     }
 
-    private String closeUnauthenticated(BufferedWriter writer, ReentrantLock writerLock) {
-        logger.warning("Closed a connection from " + remoteAddress() + " that did not authenticate within "
+    private String closeUnauthenticated() {
+        ConnectionLog.warn(logger, "Closed a connection from " + remoteAddress() + " that did not authenticate within "
                 + configuration.getAuthTimeoutMs() + " ms");
-        refuse(writer, writerLock, ErrorCode.AUTHENTICATION_TIMEOUT);
+        enqueue(OutboundQueue.closeFrame(ErrorCode.AUTHENTICATION_TIMEOUT));
         return null;
     }
 
@@ -265,27 +297,16 @@ public class MessageProcessor implements Runnable {
         return String.valueOf(socket.getRemoteSocketAddress());
     }
 
-    private void refuse(BufferedWriter writer, ReentrantLock writerLock, ErrorCode code) {
-        try {
-            writeLine(writer, writerLock, eJson.toJson(new OperationResponse(OperationType.CLOSE_CONNECTION, code)));
-        } catch (IOException e) {
-            logger.warning("Could not deliver the " + code.getCode() + " refusal: " + e.getMessage());
-        }
-    }
-
-    private static void writeLine(BufferedWriter writer, ReentrantLock writerLock, String line) throws IOException {
+    private void enqueue(String line) {
         writerLock.lock();
         try {
-            writer.write(line);
-            writer.newLine();
-            writer.flush();
+            outbound.offer(line);
         } finally {
             writerLock.unlock();
         }
     }
 
-    private boolean serveLine(String message, int maxTokens, BufferedWriter writer, ReentrantLock writerLock)
-            throws IOException {
+    private boolean serveLine(String message, int maxTokens) {
         var close = false;
         serving = true;
         inFlightRequests.enter();
@@ -301,13 +322,9 @@ public class MessageProcessor implements Runnable {
                 deliveredListen = handled.deliveredListen();
                 close = handled.close();
             } catch (InvalidCommandException exception) {
-                final var entry = PARSE_FAILURE_LOG.admit(
+                ConnectionLog.warn(logger,
                         "Refused an unparseable request from " + remoteAddress() + ": " + causeMessageOf(exception));
-                if (entry != null) {
-                    logger.warning(entry);
-                }
                 response = exception.getMessage();
-                close = exhaustedUnauthenticatedInvalidRequests();
             } catch (RuntimeException exception) {
                 logger.error("Request handling failed unexpectedly", exception);
                 response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
@@ -320,7 +337,8 @@ public class MessageProcessor implements Runnable {
                 close = true;
             }
             clientTracker.updateLastCommandTime(clientId);
-            writeLine(writer, writerLock, response);
+            close = close || exhaustedUnauthenticatedInvalidRequests();
+            enqueue(response);
             if (deliveredListen != null) {
                 listenManager.markDelivered(deliveredListen);
             }
@@ -384,8 +402,9 @@ public class MessageProcessor implements Runnable {
         if (user == null) {
             return refusal(type, ErrorCode.USER_NO_LONGER_EXISTS);
         }
-        if (!AuthorizationChecker.check(parsedMessage, user).isAllowed()) {
-            return refusal(type, ErrorCode.NO_PERMISSIONS);
+        final var authorization = AuthorizationChecker.check(parsedMessage, user);
+        if (!authorization.isAllowed()) {
+            return refusal(type, authorization.getErrorCode());
         }
         return handleAuthorized(parsedMessage, rawMessage, clientId);
     }

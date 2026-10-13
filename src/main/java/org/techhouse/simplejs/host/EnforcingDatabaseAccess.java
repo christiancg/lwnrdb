@@ -92,6 +92,12 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     }
 
     @Override
+    public boolean mayReadProcedureSource() {
+        return scopedDatabase != null
+                && AuthorizationChecker.mayReadProcedureSource(cache.getAdminUserEntry(username), scopedDatabase);
+    }
+
+    @Override
     public JsonObject findById(String db, String coll, String id) {
         final var request = new FindByIdRequest(db, coll);
         request.set_id(id);

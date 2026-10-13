@@ -81,7 +81,12 @@ public class FileSystem {
 
     private void createAdminPagesFolder() {
         final var pagesFolder = paths.adminPagesFolder();
-        if (!pagesFolder.exists() && !pagesFolder.mkdirs()) {
+        if (pagesFolder.exists()) {
+            return;
+        }
+        try {
+            OwnerOnlyPermissions.createDirectories(pagesFolder.toPath());
+        } catch (IOException e) {
             throw new DirectoryNotFoundException(pagesFolder.getAbsolutePath());
         }
     }
@@ -89,21 +94,23 @@ public class FileSystem {
     public boolean createDatabaseFolder(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
         if (!dbFolder.exists()) {
-            return dbFolder.mkdir();
+            return OwnerOnlyPermissions.createDirectory(dbFolder.toPath());
         }
         return true;
     }
 
     public boolean deleteDatabase(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
-        return isAbsent(dbFolder) || FileTreeDeleter.delete(dbFolder);
+        final var deleted = isAbsent(dbFolder) || FileTreeDeleter.delete(dbFolder);
+        FileLocks.evictAllUnder(dbFolder);
+        return deleted;
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
-            if (collectionFolder.mkdir()) {
+            if (OwnerOnlyPermissions.createDirectory(collectionFolder.toPath())) {
                 return OwnerOnlyPermissions.createNewOwnerOnlyFile(collectionFile.toPath());
             } else {
                 return false;
@@ -119,7 +126,9 @@ public class FileSystem {
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
-        return isAbsent(collectionFolder) || FileTreeDeleter.delete(collectionFolder);
+        final var deleted = isAbsent(collectionFolder) || FileTreeDeleter.delete(collectionFolder);
+        FileLocks.evictAllUnder(collectionFolder);
+        return deleted;
     }
 
     private static boolean isAbsent(File folder) {
@@ -228,9 +237,8 @@ public class FileSystem {
                 final var page = groupedEntry.getKey();
                 final var pageEntries = groupedEntry.getValue();
                 final var file = paths.collectionPage(dbName, collName, page);
-                final var lock = FileLocks.lockFor(file).writeLock();
                 OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
-                lock.lock();
+                final var lock = FileLocks.lockWrite(file);
                 try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
                         Globals.BUFFER_SIZE)) {
                     var currentOffset = file.length();
@@ -270,8 +278,7 @@ public class FileSystem {
 
     private void rollBackBulkAppends(Map<File, Long> lengthsBeforeAppend) {
         for (final var appended : lengthsBeforeAppend.entrySet()) {
-            final var lock = FileLocks.lockFor(appended.getKey()).writeLock();
-            lock.lock();
+            final var lock = FileLocks.lockWrite(appended.getKey());
             try {
                 FileLocks.truncateTo(appended.getKey(), appended.getValue());
             } finally {
@@ -285,8 +292,7 @@ public class FileSystem {
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
         final var file = paths.collectionPage(dbName, collName, page);
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(file);
         try {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var length = strData.getBytes(StandardCharsets.UTF_8).length;

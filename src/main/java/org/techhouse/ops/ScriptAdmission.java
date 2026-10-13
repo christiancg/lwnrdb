@@ -70,13 +70,21 @@ public class ScriptAdmission {
     }
 
     public Permit acquire(String username, String database) {
+        final var slices = acquireSlices(username, database);
+        if (slices == null) {
+            return null;
+        }
         if (!tryAcquire()) {
+            slices.close();
             lastScope.set(SCOPE_NODE);
             return null;
         }
+        return new Permit(username, database, permits != null, slices.perUser, slices.perDatabase);
+    }
+
+    public Permit acquireSlices(String username, String database) {
         final var userTaken = tryAcquireFrom(userPermits, username, perUserCapacity);
         if (!userTaken) {
-            release();
             rejectedPerUser.incrementAndGet();
             lastScope.set(SCOPE_USER);
             return null;
@@ -84,12 +92,11 @@ public class ScriptAdmission {
         final var databaseTaken = tryAcquireFrom(databasePermits, database, perDatabaseCapacity);
         if (!databaseTaken) {
             releaseFrom(userPermits, username);
-            release();
             rejectedPerDatabase.incrementAndGet();
             lastScope.set(SCOPE_DATABASE);
             return null;
         }
-        return new Permit(username, database, permits != null, perUserCapacity > 0 && username != null,
+        return new Permit(username, database, false, perUserCapacity > 0 && username != null,
                 perDatabaseCapacity > 0 && database != null);
     }
 

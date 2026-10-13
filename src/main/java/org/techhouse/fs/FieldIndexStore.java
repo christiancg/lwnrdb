@@ -74,6 +74,7 @@ final class FieldIndexStore {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {
                     deleted.add(index.delete());
+                    FileLocks.evictIfUnused(index);
                 }
                 return deleted.stream().allMatch(aBoolean -> aBoolean);
             }
@@ -105,8 +106,7 @@ final class FieldIndexStore {
         if (entries.isEmpty()) {
             content.append(Globals.NEWLINE);
         }
-        final var lock = FileLocks.lockFor(indexFile).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(indexFile);
         try {
             FileLocks.rewriteFileAtomically(indexFile.toPath(), content.toString().getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {
@@ -120,8 +120,7 @@ final class FieldIndexStore {
         if (indexFile == null) {
             return;
         }
-        final var lock = FileLocks.lockFor(indexFile).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(indexFile);
         try {
             final var wholeFile = readFully(indexFile);
             final var indexOfExisting = searchIndexValue(wholeFile, value);
@@ -156,8 +155,7 @@ final class FieldIndexStore {
         if (indexFile == null) {
             return;
         }
-        final var lock = FileLocks.lockFor(indexFile).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(indexFile);
         try {
             final var wholeFile = readFully(indexFile);
             final var indexOfExisting = searchIndexValue(wholeFile, value);

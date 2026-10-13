@@ -10,7 +10,9 @@ public final class RegexMatcher {
     private final RxNode root;
     private static final int INITIAL_REACHED_ENDS = 16;
     private static final int SCAN_STEP_MASK = 0x3F;
+    private static final int CAPTURE_SLOTS_PER_STEP = 64;
     private final RegexStepBudget budget;
+    private final int resetSteps;
     private int[] starts;
     private int[] ends;
     private int matchEnd;
@@ -22,6 +24,7 @@ public final class RegexMatcher {
         this.root = program.root();
         this.starts = new int[program.groupCount() + 1];
         this.ends = new int[program.groupCount() + 1];
+        this.resetSteps = 1 + 2 * (program.groupCount() + 1) / CAPTURE_SLOTS_PER_STEP;
     }
 
     public static RegexMatch exec(RegexProgram program, String input, int fromIndex, boolean sticky) {
@@ -33,7 +36,7 @@ public final class RegexMatcher {
         final var engine = new RegexMatcher(program, input, budget);
         var start = Math.max(fromIndex, 0);
         while (start <= input.length()) {
-            budget.step();
+            budget.steps(engine.resetSteps);
             engine.resetCaptures();
             if (engine.tryMatchAt(start)) {
                 return engine.buildResult(start);

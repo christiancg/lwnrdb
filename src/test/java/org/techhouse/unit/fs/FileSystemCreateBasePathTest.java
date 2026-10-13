@@ -45,6 +45,27 @@ public class FileSystemCreateBasePathTest {
     }
 
     @Test
+    public void test_database_and_collection_directories_are_owner_only(@TempDir Path tmp) throws Exception {
+        assumeTrue(OwnerOnlyPermissions.supported());
+        final var base = tmp.resolve("db");
+        TestUtils.setPrivateField(config, "filePath", base.toString());
+        final var fs = new FileSystem();
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        assertTrue(fs.createDatabaseFolder("ownerdb"));
+        assertTrue(fs.createCollectionFile("ownerdb", "ownercoll"));
+        fs.writeProcedure("ownerdb", "ownerproc", "{}");
+
+        for (final var folder : new Path[]{base.resolve("admin"), base.resolve("admin").resolve("pages"),
+                base.resolve("ownerdb"), base.resolve("ownerdb").resolve("ownercoll"),
+                base.resolve("ownerdb").resolve(".procedures")}) {
+            assertEquals("rwx------", PosixFilePermissions.toString(Files.getPosixFilePermissions(folder)),
+                    folder.toString());
+        }
+        assertTrue(fs.createDatabaseFolder("ownerdb"));
+    }
+
+    @Test
     public void test_a_base_path_that_cannot_be_created_is_reported(@TempDir Path tmp) throws Exception {
         final var blocker = Files.writeString(tmp.resolve("blocker"), "x");
         TestUtils.setPrivateField(config, "filePath", blocker.resolve("db").toString());

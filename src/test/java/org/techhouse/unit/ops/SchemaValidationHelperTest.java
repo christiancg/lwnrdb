@@ -2,7 +2,9 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -243,5 +245,50 @@ public class SchemaValidationHelperTest {
         final var refused = SchemaValidationHelper.check(save(expensive));
         assertNotNull(refused);
         assertEquals("400-23", refused.getErrorCode());
+    }
+
+    @Test
+    public void test_a_request_already_checked_against_the_same_schema_is_not_validated_again() {
+        installSchema();
+        final var document = doc("Alice");
+        final var request = save(document);
+        assertNull(SchemaValidationHelper.check(request));
+
+        document.remove("name");
+
+        assertNull(SchemaValidationHelper.check(request),
+                "the under-lock re-check of the request the edge already validated must not pay for it twice");
+        assertNotNull(SchemaValidationHelper.check(save(document)), "another request is validated in full");
+    }
+
+    @Test
+    public void test_a_replaced_schema_or_document_is_validated_again() {
+        installSchema();
+        final var request = save(doc("Alice"));
+        assertNull(SchemaValidationHelper.check(request));
+
+        request.setObject(doc(null));
+        assertNotNull(SchemaValidationHelper.check(request), "a before hook's replacement is a new document");
+
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var documents = new ArrayList<>(List.of(doc("Alice")));
+        bulk.setObjects(documents);
+        assertNull(SchemaValidationHelper.check(bulk));
+        installSchema();
+        documents.getFirst().remove("name");
+        assertNotNull(SchemaValidationHelper.check(bulk), "a new schema object means the edge check is stale");
+    }
+
+    @Test
+    public void test_another_thread_validates_the_same_request_in_full() throws Exception {
+        installSchema();
+        final var document = doc("Alice");
+        final var request = save(document);
+        assertNull(SchemaValidationHelper.check(request));
+        document.remove("name");
+        final var other = new AtomicReference<>();
+        final var thread = Thread.ofVirtual().start(() -> other.set(SchemaValidationHelper.check(request)));
+        thread.join();
+        assertNotNull(other.get());
     }
 }

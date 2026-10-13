@@ -12,6 +12,7 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.validate.SchemaBudget;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.BeforeHookContext;
@@ -44,11 +45,11 @@ public final class TransactionWrites {
     // Hooks run once the session holds the collection lock, so they see the same serialization a
     // non-transactional write does.
     public static BeforeHookOutcome runBeforeHooks(String dbName, String collName, EventType event, String actingUser,
-            JsonObject object, String id, OperationType type) {
+            JsonObject object, String id, OperationType type, SchemaBudget schemaBudget) {
         if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
             return BeforeHookOutcome.accepted(object);
         }
-        try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
+        try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser, schemaBudget)) {
             return hooks.apply(object, id, type);
         }
     }

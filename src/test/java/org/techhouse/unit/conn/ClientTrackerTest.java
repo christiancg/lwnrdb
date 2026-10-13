@@ -292,7 +292,7 @@ public class ClientTrackerTest {
         final var departure = clientTracker.signalDisconnect(clientId);
 
         assertNotNull(departure);
-        Mockito.verify(socket).close();
+        Mockito.verify(socket, Mockito.timeout(5000)).close();
         clientTracker.removeById(bystander);
         assertEquals(1, departure.getCount(), "another client's removal must not release this departure");
         clientTracker.removeById(clientId);

@@ -6,6 +6,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.test.TestUtils;
@@ -110,5 +111,25 @@ public class CompiledProcedureCacheTest {
         cache.invalidateProcedure("db", "drop");
         assertSame(kept, cache.get("db", "keep", 1L, "return 1;"));
         assertNotSame(dropped, cache.get("db", "drop", 1L, "return 1;"));
+    }
+
+    @Test
+    public void test_the_procedure_cache_is_bounded_by_bytes() throws Exception {
+        TestUtils.setPrivateField(configuration, "procedureCacheMaxBytes", String.valueOf(25 * 40 * 2));
+        try {
+            final var cache = new CompiledProcedureCache();
+            final var source = "return 1;" + " ".repeat(31);
+            final var first = cache.get("db", "a", 1L, source);
+            cache.get("db", "b", 1L, source);
+            cache.get("db", "c", 1L, source);
+            assertEquals(2, cache.size());
+            assertEquals(25 * 40 * 2, cache.weightedBytes());
+            assertNotSame(first, cache.get("db", "a", 1L, source));
+            cache.invalidateDatabase("db");
+            assertEquals(0, cache.weightedBytes());
+        } finally {
+            TestUtils.setPrivateField(configuration, "procedureCacheMaxBytes",
+                    ConfigKey.PROCEDURE_CACHE_MAX_BYTES.defaultValue());
+        }
     }
 }

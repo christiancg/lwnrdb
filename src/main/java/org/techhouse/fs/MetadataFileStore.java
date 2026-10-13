@@ -7,14 +7,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class MetadataFileStore {
     private MetadataFileStore() {
     }
 
     static void write(File file, String json) throws IOException {
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(file);
         try {
             FileLocks.rewriteFileAtomically(file.toPath(), List.of(json));
         } finally {
@@ -28,12 +28,12 @@ final class MetadataFileStore {
     }
 
     static boolean delete(File file) throws IOException {
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(file);
         try {
             return Files.deleteIfExists(file.toPath());
         } finally {
             lock.unlock();
+            FileLocks.evictIfUnused(file);
         }
     }
 
@@ -53,8 +53,13 @@ final class MetadataFileStore {
     }
 
     static void ensureFolder(File folder, String label, String dbName) throws IOException {
-        if (!folder.exists() && !folder.mkdirs() && !folder.exists()) {
-            throw new IOException("Could not create the " + label + " folder for database " + dbName);
+        if (folder.exists()) {
+            return;
+        }
+        try {
+            OwnerOnlyPermissions.createDirectories(folder.toPath());
+        } catch (IOException e) {
+            throw new IOException("Could not create the " + label + " folder for database " + dbName, e);
         }
     }
 

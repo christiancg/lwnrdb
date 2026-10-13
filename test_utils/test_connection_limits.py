@@ -363,6 +363,41 @@ def test_unparseable_lines_before_authentication_close_the_connection():
         check("Then the server closes the connection", reaches_eof(sock))
 
 
+def test_well_formed_requests_before_authentication_close_the_connection():
+    section("Five refused requests before authenticating close the connection, not only unparseable ones")
+    with raw_socket() as sock:
+        sock.sendall(b'{"type":"LIST_DATABASES"}\n' * 6)
+        answers = [read_frame(sock, 3.0) for _ in range(5)]
+        check("The first five are answered 401-1",
+              all(answer is not None and answer.get("errorCode") == "401-1" for answer in answers),
+              f"answers={answers}")
+        check("Then the server closes the connection", reaches_eof(sock))
+
+
+def test_an_idle_transaction_is_reaped_while_its_client_is_not_reading():
+    section("An idle transaction is reaped even while its client leaves responses unread")
+    with Conn.authenticated() as seeder:
+        for i in range(40):
+            seeder.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                         "object": {"_id": f"unread-bulky-{i}", "kind": "bulky", "blob": "x" * 50_000}})
+    holder = bu.non_reading_conn()
+    try:
+        check_status("START_TRANSACTION", holder.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("SAVE held-unread inside the transaction", holder.send(save("held-unread")), "OK")
+        for _ in range(6):
+            bu.send_without_reading(holder, {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+                                             "aggregationSteps": []})
+        with Conn.authenticated() as writer:
+            send_only(writer, save("standalone-unread"))
+            unblocked = writer.recv(timeout=IDLE_TIMEOUT_S + 10)
+            check_status("The standalone SAVE completes once the unread transaction is reaped", unblocked or {},
+                         "OK")
+            check_status("The reaped transaction's document was discarded", writer.send(find("held-unread")),
+                         "NOT_FOUND")
+    finally:
+        holder.close()
+
+
 def test_an_unauthenticated_request_is_answered_401_1_without_validation():
     section("A request before authenticating is answered 401-1, never validated")
     with raw_socket() as sock:
@@ -438,6 +473,8 @@ def main():
         test_a_busy_transaction_is_still_reaped_at_its_maximum_age()
         test_unparseable_lines_before_authentication_close_the_connection()
         test_an_unauthenticated_request_is_answered_401_1_without_validation()
+        test_well_formed_requests_before_authentication_close_the_connection()
+        test_an_idle_transaction_is_reaped_while_its_client_is_not_reading()
         test_max_connections_admits_exactly_the_limit_under_concurrency()
     finally:
         bu.stop_server(proc, port=PORT, wait_for_port=False)

@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.colle
 
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.function.Supplier;
 import org.techhouse.simplejs.ModuleReferences;
 import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ScriptModule;
@@ -94,6 +95,10 @@ public final class ModuleEvaluator {
         if (resolved == null) {
             throw new JsThrowException(interp.intrinsics().makeError("Error", "Cannot find module '" + source + "'"));
         }
+        if (resolved.sourceHidden()) {
+            return interp.importModule(resolved.moduleId(), resolved.displayName(),
+                    () -> parseWithoutSourceText(resolved.source()));
+        }
         final var compiled = resolved.compiled();
         final var reusable = compiled != null && compiled.strictScriptGoal() == host.strictScriptGoal();
         return interp.importModule(resolved.moduleId(), resolved.displayName(),
@@ -105,8 +110,17 @@ public final class ModuleEvaluator {
     }
 
     private Program parse(String source) {
+        return parseReportingSyntaxErrors(() -> Parser.parse(Lexer.lexWithPositions(source), host.strictScriptGoal()));
+    }
+
+    private Program parseWithoutSourceText(String source) {
+        return parseReportingSyntaxErrors(
+                () -> Parser.parseWithoutSourceText(Lexer.lexWithPositions(source), host.strictScriptGoal()));
+    }
+
+    private Program parseReportingSyntaxErrors(Supplier<Program> parser) {
         try {
-            return Parser.parse(Lexer.lexWithPositions(source), host.strictScriptGoal());
+            return parser.get();
         } catch (SyntaxErrorException | UnexpectedTokenException | UnexpectedEndOfInputException
                 | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
                 | UnterminatedCommentException | UnterminatedRegexException error) {

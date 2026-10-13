@@ -1,5 +1,6 @@
 package org.techhouse.ops;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.ARRAY_TOO_LARGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.CANCELLED;
 import static org.techhouse.simplejs.host.ScriptErrorNames.EXHAUSTED_MEMORY_MESSAGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.LIMIT;
@@ -164,6 +165,7 @@ public final class ScriptOperationHelper {
             case CANCELLED -> ErrorCode.SCRIPT_CANCELLED;
             case LIMIT -> ErrorCode.SCRIPT_LIMIT_EXCEEDED;
             case MEMORY -> ErrorCode.SCRIPT_MEMORY_EXCEEDED;
+            case ARRAY_TOO_LARGE -> ErrorCode.SCRIPT_ARRAY_TOO_LARGE;
             case RESULT_TOO_LARGE -> ErrorCode.SCRIPT_RESULT_TOO_LARGE;
             case PENDING_RESULT -> ErrorCode.SCRIPT_RESULT_PENDING;
             default -> ErrorCode.SCRIPT_FAILED;

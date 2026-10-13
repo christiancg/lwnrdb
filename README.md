@@ -71,9 +71,10 @@ Each request is one line terminated by `\n`; a single `\r` right before it is st
 
 - **Line size.** A line may be at most `maxRequestSize` bytes (default `64Mb`) once the connection has authenticated, and at most **64Kb** before that (only `AUTHENTICATE` and `CLOSE_CONNECTION` are served unauthenticated, and each is a few hundred bytes; any other request is answered `401-1` without being validated). The server refuses as soon as the unterminated bytes pass the limit, without waiting for the newline: it answers one `CLOSE_CONNECTION` frame with `400-22` and closes the connection, because the rest of an oversized line cannot be skipped safely.
 - **Token budget.** A line is also refused if it is denser than one JSON token per 4 bytes of the line limit (a 64Kb unauthenticated line may hold 16 384 tokens, a 64Mb one 16 777 216). Real documents, vectors and pipelines average well above 4 bytes per token; a huge flat array such as `[1,1,1,...]` does not. Such a line is answered `The command is not valid` and the connection stays open.
-- **Authentication deadline.** A connection must authenticate within `authTimeoutMs` (default `10000`) of being accepted. The deadline is absolute: traffic, blank lines and failed `AUTHENTICATE` attempts do not extend it. When it expires the server answers one `CLOSE_CONNECTION` frame with `408-4` and closes the connection. With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that stalls or drips its handshake is closed at `authTimeoutMs` plus one second, and so is a connection refused at `maxConnections` that never completes its handshake. Once authenticated, a connection is never closed for being idle.
+- **Authentication deadline.** A connection must authenticate within `authTimeoutMs` (default `10000`) of being accepted. The deadline is absolute: traffic, blank lines and failed `AUTHENTICATE` attempts do not extend it. When it expires the server answers one `CLOSE_CONNECTION` frame with `408-4` and closes the connection. With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that stalls or drips its handshake is closed at `authTimeoutMs` plus one second. A TLS connection over `maxConnections` or `maxUnauthenticatedConnectionsPerAddress` is closed before its handshake, with no frame (the refusal could only be sent after the handshake it would cost). Once authenticated, a connection is never closed for being idle.
 - **Unauthenticated connections per address.** One remote address may hold at most `maxUnauthenticatedConnectionsPerAddress` (default `16`) connections that have not authenticated yet; the next one is answered `503-14` and closed. Authenticating frees the slot. Clients behind one NAT address share the allowance.
-- **Unparseable lines before authentication.** A connection that sends `maxUnauthenticatedInvalidRequests` (default `5`) unparseable lines before it authenticates is closed after the last answer.
+- **Invalid requests before authentication.** A connection that sends `maxUnauthenticatedInvalidRequests` (default `5`) requests before it authenticates that are not a successful `AUTHENTICATE` (unparseable lines, requests answered `401-1`, failed attempts) is closed after the last answer.
+- **Slow readers.** Every response and LISTEN update goes through a per-connection outbound queue written by its own thread, so a client that stops reading never blocks the server: its open transaction is still rolled back after `transactionIdleTimeoutMs`, and the LISTEN worker keeps notifying everyone else. Once the unread backlog passes `clientOutboundQueueMaxBytes` (default `16Mb`) the backlog is dropped, the connection's listens end, one `CLOSE_CONNECTION` frame with `413-1` is queued and the connection is closed. A single response larger than the cap is still delivered when nothing is waiting behind it.
 - **Idle transactions.** A connection holding an open transaction must send its next request within `transactionIdleTimeoutMs` (default `30000`), and a transaction is rolled back once it is older than `transactionMaxAgeMs` (default `600000`) however busy it is; see [Transactions](#transactions).
 - `maxConnections` counts client sockets only; forwarded cluster requests and transaction sessions no longer take a slot.
 
@@ -189,7 +190,7 @@ Read operations accept an optional `"dirtyRead": true` (default `false`); see [C
 #### `AGGREGATE`
 Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
 Also accepts an optional top-level `"analyze": true` (default `false`); see [Explain / Analyze](#explain--analyze).
-A pipeline is stopped with `408-6` once it has run for `aggregateTimeoutMs` (default `300000`, `0` = no limit). An `IN`/`NOT_IN` list or a `within` polygon may hold at most `maxFilterOperands` (default `10000`) operands, refused with `400-27` past it, and a `MAP` `fieldName` may nest at most 128 levels.
+A pipeline is stopped with `408-6` once it has run for `aggregateTimeoutMs` (default `300000`, `0` = no limit). An `IN`/`NOT_IN` list or a `within` polygon may hold at most `maxFilterOperands` (default `10000`) operands, refused with `400-27` past it; the same limit caps the operands of one conjunction (`AND`/`OR`/…), the total operator nodes of one `FILTER` step, and the operators plus mid-operator operands of one `MAP` step. A `MAP` `fieldName` may nest at most 128 levels. One output row of a `JOIN` may carry a joined array of at most `maxEntrySize` bytes, refused with `400-28` past it (the same refusal whether the remote field is indexed or scanned).
 
 ```json
 {
@@ -249,7 +250,7 @@ A `MAP` `ADD_FIELD` may carry a `CAST` mid-operator (`fieldName`, `toType`, plus
 
 #### The `CONCAT` mid-operator
 
-`CONCAT` joins its operands into one string, which may be at most `maxEntrySize` characters long; a longer result stops the pipeline with `400-28`. A top-level string operand is a **field path** unless it carries the string-literal prefix `-`; a string inside an array operand is always a literal. A `null` operand contributes the text `null`, and so does a top-level field path the document does not hold — in both operand positions, and whether the null was written literally or read from a null-valued field.
+`CONCAT` joins its operands into one string, which may be at most `maxEntrySize` characters long; a longer result stops the pipeline with `400-28`. The strings one `MAP` step adds to a document through `CONCAT` and string `CAST`s are also totalled per document, and a document whose additions pass `maxEntrySize` stops the pipeline with `400-28` too, however small each one is. A top-level string operand is a **field path** unless it carries the string-literal prefix `-`; a string inside an array operand is always a literal. A `null` operand contributes the text `null`, and so does a top-level field path the document does not hold — in both operand positions, and whether the null was written literally or read from a null-valued field.
 
 #### Script operators (SimpleJS in the pipeline)
 
@@ -448,7 +449,7 @@ The response echoes any non-fatal `warnings` (e.g. unrecognized keywords that we
 ```json
 {"type":"SAVE_SCHEMA","status":"OK","message":"Collection schema saved successfully","warnings":[]}
 ```
-Returns `400-8` if the supplied schema is not a valid 2020-12 schema, and `400-24` if it is valid but expands to more than 100 000 schema nodes once its `$ref`s are followed (each reference counts its target again, so a chain of `$defs` whose levels are `allOf:[{$ref:next},{$ref:next}]` doubles per level). Nothing is stored in either case. This limit is checked only by `SAVE_SCHEMA`: a schema stored before it existed still loads and is bounded at write time by `schemaValidationBudget` instead.
+Returns `400-8` if the supplied schema is not a valid 2020-12 schema, and `400-24` if it is valid but expands to more than 100 000 schema nodes once its `$ref`s are followed (each reference counts its target again, so a chain of `$defs` whose levels are `allOf:[{$ref:next},{$ref:next}]` doubles per level). It returns `400-31` if a `pattern` value or a `patternProperties` key anywhere in the schema is longer than `schemaMaxPatternLength` characters (default `4096`). Nothing is stored in any of these cases. These limits are checked only by `SAVE_SCHEMA`: a schema stored before they existed still loads and is bounded at write time by `schemaValidationBudget` instead.
 
 #### `DELETE_SCHEMA`
 Removes the collection's schema, so writes are no longer validated. Idempotent — returns `OK` whether or not a schema existed. Requires admin privileges or database ownership.
@@ -651,11 +652,11 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
   }
   return total;
   ```
-- **Importing shared code**: a script may import any stored procedure of its own database with `import … from "procedures/<name>"` — a library is just a procedure that `export`s instead of returning. `SAVE_PROCEDURE` refuses an import that does not resolve (`400-18`), so libraries must be installed before their users. Only `export`ed bindings are visible, so a procedure written in the `CALL_PROCEDURE` style (a top-level `return`) imports as `undefined`.
+- **Importing shared code**: a script may import any stored procedure of its own database with `import … from "procedures/<name>"` — a library is just a procedure that `export`s instead of returning. `SAVE_PROCEDURE` refuses an import that does not resolve (`400-18`), so libraries must be installed before their users. A caller without script `MANAGE` (or ownership, or admin) on the database runs imported code but cannot read it: `toString()` of an imported function or class answers the `function name() { [native code] }` stub. Only `export`ed bindings are visible, so a procedure written in the `CALL_PROCEDURE` style (a top-level `return`) imports as `undefined`.
 - **Outbound HTTP** is available: `scriptFetchEnabled` is on and `scriptFetchAllowlist` is `*`, which means any **public** host. Every address a host resolves to is checked and the connection goes to that checked address, so loopback, private (10/8, 172.16/12, 192.168/16), link-local (the 169.254.169.254 metadata endpoint), CGNAT, multicast, reserved and unique-local addresses are refused with `fetch: host not allowed` — even through a DNS name or a later DNS answer — unless the **exact** host is listed (`10.0.0.5`, `localhost`); a `*.example.com` wildcard never re-opens them, and listing an internal host logs a SECURITY WARNING at startup. Only `http`/`https` URLs are fetched, redirects are never followed, the body is read as a stream and abandoned past `scriptFetchMaxResponseBytes`, a run may have at most `scriptFetchMaxConcurrent` (default 8) fetches in flight (one more rejects with `fetch: too many concurrent requests`), and any other network failure rejects with the bare `fetch failed` — the cause goes to the server log, not to the script. `*` still lets any script make the server call any public host, and the server warns at every startup — **narrow it**. `fetch` stays unavailable to pipeline scripts and before-write hooks, which hold collection locks.
 - **Native work is budgeted too**: a builtin's own loop (`indexOf`, `includes`, `splice`, typed-array scans…) is charged about one instruction per element, so a scan over a sparse `new Array(2 ** 32 - 1)` ends with `400-11` and honours `CANCEL_SCRIPT` and the timeout; native recursion over script data (`JSON.parse`/`JSON.stringify`, `structuredClone`, `flat`, `String()` of nested arrays) stops at 256 levels with a catchable `RangeError: Maximum nesting depth exceeded`; a BigInt result over 2^24 bits (2 MiB) is a catchable `RangeError: Maximum BigInt size exceeded` and a large one is charged to `scriptMaxMemoryBytes`; and a JVM stack or heap exhaustion inside an async function or generator ends the run with `400-12` instead of hanging it. `import … from "procedures/<name>"` resolves only a name the wire would accept (3-64 letters, digits, `_` or `-`); anything else is `Cannot find module`.
 - **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes.
-- **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `503-7` the run was placed on another node that never reported an outcome — it is deliberately **not** re-run here, because it may already have run there, so retrying is only safe if the script is idempotent, `409-6` sent with a transaction open.
+- **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`, the name and message each clipped to `scriptMaxLogLineChars` like every stack frame; an engine failure with no script-level meaning reads `InternalError: Internal script error`, the detail going only to the server log), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-30` an array-like past `scriptMaxArrayLength`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `503-7` the run was placed on another node that never reported an outcome — it is deliberately **not** re-run here, because it may already have run there, so retrying is only safe if the script is idempotent, `409-6` sent with a transaction open.
 - Under clustering the run is **placed** on a live node chosen by script load and ownership share (`scriptRoutingEnabled`, on by default); each operation it issues is then routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
@@ -680,7 +681,7 @@ Stores a named script in a database so it can be called by name instead of being
 - `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Absent means an unconditional upsert. Use `0` to require that the procedure does not exist yet.
 - A procedure is stored **with its database**, in `{filePath}/{database}/.procedures/{name}.json`, so dropping the database removes it.
 - **A procedure bound by another user is protected.** A [trigger](#save_trigger), before hook or [schedule](#save_schedule) looks its procedure up by name when it fires and runs it as its `definer`, so while one reaches a procedure — directly, or through a `procedures/<name>` import, transitively — saving it (disabling with `enabled:false` included) is refused with `403-4` for anyone but that definer, a database owner or an admin. A procedure that imports by a computed name (`import('procedures/' + n)`) or imports the `script` module counts as able to reach every procedure of its database, so while a foreign definer's binding reaches one, every save there is refused for other `MANAGE` users. Unbound procedures, and ones bound only by the caller, stay freely editable.
-- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `403-4` bound by a trigger, before hook or schedule whose definer is another user, `404-4` unknown database, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`, the same rule as a collection) or a blank script, `400-10` source over `scriptMaxSourceBytes`, `400-13` source that does not parse (the message carries the line and column), `400-18` a `procedures/<name>` import that does not resolve (so install a library before its importers), `409-8` version conflict.
+- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `403-4` bound by a trigger, before hook or schedule whose definer is another user, `404-4` unknown database, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`, the same rule as a collection) or a blank script, `400-10` source over `scriptMaxSourceBytes`, `400-13` source that does not parse (the message carries the line and column), `400-18` a `procedures/<name>` import that does not resolve (so install a library before its importers), `400-34` a new procedure past `maxProceduresPerDatabase`, `409-8` version conflict.
 
 #### `DELETE_PROCEDURE`
 ```json
@@ -702,7 +703,7 @@ Idempotent — succeeds whether or not the procedure existed. Refused with `400-
   ]
 }
 ```
-`includeSource: true` adds the `source` field. Requires `READ` on the database.
+The summary requires `READ` on the database. `includeSource: true` adds the `source` field and also requires script `MANAGE` on the database (or ownership, or admin); a caller with only `READ`/`RUN` is refused with `403-6`.
 
 #### `CALL_PROCEDURE`
 Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_script)'s (`scriptPermissions` of at least `RUN`), the sandbox is the same, and the response shape matches — `result`, `logs`, `logsTruncated`, and `stack` on a failure, with the same error codes.
@@ -715,7 +716,7 @@ Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_scrip
 ```
 
 - The procedure runs with the **caller's** authority, so calling one never grants more than the caller already had.
-- The parsed program is cached per node keyed by `(database, name, version)`, so a repeated call does not re-parse. `procedureCacheSize` bounds it.
+- The parsed program is cached per node keyed by `(database, name, version)`, so a repeated call does not re-parse. `procedureCacheSize` bounds its entries and `procedureCacheMaxBytes` its estimated heap.
 - **Errors**: as `RUN_SCRIPT` — including `503-6` when the node is at `maxConcurrentScripts` and no permit came free within `scriptQueueWaitMs`, which is retryable because nothing ran — plus `404-8` when the procedure is absent or disabled.
 
 #### `LIST_SCRIPTS` (admin only)
@@ -819,13 +820,15 @@ Runs a stored procedure around a write to a collection — **after** it commits 
 
 - `timing` is `after` (the default) or `before`. The two differ in almost every respect, so they are described separately below. An omitted `timing` reads as `after`, so every trigger written before this existed keeps its meaning.
 - **An `after` trigger fires once the write has committed**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a `before` trigger or a [collection schema](#schema-validation) for that — and its failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
-- **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. If the definer is deleted the trigger stops firing (it never falls back to the writer or to an admin).
+- **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. The definer's authority is re-checked every time the trigger fires (and when a pending run is replayed): if the definer is deleted, or no longer holds script `RUN` on the database and `READ` on the collection, the run is skipped and the trigger is **disabled** — `LIST_TRIGGERS` shows `enabled:false` with a `disabledReason` — and stays disabled until its owner re-saves it, even if the grant comes back. It never falls back to the writer or to an admin.
+- **A collection holds at most `triggerMaxPerCollection` triggers** (`400-32` past it). A trigger run takes its definer's `maxConcurrentScriptsPerUser` and its database's `maxConcurrentScriptsPerDatabase` slice; refused, it is retried after a backoff without consuming an attempt, and dead-lettered only once `triggerRunRetentionMs` has passed since it fired.
+- **Dropping a collection or database discards its pending and dead-lettered trigger runs**, so a later collection of the same name never receives the dropped one's documents.
 - **A write inside a transaction fires when the transaction commits**, never before, so a rolled-back write fires nothing. The event is the one the write actually performed: a new document fires `CREATED`, an overwrite `UPDATED`, and a delete fires `DELETED` carrying the document as it stood when the delete was buffered.
 - `mode` is `document` (one run per document, the default) or `batch` (one run for a whole `BULK_SAVE`, or one per collection and event for a transaction's writes).
 - `allowCascade` defaults to `false`, so writes a trigger itself performs fire nothing. With it on, a chain terminates at `triggerMaxDepth`.
 - The procedure receives `{event, database, collection, id, document, trigger, actingUser, definer, firedAt, depth}` as its `args` — `actingUser` is who wrote, `definer` is whose authority the run has. `firedAt` is the time of the first fire, the same on every retry and after a restart. In `batch` mode `documents` replaces `id`/`document`.
 - Triggers are stored **with their collection**, in `{filePath}/{database}/{collection}/{collection}-triggers.json`, so dropping the collection removes them.
-- **Errors**: `403-1` not permitted (including `MANAGE` without `READ_WRITE` on the collection), `404-4` unknown collection, `404-8` unknown or disabled procedure, `400-14` no events / an unknown event / an unknown mode, `409-8` version conflict.
+- **Errors**: `403-1` not permitted (including `MANAGE` without `READ_WRITE` on the collection), `404-4` unknown collection, `404-8` unknown or disabled procedure, `400-14` no events / an unknown event / an unknown mode, `400-32` a new trigger past `triggerMaxPerCollection`, `409-8` version conflict.
 - **A failing run is retried** with a doubling backoff up to `triggerMaxAttempts` and then kept as a dead letter for [`LIST_TRIGGER_RUNS`](#list_trigger_runs-admin-only) / [`RESOLVE_TRIGGER_RUN`](#resolve_trigger_run-admin-only). Its warning line in the server log carries `stack=[…]`, naming the procedure and line — nobody is waiting on a response, so that log is the diagnosis.
 - **There is no dry run for an `after` trigger** ([`TEST_TRIGGER`](#test_trigger) covers `before` triggers, which are directly callable). Put the logic in a procedure, exercise it with [`CALL_PROCEDURE`](#call_procedure), and make the trigger a thin wrapper that delegates to it — that exercises the body, not dispatch.
 
@@ -922,15 +925,16 @@ Runs a stored procedure **on a clock**. Requires admin privileges, ownership, or
 ```
 
 - **Exactly one of `cron` and `intervalMs`.** `intervalMs` fires every so many milliseconds; `cron` fires on the standard five-field expression `minute hour day-of-month month day-of-week`, supporting the wildcard, a single value, `a-b` ranges, `*/n` and `a-b/n` steps, comma lists, and three-letter month/day names (`JAN`, `MON`; `7` is Sunday). When both day fields are restricted they are OR-ed, the conventional cron rule. The expression is evaluated in the configured `scriptTimeZone`, not the JVM default, so `0 3 * * *` means the same instant on every node.
-- **Runs with the installer's authority** (`definer`), like a trigger and for the same reason: a scheduled run has no caller, so running it as the installer makes it behave identically regardless of who happens to be connected. Re-saving re-stamps the definer to the saving user. Only the definer, a database owner or an admin may replace or delete an existing schedule; anyone else is refused with `403-5`. If the definer is deleted the schedule stops firing (it never falls back to an admin).
+- **Runs with the installer's authority** (`definer`), like a trigger and for the same reason: a scheduled run has no caller, so running it as the installer makes it behave identically regardless of who happens to be connected. Re-saving re-stamps the definer to the saving user. Only the definer, a database owner or an admin may replace or delete an existing schedule; anyone else is refused with `403-5`. If the definer is deleted or no longer holds script `RUN` on the database, the occurrence is skipped and the schedule is **disabled** with a `disabledReason` until its owner re-saves it (it never falls back to an admin).
+- A scheduled run takes its definer's `maxConcurrentScriptsPerUser` and its database's `maxConcurrentScriptsPerDatabase` slice; refused, that occurrence is skipped (recorded in `script_runs` as `SKIPPED`) and the next fires normally. `intervalMs` may not be below `scheduleMinIntervalMs` (`400-35`), and one user may define at most `scheduleMaxTotalPerUser` schedules across every database (`400-33`).
 - **Not transactional.** A trigger runs inside a transaction because its pending-run record must be consumed atomically with its effects; a schedule has no run record, so a scheduled procedure that wants atomicity opens its own `db.transaction(...)` — which, unlike inside a trigger, is permitted.
 - `args` is the object handed to the procedure as its `args` module, exactly as with [`CALL_PROCEDURE`](#call_procedure). Because a schedule is a separate record from the procedure, one procedure can carry several schedules with different arguments.
 - `timeoutMs` bounds one run's wall clock; omit it (or `0`) to use `scheduleTimeoutMs`. It may not exceed `scheduleMaxTimeoutMs` (default `300000`); a larger value is refused with `400-29`. Everything else — instruction budget, depth, memory, log caps — comes from the `script*` keys.
 - `enabled` defaults to `true`. `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Use `0` to require that the schedule does not exist yet.
 - **Delivery is at-most-once per due instant.** Firing is never finer-grained than `scheduleTickMs`, a run still executing when the next occurrence is due is skipped rather than queued twice, and **missed runs while a node was down are skipped, not caught up** — a job that must not miss an occurrence should be idempotent and driven off data, not off the clock. Under clustering each schedule is owned by exactly one node through the consistent-hash ring, so a schedule fires once per due instant across the cluster and fails over automatically; a membership change during a tick may drop that tick rather than run it twice (see [docs/clustering.md](docs/clustering.md) → *Scheduled procedures*).
 - A schedule is stored **with its database**, in `{filePath}/{database}/.schedules/{name}.json`, so dropping the database removes it.
-- **Errors**: `403-2` schedules disabled, `403-1` not permitted, `403-5` replacing another user's schedule, `404-4` unknown database, `404-8` unknown procedure, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`), `400-16` neither or both of `cron`/`intervalMs`, a malformed cron, or a negative `timeoutMs`, `400-17` past `scheduleMaxPerDatabase`, `400-29` a `timeoutMs` past `scheduleMaxTimeoutMs`, `409-8` version conflict.
-- **A full schedule queue never drops another database's run.** When `scheduleQueueSize` is reached, the oldest queued run of the same database is dropped to make room; if that database has nothing queued, the new run is the one dropped. Triggers follow the same rule on `triggerQueueSize`.
+- **Errors**: `403-2` schedules disabled, `403-1` not permitted, `403-5` replacing another user's schedule, `404-4` unknown database, `404-8` unknown procedure, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`), `400-16` neither or both of `cron`/`intervalMs`, a malformed cron, or a negative `timeoutMs`, `400-17` past `scheduleMaxPerDatabase`, `400-29` a `timeoutMs` past `scheduleMaxTimeoutMs`, `400-33` past `scheduleMaxTotalPerUser`, `400-35` an `intervalMs` below `scheduleMinIntervalMs`, `409-8` version conflict.
+- **A full schedule queue never drops another database's run.** When `scheduleQueueSize` is reached, the oldest queued run of the same database is dropped to make room; if that database has nothing queued, the new run is the one dropped. Triggers follow the same rule on `triggerQueueSize` and `triggerQueueMaxBytes`.
 
 #### `DELETE_SCHEDULE`
 ```json
@@ -968,7 +972,7 @@ A collection can carry a single **JSON Schema (draft 2020-12)** that every write
 - A non-compliant `SAVE` is rejected with `400-7` and the document is not written.
 - A `BULK_SAVE` is **all-or-nothing**: if any document violates the schema the whole batch is rejected with `400-7` (the message names the offending `_id`), and nothing is written.
 - Collections without a schema are unconstrained (existing behaviour is unchanged).
-- Validation is **bounded**. Each document gets an evaluation budget of `schemaValidationBudget` steps (default 5 000 000): one step per schema node evaluated against a value, plus one per step of the regex matcher running a `pattern`, `patternProperties` or `propertyNames` regex. A document that exhausts it is refused with `400-23` and nothing is written, so a catastrophic pattern such as `(x+x+)+y` or an exponential `$ref` diamond cannot hold the collection write lock indefinitely. In a `BULK_SAVE` the whole batch is refused, inside a transaction the write answers `400-23` and the transaction stays open, and a before trigger whose replacement document exhausts the budget is rejected with `400-21`. The budget is a step count, not a deadline, so nodes configured with the same `schemaValidationBudget` accept and refuse the same document (keep it equal on every node of a cluster; the owner's check under the collection lock is the one that decides); legitimate 1 Mb documents cost a few hundred thousand steps at most. Cheap documents against a schema with a dangerous pattern still pass: only the documents that actually blow the budget are refused.
+- Validation is **bounded**. Each write request gets an evaluation budget of `schemaValidationBudget` steps (default 5 000 000), shared by every document of a `BULK_SAVE`: one step per schema node evaluated against a value, plus one per step of the regex matcher running a `pattern`, `patternProperties` or `propertyNames` regex (a regex with many capture groups costs more per start position, one extra step per 32 groups). A document that exhausts it is refused with `400-23` and nothing is written, so a catastrophic pattern such as `(x+x+)+y` or an exponential `$ref` diamond cannot hold the collection write lock indefinitely. In a `BULK_SAVE` the whole batch is refused, inside a transaction the write answers `400-23` and the transaction stays open, and a before trigger whose replacement document exhausts the budget is rejected with `400-21`. The budget is a step count, not a deadline, so nodes configured with the same `schemaValidationBudget` accept and refuse the same document (keep it equal on every node of a cluster; the owner's check under the collection lock is the one that decides); legitimate 1 Mb documents cost a few hundred thousand steps at most. Cheap documents against a schema with a dangerous pattern still pass: only the documents that actually blow the budget are refused.
 
 The reserved `_id` field is **excluded** from validation (it is a system-assigned primary key, already format-checked), so a schema with `"additionalProperties": false` does not need to declare it.
 
@@ -1301,9 +1305,15 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-24` | `ERROR` | The schema expands past the complexity limit |
 | `400-25` | `ERROR` | Too many listen registrations — the connection already holds `maxListensPerConnection`, or the server `maxListens` |
 | `400-26` | `ERROR` | The transaction would exceed its size limit (`transactionMaxOps` or `transactionMaxBytes`); the write is refused and the transaction stays usable for `ROLLBACK_TRANSACTION` |
-| `400-27` | `ERROR` | The filter has more operands than allowed — an `IN`/`NOT_IN` list or a `within` polygon past `maxFilterOperands` |
-| `400-28` | `ERROR` | A MAP result exceeds the maximum entry size — a `CONCAT` built a string longer than `maxEntrySize` |
+| `400-27` | `ERROR` | The filter has more operands than allowed — an `IN`/`NOT_IN` list, a `within` polygon, one conjunction's operands, one `FILTER` step's operator nodes or one `MAP` step's operators and operands past `maxFilterOperands` |
+| `400-28` | `ERROR` | A MAP result exceeds the maximum entry size — a `CONCAT` built a string longer than `maxEntrySize`, one `MAP` step added more than `maxEntrySize` bytes of strings to a document, or one `JOIN` row's joined array is larger than `maxEntrySize` |
 | `400-29` | `ERROR` | The schedule timeout exceeds the allowed maximum (`scheduleMaxTimeoutMs`) |
+| `400-30` | `ERROR` | A script array exceeds the maximum length — an array-like `length` past `scriptMaxArrayLength` reached `apply`, `Reflect.apply`/`construct`, `Vector.from` or `Array.fromAsync` |
+| `400-31` | `ERROR` | A schema regular expression exceeds the maximum length — a `pattern` or `patternProperties` key longer than `schemaMaxPatternLength`, refused by `SAVE_SCHEMA` |
+| `400-32` | `ERROR` | The collection has the maximum number of triggers (`triggerMaxPerCollection`); replacing an existing trigger is never refused |
+| `400-33` | `ERROR` | The user has the maximum number of schedules across every database (`scheduleMaxTotalPerUser`) |
+| `400-34` | `ERROR` | The database has the maximum number of procedures (`maxProceduresPerDatabase`); replacing an existing procedure is never refused |
+| `400-35` | `ERROR` | The schedule interval is below the allowed minimum (`scheduleMinIntervalMs`) |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -1313,6 +1323,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `403-3` | `FORBIDDEN` | Fault injection is disabled on this server — a [fault injection](#fault-injection-testing-and-debugging-only) operation on a server without `faultInjectionEnabled=true` |
 | `403-4` | `FORBIDDEN` | Procedure is bound by a trigger or schedule that runs as another user — a [`SAVE_PROCEDURE`](#save_procedure) or [`DELETE_PROCEDURE`](#delete_procedure) by someone other than the binding's definer, a database owner or an admin |
 | `403-5` | `FORBIDDEN` | The trigger or schedule belongs to another user — a `SAVE_TRIGGER`, `DELETE_TRIGGER`, `SAVE_SCHEDULE` or `DELETE_SCHEDULE` replacing or removing a definition by someone other than its definer, a database owner or an admin |
+| `403-6` | `FORBIDDEN` | Procedure source requires script MANAGE — a [`LIST_PROCEDURES`](#list_procedures) with `includeSource: true` by a caller with `READ` but not script `MANAGE`, ownership or admin |
 | `404-1` | `NOT_FOUND` | User not found |
 | `404-2` | `NOT_FOUND` | Entry not found |
 | `404-3` | `NOT_FOUND` | No results |
@@ -1345,6 +1356,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-15` | `ERROR` | The primary-key index cannot be rebuilt from the page files |
 | `409-16` | `ERROR` | The connection's transaction was rolled back after `transactionIdleTimeoutMs` without a request; answered once, to the next request, which is not executed |
 | `410-1` | `NOT_FOUND` | The listen ended: a collection it reads was dropped, its database was dropped, or the listening user can no longer read it. Pushed once on the listen's connection; the `listenId` is unregistered afterwards |
+| `413-1` | `ERROR` | The connection left more than `clientOutboundQueueMaxBytes` of responses unread; its backlog is dropped, its listens end, and this `CLOSE_CONNECTION` frame is the last thing written before the connection is closed (a reader that never catches up does not see it) |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -1379,7 +1391,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-32` | `ERROR` | Error while deleting the schedule |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
 | `421-3` | `ERROR` | This read joins collections the transaction wrote on different nodes |
-| `503-1` | `ERROR` | Max number of connections reached |
+| `503-1` | `ERROR` | Max number of connections reached; sent as a `CLOSE_CONNECTION` frame and the connection is closed (with `tlsEnabled=true` it is closed before its handshake, with no frame) |
 | `503-2` | `ERROR` | Cluster does not have a write quorum |
 | `503-3` | `ERROR` | Timed out waiting for the replication quorum *(the local commit **stands** and anti-entropy reconciles the lagging replicas — the write happened, so this is not a "it did not apply" error; blind retries are safe for `SAVE`/`DELETE`, which are idempotent, but not for a read-modify-write script)* |
 | `503-4` | `ERROR` | The collection's owner node is unreachable |
@@ -1390,7 +1402,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-9` | `ERROR` | The admin coordinator could not be resolved, retry shortly *(a coordinated admin op is never applied locally when no coordinator can be reached: an unreplicated DDL answered with `OK` would diverge the cluster silently)* |
 | `503-10` | `ERROR` | The collection has not reached this node yet, retry shortly *(a write routed to the collection's owner can arrive before the `CREATE_COLLECTION` that created it, since admin replication only waits for a quorum and the owner need not be in it — retryable, not a server fault)* |
 | `503-13` | `ERROR` | The server is shutting down, retry against another node or later *(answered to every request on an already-open connection once shutdown has begun, except `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION`; a write acknowledged before this point is indexed and durable, and one refused with it was not applied)* |
-| `503-14` | `ERROR` | Too many unauthenticated connections from this address (`maxUnauthenticatedConnectionsPerAddress`); sent as a `CLOSE_CONNECTION` frame and the connection is closed |
+| `503-14` | `ERROR` | Too many unauthenticated connections from this address (`maxUnauthenticatedConnectionsPerAddress`); sent as a `CLOSE_CONNECTION` frame and the connection is closed (with `tlsEnabled=true` it is closed before its handshake, with no frame) |
 
 ### Running the server
 
@@ -1424,7 +1436,8 @@ CI appends before starting it. The suites that start their own servers write tha
 
 On first startup, if no admin user exists, the server creates a superadmin from `defaultAdminUsername` / `defaultAdminPassword`. At that moment the password is **required**: at least 8 characters, and not `administrator`. The server refuses to start (one `FATAL` log line, non-zero exit, no port opened):
 
-- while `defaultAdminPassword` is the old well-known value `administrator`, **whether or not an admin already exists**. Edit `lwnrdb.cfg` and restart;
+- while `defaultAdminPassword` is the old well-known value `administrator` (in any letter case), **whether or not an admin already exists**. Edit `lwnrdb.cfg` and restart;
+- while `defaultAdminPassword` is on a short list of the most commonly used passwords (`password123`, `changeme`, `12345678`, `qwertyuiop`, `admin1234`, …, compared ignoring case) or equals `defaultAdminUsername` ignoring case, also whether or not an admin already exists;
 - while `defaultAdminPassword` is blank or missing **and** no admin user exists yet, since there would be no way to bootstrap one.
 
 Once an admin exists, `defaultAdminUsername` / `defaultAdminPassword` are ignored and the password key may be removed from `lwnrdb.cfg`. The check reads only the configured value, never the stored hash, so a deployment whose admin was created with `administrator` and whose config no longer says so starts normally: **change that admin's password with [`SET_PASSWORD`](#set_password)**, because the server cannot tell.
@@ -1440,12 +1453,14 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | Key | Rule |
 |---|---|
 | `port` | Valid number, 1–65535 |
-| `maxConnections` | Valid number ≥ 0. `0` means unlimited connections. Counts client sockets only |
+| `bindAddress` | Interface the client port binds to: an IP literal or a host name. Blank (the default) binds every interface; `127.0.0.1` accepts only local clients |
+| `maxConnections` | Valid number ≥ 0. `0` means unlimited connections. Counts client sockets only. Like every protective limit where `0` turns the limit off (`maxUnauthenticatedConnectionsPerAddress`, `maxUnauthenticatedInvalidRequests`, `maxFailedAuthAttempts`, `authFailureDelayBaseMs`, `transactionMaxOps`, `transactionMaxAgeMs`, `maxListensPerConnection`, `maxListens`, `maxFilterOperands`, `aggregateTimeoutMs`, `maxConcurrentScripts`, `maxConcurrentScriptsPerUser`, `maxConcurrentScriptsPerDatabase`), a `0` here is named in one `SECURITY WARNING` at startup |
 | `maxFailedAuthAttempts` | Valid number ≥ 0 (default `5`). Failed `AUTHENTICATE`s one connection may make; the last one answers `401-4` and closes the connection. Never reset by a success. `0` disables the cap (the delay still applies) |
 | `authFailureDelayBaseMs` | Valid number ≥ 0 (default `250`). Delay before the next `AUTHENTICATE` for a username from the same address after a failure, doubled per consecutive failure. `0` disables the delay |
 | `authFailureDelayMaxMs` | Valid number ≥ 0 and ≥ `authFailureDelayBaseMs` (default `30000`). Cap on that delay |
 | `maxConcurrentPasswordChecks` | Valid number ≥ 0 (default `0`, one per available processor). Password hashes allowed to run at once |
 | `maxRequestSize` | Human-readable size (default `64Mb`), at least `maxEntrySize` and at most `1Gb`. Largest request line an authenticated connection may send; a longer one is answered `400-22` and the connection closed. Before authenticating a line is capped at 64Kb whatever this says |
+| `clientOutboundQueueMaxBytes` | Human-readable size (default `16Mb`). Largest unread backlog of responses and LISTEN updates one connection may hold; past it the connection's listens end, `413-1` is queued and the connection is closed. A single larger response is still delivered when nothing waits behind it |
 | `authTimeoutMs` | Valid number ≥ 1 (default `10000`). Milliseconds a new connection has to authenticate, counted from accept and never extended; then `408-4` and the connection is closed |
 | `transactionIdleTimeoutMs` | Valid number ≥ 1 (default `30000`). Milliseconds a connection with an open transaction may stay silent before the transaction is rolled back and its locks released; the next request answers `409-16` once |
 | `filePath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing; see [File permissions](#file-permissions) |
@@ -1454,17 +1469,18 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxLogFiles` | Valid number ≥ 1 |
 | `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
-| `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one document may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step); a document that exhausts it is refused with `400-23`. Validation runs under the collection write lock, so raising it raises the worst-case time one write holds that lock |
+| `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
+| `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
 | `defaultAdminUsername` | 3–64 characters from `A-Z a-z 0-9 _ -`, the same rule `CREATE_USER` applies (cluster peers refuse to replicate any other user name). The server refuses to start otherwise |
-| `defaultAdminPassword` | Required (at least 8 characters, not `administrator`) when no admin user exists; may be blank once one does. `administrator` is always refused at startup, and a non-blank value shorter than 8 characters is a validation error |
+| `defaultAdminPassword` | Required (at least 8 characters, not `administrator`) when no admin user exists; may be blank once one does. `administrator`, a commonly used password and the admin username itself (all ignoring case) are always refused at startup, and a non-blank value shorter than 8 characters is a validation error |
 | `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
 | `deadEvictionMs` | Valid number ≥ 1, and greater than `deadTimeoutMs`. Milliseconds a node must stay DEAD before it is dropped from the membership view. Until then it still counts towards the quorum denominator, so this must comfortably exceed any outage a node is expected to return from |
 | `deadProbeIntervalMs` | Valid number ≥ 1 (default `10000`), and not smaller than `gossipIntervalMs`. How often a peer this node sees as `SUSPECT` or `DEAD` is probed with a gossip message. This is how two sides of a partition that each marked the other `DEAD` find each other again once it heals |
 | `shutdownTimeoutMs` | Valid number ≥ 1 (default `15000`). Total budget for a graceful shutdown — refusing new connections, releasing open transactions, draining the trigger and background-index queues. Work still outstanding when it expires is abandoned with a warning naming what was dropped |
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected. When `false` (the default), a `SECURITY WARNING` is logged at every startup |
-| `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there, owner-only (`0600`, in a folder created `0700`) |
-| `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required when `tlsEnabled=true`. While it is the shipped `change_it`, a `SECURITY WARNING` is logged at every startup with TLS on |
+| `tlsKeystorePath` | Path to a PKCS12 keystore. Used when `tlsEnabled=true` or when `clusterEnabled` and `clusterTlsEnabled` are both `true`; its parent directory must then be writable. If the file is absent a self-signed keystore is generated there, owner-only (`0600`, in a folder created `0700`). When an existing keystore is loaded, a certificate that has expired or expires within 30 days is named in a `SECURITY WARNING` |
+| `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required whenever the keystore is used (`tlsEnabled=true`, or cluster TLS). While it is the shipped `change_it`, a `SECURITY WARNING` is logged at every startup that uses the keystore |
 | `clusterEnabled` | `true` or `false`. Master switch for multi-node clustering. When `false` the node runs standalone (default) |
 | `clusterPort` | Valid number 1–65535, different from `port`. Node-to-node channel |
 | `clusterBindAddress` | Interface the cluster server binds to |
@@ -1496,23 +1512,30 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxSourceBytes` | Human-readable size > 0. Max accepted script source; larger is rejected with `400-10` |
 | `scriptMaxMemoryBytes` | Human-readable size > 0. Max bulk memory a script run may allocate; exceeding it aborts with `400-12`. Bounds the allocations that are proportional to a script-supplied length (a huge `repeat`/`padStart`, a dense array, a typed array, a `join`); ordinary small allocations are bounded by `scriptInstructionBudget` instead |
 | `scriptMaxResultBytes` | Human-readable size > 0 (default `16Mb`). Max size of the value a script returns; a larger result fails the run with `400-15` (the `console` output still comes back). Use `db.cursor` to process more data than can be returned |
+| `scriptMaxArrayLength` | Valid number ≥ 1 (default `16777216`). Longest array-like a script may expand in one native step (`apply` and `Reflect.apply`/`construct` argument lists, `Vector.from`, `Array.fromAsync`); a longer one fails the run with `400-30` before anything is allocated |
 | `scriptCursorBatchSize` | Valid number ≥ 1 (default `500`). Default number of documents `db.cursor` fetches per batch |
 | `scriptCursorMaxBatchSize` | Valid number ≥ 1 (default `5000`), and ≥ `scriptCursorBatchSize`. Upper clamp for a caller-supplied `batchSize`, so one call cannot materialise an unbounded batch |
 | `aggregationScriptInstructionBudget` | Valid number ≥ 1 (default `1000000`). Max instructions **all** the [script operators](#script-operators-simplejs-in-the-pipeline) in one pipeline may execute before the query aborts with `400-11`. Per pipeline, not per document — one interpreter serves the whole query, so a runaway predicate aborts it rather than getting a fresh budget per row |
 | `aggregationScriptTimeoutMs` | Valid number ≥ 1 (default `2000`). Wall clock for the same set of operators, also per pipeline; exceeding it aborts the query with `408-1` |
 | `aggregationScriptMaxSourceBytes` | Human-readable size > 0 (default `16Kb`). Max source size of a single script operator; a larger one is rejected with `400-10` |
 | `maxConcurrentScripts` | Valid number ≥ 0 (default `16`); `0` disables the cap. Max client-initiated script runs on this node at once; a caller refused after waiting `scriptQueueWaitMs` gets `503-6`. Triggers and schedules are bounded by their own pools instead, so the node-wide ceiling on concurrent interpreters is `maxConcurrentScripts + triggerThreads + scheduleThreads` — and that sum × `scriptMaxMemoryBytes` is the worst-case script heap, **additive** with `maxMemory` and the metadata cache budgets |
+| `maxConcurrentScriptsPerUser` | Valid number ≥ 0 (default `4`); `0` disables the slice. Max script runs one user may have on this node at once — a trigger or schedule counts against its definer. Checked before the node-wide wait and never waits itself: a caller at its own ceiling gets `503-6` naming `user` at once. A trigger refused here is retried after `triggerRetryBackoffMs` without consuming an attempt; a scheduled run refused here skips that occurrence |
+| `maxConcurrentScriptsPerDatabase` | Valid number ≥ 0 (default `8`); `0` disables the slice. The same bound per database, `503-6` naming `database` |
 | `scriptQueueWaitMs` | Valid number ≥ 0 (default `250`); `0` rejects immediately. How long a run waits for a permit before `503-6`. The wait absorbs bursts so a short spike queues instead of erroring; it may legally exceed `scriptTimeoutMs` |
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
 | `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
 | `scriptProcedureImportEnabled` | `true` or `false` (default `true`). Whether a script may import a stored procedure of its own database as a module with `import … from "procedures/<name>"`. On by default, unlike `scriptTextImportEnabled`: `importText` evaluates a caller-supplied string, whereas a procedure import evaluates code only `SAVE_PROCEDURE` could have installed |
 | `procedureCacheSize` | Compiled stored procedures retained per node (>= 0, default `128`); keyed by procedure version, so a save can never serve a stale entry. `0` compiles on every call |
+| `procedureCacheMaxBytes` | Valid size > 0 (default `16Mb`). Estimated heap the compiled-program caches (stored procedures and parsed `RUN_SCRIPT` programs) may hold, counted from each program's source length; whichever of this and `procedureCacheSize` is reached first evicts the least recently used program, and a program larger than the whole budget is compiled but not kept |
+| `maxProceduresPerDatabase` | Valid number ≥ 1 (default `500`). A `SAVE_PROCEDURE` creating one more is refused with `400-34`; replacing an existing one is always allowed |
 | `metadataCacheMaxBytes` | Human-readable size > 0 (default `72Mb`). One memory bound shared by the byte-budgeted metadata caches: stored-procedure sources, collection schemas and schedule definitions. Separate from `maxMemory`, which bounds the user document/index cache only |
 | `metadataCacheMaxEntries` | Entries in the count-budgeted metadata caches (>= 0, default `4096`): the per-collection trigger lists, and the remembered "no such procedure/schema" answers. Bounded by count, not bytes — both are small and read on a hot path. `0` reads from disk every time |
 | `triggersEnabled` | `true` or `false` (default `false`). Whether committed writes fire triggers. Separate from `scriptsEnabled` because a trigger runs code with no client asking for it; trigger DDL works either way |
 | `triggerThreads` | Workers on the trigger executor (>= 1, default `2`). Its own pool, not the background index queue, so a slow trigger cannot stall field-index maintenance |
 | `triggerQueueSize` | Bounded trigger queue (>= 1, default `10000`). On overflow the oldest queued event is dropped with a warning and counted in `GET_DATABASE_STATS` |
+| `triggerQueueMaxBytes` | Human-readable size > 0 (default `64Mb`). Byte bound on the same queue, with the same overflow rule. A queued `CREATED`/`UPDATED` event holds only ids (the documents are re-read when it runs); a `DELETED` event holds the deleted documents, which is what this bounds |
+| `triggerMaxPerCollection` | Valid number ≥ 1 (default `50`). A `SAVE_TRIGGER` creating one more trigger on the collection is refused with `400-32` |
 | `triggerMaxDepth` | How deep a chain of trigger-fired writes may go (>= 0, default `3`). A trigger with `allowCascade=false` (the default) already fires nothing above depth 0 |
 | `triggerTimeoutMs` | Max wall-clock ms a single trigger run may take (>= 1, default `1000`). Tighter than `scriptTimeoutMs` because nobody is waiting on the result |
 | `triggerRunLogEnabled` | `true` or `false` (default `true`). Whether a fired trigger is recorded durably before it runs, so a run queued when the process dies is replayed at startup. Effects and the consumption of the record commit together, so a replay cannot double-apply; off trades that for one less admin write per fired trigger. The record is **node-local** — see [docs/clustering.md](docs/clustering.md) → *Pending trigger runs are node-local* |
@@ -1526,6 +1549,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scheduleRefreshMs` | Valid number ≥ 1 (default `60000`). How often the whole schedule registry is rebuilt from disk. The DDL path updates it directly; this is the safety net for schedules that arrived through cluster replication or admin anti-entropy |
 | `scheduleTimeoutMs` | Valid number ≥ 1 (default `30000`). Default wall clock for one scheduled run; a schedule may override it with its own `timeoutMs` |
 | `scheduleMaxPerDatabase` | Valid number ≥ 1 (default `100`). Cap on schedules per database, so a `SAVE_SCHEDULE` loop cannot make the per-tick scan unbounded |
+| `scheduleMaxTotalPerUser` | Valid number ≥ 1 (default `500`). Cap on the schedules one user defines across every database, so `MANAGE` on many databases cannot multiply `scheduleMaxPerDatabase`; past it `400-33` |
+| `scheduleMinIntervalMs` | Valid number ≥ 1 (default `1000`). Smallest `intervalMs` a `SAVE_SCHEDULE` may ask for (`400-35` below it); a stored or replicated definition below it fires at this interval |
 | `faultInjectionEnabled` | `true` or `false` (default `false`). **Testing and debugging only — never in production.** Lets an admin arm the [fault injection](#fault-injection-testing-and-debugging-only) points over the wire, which can pause or halt the node. While off, those operations answer `403-3` and every point costs one field read. A node started with it on logs a `SECURITY WARNING` |
 
 ```
@@ -1544,8 +1569,10 @@ filePath=db
 logPath=logs
 maxPageSize=2Mb
 maxEntrySize=1Mb
-# schema evaluation steps one document may spend before it is refused (400-23)
+# schema evaluation steps one write request may spend before it is refused (400-23)
 schemaValidationBudget=5000000
+# longest pattern / patternProperties key SAVE_SCHEMA accepts (400-31)
+schemaMaxPatternLength=4096
 defaultAdminUsername=admin
 # required until the first admin exists; never 'administrator'
 defaultAdminPassword=<choose-a-strong-password>
@@ -1555,6 +1582,8 @@ transactionLockTimeoutMs=5000
 shutdownTimeoutMs=15000
 # largest request line once authenticated (64Kb before); longer lines get 400-22 and are closed
 maxRequestSize=64Mb
+# unread responses one connection may leave queued before it is closed (413-1)
+clientOutboundQueueMaxBytes=16Mb
 # ms a new connection has to authenticate (408-4), and ms an open transaction may sit idle (409-16)
 authTimeoutMs=10000
 transactionIdleTimeoutMs=30000
@@ -1583,15 +1612,16 @@ scriptMaxMemoryBytes=64Mb
 # % of max heap the post-GC live set may reach before a script allocating more is stopped
 scriptHeapCeilingPercent=75
 scriptMaxResultBytes=16Mb
+scriptMaxArrayLength=16777216
 scriptCursorBatchSize=500
 scriptCursorMaxBatchSize=5000
 # node-wide script concurrency cap; x scriptMaxMemoryBytes is the worst-case script heap
 maxConcurrentScripts=16
 scriptQueueWaitMs=250
-# per-tenant slices taken inside the node-wide permit; 0 disables. They do not wait: a caller at
-# its own ceiling is refused at once rather than occupying a node-wide permit while it queues
-maxConcurrentScriptsPerUser=0
-maxConcurrentScriptsPerDatabase=0
+# per-tenant slices checked before the node-wide wait; 0 disables. They do not wait: a caller at
+# its own ceiling is refused at once. Triggers and schedules take them too, as their definer
+maxConcurrentScriptsPerUser=4
+maxConcurrentScriptsPerDatabase=8
 # outbound HTTP from scripts. On by default so the capability is discoverable; the allowlist takes
 # exact hosts, *.sub.domain wildcards, or a bare * for every PUBLIC host (an EMPTY list denies
 # everything). Private, loopback and link-local addresses need an exact entry. Ships as * and warns
@@ -1610,12 +1640,16 @@ scriptRunHistoryIncludeLogs=false
 scriptRunHistoryMaxErrorChars=2000
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
+procedureCacheMaxBytes=16Mb
+maxProceduresPerDatabase=500
 # metadata cache bounds - budgeted SEPARATELY from maxMemory (see below)
 metadataCacheMaxBytes=72Mb
 metadataCacheMaxEntries=4096
 triggersEnabled=false
 triggerThreads=2
 triggerQueueSize=10000
+triggerQueueMaxBytes=64Mb
+triggerMaxPerCollection=50
 triggerMaxDepth=3
 triggerTimeoutMs=1000
 # durable pending trigger runs, so a run queued when the process dies is replayed at startup
@@ -1679,12 +1713,13 @@ re-encrypt the keystore under it).
 
 ### File permissions
 
-On POSIX filesystems, the folders the server creates — the data root (`filePath`), the log
+On POSIX filesystems, the folders the server creates — the data root (`filePath`), every database,
+collection, `admin/pages`, `.procedures`/`.schedules` and `cluster/` folder under it, the log
 folder (`logPath`) and the generated keystore's folder — are created `0700`, and a generated
 keystore `0600`, with the mode set in the creating call so there is no moment they are readable
 by others. A `0700` data root already shields everything under it, including the password hashes
 in `admin/` and the cluster state in `cluster/`. Existing paths are **never** `chmod`-ed: instead a
-`SECURITY WARNING` names each of the data root, the log folder, the keystore (with TLS on) and
+`SECURITY WARNING` names each of the data root, the log folder, the keystore (with client or cluster TLS on) and
 `lwnrdb.cfg` (it holds `defaultAdminPassword`, `tlsKeystorePassword` and `clusterSecret`) that group
 or other users can access, with the `chmod 700`/`chmod 600` that fixes it. A Docker volume created
 by the runtime is often `0755`, so that warning is expected there until you tighten it. A permission

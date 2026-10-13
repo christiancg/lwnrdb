@@ -3,6 +3,7 @@ package org.techhouse.simplejs.internal.interpreter;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.internal.Completion;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -104,10 +105,9 @@ final class ForInEnumeration {
         }
         if (target instanceof JsArray array) {
             final var keys = new ArrayList<String>();
-            for (var i = 0; i < array.length(); i++) {
-                if (!array.isHole(i)) {
-                    keys.add(Integer.toString(i));
-                }
+            for (final var index : array.populatedIndices()) {
+                InterpreterOps.pace(interp.ops(), keys.size());
+                keys.add(Integer.toString(index));
             }
             keys.addAll(array.namedPropertyKeys());
             return keys;

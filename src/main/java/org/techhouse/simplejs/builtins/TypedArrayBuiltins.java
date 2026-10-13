@@ -167,7 +167,7 @@ public final class TypedArrayBuiltins {
 
     public static List<JsValue> sourceItems(JsValue source, IterableToList iterableToList, InterpreterOps ops) {
         if (source instanceof JsTypedArray typed) {
-            return elements(typed);
+            return elements(typed, ops);
         }
         if (ops == null || InterpreterUtils.isCallable(ops.getMember(source, JsSymbol.ITERATOR))) {
             return InterpreterUtils.arrayLikeOrIterableToList(source, iterableToList, ops);
@@ -252,9 +252,12 @@ public final class TypedArrayBuiltins {
         return created;
     }
 
-    public static List<JsValue> elements(JsTypedArray typed) {
-        final var result = new ArrayList<JsValue>();
-        for (var i = 0; i < typed.length(); i++) {
+    public static List<JsValue> elements(JsTypedArray typed, InterpreterOps ops) {
+        final var length = typed.length();
+        InterpreterOps.chargeElements(ops, length);
+        final var result = new ArrayList<JsValue>(length);
+        for (var i = 0; i < length; i++) {
+            InterpreterOps.pace(ops, i);
             result.add(typed.getElement(i));
         }
         return result;

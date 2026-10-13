@@ -6,6 +6,7 @@ import java.io.OutputStreamWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import javax.net.ssl.SSLException;
@@ -14,9 +15,13 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.BoundedLineReader;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.ConnectionLog;
+import org.techhouse.conn.HandshakeDeadline;
 import org.techhouse.conn.InFlightRequests;
+import org.techhouse.conn.SocketClosing;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.RequestTooLargeException;
@@ -64,9 +69,15 @@ public class ClusterConnectionHandler implements Runnable {
 
     @Override
     public void run() {
+        final var handshaking = new AtomicBoolean(true);
+        final var deadline = HandshakeDeadline.arm(socket,
+                clusterConfig.handshakeTimeoutMs() + Globals.HANDSHAKE_DEADLINE_GRACE_MS, handshaking::get);
         try (socket) {
+            SocketClosing.boundTlsClose(socket);
             final var reader = new BoundedLineReader(socket.getInputStream(), socket::setSoTimeout);
             final var accepted = ClusterHandshake.accept(reader);
+            handshaking.set(false);
+            deadline.disarm();
             handshakeDone.run();
             if (accepted) {
                 serve(reader);
@@ -74,10 +85,11 @@ public class ClusterConnectionHandler implements Runnable {
         } catch (RequestTooLargeException e) {
             logger.warning("Closed a cluster connection: a frame exceeded clusterMaxFrameSize");
         } catch (SSLException e) {
-            logger.warning("Rejected cluster connection: TLS handshake failed");
+            ConnectionLog.warn(logger, "Rejected cluster connection: TLS handshake failed");
         } catch (IOException e) {
             logger.warning("Cluster connection error: " + e.getMessage());
         } finally {
+            deadline.disarm();
             handshakeDone.run();
         }
     }

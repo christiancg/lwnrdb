@@ -218,12 +218,12 @@ public final class ConfigurationValidator {
             errors.add("tlsEnabled must be true or false, but was: " + enabledValue);
             return;
         }
-        if (!Boolean.parseBoolean(enabledValue.trim())) {
+        if (!Boolean.parseBoolean(enabledValue.trim()) && !usesClusterTls(configs)) {
             return;
         }
         final var keystorePath = configs.get("tlsKeystorePath");
         if (keystorePath == null || keystorePath.isBlank()) {
-            errors.add("tlsKeystorePath must be a non-blank path when tlsEnabled is true");
+            errors.add("tlsKeystorePath must be a non-blank path when tlsEnabled or clusterTlsEnabled is true");
         } else {
             final Path parent = Paths.get(keystorePath.trim()).toAbsolutePath().getParent();
             if (parent != null) {
@@ -240,8 +240,13 @@ public final class ConfigurationValidator {
         }
         final var keystorePassword = configs.get("tlsKeystorePassword");
         if (keystorePassword == null || keystorePassword.isBlank()) {
-            errors.add("tlsKeystorePassword must be a non-blank string when tlsEnabled is true");
+            errors.add("tlsKeystorePassword must be a non-blank string when tlsEnabled or clusterTlsEnabled is true");
         }
+    }
+
+    private static boolean usesClusterTls(Map<String, String> configs) {
+        return Boolean.parseBoolean(configs.getOrDefault("clusterEnabled", "false").trim())
+                && Boolean.parseBoolean(configs.getOrDefault("clusterTlsEnabled", "false").trim());
     }
 
     private static void validateWritablePath(Map<String, String> configs, String key, List<String> errors) {

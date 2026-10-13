@@ -33,6 +33,7 @@ import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER;
 import java.util.List;
 import java.util.Locale;
 import org.techhouse.ejson.internal.NumberFormatter;
+import org.techhouse.simplejs.builtins.string.StringSearch;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
@@ -121,15 +122,20 @@ public final class StringBuiltins {
             final var segment = ops == null
                     ? elementOf(literals, i)
                     : ops.getMember(literals, new JsString(Integer.toString(i)));
-            result.append(JsCoercion.toStr(segment, ops));
+            appendCharged(result, JsCoercion.toStr(segment, ops), ops);
             if (i + 1 == count) {
                 break;
             }
             if (i + 1 < args.size()) {
-                result.append(JsCoercion.toStr(args.get(i + 1), ops));
+                appendCharged(result, JsCoercion.toStr(args.get(i + 1), ops), ops);
             }
         }
         return result.toString();
+    }
+
+    private static void appendCharged(StringBuilder result, String text, InterpreterOps ops) {
+        InterpreterOps.chargeChars(ops, text.length());
+        result.append(text);
     }
 
     public static void requireObject(JsValue value) {
@@ -187,7 +193,7 @@ public final class StringBuiltins {
             case "includes" -> new JsNativeFunction("includes", (_, args) -> {
                 requireNotRegExp(args, "includes", ops);
                 final var search = str(args, 0, ops);
-                return JsBoolean.of(value.indexOf(search, startPosition(value, args, ops)) >= 0);
+                return JsBoolean.of(StringSearch.indexOf(value, search, startPosition(value, args, ops), ops) >= 0);
             });
             case "startsWith" -> new JsNativeFunction("startsWith", (_, args) -> {
                 requireNotRegExp(args, "startsWith", ops);

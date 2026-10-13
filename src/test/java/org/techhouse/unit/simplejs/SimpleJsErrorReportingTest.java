@@ -3,8 +3,11 @@ package org.techhouse.unit.simplejs;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.SimpleJs;
+import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
@@ -120,5 +123,32 @@ public class SimpleJsErrorReportingTest {
     @Test
     public void test_a_thrown_object_with_no_chain_at_all_still_reports() {
         assertEquals("Error", nameOf("throw Object.create(null);"));
+    }
+
+    @Test
+    public void test_a_huge_error_message_is_truncated_in_the_response() {
+        final var result = run("throw new Error('x'.repeat(100000));");
+        assertEquals("Error", result.getErrorName());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, result.getErrorMessage().length());
+    }
+
+    @Test
+    public void test_a_huge_thrown_name_and_message_are_clamped_to_the_configured_line_length() {
+        final var limits = new ResourceLimits(-1, -1, -1, true, false, List.of(), -1, -1, false, false,
+                ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.DEFAULT_MAX_LOG_LINES, 100);
+        final var result = simpleJs.run("throw { name: 'N'.repeat(10000), message: 'm'.repeat(10000) };",
+                new SimpleHostBindings(new JsonObject(), null, null, limits));
+        assertEquals("N".repeat(100), result.getErrorName());
+        assertEquals("m".repeat(100), result.getErrorMessage());
+    }
+
+    @Test
+    public void test_a_short_message_and_an_engine_error_name_are_not_clamped() {
+        final var limits = new ResourceLimits(-1, 50L, -1, true, false, List.of(), -1, -1, false, false,
+                ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.DEFAULT_MAX_LOG_LINES, 3);
+        final var result = simpleJs.run("while (true) {}",
+                new SimpleHostBindings(new JsonObject(), null, null, limits));
+        assertEquals("ScriptTimeoutError", result.getErrorName());
+        assertTrue(result.getErrorMessage().length() <= 3, result.getErrorMessage());
     }
 }

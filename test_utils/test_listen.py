@@ -612,6 +612,45 @@ def test_disconnect_cleanup(writer: Conn):
     check_code("STOP_LISTEN after disconnect → NOT_FOUND", r_stop, "NOT_FOUND", "404-7")
 
 
+BULKY_DOCS = 20
+BULKY_WRITES = 60
+
+
+def bulky_doc(i: int) -> dict:
+    return {"_id": f"bulky-{i % BULKY_DOCS}", "kind": "bulky", "n": i, "blob": "x" * 50_000}
+
+
+def test_a_non_reading_listener_is_disconnected_and_others_still_notified(writer: Conn):
+    section("LISTEN: a listener that stops reading is cut off; the others keep getting pushes")
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "bulky"}}]
+    for i in range(BULKY_DOCS):
+        save_doc(writer, bulky_doc(i))
+    slow = bu.non_reading_conn()
+    with Conn() as fast:
+        fast.authenticate()
+        check_status("the slow listener registers", listen(slow, steps), "OK")
+        r_fast = listen(fast, steps)
+        check_status("the reading listener registers", r_fast, "OK")
+
+        missed = []
+        for i in range(BULKY_DOCS, BULKY_DOCS + BULKY_WRITES):
+            save_doc(writer, bulky_doc(i))
+            pushed = fast.recv(timeout=10.0)
+            if pushed is None:
+                missed.append(i)
+                break
+        check("every write still reached the reading listener", not missed,
+              f"writes the reading listener never heard about: {missed}")
+
+        check("the slow listener's connection is closed once its backlog overflows",
+              bu.read_until_closed(slow, timeout=30.0), "the server still held the connection open")
+        stop_listen(fast, r_fast.get("listenId"))
+    slow.close()
+    for i in range(BULKY_DOCS):
+        delete_doc(writer, f"bulky-{i}")
+
+
 def test_a_connection_cannot_register_past_its_listen_limit():
     section("LISTEN: one connection is capped at maxListensPerConnection registrations")
 
@@ -805,6 +844,7 @@ def main():
                 test_dropping_the_collection_ends_the_listen(writer_conn, listener_conn)
                 test_dropping_a_joined_collection_ends_the_listen(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)
+                test_a_non_reading_listener_is_disconnected_and_others_still_notified(writer_conn)
 
             test_a_connection_cannot_register_past_its_listen_limit()
             test_unauthenticated_listen()

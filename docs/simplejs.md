@@ -315,9 +315,32 @@ host value exists, so the charge is a peak guard), every element `flat` writes, 
 `fetch` response, and `toHex`/`toBase64` output. A `RegExp` compiled at run time charges its parse
 for the duration of the parse, and the process-wide program cache keeps only patterns of at most
 4096 characters, evicting least recently used ones past one million cached source characters.
+Every native step that allocates in proportion to a script-supplied length charges before it
+allocates, computing the size in `long` so it cannot wrap to zero: growing an array through
+`length` or an index write past its end (or `Object.defineProperty` on either), the argument list
+`apply`, `Reflect.apply` and `Reflect.construct` build (credited back when the call returns),
+`Vector.from`, every `Iterator.prototype.windows` copy, `ArrayBuffer.prototype.slice` (including
+`slice(-Infinity)`), the boxed copies typed-array `sort`, `toSorted`, `toReversed` and `set` make,
+`String.raw`, the indentation and per-occurrence string text `JSON.stringify` renders, and the
+worst-case expansion of `normalize` (held only while it runs). An array-like whose `length` is
+above **`scriptMaxArrayLength`** (default 16 777 216) is refused before anything is allocated, as
+an untrappable `ScriptArrayTooLargeError` (`400-30`): `apply`/`Reflect.apply`/`Reflect.construct`
+argument lists, `Vector.from` and `Array.fromAsync`. The event loop also ticks once per microtask,
+so a promise chain that never yields to a timer (`Array.fromAsync` over a huge array-like) still
+meets the deadline. A `db.*` write payload is charged for every string and key occurrence it
+contains, not once per distinct string, so an object that shares one large string across many
+fields is refused on the memory budget before it reaches the collection lock; the charge is
+credited back once the payload is converted.
+
 `BigInt` parsing refuses more than `BigIntLimits.MAX_PARSE_DIGITS` (65 536) digits with a
 `RangeError` (the JDK's decimal parse is quadratic); a longer non-decimal `Number("0x…")` literal
-evaluates to `Infinity` without being parsed.
+and a longer `parseInt` digit run evaluate to `Infinity` (or the value of the digits left after
+leading zeros) without being parsed. Every promise (96 bytes) and every generator or `async`
+function coroutine (2Kb) is charged when it is created, since the run keeps them until it ends;
+a queued microtask (64 bytes) and a pending timer (96 bytes) are charged while they wait and
+released when they run or are cleared, so a backlog is bounded without taxing a long `await`
+loop. Spreading an array charges the slots its storage does not back, so `[...a]` over
+`a.length = 2 ** 32 - 1` fails on the budget instead of materialising four billion holes.
 
 What the static model still cannot see — many retained copies of a large string (`big + i`,
 `big.slice(1)`), a heap full of suspended coroutines — is caught by the **heap ceiling**
@@ -339,12 +362,23 @@ strings, `BigInt.prototype.toString` (by bit length squared), `crypto.hash`, `to
 and a regex compile. A single such call can still overrun the deadline by its own duration, never
 by more. The regex matcher charges one step for every 64 characters a simple quantifier scans, so
 a pattern that rescans a long input from every start position (`/a{1000000}/` against 999 999
-`a`s) runs into the budget instead of spending minutes between deadline samples.
+`a`s) runs into the budget instead of spending minutes between deadline samples. A literal string
+search (`indexOf`, `lastIndexOf`, `includes`, `split`, `replace`, `replaceAll`) whose worst case
+exceeds 2^24 character comparisons runs as a linear-time KMP scan (`string/StringSearch`) that
+ticks every 1024 characters, so a 4M-character haystack and a 4K-character near-miss needle
+cannot hold the thread for minutes between deadline samples; smaller searches keep the JDK's
+intrinsic. For-in and `Object.keys`/`values`/`entries` over an array walk only its populated
+indices (`JsArray.populatedIndices`), so a sparse `length` near 2^32 costs nothing.
 
 **Coroutine teardown.** At the end of a run every suspended generator or `async` function is
 cancelled once; its `finally` blocks run as the language requires, but a `yield` or `await`
 reached after the cancellation throws immediately instead of suspending, so `finally { yield }`
-can no longer park a virtual thread (and the whole realm it references) forever. A parser
+can no longer park a virtual thread (and the whole realm it references) forever. A coroutine that
+such a `finally` starts is registered while the teardown walks the list and is cancelled in the
+same pass. Per-realm engine state (the `parseInt`/`parseFloat` functions shared with `Number`, the
+iterator-helper prototypes, the stepping state of built-in iterators) lives on the realm's own
+objects (`JsObject` internal slot), never in a static map, so a finished run's realm is
+unreachable once its result is converted. A parser
 `StackOverflowError` on a deeply nested source is answered as a syntax error (`400-9` for
 `RUN_SCRIPT`, `400-13` for `SAVE_PROCEDURE`) without logging a stack trace.
 
@@ -369,14 +403,19 @@ script body, generator and async function runs on one) is relayed to the driver 
 before any generator or promise observer sees it, so a `StackOverflowError` deep inside an async
 function ends the run as `400-12` instead of hanging it with its admission permit held.
 
-Per-run budgets bound **one** run; `ops/ScriptAdmission` bounds their sum. It caps
+Per-run budgets bound **one** run; `ops/ScriptAdmission` bounds their sum. It first takes this
+caller's `maxConcurrentScriptsPerUser` (default 4) and this database's
+`maxConcurrentScriptsPerDatabase` (default 8) slice, without waiting, and only then caps
 client-initiated runs at `maxConcurrentScripts` (admitting after a bounded `scriptQueueWaitMs`
-wait, else `503-6`), then takes this caller's `maxConcurrentScriptsPerUser` and this database's
-`maxConcurrentScriptsPerDatabase` slice — the inner two without waiting, since a tenant already
-at its ceiling should be told at once rather than occupy a node-wide permit while it queues. The
-returned `Permit` records which pools it took, so an inner refusal releases the outer one.
-Triggers, hooks and schedules are exempt: they are already bounded by their own worker pools, and
-a trigger refused for want of a permit would be a *dropped* trigger, not a retried one. The
+wait, else `503-6`): a tenant already at its ceiling is told at once instead of queueing for a
+node-wide permit it could not use. The returned `Permit` records which pools it took, so a
+node-wide refusal releases the slices. Triggers and schedules take the two slices as their
+definer (`acquireSlices`), not the node-wide permit: they are already bounded by their own worker
+pools, but without the slices one tenant's automation could hold every interpreter its users'
+scripts compete for. A trigger refused a slice is re-queued after a backoff without consuming an
+attempt (dead-lettered only once `triggerRunRetentionMs` has passed since it fired), so it is
+delayed, never dropped; a scheduled run refused one skips that occurrence. Before hooks stay
+exempt — they run inline under the write lock, where a refusal would be a failed write. The
 node-wide ceiling on concurrent interpreters is therefore
 `maxConcurrentScripts + triggerThreads + scheduleThreads`, and that sum times
 `scriptMaxMemoryBytes` is the worst-case script heap to size `-Xmx` against — additive with
@@ -454,7 +493,13 @@ digits, `_` or `-`, so `/`, `..`, `\`, NUL and over-long names never reach the f
 the run's own database is searched), a missing or disabled procedure
 answers `Cannot find module`, and the module id carries the procedure's version so a
 `CompiledProcedureCache` entry can be reused across runs. Authority is the **importer's**:
-importing widens what code is reachable, never what it may do. `SAVE_PROCEDURE` walks the
+importing widens what code is reachable, never what it may do. Reading the code is a separate
+right: when the run's user lacks script `MANAGE` on the database (and is neither its owner nor an
+admin), `EnforcingDatabaseAccess.mayReadProcedureSource` is false and the resolver answers
+`ResolvedModule.withHiddenSource`, which `ModuleEvaluator` parses with
+`Parser.parseWithoutSourceText` (no spans, never the shared cached parse), so `toString()` of an
+imported function or class is the `NativeFunction` stub — the same rule `LIST_PROCEDURES`
+applies to `includeSource`. `SAVE_PROCEDURE` walks the
 compiled program's static specifiers and refuses an unresolvable `procedures/` target with
 `400-18`, so a typo reaches whoever installs the procedure — which means install order matters.
 
@@ -657,7 +702,7 @@ procedure makes is authorized again against the definer's own grants.
 
 **Errors** map to: `403-2` scripting disabled, `404-4` unknown database, `400-10` source too
 large, `400-9` threw or would not parse, `400-11` budget/depth, `400-12` memory, `400-15` result
-too large, `400-20` pending result, `408-1` timeout, `408-2` cancelled, `409-6` inside an open
+too large, `400-20` pending result, `400-30` an array-like past `scriptMaxArrayLength`, `408-1` timeout, `408-2` cancelled, `409-6` inside an open
 client transaction. Console output and a stack ride along on every outcome.
 
 ### Triggers
@@ -672,7 +717,17 @@ depend on who wrote, and would fail for exactly the low-privilege users most wor
 as a WARN in a log the writer never sees. Two consequences: a definer who no longer exists
 **disables** the trigger (falling back to the writer would silently reinstate invoker rights, and
 falling back to an admin would let *deleting* a user widen a trigger's authority), and a definer
-whose permissions are later reduced silently narrows it.
+whose permissions are later reduced narrows it. `ops/DefinerAuthority` re-checks the definer every
+time an after trigger or a schedule fires — a recovery replay and a `RESOLVE_TRIGGER_RUN` replay
+included, since both go through the same dispatch: an after trigger needs script `RUN` on the
+database and `READ` on its collection (the documents it is handed are that collection's), a
+schedule needs `RUN`. A definer that is gone or lacks them skips the run and **disables** the
+definition with a stored `disabledReason`, so a later re-grant (or a re-created user of the same
+name) does not silently revive it; its owner re-saves it. The disable is a definition write, so it
+is made only where definitions are decided — a standalone node, or the cluster's admin coordinator
+with quorum and a completed admin sync, which replicates it like any other definition change. Any
+other node still skips every run and leaves the definition as it is. Before hooks are not
+re-checked: a hook has no `db` and no `fetch`, so it can hand nothing to its definer.
 
 The definer is always the saving user: no request field can name another one, so a client cannot
 install a trigger that runs as someone else. Peers never derive it either — they receive the
@@ -779,7 +834,15 @@ once per replica. Enqueueing is one map lookup and a queue offer, so it is safe 
 lock. `bckg_ops/TriggerExecutor` runs them on **its own** bounded queue and workers, deliberately
 not the background index queue: a trigger runs arbitrary user code, and sharing that queue would
 let one slow trigger stall field-index maintenance for every collection. On overflow the oldest
-queued run is dead-lettered and counted. Cascades carry `triggerDepth + 1` on the request itself — a field,
+queued run is dead-lettered and counted. The queue is bounded by count (`triggerQueueSize`) and by
+bytes (`triggerQueueMaxBytes`): a queued `CREATED`/`UPDATED` event keeps only its ids and re-reads
+the documents when it runs (a retry always did), so only a `DELETED` event's snapshot, which has
+nothing to re-read, takes real space. Dropping a collection or database discards its queued events
+and every pending or dead-lettered run record, so a same-name collection created later never
+receives the dropped one's documents. A standalone node garbage-collects stranded and expired
+dead-lettered runs every minute, not only at startup; a cluster node already does it in its
+transaction recovery sweep. A collection holds at most `triggerMaxPerCollection` triggers
+(`400-32`). Cascades carry `triggerDepth + 1` on the request itself — a field,
 not a `ThreadLocal`, so the bound survives a cluster forward — zeroed for client requests;
 `allowCascade` defaults to false.
 
@@ -848,6 +911,11 @@ permitted. `bckg_ops/ScheduleExecutor` owns the ticker plus its own queue and wo
 anything this node does not own or that is still running. A run still waiting in that queue when its
 schedule is deleted, disabled or changed is skipped: the dispatcher runs it only while it is still the
 registered entry, so an acknowledged `DELETE_SCHEDULE` never fires a stale definition afterwards.
+A run takes its definer's admission slices and is skipped (recorded as `SKIPPED`) when they are
+full. `intervalMs` may not be below `scheduleMinIntervalMs` (`400-35`), and a stored or replicated
+definition below it fires at that minimum; one user may define at most `scheduleMaxTotalPerUser`
+schedules across every database (`400-33`), counted from the registry under one lock so two
+databases' saves cannot both take the last slot.
 
 ### Pipeline scripts
 
@@ -932,18 +1000,19 @@ influence any of them.
 | Group | Keys |
 |---|---|
 | Enable | `scriptsEnabled`, `triggersEnabled`, `schedulesEnabled` |
-| Sandbox | `scriptInstructionBudget`, `scriptTimeoutMs`, `scriptMaxDepth`, `scriptMaxMemoryBytes`, `scriptMaxSourceBytes`, `scriptMaxResultBytes` |
+| Sandbox | `scriptInstructionBudget`, `scriptTimeoutMs`, `scriptMaxDepth`, `scriptMaxMemoryBytes`, `scriptMaxSourceBytes`, `scriptMaxResultBytes`, `scriptMaxArrayLength` |
 | Logs | `scriptMaxLogLines`, `scriptMaxLogLineChars` |
 | Imports | `scriptProcedureImportEnabled` (on), `scriptTextImportEnabled` (off) |
 | Cursors | `scriptCursorBatchSize`, `scriptCursorMaxBatchSize` |
 | Egress | `scriptFetchEnabled` (on), `scriptFetchAllowlist` (`*`, public hosts only), `scriptFetchTimeoutMs`, `scriptFetchMaxResponseBytes`, `scriptFetchMaxConcurrent` (8) |
 | Admission | `maxConcurrentScripts`, `scriptQueueWaitMs`, `maxConcurrentScriptsPerUser`, `maxConcurrentScriptsPerDatabase` |
-| Caching | `procedureCacheSize` (compiled procedures and parsed ad-hoc scripts), `metadataCacheMaxBytes`, `metadataCacheMaxEntries` |
+| Caching | `procedureCacheSize` and `procedureCacheMaxBytes` (compiled procedures and parsed ad-hoc scripts, bounded by entries and by estimated heap; compiled outside the cache lock), `metadataCacheMaxBytes`, `metadataCacheMaxEntries` |
+| Procedures | `maxProceduresPerDatabase` |
 | Locale | `scriptTimeZone` (UTC), `scriptLocale` (en-US) |
-| Triggers | `triggerThreads`, `triggerQueueSize`, `triggerTimeoutMs`, `triggerMaxDepth`, `triggerRunLogEnabled`, `triggerRunRetentionMs`, `triggerMaxAttempts`, `triggerRetryBackoffMs`, `triggerRetryMaxBackoffMs`, `triggerDeadLetterRetentionMs` |
+| Triggers | `triggerThreads`, `triggerQueueSize`, `triggerQueueMaxBytes`, `triggerMaxPerCollection`, `triggerTimeoutMs`, `triggerMaxDepth`, `triggerRunLogEnabled`, `triggerRunRetentionMs`, `triggerMaxAttempts`, `triggerRetryBackoffMs`, `triggerRetryMaxBackoffMs`, `triggerDeadLetterRetentionMs` |
 | Metadata caches | `metadataCacheMaxBytes` (procedure sources, schemas, schedule definitions), `metadataCacheMaxEntries` (trigger lists, negative lookups) |
 | Before hooks | `beforeHookInstructionBudget`, `beforeHookTimeoutMs` |
-| Schedules | `scheduleThreads`, `scheduleQueueSize`, `scheduleTickMs`, `scheduleRefreshMs`, `scheduleTimeoutMs`, `scheduleMaxPerDatabase` |
+| Schedules | `scheduleThreads`, `scheduleQueueSize`, `scheduleTickMs`, `scheduleRefreshMs`, `scheduleTimeoutMs`, `scheduleMaxPerDatabase`, `scheduleMaxTotalPerUser`, `scheduleMinIntervalMs` |
 | Pipeline scripts | `aggregationScriptInstructionBudget`, `aggregationScriptTimeoutMs`, `aggregationScriptMaxSourceBytes` |
 | History | `scriptRunHistoryEnabled`, `scriptRunHistoryKinds`, `scriptRunHistoryRetentionMs`, `scriptRunHistoryIncludeLogs`, `scriptRunHistoryMaxErrorChars` |
 | Cluster | `scriptRoutingEnabled`, `scriptLocalityWeight` |

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -24,6 +25,7 @@ import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
@@ -40,6 +42,7 @@ public final class DatabaseOperationHelper {
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
 
     private DatabaseOperationHelper() {
     }
@@ -202,6 +205,8 @@ public final class DatabaseOperationHelper {
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);
         listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
+        triggerExecutor.discardQueuedFor(dbName, null);
+        TriggerRunLog.discardAllFor(dbName, null);
         GrantPruner.forDroppedDatabase(dbName, grantVersion);
         return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
     }

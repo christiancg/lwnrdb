@@ -161,6 +161,11 @@ public final class InterpreterOpsBridge implements org.techhouse.simplejs.builti
     }
 
     @Override
+    public int maxArrayLength() {
+        return interp.host.limits().maxArrayLength();
+    }
+
+    @Override
     public void tick(long weight) {
         interp.tick(weight);
     }

@@ -221,6 +221,26 @@ public final class TriggerRunLog {
         logger.info("Garbage-collected " + stale.size() + " stranded trigger run record(s)");
     }
 
+    public static void discardAllFor(String dbName, String collName) {
+        try {
+            final var dropped = new ArrayList<String>();
+            for (final var entry : pending()) {
+                if (dbName.equals(entry.getDbName()) && (collName == null || collName.equals(entry.getCollName()))) {
+                    dropped.add(entry.get_id());
+                }
+            }
+            if (!dropped.isEmpty()) {
+                AdminOperationHelper.deleteTriggerRuns(dropped);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error("Interrupted while discarding the trigger runs of " + dbName + "|" + collName, e);
+        } catch (Exception e) {
+            logger.error("Failed to discard the trigger runs of " + dbName + "|" + collName
+                    + "; they are skipped when they fire, since their trigger is gone", e);
+        }
+    }
+
     private static boolean isStranded(AdminTriggerRunEntry entry, Set<String> ownNodeIds, long cutoff,
             long deadCutoff) {
         if (entry.getStatus() == TriggerRunStatus.DEAD) {

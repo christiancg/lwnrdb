@@ -170,6 +170,7 @@ final class JsArrayLength {
                 && (Boolean.TRUE.equals(descriptor.writable()) || newLength != jsArray.length)) {
             throw OrdinaryProperties.redefineError(key);
         }
+        jsArray.chargeDenseGrowth(JsArray.LENGTH_COERCION_OPS.get(), newLength);
         final var truncated = defineLength(newLength);
         setLengthWritable(writable);
         if (!truncated) {

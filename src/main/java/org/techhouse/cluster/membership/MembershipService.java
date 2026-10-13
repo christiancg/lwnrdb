@@ -365,7 +365,7 @@ public class MembershipService {
             final var generated = UUID.randomUUID().toString();
             final var parent = path.getParent();
             if (parent != null) {
-                Files.createDirectories(parent);
+                OwnerOnlyPermissions.createDirectories(parent);
             }
             writeNodeIdAtomically(path, generated);
             return generated;

@@ -43,6 +43,23 @@ public final class OwnerOnlyPermissions {
         Files.createDirectories(directory);
     }
 
+    public static boolean createDirectory(Path directory) {
+        return createDirectory(directory, POSIX);
+    }
+
+    static boolean createDirectory(Path directory, boolean posix) {
+        try {
+            if (posix) {
+                Files.createDirectory(directory, PosixFilePermissions.asFileAttribute(DIRECTORY));
+            } else {
+                Files.createDirectory(directory);
+            }
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     private static void createMissingLevelsOwnerOnly(Path absolute) throws IOException {
         final var missing = new ArrayDeque<Path>();
         for (var level = absolute; level != null && !Files.exists(level); level = level.getParent()) {

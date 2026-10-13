@@ -2,6 +2,7 @@ package org.techhouse.test;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,6 +31,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.SizeParser;
 import org.techhouse.config.ValueType;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
@@ -367,6 +369,12 @@ public class TestUtils {
         Mockito.when(socket.getInetAddress()).thenReturn(address);
         Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
         return socket;
+    }
+
+    public static OutboundQueue inlineOutbound(BufferedWriter writer) {
+        return new OutboundQueue(writer, () -> {
+        }, Long.MAX_VALUE, Runnable::run, () -> {
+        });
     }
 
     public static Socket clientSocket(InputStream in, OutputStream out) throws IOException {

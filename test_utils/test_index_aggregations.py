@@ -1874,12 +1874,53 @@ def limits_suite(c):
                "ERROR", "400-28")
     check("and its forced-scan twin answers the same", scanned.get("errorCode") == counted.get("errorCode"),
           f"index={counted.get('errorCode')} scan={scanned.get('errorCode')}")
+    wide_and = {"conjunctionType": "AND", "operators": [
+        {"fieldOperatorType": "EQUALS", "field": "category", "value": i} for i in range(10001)]}
+    check_code("An AND with more than maxFilterOperands operands -> 400-27",
+               agg(c, COLL, [{"type": "FILTER", "operator": wide_and}]), "ERROR", "400-27")
+    copies = [{"fieldName": f"p{i}", "operator": {"type": "CONCAT", "operands": ["payload"]}}
+              for i in range(MAX_ENTRY_BYTES // PAYLOAD_BYTES + 1)]
+    check_code("A MAP whose CONCATs add more than maxEntrySize to one document -> 400-28",
+               agg(c, COLL, [{"type": "LIMIT", "limit": 1}, {"type": "MAP", "operators": copies}]), "ERROR", "400-28")
+    check_status("and the same MAP with half the copies still answers",
+                 agg(c, COLL, [{"type": "LIMIT", "limit": 1}, {"type": "MAP", "operators": copies[:len(copies) // 2]}]),
+                 "OK")
+    join_cap_suite(c)
     check_status("A geo point written with a trailing comma is accepted",
                  c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
                          "object": {"_id": "geo-trailing", "location": "#geo(40.0,-74.0,)"}}), "OK")
     check_status("and stays readable", c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
                                                "_id": "geo-trailing"}), "OK")
     c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "geo-trailing"})
+
+
+MAX_ENTRY_BYTES = 1024 * 1024
+JOIN_CAP_COLL = "idxagg_joincap"
+
+
+def join_cap_suite(c):
+    section("A JOIN row whose joined array passes maxEntrySize is refused, indexed or not")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
+    shared = [{"_id": f"jc{i}", "key": "k", "pad": rand_payload(400)} for i in range(3000)]
+    check_status("load 3000 documents sharing one join key",
+                 c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": JOIN_CAP_COLL, "objects": shared}),
+                 "OK")
+    join = [{"type": "LIMIT", "limit": 1}, {"type": "JOIN", "joinCollection": JOIN_CAP_COLL, "localField": "key",
+                                             "remoteField": "key", "asField": "matched"}]
+    check_code("the scanned JOIN is refused -> 400-28", agg(c, JOIN_CAP_COLL, join), "ERROR", "400-28")
+    check_status("index the join key",
+                 c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": JOIN_CAP_COLL,
+                         "fieldName": "key"}), "OK")
+    check_code("the indexed JOIN is refused the same way -> 400-28", agg(c, JOIN_CAP_COLL, join), "ERROR", "400-28")
+    counted = agg(c, JOIN_CAP_COLL, [bu.filter_step("key", "EQUALS", "k"), join[1], {"type": "COUNT"}])
+    check_code("[FILTER indexed, JOIN, COUNT] is refused rather than counted from the index", counted,
+               "ERROR", "400-28")
+    check_status("a JOIN on a key shared by a few documents still answers",
+                 agg(c, COLL, [{"type": "LIMIT", "limit": 3}, {"type": "JOIN", "joinCollection": JOIN_CAP_COLL,
+                                                                "localField": "_id", "remoteField": "_id",
+                                                                "asField": "matched"}]), "OK")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
 
 
 def main():

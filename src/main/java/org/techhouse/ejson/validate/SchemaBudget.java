@@ -3,12 +3,12 @@ package org.techhouse.ejson.validate;
 import org.techhouse.ejson.exceptions.SchemaBudgetExceededException;
 import org.techhouse.simplejs.internal.regex.RegexStepBudget;
 
-final class SchemaBudget implements RegexStepBudget {
+public final class SchemaBudget implements RegexStepBudget {
     static final String EXCEEDED_MESSAGE = "Schema validation exceeded its evaluation budget";
 
     private long remaining;
 
-    SchemaBudget(long steps) {
+    public SchemaBudget(long steps) {
         this.remaining = steps;
     }
 
@@ -18,5 +18,13 @@ final class SchemaBudget implements RegexStepBudget {
             throw new SchemaBudgetExceededException(EXCEEDED_MESSAGE);
         }
         remaining--;
+    }
+
+    @Override
+    public void steps(int count) {
+        if (remaining < count) {
+            throw new SchemaBudgetExceededException(EXCEEDED_MESSAGE);
+        }
+        remaining -= count;
     }
 }

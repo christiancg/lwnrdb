@@ -190,14 +190,14 @@ public final class StringSlicing {
     public static int indexOf(String value, List<JsValue> args, InterpreterOps ops) {
         final var search = str(args, 0, ops);
         final var pos = args.size() > 1 ? JsCoercion.toNumber(args.get(1), ops) : 0;
-        return value.indexOf(search, clampPosition(pos, value.length()));
+        return StringSearch.indexOf(value, search, clampPosition(pos, value.length()), ops);
     }
 
     public static int lastIndexOf(String value, List<JsValue> args, InterpreterOps ops) {
         final var search = str(args, 0, ops);
         final var raw = args.size() > 1 ? JsCoercion.toNumber(args.get(1), ops) : Double.NaN;
         final var pos = Double.isNaN(raw) ? Double.POSITIVE_INFINITY : raw;
-        return value.lastIndexOf(search, clampPosition(pos, value.length()));
+        return StringSearch.lastIndexOf(value, search, clampPosition(pos, value.length()), ops);
     }
 
     public static int clampPosition(double pos, int length) {

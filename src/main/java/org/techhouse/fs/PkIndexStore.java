@@ -62,8 +62,7 @@ final class PkIndexStore {
     boolean rewriteRows(String dbName, String collectionName, UnaryOperator<List<PkIndexEntry>> change)
             throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
-        final var lock = FileLocks.lockFor(indexFile).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(indexFile);
         try {
             final var parsed = indexFile.exists() ? parsePkIndex(dbName, collectionName, indexFile) : EMPTY_PARSED;
             if (parsed.unrecognised()) {
@@ -112,8 +111,7 @@ final class PkIndexStore {
 
     void replaceAll(String dbName, String collectionName, List<PkIndexEntry> entries) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
-        final var lock = FileLocks.lockFor(indexFile).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(indexFile);
         try {
             final var sorted = new ArrayList<>(entries);
             sorted.sort(Comparator.comparing(PkIndexEntry::getValue));

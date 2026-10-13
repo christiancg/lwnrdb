@@ -485,6 +485,36 @@ def test_a_committed_transaction_survives_the_disconnect():
             c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": stale})
 
 
+BULKY_DOCS = 20
+UNREAD_AGGREGATES = 60
+
+
+def test_a_client_that_stops_reading_mid_transaction_releases_its_locks():
+    section("A transaction whose client stops reading is rolled back once its backlog overflows")
+
+    with authed_conn() as (c):
+        bulk_save(c, [{"_id": f"bulky-{i}", "kind": "bulky", "blob": "x" * 50_000} for i in range(BULKY_DOCS)])
+    slow = bu.non_reading_conn()
+    check_status("START_TRANSACTION", start_txn(slow), "OK")
+    check_status("SAVE buffered (takes the collection write lock)", save(slow, {"_id": "unread-1", "v": 1}), "OK")
+    bulky = {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+             "aggregationSteps": [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind",
+                                                                   "value": "bulky"}}]}
+    for _ in range(UNREAD_AGGREGATES):
+        if not bu.send_without_reading(slow, bulky):
+            break
+
+    with authed_conn() as (other):
+        send_only(other, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "unread-1"})
+        unblocked = other.recv(timeout=30.0)
+        check_code("another connection gets the collection back, without the rolled-back write",
+                   unblocked or {}, "NOT_FOUND", "404-2")
+        check("the non-reading connection is closed", bu.read_until_closed(slow, timeout=30.0))
+        slow.close()
+        for i in range(BULKY_DOCS):
+            delete(other, f"bulky-{i}")
+
+
 def test_join_reads_your_own_writes(c):
     section("A JOIN inside a transaction reads the transaction's own writes")
     save(c, {"_id": "jrw_left", "k": "shared"})
@@ -608,6 +638,7 @@ def main():
         test_a_commit_after_the_write_grant_is_revoked_is_refused(c)
     test_auto_rollback_on_disconnect()
     test_a_committed_transaction_survives_the_disconnect()
+    test_a_client_that_stops_reading_mid_transaction_releases_its_locks()
 
     with authed_conn() as (c):
         teardown_fixtures(c)

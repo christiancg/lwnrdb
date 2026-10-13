@@ -97,7 +97,12 @@ public final class ReflectBuiltins {
         if (!InterpreterUtils.isCallable(target) && !(target instanceof JsProxy proxy && proxy.isCallable())) {
             throw new TypeErrorException("Reflect.apply called on non-callable target");
         }
-        return ops.call(target, arg(args, 1), argumentsList(ops, arg(args, 2)));
+        final var list = argumentsList(ops, arg(args, 2));
+        try {
+            return ops.call(target, arg(args, 1), list);
+        } finally {
+            InterpreterOps.release(ops, list.size() * InterpreterOps.BYTES_PER_ELEMENT);
+        }
     }
 
     private static JsValue construct(InterpreterOps ops, List<JsValue> args) {
@@ -109,7 +114,12 @@ public final class ReflectBuiltins {
         if (!InterpreterUtils.isConstructor(newTarget)) {
             throw new TypeErrorException("Reflect.construct called with a non-constructor newTarget");
         }
-        return ops.construct(target, argumentsList(ops, arg(args, 1)), newTarget);
+        final var list = argumentsList(ops, arg(args, 1));
+        try {
+            return ops.construct(target, list, newTarget);
+        } finally {
+            InterpreterOps.release(ops, list.size() * InterpreterOps.BYTES_PER_ELEMENT);
+        }
     }
 
     private static List<JsValue> argumentsList(InterpreterOps ops, JsValue value) {
@@ -117,7 +127,9 @@ public final class ReflectBuiltins {
             throw new TypeErrorException("CreateListFromArrayLike called on non-object");
         }
         if (value instanceof JsArray array) {
-            return new ArrayList<>(array.getElements());
+            final var elements = array.getElements();
+            InterpreterOps.chargeArrayLike(ops, elements.size());
+            return new ArrayList<>(elements);
         }
         final var length = JsCoercion.toNumber(ops.getMember(value, new JsString("length")), ops);
         if (Double.isNaN(length) || length <= 0) {
@@ -126,8 +138,11 @@ public final class ReflectBuiltins {
         if (length > MAX_LIST_LENGTH) {
             throw new TypeErrorException("Arguments list length exceeds the supported maximum");
         }
-        final var list = new ArrayList<JsValue>((int) length);
-        for (var i = 0; i < (int) length; i++) {
+        final var count = (int) length;
+        InterpreterOps.chargeArrayLike(ops, count);
+        final var list = new ArrayList<JsValue>(count);
+        for (var i = 0; i < count; i++) {
+            InterpreterOps.pace(ops, i);
             list.add(ops.getMember(value, new JsString(Integer.toString(i))));
         }
         return list;

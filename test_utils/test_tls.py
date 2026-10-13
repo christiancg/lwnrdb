@@ -83,17 +83,21 @@ def test_a_dripped_client_hello_is_closed_at_the_handshake_deadline():
 
 
 def test_one_address_cannot_hold_every_unauthenticated_slot():
-    section("One address holds at most maxUnauthenticatedConnectionsPerAddress unauthenticated connections")
+    section("One address holds at most maxUnauthenticatedConnectionsPerAddress unauthenticated connections; "
+            "the next TLS one is closed before its handshake")
     holders = [socket.create_connection((HOST, PORT), timeout=10) for _ in range(PRE_AUTH_PER_ADDRESS)]
     try:
         time.sleep(0.3)
-        frame = None
-        with tls_socket(verify=False) as extra:
-            extra.settimeout(5)
-            raw = extra.makefile("rb").readline()
-            frame = raw.decode("utf-8", errors="replace").strip() if raw else None
-        check("The next connection from the same address gets 503-14", frame is not None and "503-14" in frame,
-              f"got={frame!r}")
+        outcome = None
+        try:
+            with tls_socket(verify=False) as extra:
+                extra.settimeout(5)
+                raw = extra.makefile("rb").readline()
+                outcome = "handshake completed, then: " + (raw.decode("utf-8", errors="replace").strip() or "EOF")
+        except (ssl.SSLError, OSError) as refused:
+            outcome = f"closed before the handshake ({type(refused).__name__})"
+        check("The next connection from the same address is closed before its TLS handshake",
+              outcome is not None and outcome.startswith("closed before the handshake"), f"got={outcome!r}")
     finally:
         for holder in holders:
             holder.close()
@@ -236,6 +240,91 @@ def test_default_admin_password_refuses_to_start():
     check_refused_start("defaultAdminPassword=administrator", work_dir, log_path, "well-known shipped value", True)
 
 
+def test_weak_admin_password_refuses_to_start():
+    section("A commonly used or username-equal admin password refuses to start")
+    work_dir, log_path = fresh_work_dir("weak-pw")
+    bu.write_config(work_dir, PORT, admin_password="Password123")
+    check_refused_start("defaultAdminPassword=Password123", work_dir, log_path, "most commonly used passwords", True)
+    work_dir, log_path = fresh_work_dir("username-pw")
+    bu.write_config(work_dir, PORT, admin_password="ADMIN_admin", defaultAdminUsername="admin_ADMIN")
+    check_refused_start("defaultAdminPassword equal to the username", work_dir, log_path,
+                        "same as defaultAdminUsername", True)
+
+
+def test_cluster_tls_keystore_and_disabled_limits_are_warned_about():
+    section("Cluster-only TLS warns about the shipped keystore password, and 0 limits are named")
+    work_dir, log_path = fresh_work_dir("cluster-tls-warn")
+    bu.write_config(work_dir, PORT, clusterEnabled=True, clusterTlsEnabled=True, clusterExpectedSize=2,
+                    clusterPort=PORT + 1000, clusterSecret="cluster-secret-for-the-tls-suite-0123456789",
+                    tlsKeystorePath="certs/lwnrdb.p12", tlsKeystorePassword="change_it", maxListens=0,
+                    maxFilterOperands=0)
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path)
+    finally:
+        bu.stop_server(proc)
+    log = bu.read_log(log_path)
+    check("tlsKeystorePassword=change_it is warned about with only cluster TLS on",
+          "tlsKeystorePassword is still the shipped value 'change_it'" in log)
+    zero_line = next((line for line in log.splitlines() if "limits are set to 0" in line), "")
+    check("every protective limit set to 0 is named in one SECURITY WARNING",
+          "SECURITY WARNING" in zero_line and "maxListens" in zero_line and "maxFilterOperands" in zero_line
+          and "maxConnections" not in zero_line, zero_line or log[-600:])
+
+
+def connects(address: str, port: int) -> bool:
+    try:
+        socket.create_connection((address, port), timeout=3).close()
+        return True
+    except OSError:
+        return False
+
+
+def address_a_loopback_listener_refuses():
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("10.255.255.255", 1))
+        address = probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+    if address.startswith("127."):
+        return None
+    with socket.socket() as control:
+        control.bind(("127.0.0.1", 0))
+        control.listen()
+        reachable = connects(address, control.getsockname()[1])
+    return None if reachable else address
+
+
+def test_bind_address_and_tenant_folders():
+    section("bindAddress limits the client port, and tenant folders are created owner-only")
+    work_dir, log_path = fresh_work_dir("bind-address")
+    bu.write_config(work_dir, PORT, bindAddress="127.0.0.1")
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path)
+        with Conn() as c:
+            check_status("a loopback client authenticates", c.authenticate(), "OK")
+            check_status("CREATE_DATABASE", c.send({"type": "CREATE_DATABASE", "databaseName": "tls_owner_db"}), "OK")
+            check_status("CREATE_COLLECTION", c.send({"type": "CREATE_COLLECTION", "databaseName": "tls_owner_db",
+                                                      "collectionName": "tls_owner_coll"}), "OK")
+        external = address_a_loopback_listener_refuses()
+        if external is None:
+            bu.warn("no non-loopback IPv4 address that a loopback-only listener refuses; the check is skipped")
+        else:
+            check(f"a client reaching {external} is refused", not connects(external, PORT))
+    finally:
+        bu.stop_server(proc)
+    if os.name != "posix":
+        return
+    for folder in (os.path.join("db", "tls_owner_db"), os.path.join("db", "tls_owner_db", "tls_owner_coll"),
+                   os.path.join("db", "admin", "pages")):
+        path = os.path.join(work_dir, folder)
+        check(f"{folder}/ was created 0700", mode_of(path) == 0o700, oct(mode_of(path)))
+
+
 def test_blank_admin_password_refuses_to_bootstrap():
     section("A blank admin password refuses to bootstrap the first admin")
     work_dir, log_path = fresh_work_dir("blank-pw")
@@ -337,6 +426,9 @@ def main():
     test_data_and_keystore_folders_are_owner_only(work_dir, log_path)
     test_default_keystore_password_warning(log_path)
     test_default_admin_password_refuses_to_start()
+    test_weak_admin_password_refuses_to_start()
+    test_cluster_tls_keystore_and_disabled_limits_are_warned_about()
+    test_bind_address_and_tenant_folders()
     test_blank_admin_password_refuses_to_bootstrap()
     test_blank_admin_password_starts_once_an_admin_exists()
 

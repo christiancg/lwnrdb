@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 import java.util.List;
+import org.techhouse.simplejs.exceptions.ScriptArrayLengthException;
 import org.techhouse.simplejs.values.JsValue;
 
 public interface InterpreterOps {
@@ -61,6 +62,10 @@ public interface InterpreterOps {
     default void tick() {
     }
 
+    default int maxArrayLength() {
+        return -1;
+    }
+
     default void tick(long weight) {
     }
 
@@ -114,6 +119,22 @@ public interface InterpreterOps {
 
     static void chargeElements(InterpreterOps ops, long count) {
         charge(ops, count * BYTES_PER_ELEMENT);
+    }
+
+    static void requireArrayLength(InterpreterOps ops, long length) {
+        if (ops == null) {
+            return;
+        }
+        final var cap = ops.maxArrayLength();
+        if (cap >= 0 && length > cap) {
+            throw new ScriptArrayLengthException(
+                    "An array-like length of " + length + " exceeds the maximum of " + cap + " elements");
+        }
+    }
+
+    static void chargeArrayLike(InterpreterOps ops, long length) {
+        requireArrayLength(ops, length);
+        chargeElements(ops, length);
     }
 
     static java.time.ZoneId timeZone(InterpreterOps ops) {

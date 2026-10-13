@@ -85,7 +85,7 @@ public class Main {
 
     public static void main(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
-        AdminPasswordGuard.refuseShippedPassword();
+        AdminPasswordGuard.refuseWeakPassword();
         FetchPinningGuard.refuseUnpinnedFetch();
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
@@ -109,6 +109,7 @@ public class Main {
         // Must run after cleanupOrphanedTransactions: the records left are runs that never applied.
         TriggerRunRecovery.garbageCollect();
         TriggerRunRecovery.warnAboutStrandedRuns();
+        startTriggerRunSweepIfStandalone();
         startSchedulerIfEnabled();
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
@@ -119,6 +120,7 @@ public class Main {
         StartupWarnings.warnIfScriptFetchEnabled();
         StartupWarnings.warnIfPlaintextClients();
         StartupWarnings.warnIfDefaultKeystorePassword();
+        StartupWarnings.warnIfProtectiveLimitsAreOff();
         StartupWarnings.warnIfStorageIsReadableByOthers();
         StartupWarnings.warnIfFaultInjectionEnabled();
         StartupWarnings.warnIfClusterWithoutTls();
@@ -127,9 +129,16 @@ public class Main {
         startClusterIfEnabled();
         TriggerRunRecovery.recoverLocal(startupTriggerRuns);
         final var sslServerSocketFactory = createTlsFactory();
-        final var server = new SocketServer(port, sslServerSocketFactory);
+        final var server = new SocketServer(port, config.getBindAddress(), sslServerSocketFactory);
         registerShutdownHook(server);
         server.serve();
+    }
+
+    private static void startTriggerRunSweepIfStandalone() {
+        if (!clusterConfig.isEnabled()) {
+            triggerExecutor.sweepPeriodically(TriggerRunRecovery::sweep,
+                    TriggerRunRecovery.STANDALONE_SWEEP_INTERVAL_MS);
+        }
     }
 
     private static void startSchedulerIfEnabled() {

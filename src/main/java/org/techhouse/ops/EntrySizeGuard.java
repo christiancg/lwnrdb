@@ -26,7 +26,11 @@ public final class EntrySizeGuard {
         return (long) text.length() * MAX_UTF8_BYTES_PER_CHAR > maxEntrySize && utf8Length(text) > maxEntrySize;
     }
 
-    private static long utf8Length(CharSequence text) {
+    public static boolean exceedsMaxEntrySize(long byteCount) {
+        return byteCount > configuration.getMaxEntrySize();
+    }
+
+    public static long utf8Length(CharSequence text) {
         var bytes = 0L;
         for (var i = 0; i < text.length(); i++) {
             final var c = text.charAt(i);

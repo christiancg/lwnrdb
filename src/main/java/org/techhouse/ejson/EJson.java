@@ -29,7 +29,9 @@ import org.techhouse.ejson.type_adapters.impl.NumberTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.StringTypeAdapter;
 import org.techhouse.ejson.validate.JsonSchema;
 import org.techhouse.ejson.validate.MetaSchemaValidator;
+import org.techhouse.ejson.validate.SchemaBudget;
 import org.techhouse.ejson.validate.SchemaComplexity;
+import org.techhouse.ejson.validate.SchemaPatternLengths;
 import org.techhouse.ejson.validate.SchemaValidationResult;
 import org.techhouse.ejson.validate.SchemaValidator;
 
@@ -163,7 +165,16 @@ public class EJson {
         return schemaValidator.validate(instance, new JsonSchema(schema, stepBudget));
     }
 
+    public SchemaValidationResult validateInstance(JsonBaseElement instance, JsonObject schema,
+            SchemaBudget sharedBudget) {
+        return schemaValidator.validate(instance, new JsonSchema(schema, sharedBudget));
+    }
+
     public long schemaExpandedNodeCount(JsonObject schema, int limit) {
         return SchemaComplexity.expandedNodeCount(schema, limit);
+    }
+
+    public int longestSchemaPattern(JsonObject schema) {
+        return SchemaPatternLengths.longestPattern(schema);
     }
 }

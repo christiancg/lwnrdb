@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.ProcedureDefinition;
@@ -97,8 +98,14 @@ public final class ProcedureOperationHelper {
             if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
-            final var colliding = OnDiskNameRegistry.collidingDefinition(fs.listProcedureNames(dbName),
-                    request.getName());
+            final var procedureNames = fs.listProcedureNames(dbName);
+            final var maxProcedures = configuration.intValue(ConfigKey.MAX_PROCEDURES_PER_DATABASE);
+            if (existing == null && procedureNames.size() >= maxProcedures) {
+                return new OperationResponse(OperationType.SAVE_PROCEDURE,
+                        ErrorCode.TOO_MANY_PROCEDURES.getDefaultMessage() + " (" + maxProcedures + ")",
+                        ErrorCode.TOO_MANY_PROCEDURES);
+            }
+            final var colliding = OnDiskNameRegistry.collidingDefinition(procedureNames, request.getName());
             if (colliding != null) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
             }

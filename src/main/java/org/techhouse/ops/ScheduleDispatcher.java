@@ -17,6 +17,7 @@ public final class ScheduleDispatcher {
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ScheduleRegistry registry = IocContainer.get(ScheduleRegistry.class);
+    private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(ScheduleDispatcher.class);
 
@@ -39,14 +40,25 @@ public final class ScheduleDispatcher {
             return;
         }
         final var definer = definition.getDefiner();
-        if (definer == null || cache.getAdminUserEntry(definer) == null) {
+        final var refusal = DefinerAuthority.refusal(definer, dbName, null);
+        if (refusal != null) {
             scheduleExecutor.countSkip();
-            final var reason = "definer '" + definer + "' no longer exists; the schedule is disabled";
+            final var reason = refusal + "; the schedule is disabled";
             registry.warnOnce(entry.key(), reason);
             recordSkip(entry, definition, reason);
+            DefinerAuthority.disableSchedule(dbName, definition, refusal);
             return;
         }
-        run(entry, definition, procedure.getVersion(), procedure.getSource(), definer);
+        final var permit = admission.acquireSlices(definer, dbName);
+        if (permit == null) {
+            scheduleExecutor.countSkip();
+            recordSkip(entry, definition, "the " + admission.lastRefusalScope()
+                    + " script concurrency limit was reached; this occurrence was skipped");
+            return;
+        }
+        try (permit) {
+            run(entry, definition, procedure.getVersion(), procedure.getSource(), definer);
+        }
     }
 
     private static void run(ScheduleRegistry.Entry entry, ScheduleDefinition definition, long version, String source,
@@ -90,6 +102,6 @@ public final class ScheduleDispatcher {
                 base.fetchEnabled(), base.fetchHostAllowlist(), base.maxResponseBytes(), base.fetchTimeoutMillis(),
                 base.strictScriptGoal(), base.textImportEnabled(), base.maxModuleDepth(), base.maxLogLines(),
                 base.maxLogLineChars(), base.memoryBudget(), -1, base.cursorBatchSize(), base.cursorMaxBatchSize(),
-                base.fetchMaxConcurrent());
+                base.fetchMaxConcurrent(), base.maxArrayLength());
     }
 }

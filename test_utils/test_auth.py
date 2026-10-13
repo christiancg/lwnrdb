@@ -72,46 +72,52 @@ def teardown_fixtures(c):
         c.send({"type": "DROP_DATABASE", "databaseName": db})
 
 
-def test_unauthenticated(c):
+def send_unauthenticated(message: dict) -> dict:
+    with Conn() as c:
+        response = c.send(message)
+    return response
+
+
+def test_unauthenticated():
     section("Unauthenticated requests — all must return UNAUTHENTICATED")
 
     check_status("SAVE without auth",
-          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+          send_unauthenticated({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
                       "object": {"x": 1}}),
           "UNAUTHENTICATED")
 
     check_status("FIND_BY_ID without auth",
-          c.send({"type": "FIND_BY_ID", "databaseName": "auth_db",
+          send_unauthenticated({"type": "FIND_BY_ID", "databaseName": "auth_db",
                       "collectionName": "allowed", "_id": "doc1"}),
           "UNAUTHENTICATED")
 
     check_status("AGGREGATE without auth",
-          c.send({"type": "AGGREGATE", "databaseName": "auth_db",
+          send_unauthenticated({"type": "AGGREGATE", "databaseName": "auth_db",
                       "collectionName": "allowed", "aggregationSteps": []}),
           "UNAUTHENTICATED")
 
     check_status("CREATE_DATABASE without auth",
-          c.send({"type": "CREATE_DATABASE", "databaseName": "new_db"}),
+          send_unauthenticated({"type": "CREATE_DATABASE", "databaseName": "new_db"}),
           "UNAUTHENTICATED")
 
     check_status("DROP_DATABASE without auth",
-          c.send({"type": "DROP_DATABASE", "databaseName": "auth_db"}),
+          send_unauthenticated({"type": "DROP_DATABASE", "databaseName": "auth_db"}),
           "UNAUTHENTICATED")
 
     check_status("CREATE_USER without auth",
-          c.send({"type": "CREATE_USER", "username": "ghost", "password": "ghost1234"}),
+          send_unauthenticated({"type": "CREATE_USER", "username": "ghost", "password": "ghost1234"}),
           "UNAUTHENTICATED")
 
     check_status("LIST_COLLECTIONS without auth",
-          c.send({"type": "LIST_COLLECTIONS", "databaseName": "auth_db"}),
+          send_unauthenticated({"type": "LIST_COLLECTIONS", "databaseName": "auth_db"}),
           "UNAUTHENTICATED")
 
     check_code("LIST_DATABASES requires authentication",
-          c.send({"type": "LIST_DATABASES"}),
+          send_unauthenticated({"type": "LIST_DATABASES"}),
           "UNAUTHENTICATED", "401-1")
 
     check_status("CLOSE_CONNECTION is public (must return OK)",
-          c.send({"type": "CLOSE_CONNECTION"}),
+          send_unauthenticated({"type": "CLOSE_CONNECTION"}),
           "OK")
 
 
@@ -1065,8 +1071,7 @@ def main():
         create_user(c, "new_owner", "new_owner1234")
         create_script_managers(c)
 
-    with Conn() as c:
-        test_unauthenticated(c)
+    test_unauthenticated()
 
     with Conn() as c:
         test_bad_credentials(c)

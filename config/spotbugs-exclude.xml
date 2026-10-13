@@ -41,6 +41,11 @@
     </Match>
 
     <Match>
+        <Class name="org.techhouse.unit.simplejs.RealmRetentionTest"/>
+        <Bug pattern="DM_GC"/>
+    </Match>
+
+    <Match>
         <Class name="org.techhouse.ejson.type_adapters.impl.BooleanTypeAdapter"/>
         <Bug pattern="NP_BOOLEAN_RETURN_NULL"/>
     </Match>

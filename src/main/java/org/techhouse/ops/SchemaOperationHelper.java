@@ -2,6 +2,8 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.fs.FileSystem;
@@ -19,6 +21,7 @@ public final class SchemaOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private SchemaOperationHelper() {
     }
@@ -43,6 +46,13 @@ public final class SchemaOperationHelper {
                     ErrorCode.SCHEMA_TOO_COMPLEX.getDefaultMessage() + ": it expands to more than "
                             + Globals.MAX_SCHEMA_EXPANDED_NODES + " schema nodes once its references are followed",
                     ErrorCode.SCHEMA_TOO_COMPLEX);
+        }
+        final var maxPatternLength = configuration.intValue(ConfigKey.SCHEMA_MAX_PATTERN_LENGTH);
+        if (eJson.longestSchemaPattern(schema) > maxPatternLength) {
+            return new OperationResponse(
+                    OperationType.SAVE_SCHEMA, ErrorCode.SCHEMA_PATTERN_TOO_LONG.getDefaultMessage()
+                            + ": a pattern is longer than " + maxPatternLength + " characters",
+                    ErrorCode.SCHEMA_PATTERN_TOO_LONG);
         }
         StoredDefinitions.writeSchema(dbName, collName, schema);
         cache.putCollectionSchema(dbName, collName, schema);

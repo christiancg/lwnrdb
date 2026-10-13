@@ -53,6 +53,8 @@ public final class Interpreter {
             Map<String, JsValue> namedExports) {
     }
 
+    private static final long COROUTINE_BYTES = 2048L;
+
     public final EventLoop eventLoop = new EventLoop();
     public final ThreadLocal<Coroutine> currentCoroutine = new ThreadLocal<>();
     public final List<Coroutine> coroutines = new ArrayList<>();
@@ -279,11 +281,14 @@ public final class Interpreter {
             moduleLifecycle.reportUnhandledRejections();
             return finished;
         } finally {
-            if (metrics != null) {
-                metrics.fill(this);
+            try {
+                if (metrics != null) {
+                    metrics.fill(this);
+                }
+                lifecycle.cancelPendingCoroutines();
+            } finally {
+                StackCapture.uninstall(callStack);
             }
-            lifecycle.cancelPendingCoroutines();
-            StackCapture.uninstall(callStack);
         }
     }
 
@@ -431,6 +436,11 @@ public final class Interpreter {
 
     public void noteAllocation(long bytes) {
         lifecycle.noteAllocation(bytes);
+    }
+
+    public void registerCoroutine(Coroutine coroutine) {
+        lifecycle.charge(COROUTINE_BYTES);
+        coroutines.add(coroutine);
     }
 
     public void cancelPendingCoroutines() {

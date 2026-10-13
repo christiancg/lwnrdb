@@ -38,8 +38,7 @@ final class TornPageTail {
     }
 
     static boolean heal(File page, long pageNumber, List<PkIndexEntry> entries) throws IOException {
-        final var lock = FileLocks.lockFor(page).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(page);
         try {
             final var cut = endOfLastCompleteLine(page);
             if (cut < 0) {

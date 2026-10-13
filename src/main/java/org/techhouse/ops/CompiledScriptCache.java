@@ -1,9 +1,5 @@
 package org.techhouse.ops;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.concurrent.locks.ReentrantLock;
-import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
@@ -12,39 +8,28 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 public class CompiledScriptCache {
     public static final String NESTING_TOO_DEEP = "The script is nested too deeply to compile";
     private final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
-    private final Configuration configuration = Configuration.getInstance();
-    private final Map<String, CachedCompilation> cache = new LinkedHashMap<>(16, 0.75f, true);
-    private final ReentrantLock lock = new ReentrantLock();
+    private final CompiledProgramLru<CachedCompilation> cache = new CompiledProgramLru<>();
 
     public record CachedCompilation(CompiledScript compiled, RuntimeException failure) {
     }
 
     public CachedCompilation get(String source) {
-        final var maxSize = configuration.getProcedureCacheSize();
-        if (maxSize <= 0) {
+        if (cache.isDisabled()) {
             return compile(source);
         }
-        lock.lock();
-        try {
-            var entry = cache.get(source);
-            if (entry == null) {
-                entry = compile(source);
-                cache.put(source, entry);
-                evictDownTo(maxSize);
-            }
-            return entry;
-        } finally {
-            lock.unlock();
+        final var cached = cache.get(source, _ -> true);
+        if (cached != null) {
+            return cached;
         }
+        return cache.admit(source, compile(source), source, _ -> true);
     }
 
     public int size() {
-        lock.lock();
-        try {
-            return cache.size();
-        } finally {
-            lock.unlock();
-        }
+        return cache.size();
+    }
+
+    public long weightedBytes() {
+        return cache.weightedBytes();
     }
 
     private CachedCompilation compile(String source) {
@@ -54,14 +39,6 @@ public class CompiledScriptCache {
             return new CachedCompilation(null, failure);
         } catch (StackOverflowError tooDeep) {
             return new CachedCompilation(null, new SyntaxErrorException(NESTING_TOO_DEEP));
-        }
-    }
-
-    private void evictDownTo(int maxSize) {
-        final var iterator = cache.keySet().iterator();
-        while (cache.size() > maxSize && iterator.hasNext()) {
-            iterator.next();
-            iterator.remove();
         }
     }
 }

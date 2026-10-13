@@ -124,11 +124,12 @@ public class ResourceLimitsTest {
     @Test
     public void test_cursor_defaults_are_carried() {
         final var limits = new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, false, false, 4, 7, 9, 4096,
-                1024, 50, 500, 3);
+                1024, 50, 500, 3, 77);
         assertEquals(1024, limits.maxResultBytes());
         assertEquals(50, limits.cursorBatchSize());
         assertEquals(500, limits.cursorMaxBatchSize());
         assertEquals(3, limits.fetchMaxConcurrent());
+        assertEquals(77, limits.maxArrayLength());
         assertEquals(ResourceLimits.DEFAULT_FETCH_MAX_CONCURRENT, new ResourceLimits(100, 200, 3).fetchMaxConcurrent());
         assertEquals(-1, new ResourceLimits(100, 200, 3).cursorBatchSize());
         assertEquals(-1, new ResourceLimits(100, 200, 3).cursorMaxBatchSize());

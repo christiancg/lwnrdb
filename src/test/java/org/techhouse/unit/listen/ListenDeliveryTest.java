@@ -53,7 +53,7 @@ public class ListenDeliveryTest {
         manager = new ListenManager();
         clientId = clientTracker.registerForwardedClient(LISTENER);
         pushed = new StringWriter();
-        clientTracker.registerWriter(clientId, new BufferedWriter(pushed));
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(new BufferedWriter(pushed)));
     }
 
     @AfterEach

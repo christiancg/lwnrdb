@@ -105,6 +105,13 @@ public class ScriptOperationHelperTest {
     }
 
     @Test
+    public void test_an_array_like_past_the_array_cap_returns_400_30() {
+        final var response = run("return Math.max.apply(null, { length: 2 ** 30 });");
+        assertEquals(ErrorCode.SCRIPT_ARRAY_TOO_LARGE.getCode(), response.getErrorCode());
+        assertTrue(response.getMessage().startsWith("ScriptArrayTooLargeError: "), response.getMessage());
+    }
+
+    @Test
     public void test_returns_403_when_scripts_disabled() throws Exception {
         setConfig("scriptsEnabled", false);
         final var response = ScriptOperationHelper.execute(new RunScriptRequest(TestGlobals.DB, "return 1;", null),

@@ -18,6 +18,12 @@ import org.techhouse.utils.OwnerOnlyPermissions;
 public final class StartupWarnings {
     private static final Configuration config = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(StartupWarnings.class);
+    private static final List<ConfigKey> LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_CONNECTIONS,
+            ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS, ConfigKey.MAX_UNAUTHENTICATED_INVALID_REQUESTS,
+            ConfigKey.MAX_FAILED_AUTH_ATTEMPTS, ConfigKey.AUTH_FAILURE_DELAY_BASE_MS, ConfigKey.TRANSACTION_MAX_OPS,
+            ConfigKey.TRANSACTION_MAX_AGE_MS, ConfigKey.MAX_LISTENS_PER_CONNECTION, ConfigKey.MAX_LISTENS,
+            ConfigKey.MAX_FILTER_OPERANDS, ConfigKey.AGGREGATE_TIMEOUT_MS, ConfigKey.MAX_CONCURRENT_SCRIPTS,
+            ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_USER, ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_DATABASE);
 
     private StartupWarnings() {
     }
@@ -45,11 +51,26 @@ public final class StartupWarnings {
     }
 
     public static void warnIfDefaultKeystorePassword() {
-        if (config.isTlsEnabled()
-                && ConfigKey.TLS_KEYSTORE_PASSWORD.defaultValue().equals(config.getTlsKeystorePassword())) {
+        if (usesKeystore() && ConfigKey.TLS_KEYSTORE_PASSWORD.defaultValue().equals(config.getTlsKeystorePassword())) {
             logger.warning("SECURITY WARNING: tlsKeystorePassword is still the shipped value '"
                     + ConfigKey.TLS_KEYSTORE_PASSWORD.defaultValue() + "', so anyone who can read the keystore file "
                     + "can extract the private key. Set your own in lwnrdb.cfg.");
+        }
+    }
+
+    public static void warnIfProtectiveLimitsAreOff() {
+        final var off = new ArrayList<String>();
+        for (final var key : LIMITS_OFF_AT_ZERO) {
+            if (Long.parseLong(config.stringValue(key).trim()) == 0L) {
+                off.add(key.key());
+            }
+        }
+        if (!off.isEmpty()) {
+            logger.warning("SECURITY WARNING: these limits are set to 0, which turns them off: "
+                    + String.join(", ", off)
+                    + ". Without them one client can hold every connection, retry passwords without pause or tie up"
+                    + " the server with unbounded work. Set a positive value unless something in front of this"
+                    + " server enforces the same limit.");
         }
     }
 

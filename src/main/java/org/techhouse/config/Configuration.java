@@ -69,6 +69,10 @@ public final class Configuration {
         return intValue(ConfigKey.PORT);
     }
 
+    public String getBindAddress() {
+        return stringValue(ConfigKey.BIND_ADDRESS).trim();
+    }
+
     public int getMaxConnections() {
         return intValue(ConfigKey.MAX_CONNECTIONS);
     }

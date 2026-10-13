@@ -196,13 +196,13 @@ public final class StringRegExpDelegation {
             return result;
         }
         var from = 0;
-        var index = value.indexOf(separator);
+        var index = StringSearch.indexOf(value, separator, 0, ops);
         while (index >= 0) {
             InterpreterOps.chargeElements(ops, 1);
             InterpreterOps.chargeChars(ops, index - from);
             result.push(new JsString(value.substring(from, index)));
             from = index + separator.length();
-            index = value.indexOf(separator, from);
+            index = StringSearch.indexOf(value, separator, from, ops);
         }
         result.push(new JsString(value.substring(from)));
         return result;
@@ -222,7 +222,7 @@ public final class StringRegExpDelegation {
         if (all) {
             return new JsString(replaceAllLiteral(value, search, args, invoker, callable, replacement, ops));
         }
-        final var index = value.indexOf(search);
+        final var index = StringSearch.indexOf(value, search, 0, ops);
         if (index < 0) {
             return new JsString(value);
         }
@@ -268,7 +268,7 @@ public final class StringRegExpDelegation {
         final var advanceBy = Math.max(1, search.length());
         final var sb = new StringBuilder();
         var from = 0;
-        var index = value.indexOf(search);
+        var index = StringSearch.indexOf(value, search, 0, ops);
         while (index >= 0) {
             sb.append(value, from, index);
             final var piece = literalPiece(value, search, index, args, invoker, callable, replacement, ops);
@@ -279,7 +279,7 @@ public final class StringRegExpDelegation {
             if (next > value.length()) {
                 break;
             }
-            index = value.indexOf(search, next);
+            index = StringSearch.indexOf(value, search, next, ops);
         }
         sb.append(value.substring(Math.min(from, value.length())));
         InterpreterOps.chargeChars(ops, sb.length());

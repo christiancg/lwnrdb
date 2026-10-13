@@ -1,10 +1,7 @@
 package org.techhouse.ops;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
 import org.techhouse.cache.Cache;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.CompiledScript;
@@ -13,66 +10,38 @@ import org.techhouse.utils.JsonUtils;
 
 public class CompiledProcedureCache {
     private final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
-    private final Configuration configuration = Configuration.getInstance();
-    private final Map<String, CompiledScript> cache = new LinkedHashMap<>(16, 0.75f, true);
-    private final ReentrantLock lock = new ReentrantLock();
+    private final CompiledProgramLru<CompiledScript> cache = new CompiledProgramLru<>();
 
     public CompiledScript get(String dbName, String name, long version, String source) {
-        final var maxSize = configuration.getProcedureCacheSize();
-        if (maxSize <= 0) {
+        if (cache.isDisabled()) {
             return simpleJs.compile(source, false);
         }
         final var key = keyOf(dbName, name, version);
         final var sourceHash = JsonUtils.sha256(source);
-        lock.lock();
-        try {
-            var compiled = cache.get(key);
-            if (compiled == null || !sourceHash.equals(compiled.sourceHash())) {
-                compiled = simpleJs.compile(source, false);
-                cache.put(key, compiled);
-                evictDownTo(maxSize);
-            }
-            return compiled;
-        } finally {
-            lock.unlock();
+        final Predicate<CompiledScript> sameSource = compiled -> sourceHash.equals(compiled.sourceHash());
+        final var cached = cache.get(key, sameSource);
+        if (cached != null) {
+            return cached;
         }
+        return cache.admit(key, simpleJs.compile(source, false), source, sameSource);
     }
 
     public void invalidateDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        lock.lock();
-        try {
-            cache.keySet().removeIf(key -> key.startsWith(prefix));
-        } finally {
-            lock.unlock();
-        }
+        cache.removeIf(key -> key.startsWith(prefix));
     }
 
     public void invalidateProcedure(String dbName, String name) {
         final var prefix = Cache.getCollectionIdentifier(dbName, name) + Globals.COLL_IDENTIFIER_SEPARATOR;
-        lock.lock();
-        try {
-            cache.keySet().removeIf(key -> key.startsWith(prefix));
-        } finally {
-            lock.unlock();
-        }
+        cache.removeIf(key -> key.startsWith(prefix));
     }
 
     public int size() {
-        lock.lock();
-        try {
-            return cache.size();
-        } finally {
-            lock.unlock();
-        }
+        return cache.size();
     }
 
-    private void evictDownTo(int maxSize) {
-        final var iterator = cache.keySet().iterator();
-        while (cache.size() > maxSize && iterator.hasNext()) {
-            iterator.next();
-            iterator.remove();
-        }
+    public long weightedBytes() {
+        return cache.weightedBytes();
     }
 
     private static String keyOf(String dbName, String name, long version) {

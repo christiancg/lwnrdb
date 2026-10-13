@@ -34,7 +34,7 @@ public class FetchSecurityTest {
 
     private static ResourceLimits limits(List<String> allowlist, long timeout, int maxConcurrent) {
         return new ResourceLimits(-1, 10_000, -1, false, true, allowlist, -1, timeout, false, false, 16, 1000, 4096, -1,
-                -1, -1, -1, maxConcurrent);
+                -1, -1, -1, maxConcurrent, ResourceLimits.UNLIMITED_ARRAY_LENGTH);
     }
 
     private String message(String url, NetworkAccess network, ResourceLimits limits) {
@@ -61,7 +61,7 @@ public class FetchSecurityTest {
 
     @Test
     public void test_default_host_fetch_rejects() {
-        final var source = "try { await fetch('http://example.com/'); return 'reached'; }"
+        final var source = "try { await fetch('https://example.com/'); return 'reached'; }"
                 + " catch (e) { return e.message; }";
         final var result = engine.run(source, SimpleHostBindings.empty());
         assertFalse(result.isError());
@@ -106,7 +106,7 @@ public class FetchSecurityTest {
             calls.incrementAndGet();
             return OK;
         };
-        for (final var url : List.of("file:///etc/passwd", "ftp://x.example/", "x.example/path", "http:///x")) {
+        for (final var url : List.of("file:///etc/passwd", "ftp://x.example/", "x.example/path", "https:///x")) {
             assertEquals("fetch: host not allowed", message(url, network, limits(List.of("*"), -1, 8)), url);
         }
         assertEquals(0, calls.get());
@@ -120,10 +120,10 @@ public class FetchSecurityTest {
             return OK;
         };
         final var allowed = limits(List.of("allowed.com"), -1, 8);
-        assertEquals("reached", message("http://allowed.com#@evil.com/", network, allowed));
-        assertEquals("reached", message("http://evil.com@allowed.com/", network, allowed));
-        assertEquals("fetch: host not allowed", message("http://evil.com\\\\@allowed.com/", network, allowed));
-        assertEquals("fetch: host not allowed", message("http://allowed.com.evil.com/", network, allowed));
+        assertEquals("reached", message("https://allowed.com#@evil.com/", network, allowed));
+        assertEquals("reached", message("https://evil.com@allowed.com/", network, allowed));
+        assertEquals("fetch: host not allowed", message("https://evil.com\\\\@allowed.com/", network, allowed));
+        assertEquals("fetch: host not allowed", message("https://allowed.com.evil.com/", network, allowed));
         assertEquals(2, captured.size());
         for (final var request : captured) {
             assertEquals("allowed.com", FetchTarget.host(request.url()));
@@ -153,7 +153,7 @@ public class FetchSecurityTest {
         };
         message("http://10.0.0.5/x", network, limits(List.of("*"), -1, 8));
         assertFalse(captured[0].privateAllowed());
-        message("http://a.example.com/x", network, limits(List.of("*.example.com"), -1, 8));
+        message("https://a.example.com/x", network, limits(List.of("*.example.com"), -1, 8));
         assertFalse(captured[0].privateAllowed());
     }
 

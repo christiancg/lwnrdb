@@ -6,6 +6,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.BoundedLineReader;
+import org.techhouse.conn.ConnectionLog;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.RequestTooLargeException;
 import org.techhouse.ioc.IocContainer;
@@ -57,7 +58,7 @@ final class ClusterHandshake {
     }
 
     private static boolean rejected() {
-        logger.warning("Rejected cluster connection: handshake failed");
+        ConnectionLog.warn(logger, "Rejected cluster connection: handshake failed");
         return false;
     }
 }

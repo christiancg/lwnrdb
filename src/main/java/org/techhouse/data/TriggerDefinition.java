@@ -122,20 +122,6 @@ public class TriggerDefinition extends StoredDefinition {
         return result;
     }
 
-    public static List<TriggerDefinition> fromJsonArray(JsonArray array) {
-        final var result = new ArrayList<TriggerDefinition>();
-        for (final var element : array.asList()) {
-            result.add(fromJsonObject(element.asJsonObject()));
-        }
-        return result;
-    }
-
-    public static JsonArray toJsonArray(List<TriggerDefinition> definitions) {
-        final var array = new JsonArray();
-        definitions.forEach(definition -> array.add(definition.toJsonObject()));
-        return array;
-    }
-
     public Set<EventType> getEvents() {
         return events;
     }
@@ -166,6 +152,12 @@ public class TriggerDefinition extends StoredDefinition {
 
     public String getDefiner() {
         return definer;
+    }
+
+    public TriggerDefinition disabledCopy(String reason, long at) {
+        final var copy = fromJsonObject(toJsonObject());
+        copy.markDisabled(reason, at);
+        return copy;
     }
 
     @Override

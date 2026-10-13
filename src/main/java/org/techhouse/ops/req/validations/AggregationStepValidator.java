@@ -96,15 +96,19 @@ public class AggregationStepValidator {
     }
 
     public static boolean canFailWhileRunning(java.util.List<BaseAggregationStep> steps) {
-        return containsScript(steps) || steps.stream().anyMatch(
-                step -> step.getType() == AggregationStepType.MAP && mapContainsConcat((MapAggregationStep) step));
+        return containsScript(steps) || steps.stream().anyMatch(step -> step.getType() == AggregationStepType.JOIN
+                || step.getType() == AggregationStepType.MAP && mapGrowsText((MapAggregationStep) step));
     }
 
-    private static boolean mapContainsConcat(MapAggregationStep step) {
+    private static boolean mapGrowsText(MapAggregationStep step) {
         return step.getOperators() != null && step.getOperators().stream()
                 .anyMatch(operator -> operator.getType() == MapOperationType.ADD_FIELD
                         && ((AddFieldMapOperator) operator).getOperator() != null
-                        && ((AddFieldMapOperator) operator).getOperator().getType() == MidOperationType.CONCAT);
+                        && isTextGrowing(((AddFieldMapOperator) operator).getOperator().getType()));
+    }
+
+    private static boolean isTextGrowing(MidOperationType type) {
+        return type == MidOperationType.CONCAT || type == MidOperationType.CAST;
     }
 
     private static boolean mapContainsScript(MapAggregationStep step) {
@@ -149,12 +153,40 @@ public class AggregationStepValidator {
         if (step.getOperator() == null) {
             return ValidationResult.fail("FILTER step requires an operator");
         }
-        return validateOperator(step.getOperator());
+        final var breadth = operandLimitRefusal(operatorNodeCount(step.getOperator()), "FILTER operator nodes");
+        return breadth.isValid() ? validateOperator(step.getOperator()) : breadth;
+    }
+
+    private static int operatorNodeCount(BaseOperator operator) {
+        if (!(operator instanceof ConjunctionOperator conjunction) || conjunction.getOperators() == null) {
+            return 1;
+        }
+        var total = 1;
+        for (final var nested : conjunction.getOperators()) {
+            total += nested == null ? 1 : operatorNodeCount(nested);
+        }
+        return total;
+    }
+
+    private static int mapNodeCount(MapAggregationStep step) {
+        var total = 0;
+        for (final var op : step.getOperators()) {
+            total += 1 + (op.getCondition() == null ? 0 : operatorNodeCount(op.getCondition()));
+            if (op instanceof AddFieldMapOperator addOp && addOp.getOperator() instanceof ArrayParamMidOperator arrayOp
+                    && arrayOp.getOperands() != null) {
+                total += arrayOp.getOperands().size();
+            }
+        }
+        return total;
     }
 
     private static ValidationResult validateMap(MapAggregationStep step) {
         if (step.getOperators() == null || step.getOperators().isEmpty()) {
             return ValidationResult.fail("MAP step requires at least one operator");
+        }
+        final var breadth = operandLimitRefusal(mapNodeCount(step), "MAP operator nodes");
+        if (!breadth.isValid()) {
+            return breadth;
         }
         for (var op : step.getOperators()) {
             if (op.getFieldName() == null || op.getFieldName().isBlank()) {
@@ -292,6 +324,11 @@ public class AggregationStepValidator {
             }
             if (conjOp.getOperators() == null || conjOp.getOperators().isEmpty()) {
                 return ValidationResult.fail("Conjunction operator requires at least one nested operator");
+            }
+            final var breadth = operandLimitRefusal(conjOp.getOperators().size(),
+                    conjOp.getConjunctionType() + " operands");
+            if (!breadth.isValid()) {
+                return breadth;
             }
             for (var nested : conjOp.getOperators()) {
                 final var result = validateOperator(nested, context);

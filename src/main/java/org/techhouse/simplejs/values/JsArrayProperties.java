@@ -85,6 +85,7 @@ final class JsArrayProperties {
             throw new TypeErrorException("Cannot define property " + name + ", jsArray.length is not writable");
         }
         if (wideIndex <= Integer.MAX_VALUE) {
+            jsArray.chargeDenseGrowth(JsArray.LENGTH_COERCION_OPS.get(), wideIndex + 1L);
             OrdinaryProperties.validateAndApply(indexSlot(wideIndex.intValue()), jsArray.table.isExtensible(), name,
                     descriptor);
         } else {

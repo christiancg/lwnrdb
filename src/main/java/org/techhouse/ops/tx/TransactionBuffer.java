@@ -68,7 +68,8 @@ public final class TransactionBuffer {
                     cache.getPkIndexAndLoadIfNecessary(dbName, collName), id);
             final var hooked = TransactionWrites.runBeforeHooks(dbName, collName,
                     insert ? EventType.CREATED : EventType.UPDATED,
-                    clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id, OperationType.SAVE);
+                    clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id, OperationType.SAVE,
+                    SchemaValidationHelper.budgetFor(request));
             if (hooked.isRejected()) {
                 return hooked.rejection();
             }
@@ -115,7 +116,8 @@ public final class TransactionBuffer {
             final var updated = new ArrayList<String>();
             final var overlayUpdates = new java.util.LinkedHashMap<String, JsonObject>();
             try (var hooks = BulkBeforeHooks.open(dbName, collName,
-                    clientTracker.getAuthenticatedUsername(transaction.getClientId()))) {
+                    clientTracker.getAuthenticatedUsername(transaction.getClientId()),
+                    SchemaValidationHelper.budgetFor(request))) {
                 for (final var object : request.getObjects()) {
                     final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
                     final var isUpdate = TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id);

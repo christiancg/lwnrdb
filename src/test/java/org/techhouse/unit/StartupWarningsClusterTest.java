@@ -24,6 +24,7 @@ public class StartupWarningsClusterTest {
     private boolean origClusterTls;
     private String origTlsEnabled;
     private String origKeystorePath;
+    private String origKeystorePassword;
 
     @BeforeEach
     public void setUp() {
@@ -31,6 +32,7 @@ public class StartupWarningsClusterTest {
         origClusterTls = config.isClusterTlsEnabled();
         origTlsEnabled = String.valueOf(config.isTlsEnabled());
         origKeystorePath = config.getTlsKeystorePath();
+        origKeystorePassword = config.getTlsKeystorePassword();
     }
 
     @AfterEach
@@ -39,6 +41,7 @@ public class StartupWarningsClusterTest {
         TestUtils.setPrivateField(config, "clusterTlsEnabled", origClusterTls);
         TestUtils.setPrivateField(config, "tlsEnabled", origTlsEnabled);
         TestUtils.setPrivateField(config, "tlsKeystorePath", origKeystorePath);
+        TestUtils.setPrivateField(config, "tlsKeystorePassword", origKeystorePassword);
     }
 
     private void readableKeystore(Path dir) throws Exception {
@@ -69,6 +72,31 @@ public class StartupWarningsClusterTest {
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.warnIfStorageIsReadableByOthers();
             logWriter.verify(() -> LogWriter.writeLogEntry(argThat(entry -> entry.contains("TLS keystore"))), never());
+        }
+    }
+
+    @Test
+    public void test_default_keystore_password_warns_for_cluster_tls_only() throws Exception {
+        TestUtils.setPrivateField(config, "tlsEnabled", "false");
+        TestUtils.setPrivateField(config, "tlsKeystorePassword", "change_it");
+        TestUtils.setPrivateField(config, "clusterEnabled", true);
+        TestUtils.setPrivateField(config, "clusterTlsEnabled", true);
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfDefaultKeystorePassword();
+            logWriter.verify(() -> LogWriter
+                    .writeLogEntry(argThat(entry -> entry.contains("tlsKeystorePassword is still the shipped value"))));
+        }
+    }
+
+    @Test
+    public void test_default_keystore_password_is_silent_when_no_tls_uses_it() throws Exception {
+        TestUtils.setPrivateField(config, "tlsEnabled", "false");
+        TestUtils.setPrivateField(config, "tlsKeystorePassword", "change_it");
+        TestUtils.setPrivateField(config, "clusterEnabled", true);
+        TestUtils.setPrivateField(config, "clusterTlsEnabled", false);
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfDefaultKeystorePassword();
+            logWriter.verifyNoInteractions();
         }
     }
 

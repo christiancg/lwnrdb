@@ -146,8 +146,7 @@ final class CompactionRecovery {
         if (marker.kind() == Kind.RELOCATE) {
             truncateRelocationTarget(marker);
         }
-        final var lock = FileLocks.lockFor(page).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(page);
         try {
             restorePage(page, marker);
         } finally {
@@ -160,8 +159,7 @@ final class CompactionRecovery {
             return;
         }
         final var target = paths.collectionPage(marker.dbName(), marker.collName(), marker.targetPage());
-        final var lock = FileLocks.lockFor(target).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(target);
         try {
             if (target.exists() && target.length() > marker.targetLengthBefore()) {
                 OwnerOnlyPermissions.ensureOwnerOnlyFile(target.toPath());

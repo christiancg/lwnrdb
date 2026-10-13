@@ -39,7 +39,8 @@ public final class BeforeHookHelper {
             if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
                 return null;
             }
-            try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
+            try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser,
+                    SchemaValidationHelper.budgetFor(request))) {
                 final var outcome = hooks.apply(request.getObject(), request.get_id(), OperationType.SAVE);
                 if (outcome.isRejected()) {
                     return outcome.rejection();
@@ -64,7 +65,8 @@ public final class BeforeHookHelper {
             return null;
         }
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING, () -> {
-            try (var hooks = BulkBeforeHooks.open(dbName, collName, actingUser)) {
+            try (var hooks = BulkBeforeHooks.open(dbName, collName, actingUser,
+                    SchemaValidationHelper.budgetFor(request))) {
                 final var existingIds = new HashSet<String>();
                 cache.getPkIndexAndLoadIfNecessary(dbName, collName)
                         .forEach(entry -> existingIds.add(entry.getValue()));

@@ -130,7 +130,7 @@ public class MainStartupOrderTest {
     @Test
     public void test_the_shipped_password_check_precedes_any_storage_creation() throws IOException {
         final var body = mainBody();
-        final var check = positionOf(body, "AdminPasswordGuard.refuseShippedPassword();");
+        final var check = positionOf(body, "AdminPasswordGuard.refuseWeakPassword();");
 
         assertTrue(positionOf(body, "LogWriter.createLogPathAndRemoveOldFiles();") < check,
                 "the FATAL line must reach the log file");

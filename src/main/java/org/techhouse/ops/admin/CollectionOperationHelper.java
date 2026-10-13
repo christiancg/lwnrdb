@@ -2,6 +2,7 @@ package org.techhouse.ops.admin;
 
 import java.util.List;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -17,6 +18,7 @@ import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
@@ -30,6 +32,7 @@ public final class CollectionOperationHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
             .get(org.techhouse.cluster.HybridClock.class);
 
@@ -133,6 +136,8 @@ public final class CollectionOperationHelper {
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
+                triggerExecutor.discardQueuedFor(dbName, collName);
+                TriggerRunLog.discardAllFor(dbName, collName);
                 GrantPruner.forDroppedCollection(dbName, collName, grantVersion);
                 dropSucceeded = true;
                 return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");

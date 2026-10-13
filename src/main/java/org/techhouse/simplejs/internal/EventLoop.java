@@ -22,6 +22,8 @@ import org.techhouse.simplejs.values.JsPromise;
 
 public final class EventLoop {
     private static final long CANCEL_POLL_NANOS = 50_000_000L;
+    private static final long MICROTASK_BYTES = 64L;
+    private static final long TIMER_BYTES = 96L;
 
     private static final class Timer {
         private final long id;
@@ -81,6 +83,7 @@ public final class EventLoop {
     }
 
     public void queueMicrotask(Runnable task) {
+        InterpreterOps.charge(ops, MICROTASK_BYTES);
         microtasks.add(task);
     }
 
@@ -108,6 +111,7 @@ public final class EventLoop {
     public long setTimer(Runnable callback, long delayMillis, boolean repeat) {
         final var delay = Math.max(0, delayMillis);
         final var intervalNanos = delay * 1_000_000L;
+        InterpreterOps.charge(ops, TIMER_BYTES);
         final var id = nextTimerId++;
         timers.add(new Timer(id, System.nanoTime() + intervalNanos, intervalNanos, repeat, nextSeq++, callback));
         return id;
@@ -133,7 +137,10 @@ public final class EventLoop {
     private void drainLoop(long deadlineNanos) {
         while (true) {
             while (!microtasks.isEmpty()) {
-                microtasks.poll().run();
+                final var task = microtasks.poll();
+                InterpreterOps.release(ops, MICROTASK_BYTES);
+                InterpreterOps.tick(ops);
+                task.run();
             }
             final var completion = asyncCompletions.poll();
             if (completion != null) {
@@ -158,6 +165,8 @@ public final class EventLoop {
             if (timer.repeat) {
                 timer.dueNanos = System.nanoTime() + timer.intervalNanos;
                 timers.add(timer);
+            } else {
+                InterpreterOps.release(ops, TIMER_BYTES);
             }
             try {
                 timer.callback.run();
@@ -190,6 +199,7 @@ public final class EventLoop {
     private Timer pollNextLiveTimer() {
         var timer = timers.poll();
         while (timer != null && cancelled.remove(timer.id)) {
+            InterpreterOps.release(ops, TIMER_BYTES);
             timer = timers.poll();
         }
         return timer;

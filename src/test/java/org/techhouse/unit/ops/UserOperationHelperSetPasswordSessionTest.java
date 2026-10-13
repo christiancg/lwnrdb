@@ -4,8 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +24,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.test.ResponseLines;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -132,10 +131,8 @@ public class UserOperationHelperSetPasswordSessionTest {
     public void a_deauthenticated_connection_can_still_roll_back_its_transaction() throws Exception {
         createUser("tx_holder", true);
         final var toServer = new PipedOutputStream();
-        final var fromServer = new PipedInputStream(1 << 16);
-        final var socket = TestUtils.clientSocket(new PipedInputStream(toServer, 1 << 16),
-                new PipedOutputStream(fromServer));
-        final var responses = new BufferedReader(new InputStreamReader(fromServer, StandardCharsets.UTF_8));
+        final var responses = new ResponseLines();
+        final var socket = TestUtils.clientSocket(new PipedInputStream(toServer, 1 << 16), responses);
         final var connection = new Thread(new MessageProcessor(socket));
         connection.start();
         try (toServer) {
@@ -143,8 +140,8 @@ public class UserOperationHelperSetPasswordSessionTest {
                 try {
                     toServer.write((message + "\n").getBytes(StandardCharsets.UTF_8));
                     toServer.flush();
-                    return responses.readLine();
-                } catch (java.io.IOException e) {
+                    return responses.next();
+                } catch (java.io.IOException | InterruptedException e) {
                     throw new IllegalStateException(e);
                 }
             };

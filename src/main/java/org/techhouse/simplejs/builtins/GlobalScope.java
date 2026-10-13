@@ -36,7 +36,8 @@ public final class GlobalScope {
         intrinsics.linkFunctionKindConstructors(functionCtor);
         constructor(global, "Array", ArrayBuiltins.create(invoker, eventLoop, ops, intrinsics), intrinsics.arrayProto);
         constructor(global, "String", StringBuiltins.create(ops), intrinsics.stringProto);
-        constructor(global, "Number", NumberBuiltins.create(ops), intrinsics.numberProto);
+        final var number = NumberBuiltins.create(ops);
+        constructor(global, "Number", number, intrinsics.numberProto);
         constructor(global, "Boolean", booleanFunction(), intrinsics.booleanProto);
         namespace(global, "Math", MathBuiltins.create(ops), intrinsics);
         namespace(global, "JSON", JsonBuiltins.create(ops, invoker, intrinsics.objectProto), intrinsics);
@@ -87,8 +88,8 @@ public final class GlobalScope {
         final var bigInt = NumberBuiltins.bigIntFunction(ops);
         BigIntBuiltins.installStatics(bigInt, ops);
         constructor(global, "BigInt", bigInt, intrinsics.bigintProto);
-        define(global, "parseInt", NumberBuiltins.parseIntFunction(ops));
-        define(global, "parseFloat", NumberBuiltins.parseFloatFunction(ops));
+        define(global, "parseInt", number.getProperty("parseInt"));
+        define(global, "parseFloat", number.getProperty("parseFloat"));
         define(global, "isNaN", NumberBuiltins.isNaNFunction(ops));
         define(global, "isFinite", NumberBuiltins.isFiniteFunction(ops));
         define(global, "eval", evalStub());

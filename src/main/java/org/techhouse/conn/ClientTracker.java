@@ -1,7 +1,5 @@
 package org.techhouse.conn;
 
-import java.io.BufferedWriter;
-import java.io.IOException;
 import java.net.Socket;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -36,7 +34,7 @@ public class ClientTracker {
         }
         final var clientId = UUID.randomUUID();
         clients.put(clientId, new Client(socket.getInetAddress().getHostAddress()));
-        disconnectSignals.put(clientId, () -> closeQuietly(socket));
+        disconnectSignals.put(clientId, () -> SocketClosing.closeInBackground(socket));
         return clientId;
     }
 
@@ -61,13 +59,6 @@ public class ClientTracker {
         }
         signal.run();
         return departure;
-    }
-
-    private static void closeQuietly(Socket socket) {
-        try {
-            socket.close();
-        } catch (IOException ignored) {
-        }
     }
 
     // The caller must removeById this transient client when the operation completes, or it leaks.
@@ -228,20 +219,20 @@ public class ClientTracker {
         return client != null ? client.getAuthenticatedUsername() : null;
     }
 
-    public void registerWriter(UUID clientId, BufferedWriter writer) {
+    public void registerOutbound(UUID clientId, OutboundQueue outbound) {
         if (clientId == null)
             return;
         final var client = clients.get(clientId);
         if (client != null) {
-            client.setWriter(writer);
+            client.setOutbound(outbound);
         }
     }
 
-    public BufferedWriter getWriter(UUID clientId) {
+    public OutboundQueue getOutbound(UUID clientId) {
         if (clientId == null)
             return null;
         final var client = clients.get(clientId);
-        return client != null ? client.getWriter() : null;
+        return client != null ? client.getOutbound() : null;
     }
 
     public ReentrantLock getWriterLock(UUID clientId) {

@@ -15,6 +15,7 @@ import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -108,13 +109,15 @@ public class FilterOperatorHelper {
         final var matches = new ArrayList<Set<JsonObject>>();
         for (var step : operator.getOperators()) {
             final Set<JsonObject> matched = Collections.newSetFromMap(new IdentityHashMap<>());
-            try (var stepResults = processConjunctionStep(step, buffered.stream(), dbName, collName, context)) {
+            try (var stepResults = processConjunctionStep(step, AggregateDeadline.watch(buffered.stream()), dbName,
+                    collName, context)) {
                 stepResults.forEach(matched::add);
             }
             matches.add(matched);
         }
         final var type = operator.getConjunctionType();
-        return buffered.stream().filter(row -> accepts(type, countMatches(matches, row), matches.size()));
+        return AggregateDeadline.watch(buffered.stream())
+                .filter(row -> accepts(type, countMatches(matches, row), matches.size()));
     }
 
     private static int countMatches(List<Set<JsonObject>> matches, JsonObject row) {
@@ -138,7 +141,8 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
-        return combinationResult.stream().flatMap(FilterOperatorHelper::distinctByConjunctionKey)
+        return AggregateDeadline
+                .watch(combinationResult.stream().flatMap(FilterOperatorHelper::distinctByConjunctionKey))
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == matches).map(List::getFirst);
     }
@@ -154,13 +158,14 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
-        return distinctByConjunctionKey(combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream));
+        return distinctByConjunctionKey(
+                AggregateDeadline.watch(combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)));
     }
 
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined, String dbName,
             String collName) {
         final var wholeCollection = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
-        return Stream.concat(distinctByConjunctionKey(wholeCollection), combined)
+        return AggregateDeadline.watch(Stream.concat(distinctByConjunctionKey(wholeCollection), combined))
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == 1).map(List::getFirst);
     }

@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.util.List;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocketFactory;
@@ -17,6 +18,7 @@ import org.techhouse.ex.TlsConfigurationException;
 import org.techhouse.log.Logger;
 
 public final class TlsContextFactory {
+    public static final List<String> ENABLED_PROTOCOLS = List.of("TLSv1.3", "TLSv1.2");
     private static final Logger logger = Logger.logFor(TlsContextFactory.class);
 
     private TlsContextFactory() {
@@ -42,6 +44,10 @@ public final class TlsContextFactory {
         return mutualContext(config, "Failed to initialise the TLS client context").getSocketFactory();
     }
 
+    public static String[] enabledProtocols() {
+        return ENABLED_PROTOCOLS.toArray(String[]::new);
+    }
+
     public static SSLServerSocketFactory createClusterServerSocketFactory(Configuration config) {
         return mutualContext(config, "Failed to initialise the cluster TLS context").getServerSocketFactory();
     }
@@ -65,7 +71,9 @@ public final class TlsContextFactory {
 
     private static KeyStore loadOrGenerateKeyStore(Path keystorePath, char[] password) {
         if (Files.exists(keystorePath)) {
-            return loadKeyStore(keystorePath, password);
+            final var keyStore = loadKeyStore(keystorePath, password);
+            CertificateExpiry.warnIfExpiringSoon(keyStore, keystorePath);
+            return keyStore;
         }
         logger.warning("SECURITY WARNING: no TLS keystore found at " + keystorePath
                 + ". Generating a self-signed certificate for development use only. Clients will not trust it; "

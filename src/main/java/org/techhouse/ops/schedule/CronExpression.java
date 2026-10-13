@@ -179,8 +179,8 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
         if (from > to) {
             throw new InvalidCronException(text, "range '" + range + "' starts after it ends");
         }
-        for (var value = from; value <= to; value += step) {
-            bits.set(value);
+        for (long value = from; value <= to; value += step) {
+            bits.set((int) value);
         }
     }
 

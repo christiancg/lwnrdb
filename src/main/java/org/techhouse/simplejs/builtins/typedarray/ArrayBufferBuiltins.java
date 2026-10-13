@@ -85,10 +85,10 @@ public final class ArrayBufferBuiltins {
             case "resizable" -> JsBoolean.of(buffer.isResizable());
             case "detached" -> JsBoolean.of(buffer.isDetached());
             case "slice" -> new JsNativeFunction("slice", (_, args) -> {
-                final var from = (int) intArg(args, 0, 0, ops);
-                final var to = (int) intArg(args, 1, buffer.byteLength(), ops);
-                InterpreterOps.charge(ops, Math.max(to - from, 0));
-                final var sliced = buffer.slice(from, to);
+                final var from = intArg(args, 0, 0, ops);
+                final var to = intArg(args, 1, buffer.byteLength(), ops);
+                InterpreterOps.charge(ops, sliceBytes(from, to, buffer.byteLength()));
+                final var sliced = buffer.slice((int) from, (int) to);
                 requireBufferSpecies(buffer, ops);
                 return sliced;
             });
@@ -108,6 +108,14 @@ public final class ArrayBufferBuiltins {
             });
             default -> null;
         };
+    }
+
+    static long sliceBytes(double from, double to, int byteLength) {
+        return Math.max(resolveRelative(to, byteLength) - resolveRelative(from, byteLength), 0L);
+    }
+
+    private static long resolveRelative(double relative, int byteLength) {
+        return relative < 0 ? (long) Math.max(byteLength + relative, 0) : (long) Math.min(relative, byteLength);
     }
 
     public static void requireBufferSpecies(JsArrayBuffer buffer, InterpreterOps ops) {

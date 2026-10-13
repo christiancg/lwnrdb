@@ -1,10 +1,14 @@
 package org.techhouse.bckg_ops.events;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import org.techhouse.data.DbEntry;
 
 public class TriggerEvent extends CollectionScopedEvent {
+    private static final long QUEUED_EVENT_OVERHEAD_BYTES = 256L;
+    private static final long QUEUED_ID_OVERHEAD_BYTES = 64L;
+
     private final String triggerName;
     private final String procedureName;
     private final boolean batchMode;
@@ -63,6 +67,32 @@ public class TriggerEvent extends CollectionScopedEvent {
     public TriggerEvent withCurrentEntries(List<DbEntry> currentEntries) {
         return new TriggerEvent(getType(), getDbName(), getCollName(), triggerName, procedureName, batchMode,
                 currentEntries, actingUser, depth, runId, attempt, firedAt, false);
+    }
+
+    public TriggerEvent withIdsOnly() {
+        if (getType() == EventType.DELETED) {
+            return this;
+        }
+        final var stubs = new ArrayList<DbEntry>(entries.size());
+        for (final var entry : entries) {
+            final var stub = new DbEntry();
+            stub.setDatabaseName(getDbName());
+            stub.setCollectionName(getCollName());
+            stub.set_id(entry.get_id());
+            stubs.add(stub);
+        }
+        return new TriggerEvent(getType(), getDbName(), getCollName(), triggerName, procedureName, batchMode, stubs,
+                actingUser, depth, runId, attempt, firedAt, true);
+    }
+
+    public long queuedBytes() {
+        var bytes = QUEUED_EVENT_OVERHEAD_BYTES;
+        for (final var entry : entries) {
+            bytes += entry.getData() == null
+                    ? QUEUED_ID_OVERHEAD_BYTES + 2L * String.valueOf(entry.get_id()).length()
+                    : entry.byteSize();
+        }
+        return bytes;
     }
 
     public boolean hasStaleEntries() {

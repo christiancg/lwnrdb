@@ -286,7 +286,7 @@ public final class DbModule {
     }
 
     private static JsonBaseElement payloadArg(List<JsValue> args, InterpreterOps ops) {
-        return args.size() > PAYLOAD_INDEX ? EJsonInterop.toHostEjson(args.get(PAYLOAD_INDEX), ops) : null;
+        return args.size() > PAYLOAD_INDEX ? EJsonInterop.toHostPayload(args.get(PAYLOAD_INDEX), ops) : null;
     }
 
     private static JsonObject requireDocument(JsonBaseElement converted) {

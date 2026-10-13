@@ -1,5 +1,6 @@
 package org.techhouse.simplejs;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.ARRAY_TOO_LARGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.CANCELLED;
 import static org.techhouse.simplejs.host.ScriptErrorNames.EXHAUSTED_MEMORY_MESSAGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.LIMIT;
@@ -19,6 +20,7 @@ import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
+import org.techhouse.simplejs.exceptions.ScriptArrayLengthException;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.exceptions.ScriptCancelledException;
 import org.techhouse.simplejs.exceptions.ScriptMemoryException;
@@ -62,6 +64,7 @@ import org.techhouse.utils.JsonUtils;
 
 public final class SimpleJs {
     private static final String INTERNAL_ERROR = "InternalError";
+    private static final String INTERNAL_ERROR_MESSAGE = "Internal script error";
     private static final Logger logger = Logger.logFor(SimpleJs.class);
 
     public CompiledScript compile(String source, boolean strictScriptGoal) {
@@ -101,7 +104,7 @@ public final class SimpleJs {
             return resultOf(Interpreter.run(program, capturing, null, this::convertResult, metrics), capture, limits)
                     .withMetrics(measured(metrics));
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
-            final var error = describe(failure);
+            final var error = describe(failure, maxErrorChars(limits));
             if (error == null) {
                 throw failure;
             }
@@ -110,7 +113,7 @@ public final class SimpleJs {
     }
 
     public ScriptResult failure(RuntimeException failure) {
-        final var error = describe(failure);
+        final var error = describe(failure, ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS);
         if (error == null) {
             throw failure;
         }
@@ -135,7 +138,7 @@ public final class SimpleJs {
             return resultOf(Interpreter.run(program, capturing, around, this::convertResult, metrics), capture, limits)
                     .withMetrics(measured(metrics));
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
-            final var error = describe(failure);
+            final var error = describe(failure, maxErrorChars(limits));
             if (error == null) {
                 throw failure;
             }
@@ -152,24 +155,25 @@ public final class SimpleJs {
         try {
             return openCallable(compile(source, host.strictScriptGoal()), host);
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
-            throw asCallableException(failure);
+            throw asCallableException(failure, maxErrorChars(host.limits()));
         }
     }
 
     public ScriptCallable openCallable(CompiledScript compiled, HostBindings host) {
+        final var maxErrorChars = maxErrorChars(host.limits());
         try {
             final var program = compiled.strictScriptGoal() == host.strictScriptGoal()
                     ? compiled.program()
                     : Parser.parse(Lexer.lexWithPositions(compiled.source()), host.strictScriptGoal());
             final var session = Interpreter.open(program, host);
             try {
-                return new SessionCallable(session, requireCallable(session.outcome()));
+                return new SessionCallable(session, requireCallable(session.outcome()), maxErrorChars);
             } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
                 session.close();
                 throw failure;
             }
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
-            throw asCallableException(failure);
+            throw asCallableException(failure, maxErrorChars);
         }
     }
 
@@ -190,8 +194,12 @@ public final class SimpleJs {
         throw new TypeErrorException("Script must export default (or return) a function");
     }
 
-    private static ScriptCallableException asCallableException(Throwable failure) {
-        final var error = describe(failure);
+    private static int maxErrorChars(ResourceLimits limits) {
+        return limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS : limits.maxLogLineChars();
+    }
+
+    private static ScriptCallableException asCallableException(Throwable failure, int maxErrorChars) {
+        final var error = describe(failure, maxErrorChars);
         if (error == null) {
             if (failure instanceof RuntimeException runtime) {
                 throw runtime;
@@ -205,7 +213,7 @@ public final class SimpleJs {
         NULLED, REFUSED
     }
 
-    private record SessionCallable(Session session, JsValue function) implements ScriptCallable {
+    private record SessionCallable(Session session, JsValue function, int maxErrorChars) implements ScriptCallable {
         @Override
         public JsonBaseElement apply(JsonObject document) {
             return invoke(List.of(EJsonInterop.fromEjson(document)), document, null, NonFiniteResult.NULLED);
@@ -236,7 +244,7 @@ public final class SimpleJs {
                         ? JsonNull.INSTANCE
                         : session.toHostEjson(returned);
             } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
-                throw asCallableException(failure);
+                throw asCallableException(failure, maxErrorChars);
             }
         }
 
@@ -251,7 +259,7 @@ public final class SimpleJs {
             try {
                 return settled(session.call(function, args));
             } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
-                throw asCallableException(failure);
+                throw asCallableException(failure, maxErrorChars);
             } finally {
                 session.release(charged);
             }
@@ -271,15 +279,30 @@ public final class SimpleJs {
         ScriptError(String name, String message) {
             this(name, message, null);
         }
+
+        ScriptError bounded(int maxChars) {
+            return new ScriptError(name, clamp(message, maxChars),
+                    stack == null ? null : stack.stream().map(frame -> clamp(frame, maxChars)).toList());
+        }
     }
 
-    private static ScriptError describe(Throwable failure) {
+    private static String clamp(String text, int maxChars) {
+        return text != null && maxChars > 0 && text.length() > maxChars ? text.substring(0, maxChars) : text;
+    }
+
+    private static ScriptError describe(Throwable failure, int maxChars) {
+        final var error = describeUnbounded(failure, maxChars);
+        return error == null ? null : error.bounded(maxChars);
+    }
+
+    private static ScriptError describeUnbounded(Throwable failure, int maxChars) {
         return switch (failure) {
             case ScriptCancelledException cancelled -> new ScriptError(CANCELLED, cancelled.getMessage());
             case ScriptTimeoutException timeout -> new ScriptError(TIMEOUT, timeout.getMessage());
             case ScriptMemoryException memory -> new ScriptError(MEMORY, memory.getMessage());
+            case ScriptArrayLengthException array -> new ScriptError(ARRAY_TOO_LARGE, array.getMessage());
             case ScriptAbortException limit -> new ScriptError(LIMIT, limit.getMessage());
-            case JsThrowException thrown -> throwName(thrown);
+            case JsThrowException thrown -> throwName(thrown, maxChars);
             case TypeErrorException error -> new ScriptError("TypeError", error.getMessage(), error.getCapturedStack());
             case ReferenceErrorException error ->
                 new ScriptError("ReferenceError", error.getMessage(), error.getCapturedStack());
@@ -310,13 +333,13 @@ public final class SimpleJs {
     private static ScriptError reportedInternalError(RuntimeException unmapped) {
         logger.error("A script run failed with an exception the engine does not map, so it is reported as "
                 + INTERNAL_ERROR + " rather than escaping the interpreter", unmapped);
-        return new ScriptError(INTERNAL_ERROR, unmapped.getClass().getSimpleName() + ": " + unmapped.getMessage());
+        return new ScriptError(INTERNAL_ERROR, INTERNAL_ERROR_MESSAGE);
     }
 
-    private static ScriptError throwName(JsThrowException thrown) {
+    private static ScriptError throwName(JsThrowException thrown, int maxChars) {
         final var value = thrown.getValue();
         if (value instanceof JsObject object) {
-            return new ScriptError(errorName(object), field(object), object.getErrorStack());
+            return new ScriptError(clamp(errorName(object), maxChars), field(object), object.getErrorStack());
         }
         return new ScriptError("Error", JsCoercion.toStr(value));
     }
