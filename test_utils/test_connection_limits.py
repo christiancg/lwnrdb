@@ -5,6 +5,7 @@ import socket
 import tempfile
 import threading
 import time
+import weakref
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_status, section
@@ -21,6 +22,8 @@ COLL = "items"
 
 bu.configure(host=HOST, port=PORT)
 
+_unread: "weakref.WeakKeyDictionary[socket.socket, bytes]" = weakref.WeakKeyDictionary()
+
 
 def write_config(work_dir: str):
     bu.write_config(work_dir, PORT, maxRequestSize="128Kb", maxEntrySize="64Kb", maxPageSize="256Kb",
@@ -35,13 +38,12 @@ def raw_socket(timeout: float = 10.0) -> socket.socket:
 
 def read_frame(sock: socket.socket, timeout: float):
     deadline = time.time() + timeout
-    data = b""
+    data = _unread.pop(sock, b"")
     while b"\n" not in data:
         remaining = deadline - time.time()
-        if remaining <= 0:
-            return None
-        ready, _, _ = select.select([sock], [], [], remaining)
+        ready, _, _ = select.select([sock], [], [], remaining) if remaining > 0 else ([], [], [])
         if not ready:
+            _unread[sock] = data
             return None
         try:
             chunk = sock.recv(65536)
@@ -50,7 +52,10 @@ def read_frame(sock: socket.socket, timeout: float):
         if not chunk:
             break
         data += chunk
-    line = data.split(b"\n", 1)[0].decode(errors="replace").strip()
+    line, _, rest = data.partition(b"\n")
+    if rest:
+        _unread[sock] = rest
+    line = line.decode(errors="replace").strip()
     if not line:
         return None
     try:
