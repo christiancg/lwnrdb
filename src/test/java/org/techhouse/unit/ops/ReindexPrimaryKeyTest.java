@@ -152,8 +152,8 @@ public class ReindexPrimaryKeyTest {
     private List<String> queuedIds() throws Exception {
         final LinkedBlockingQueue<?> queue = TestUtils.getPrivateField(stubTaskManager, "queue",
                 LinkedBlockingQueue.class);
-        return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast)
-                .map(event -> event.getDbEntry().get_id()).toList();
+        return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast).map(EntityEvent::getId)
+                .toList();
     }
 
     private List<String> idsTaggedLikeB() {

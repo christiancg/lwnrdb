@@ -73,7 +73,7 @@ public final class AdminRecordStore<T> {
                 }
                 entry.setPage(pk.getPage());
                 entry.setPreviousByteSize(pk.getLength());
-                cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk));
+                cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk, AdminResidentRows.of(collName)));
                 pkRemove.accept(recordId);
                 entryCountUpdater.apply(Globals.ADMIN_DB_NAME, collName, EventType.DELETED, List.of(entry));
             }

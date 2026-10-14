@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public abstract class JsonCustom<T> extends JsonString {
@@ -25,6 +26,11 @@ public abstract class JsonCustom<T> extends JsonString {
     }
 
     public JsonCustom() {
+    }
+
+    @Override
+    public JsonBaseElement deepCopy() {
+        return CustomTypeFactory.getCustomTypeInstance(getValue());
     }
 
     public T getCustomValue() {

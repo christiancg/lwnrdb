@@ -6,7 +6,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.cache.Cache;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.ejson.EJson;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -22,7 +22,6 @@ public class ListenProcessorThread implements Runnable {
     private final LinkedBlockingQueue<UUID> dirtyQueue;
     private final ListenManager manager;
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private final EJson eJson = IocContainer.get(EJson.class);
     private final Cache cache = IocContainer.get(Cache.class);
 
     public ListenProcessorThread(LinkedBlockingQueue<UUID> dirtyQueue, ListenManager manager) {
@@ -133,7 +132,7 @@ public class ListenProcessorThread implements Runnable {
             if (expected != null && manager.getRegistration(listenId) != expected) {
                 return;
             }
-            if (!outbound.offer(eJson.toJson(frame))) {
+            if (!outbound.offer(OutboundQueue.frameOf(frame))) {
                 manager.unregister(listenId);
             }
         } finally {

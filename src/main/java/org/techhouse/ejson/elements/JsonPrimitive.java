@@ -1,7 +1,5 @@
 package org.techhouse.ejson.elements;
 
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
-
 public class JsonPrimitive<T> extends JsonBaseElement {
     protected T value;
 
@@ -11,10 +9,6 @@ public class JsonPrimitive<T> extends JsonBaseElement {
 
     public T getValue() {
         return this.value;
-    }
-
-    public void setValue(T value) {
-        this.value = value;
     }
 
     @Override
@@ -51,12 +45,6 @@ public class JsonPrimitive<T> extends JsonBaseElement {
 
     @Override
     public JsonBaseElement deepCopy() {
-        return switch (this) {
-            case JsonCustom<?> custom -> CustomTypeFactory.getCustomTypeInstance(custom.getValue());
-            case JsonNumber ignored -> new JsonNumber((Number) getValue());
-            case JsonBoolean ignored -> new JsonBoolean((Boolean) getValue());
-            case JsonString ignored -> new JsonString((String) getValue());
-            default -> null;
-        };
+        return this;
     }
 }

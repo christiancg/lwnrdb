@@ -1,8 +1,9 @@
 package org.techhouse.conn;
 
-import java.io.BufferedWriter;
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -18,10 +19,11 @@ public class OutboundQueue {
     public static final Executor VIRTUAL_DRAINER = command -> Thread.ofVirtual().name("lwnrdb-outbound").start(command);
     private static final EJson eJson = IocContainer.get(EJson.class);
     private static final long OVERFLOW_CLOSE_GRACE_MS = 1000L;
+    private static final byte[] LINE_END = System.lineSeparator().getBytes(StandardCharsets.US_ASCII);
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition idle = lock.newCondition();
-    private final ArrayDeque<String> pending = new ArrayDeque<>();
-    private final BufferedWriter writer;
+    private final ArrayDeque<byte[]> pending = new ArrayDeque<>();
+    private final OutputStream out;
     private final Closeable connection;
     private final long maxQueuedBytes;
     private final Executor drainer;
@@ -30,26 +32,38 @@ public class OutboundQueue {
     private boolean draining;
     private boolean closed;
 
-    public OutboundQueue(BufferedWriter writer, Closeable connection, long maxQueuedBytes, Executor drainer,
+    public OutboundQueue(OutputStream out, Closeable connection, long maxQueuedBytes, Executor drainer,
             Runnable onOverflow) {
-        this.writer = writer;
+        this.out = out;
         this.connection = connection;
         this.maxQueuedBytes = maxQueuedBytes;
         this.drainer = drainer;
         this.onOverflow = onOverflow;
     }
 
-    public static String closeFrame(ErrorCode code) {
-        return eJson.toJson(new OperationResponse(OperationType.CLOSE_CONNECTION, code));
+    public static byte[] frameOf(OperationResponse response) {
+        return eJson.toJsonBytes(response, response.estimatedJsonChars());
     }
 
-    public static void sendDirectly(BufferedWriter writer, ErrorCode code) throws IOException {
-        writer.write(closeFrame(code));
-        writer.newLine();
-        writer.flush();
+    public static byte[] closeFrame(ErrorCode code) {
+        return frameOf(new OperationResponse(OperationType.CLOSE_CONNECTION, code));
     }
 
-    public boolean offer(String line) {
+    public static void sendDirectly(OutputStream out, ErrorCode code) throws IOException {
+        writeFrame(out, closeFrame(code));
+        out.flush();
+    }
+
+    private static void writeFrame(OutputStream out, byte[] frame) throws IOException {
+        out.write(frame);
+        out.write(LINE_END);
+    }
+
+    private static long queuedLengthOf(byte[] frame) {
+        return (long) frame.length + LINE_END.length;
+    }
+
+    public boolean offer(byte[] frame) {
         final boolean overflowed;
         final boolean startDrain;
         lock.lock();
@@ -57,15 +71,15 @@ public class OutboundQueue {
             if (closed) {
                 return false;
             }
-            overflowed = queuedBytes > 0 && line.length() > maxQueuedBytes - queuedBytes;
+            overflowed = queuedBytes > 0 && queuedLengthOf(frame) > maxQueuedBytes - queuedBytes;
             if (overflowed) {
                 pending.clear();
                 queuedBytes = 0;
                 closed = true;
                 pending.add(closeFrame(ErrorCode.OUTBOUND_BACKLOG));
             } else {
-                pending.add(line);
-                queuedBytes += line.length();
+                pending.add(frame);
+                queuedBytes += queuedLengthOf(frame);
             }
             startDrain = !draining;
             draining = true;
@@ -112,33 +126,32 @@ public class OutboundQueue {
     }
 
     private void drain() {
-        var line = nextLine();
-        while (line != null) {
+        var frame = nextFrame();
+        while (frame != null) {
             try {
-                writer.write(line);
-                writer.newLine();
+                writeFrame(out, frame);
                 if (nothingPending()) {
-                    writer.flush();
+                    out.flush();
                 }
             } catch (IOException e) {
                 abandon();
                 return;
             }
-            line = nextLine();
+            frame = nextFrame();
         }
     }
 
-    private String nextLine() {
-        final String line;
+    private byte[] nextFrame() {
+        final byte[] frame;
         final boolean finished;
         lock.lock();
         try {
-            line = pending.poll();
-            if (line != null && !closed) {
-                queuedBytes -= line.length();
+            frame = pending.poll();
+            if (frame != null && !closed) {
+                queuedBytes -= queuedLengthOf(frame);
             }
-            finished = line == null && closed;
-            if (line == null) {
+            finished = frame == null && closed;
+            if (frame == null) {
                 draining = false;
                 idle.signalAll();
             }
@@ -148,7 +161,7 @@ public class OutboundQueue {
         if (finished) {
             closeQuietly();
         }
-        return line;
+        return frame;
     }
 
     private boolean nothingPending() {

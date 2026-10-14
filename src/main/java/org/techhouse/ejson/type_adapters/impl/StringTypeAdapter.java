@@ -8,7 +8,12 @@ public class StringTypeAdapter implements TypeAdapter<String> {
 
     @Override
     public String toJson(String value) {
-        return value == null ? "null" : "\"" + JsonStrings.escape(value) + "\"";
+        if (value == null) {
+            return "null";
+        }
+        final var out = new StringBuilder(value.length() + 2);
+        toJson(value, out);
+        return out.toString();
     }
 
     @Override
@@ -16,7 +21,9 @@ public class StringTypeAdapter implements TypeAdapter<String> {
         if (value == null) {
             out.append("null");
         } else {
-            out.append('"').append(JsonStrings.escape(value)).append('"');
+            out.append('"');
+            JsonStrings.appendEscaped(out, value);
+            out.append('"');
         }
     }
 

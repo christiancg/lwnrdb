@@ -2,8 +2,7 @@ package org.techhouse.unit.data;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.BufferedWriter;
-import java.io.StringWriter;
+import java.io.ByteArrayOutputStream;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.ClientTracker;
@@ -15,7 +14,7 @@ public class ClientWriterTest {
     @Test
     public void client_outboundGetterSetter() {
         final var client = new Client("127.0.0.1");
-        final var outbound = TestUtils.inlineOutbound(new BufferedWriter(new StringWriter()));
+        final var outbound = TestUtils.inlineOutbound(new ByteArrayOutputStream());
 
         client.setOutbound(outbound);
 
@@ -26,7 +25,7 @@ public class ClientWriterTest {
     public void clientTracker_registerAndGetOutbound() {
         final var tracker = new ClientTracker();
         final var clientId = tracker.addClient(TestUtils.clientSocket());
-        final var outbound = TestUtils.inlineOutbound(new BufferedWriter(new StringWriter()));
+        final var outbound = TestUtils.inlineOutbound(new ByteArrayOutputStream());
 
         tracker.registerOutbound(clientId, outbound);
 
@@ -43,7 +42,7 @@ public class ClientWriterTest {
     @Test
     public void clientTracker_registerOutbound_nullId_doesNotThrow() {
         final var tracker = new ClientTracker();
-        final var outbound = TestUtils.inlineOutbound(new BufferedWriter(new StringWriter()));
+        final var outbound = TestUtils.inlineOutbound(new ByteArrayOutputStream());
 
         assertDoesNotThrow(() -> tracker.registerOutbound(null, outbound));
     }

@@ -48,8 +48,8 @@ public class ScriptPermissionLevelTest {
 
     @Test
     public void test_from_json_reads_the_legacy_boolean_form() {
-        assertEquals(ScriptPermissionLevel.RUN, ScriptPermissionLevel.fromJson(new JsonBoolean(true)));
-        assertEquals(ScriptPermissionLevel.NONE, ScriptPermissionLevel.fromJson(new JsonBoolean(false)));
+        assertEquals(ScriptPermissionLevel.RUN, ScriptPermissionLevel.fromJson(JsonBoolean.of(true)));
+        assertEquals(ScriptPermissionLevel.NONE, ScriptPermissionLevel.fromJson(JsonBoolean.of(false)));
     }
 
     @Test

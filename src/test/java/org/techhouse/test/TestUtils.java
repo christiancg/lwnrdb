@@ -2,7 +2,6 @@ package org.techhouse.test;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -371,8 +370,8 @@ public class TestUtils {
         return socket;
     }
 
-    public static OutboundQueue inlineOutbound(BufferedWriter writer) {
-        return new OutboundQueue(writer, () -> {
+    public static OutboundQueue inlineOutbound(OutputStream out) {
+        return new OutboundQueue(out, () -> {
         }, Long.MAX_VALUE, Runnable::run, () -> {
         });
     }

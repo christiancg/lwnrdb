@@ -129,7 +129,7 @@ public class EventProcessorHelperPendingWritesTest {
         try (var ignoredIndexes = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
             admin.when(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(),
-                    argThat(entry -> entry != null && "group-c".equals(entry.get_id())), anyLong()))
+                    argThat(entry -> entry != null && "group-c".equals(entry.id())), anyLong()))
                     .thenThrow(new IOException("disk full"));
             Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
         }

@@ -39,6 +39,9 @@ GEO = "idxagg_geo"
 GEO_SCAN = "idxagg_geo_scan"
 GEO_TARGET = "#geo(40.0,-74.0)"
 GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
+WIDE_AND = "idxagg_wide_and"
+WIDE_AND_DOCS = int(os.environ.get("INDEX_TEST_WIDE_AND_DOCS", "20000"))
+WIDE_AND_CHILDREN = 2000
 GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -1923,6 +1926,23 @@ def join_cap_suite(c):
     c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
 
 
+def test_wide_and_conjunction_stays_within_memory(c):
+    section("A source AND of 2000 children keeps one tally per document, not one row per child")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
+    bulk_load(c, WIDE_AND, ({"_id": f"w{i:05d}", "n": i % 1000} for i in range(WIDE_AND_DOCS)))
+    leaves = [{"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "n", "value": 0}] * (WIDE_AND_CHILDREN - 1)
+    leaves.append({"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "n", "value": 999})
+    steps = [{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": leaves}}, {"type": "COUNT"}]
+
+    r = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": WIDE_AND, "aggregationSteps": steps},
+               timeout=300.0)
+    check_status(f"AND of {WIDE_AND_CHILDREN} children over {WIDE_AND_DOCS} docs (OK)", r, "OK")
+    check("the AND keeps only the documents every child matched", bu.count_of(r) == WIDE_AND_DOCS // 1000,
+          detail=f"count={bu.count_of(r)}")
+    check_status("the server stays alive afterwards (LIST_DATABASES)", c.send({"type": "LIST_DATABASES"}), "OK")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
+
+
 def main():
     bu.banner("index-backed aggregation performance test suite", HOST, PORT)
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
@@ -1994,6 +2014,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         regression_suite(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_wide_and_conjunction_stays_within_memory(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

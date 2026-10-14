@@ -15,7 +15,7 @@ import org.techhouse.utils.CaseFolding;
 
 // Index files are written non-atomically, so a crash mid-write can leave a torn line: every loader
 // here drops it and rewrites the survivors, rather than failing every later read.
-final class FieldIndexLoader {
+public final class FieldIndexLoader {
     private static final Logger logger = Logger.logFor(FieldIndexLoader.class);
 
     private final FilePaths paths;
@@ -27,15 +27,14 @@ final class FieldIndexLoader {
     <T> List<FieldIndexEntry<T>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName,
             Class<T> indexType) throws IOException {
         return load(dbName, collName, IndexKind.fileLabel(indexType), fieldName, "field",
-                line -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, indexType), byIndexedValue());
+                line -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, indexType), orderFor(indexType));
     }
 
     // Sorted by hash so SearchUtils' binary search works.
     List<FieldIndexEntry<String>> readWholeHashIndexFile(String dbName, String collName, String fieldName,
             IndexKind kind) throws IOException {
         return load(dbName, collName, kind.label(), fieldName, "hash",
-                line -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, String.class),
-                Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase));
+                line -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, String.class), hashOrder());
     }
 
     private <T> List<FieldIndexEntry<T>> load(String dbName, String collName, String indexTypeLabel, String fieldName,
@@ -87,16 +86,26 @@ final class FieldIndexLoader {
         return new Parsed<>(entries, keepLines, dropped, dropped && entries.isEmpty());
     }
 
-    private static <T> Comparator<FieldIndexEntry<T>> byIndexedValue() {
-        return (o1, o2) -> switch ((Object) o1.getValue()) {
-            case Number n -> Double.compare(n.doubleValue(), ((Number) o2.getValue()).doubleValue());
-            case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
-            case JsonCustom<?> c -> {
-                final var customClass = c.getClass();
-                //noinspection unchecked
-                yield customClass.cast(c).compareToCustom(customClass.cast(o2.getValue()));
-            }
-            default -> CaseFolding.compare((String) o1.getValue(), (String) o2.getValue());
-        };
+    public static <T> Comparator<FieldIndexEntry<T>> orderFor(Class<T> indexType) {
+        if (Number.class.isAssignableFrom(indexType)) {
+            return Comparator.comparingDouble(entry -> ((Number) entry.getValue()).doubleValue());
+        }
+        if (indexType == Boolean.class) {
+            return (o1, o2) -> Boolean.compare((Boolean) o1.getValue(), (Boolean) o2.getValue());
+        }
+        if (indexType == String.class) {
+            return (o1, o2) -> CaseFolding.compare((String) o1.getValue(), (String) o2.getValue());
+        }
+        return (o1, o2) -> compareCustom((JsonCustom<?>) o1.getValue(), o2.getValue());
+    }
+
+    public static Comparator<FieldIndexEntry<String>> hashOrder() {
+        return Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase);
+    }
+
+    private static int compareCustom(JsonCustom<?> custom, Object other) {
+        final var customClass = custom.getClass();
+        //noinspection unchecked
+        return customClass.cast(custom).compareToCustom(customClass.cast(other));
     }
 }

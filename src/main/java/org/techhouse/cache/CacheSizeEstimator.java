@@ -28,9 +28,7 @@ public final class CacheSizeEstimator {
         if (memoized >= 0) {
             return memoized;
         }
-        final var estimate = estimateEntry(entry, HeapLayout.current());
-        entry.setCachedHeapBytes(estimate);
-        return estimate;
+        return entry.memoizeHeapBytes(estimateEntry(entry, HeapLayout.current()));
     }
 
     public static long estimateEntry(DbEntry entry, HeapLayout layout) {

@@ -100,6 +100,7 @@
                             <excludes>
                                 <exclude>**/config/ConfigReaderTest.java</exclude>
                                 <exclude>**/config/ConfigurationTest.java</exclude>
+                                <exclude>**/perf/AllocationBudgetTest.java</exclude>
                             </excludes>
                         </configuration>
                     </execution>
@@ -113,6 +114,18 @@
                             <includes>
                                 <include>**/config/ConfigReaderTest.java</include>
                                 <include>**/config/ConfigurationTest.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>tests-that-measure-allocation</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <forkCount>1</forkCount>
+                            <includes>
+                                <include>**/perf/AllocationBudgetTest.java</include>
                             </includes>
                         </configuration>
                     </execution>

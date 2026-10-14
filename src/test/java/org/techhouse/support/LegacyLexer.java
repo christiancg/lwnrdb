@@ -1,4 +1,4 @@
-package org.techhouse.ejson.internal;
+package org.techhouse.support;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,8 +16,8 @@ import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.exceptions.MissingEndOfStringException;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
-public final class Lexer {
-    private Lexer() {
+public final class LegacyLexer {
+    private LegacyLexer() {
     }
 
     private static final String TRUE_LITERAL = "true";
@@ -46,10 +46,10 @@ public final class Lexer {
             } else if (isNumberCharacter(c)) {
                 i = lexNumber(input, i, tokens);
             } else if (input.regionMatches(i, TRUE_LITERAL, 0, TRUE_LEN)) {
-                tokens.add(new JsonBoolean(true));
+                tokens.add(JsonBoolean.TRUE);
                 i += TRUE_LEN;
             } else if (input.regionMatches(i, FALSE_LITERAL, 0, FALSE_LEN)) {
-                tokens.add(new JsonBoolean(false));
+                tokens.add(JsonBoolean.FALSE);
                 i += FALSE_LEN;
             } else if (input.regionMatches(i, NULL_LITERAL, 0, NULL_LEN)) {
                 tokens.add(JsonNull.INSTANCE);
@@ -146,7 +146,6 @@ public final class Lexer {
             case 'u' -> {
                 return appendUnicodeEscape(builder, input, position + 1);
             }
-            // An unrecognised escape is kept verbatim so pre-escaping content degrades instead of failing
             default -> builder.append('\\').append(c);
         }
         return position + 1;

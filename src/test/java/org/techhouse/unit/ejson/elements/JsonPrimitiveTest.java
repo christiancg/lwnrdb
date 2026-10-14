@@ -23,34 +23,24 @@ public class JsonPrimitiveTest {
     }
 
     @Test
-    public void test_set_get_primitive_values() {
+    public void test_get_primitive_values() {
         JsonString stringPrimitive = new JsonString("test");
         JsonNumber numberPrimitive = new JsonNumber(42);
-        JsonBoolean booleanPrimitive = new JsonBoolean(true);
+        JsonBoolean booleanPrimitive = JsonBoolean.of(true);
 
         assertEquals("test", stringPrimitive.getValue());
         assertEquals(42, numberPrimitive.getValue());
         assertEquals(true, booleanPrimitive.getValue());
-
-        stringPrimitive.setValue("updated");
-        numberPrimitive.setValue(99);
-        booleanPrimitive.setValue(false);
-
-        assertEquals("updated", stringPrimitive.getValue());
-        assertEquals(99, numberPrimitive.getValue());
-        assertEquals(false, booleanPrimitive.getValue());
+        assertEquals("updated", new JsonString("updated").getValue());
+        assertEquals(99, new JsonNumber(99).getValue());
+        assertEquals(false, JsonBoolean.of(false).getValue());
     }
 
     @Test
     public void test_equals_with_null_values() {
-        JsonString primitive1 = new JsonString();
-        primitive1.setValue(null);
-
-        JsonString primitive2 = new JsonString();
-        primitive2.setValue(null);
-
-        JsonString primitive3 = new JsonString();
-        primitive3.setValue("not null");
+        JsonString primitive1 = new JsonString(null);
+        JsonString primitive2 = new JsonString(null);
+        JsonString primitive3 = new JsonString("not null");
 
         assertEquals(primitive1, primitive2);
         assertNotEquals(primitive1, primitive3);
@@ -99,24 +89,17 @@ public class JsonPrimitiveTest {
     }
 
     @Test
-    public void test_json_number_deep_copy_creates_new_instance_with_same_value() {
+    public void test_json_number_deep_copy_shares_the_immutable_instance() {
         JsonNumber original = new JsonNumber(42);
 
-        JsonBaseElement copy = original.deepCopy();
-
-        assertAll(() -> assertInstanceOf(JsonNumber.class, copy), () -> assertNotSame(original, copy), () -> {
-            assert copy instanceof JsonNumber;
-            assertEquals(original.getValue(), ((JsonNumber) copy).getValue());
-        });
+        assertSame(original, original.deepCopy());
     }
 
     @Test
     public void test_json_boolean_deep_copy() {
-        JsonBoolean original = new JsonBoolean(true);
-        JsonBaseElement copy = original.deepCopy();
-        assertInstanceOf(JsonBoolean.class, copy);
-        assertNotSame(original, copy);
-        assertEquals(true, ((JsonBoolean) copy).getValue());
+        JsonBoolean original = JsonBoolean.of(true);
+
+        assertSame(original, original.deepCopy());
     }
 
     @Test
@@ -143,7 +126,7 @@ public class JsonPrimitiveTest {
     @Test
     public void test_equals_different_primitive_types_returns_false() {
         JsonString s = new JsonString("true");
-        JsonBoolean b = new JsonBoolean(true);
+        JsonBoolean b = JsonBoolean.of(true);
         assertNotEquals(s, b);
     }
 
@@ -223,7 +206,7 @@ public class JsonPrimitiveTest {
 
         JsonBaseElement copy = original.deepCopy();
 
-        assertAll(() -> assertEquals(JsonString.class, copy.getClass()), () -> assertFalse(copy.isJsonCustom()),
+        assertAll(() -> assertSame(original, copy), () -> assertFalse(copy.isJsonCustom()),
                 () -> assertEquals(original.getValue(), ((JsonString) copy).getValue()));
     }
 

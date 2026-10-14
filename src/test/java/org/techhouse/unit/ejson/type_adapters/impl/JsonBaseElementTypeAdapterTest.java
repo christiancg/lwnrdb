@@ -16,7 +16,7 @@ public class JsonBaseElementTypeAdapterTest {
         new EJson();
         JsonBaseElementTypeAdapter adapter = new JsonBaseElementTypeAdapter();
 
-        JsonBoolean boolElement = new JsonBoolean(true);
+        JsonBoolean boolElement = JsonBoolean.of(true);
 
         String result = adapter.toJson(boolElement);
 

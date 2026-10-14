@@ -3,9 +3,9 @@ package org.techhouse.unit.listen;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.BufferedWriter;
-import java.io.StringWriter;
-import java.io.Writer;
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -36,7 +36,7 @@ public class ListenSlowReaderTest {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final CountDownLatch slowReaderReads = new CountDownLatch(1);
     private final CountDownLatch slowWriteStarted = new CountDownLatch(1);
-    private final StringWriter fastPushed = new StringWriter();
+    private final ByteArrayOutputStream fastPushed = new ByteArrayOutputStream();
     private ListenManager manager;
     private UUID slowClient;
     private UUID fastClient;
@@ -61,10 +61,9 @@ public class ListenSlowReaderTest {
         manager = new ListenManager();
         slowClient = clientTracker.registerForwardedClient(LISTENER);
         fastClient = clientTracker.registerForwardedClient(LISTENER);
-        clientTracker.registerOutbound(slowClient, new OutboundQueue(new BufferedWriter(new Writer() {
+        clientTracker.registerOutbound(slowClient, new OutboundQueue(new OutputStream() {
             @Override
-            @SuppressWarnings("NullableProblems")
-            public void write(char[] buffer, int offset, int length) {
+            public void write(int b) {
                 slowWriteStarted.countDown();
                 try {
                     slowReaderReads.await();
@@ -72,18 +71,10 @@ public class ListenSlowReaderTest {
                     Thread.currentThread().interrupt();
                 }
             }
-
-            @Override
-            public void flush() {
-            }
-
-            @Override
-            public void close() {
-            }
-        }, 1), () -> {
+        }, () -> {
         }, Long.MAX_VALUE, OutboundQueue.VIRTUAL_DRAINER, () -> {
         }));
-        clientTracker.registerOutbound(fastClient, TestUtils.inlineOutbound(new BufferedWriter(fastPushed)));
+        clientTracker.registerOutbound(fastClient, TestUtils.inlineOutbound(fastPushed));
     }
 
     @AfterEach
@@ -113,7 +104,7 @@ public class ListenSlowReaderTest {
     private boolean fastClientReceived(UUID listenId) throws InterruptedException {
         final var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
-            if (fastPushed.toString().contains(listenId.toString())) {
+            if (fastPushed.toString(StandardCharsets.UTF_8).contains(listenId.toString())) {
                 return true;
             }
             Thread.sleep(20);

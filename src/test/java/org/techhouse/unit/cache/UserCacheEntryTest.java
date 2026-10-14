@@ -100,7 +100,7 @@ public class UserCacheEntryTest {
         String dbName = "testDB";
         String collName = "testCollection";
         String fieldName = "testField";
-        FieldOperator operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, new JsonBoolean(true));
+        FieldOperator operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, JsonBoolean.of(true));
 
         List<FieldIndexEntry<Boolean>> booleanIndex = new ArrayList<>();
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class))

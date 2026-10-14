@@ -6,7 +6,7 @@ src/main/java/org/techhouse/cache/AdminCache.java 8
 src/main/java/org/techhouse/cache/AdminPageCache.java 1
 src/main/java/org/techhouse/cache/Cache.java 3
 src/main/java/org/techhouse/cache/DefinitionCache.java 3
-src/main/java/org/techhouse/cache/UserCache.java 8
+src/main/java/org/techhouse/cache/UserCache.java 6
 src/main/java/org/techhouse/cluster/ClusterConnectionHandler.java 8
 src/main/java/org/techhouse/cluster/ClusterCoordinator.java 6
 src/main/java/org/techhouse/cluster/ClusterRouter.java 4
@@ -41,7 +41,6 @@ src/main/java/org/techhouse/ejson/custom_types/JsonGeo.java 2
 src/main/java/org/techhouse/ejson/custom_types/JsonVector.java 1
 src/main/java/org/techhouse/ejson/elements/JsonNumber.java 2
 src/main/java/org/techhouse/ejson/internal/JsonStrings.java 2
-src/main/java/org/techhouse/ejson/internal/Lexer.java 1
 src/main/java/org/techhouse/ejson/internal/NumberFormatter.java 2
 src/main/java/org/techhouse/ejson/internal/ReflectionUtils.java 4
 src/main/java/org/techhouse/ejson/internal/UnsafeAllocator.java 1
@@ -63,7 +62,6 @@ src/main/java/org/techhouse/ops/DeleteOperationHelper.java 1
 src/main/java/org/techhouse/ops/EntrySizeGuard.java 1
 src/main/java/org/techhouse/ops/FilterOperatorHelper.java 10
 src/main/java/org/techhouse/ops/GeoSpatialIndexHelper.java 4
-src/main/java/org/techhouse/ops/IndexHelper.java 8
 src/main/java/org/techhouse/ops/OperationProcessor.java 2
 src/main/java/org/techhouse/ops/ReplicatedApplyHelper.java 3
 src/main/java/org/techhouse/ops/SaveOperationHelper.java 8
@@ -151,13 +149,12 @@ src/test/java/org/techhouse/unit/data/admin/AdminUserEntryScriptPermissionTest.j
 src/test/java/org/techhouse/unit/ejson/custom_types/CustomTypeFactoryTest.java 1
 src/test/java/org/techhouse/unit/ejson/custom_types/JsonGeoTest.java 1
 src/test/java/org/techhouse/unit/ejson/internal/JsonStringsTest.java 3
-src/test/java/org/techhouse/unit/ejson/internal/LexerTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/TypeAdapterFactoryTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/impl/JsonCustomTypeAdapterTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/impl/ReflectionTypeAdapterTest.java 4
 src/test/java/org/techhouse/unit/fs/FileSystemFieldIndexTest.java 1
 src/test/java/org/techhouse/unit/fs/FileSystemPkIndexTest.java 2
-src/test/java/org/techhouse/unit/fs/FileSystemReadTest.java 3
+src/test/java/org/techhouse/unit/fs/FileSystemReadTest.java 2
 src/test/java/org/techhouse/unit/fs/FileSystemWriteTest.java 1
 src/test/java/org/techhouse/unit/fs/TornCodepointRecoveryTest.java 2
 src/test/java/org/techhouse/unit/listen/ListenProcessorThreadTest.java 6

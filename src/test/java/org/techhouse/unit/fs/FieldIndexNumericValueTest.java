@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.LegacyIndexLines;
 import org.techhouse.test.TestGlobals;
 
 public class FieldIndexNumericValueTest extends FileSystemTestBase {
@@ -25,9 +26,9 @@ public class FieldIndexNumericValueTest extends FileSystemTestBase {
     public void test_integer_and_double_spellings_of_one_value_share_an_entry() throws Exception {
         final var fileSystem = fs;
 
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 7, Set.of("id1")), null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 7.0d, Set.of("id1", "id2")), null);
 
         final var index = read(fileSystem);
@@ -39,9 +40,9 @@ public class FieldIndexNumericValueTest extends FileSystemTestBase {
     public void test_integral_value_written_as_double_keeps_the_canonical_key() throws Exception {
         final var fileSystem = fs;
 
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 3.0d, Set.of("a")), null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 3, Set.of("a", "b")), null);
 
         final var index = read(fileSystem);
@@ -54,9 +55,9 @@ public class FieldIndexNumericValueTest extends FileSystemTestBase {
         final var fileSystem = fs;
         final var big = 10_000_000_000d;
 
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, big, Set.of("x")), null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, big, Set.of("x", "y")), null);
 
         final var index = read(fileSystem);
@@ -69,9 +70,9 @@ public class FieldIndexNumericValueTest extends FileSystemTestBase {
     public void test_non_integral_values_are_unaffected() throws Exception {
         final var fileSystem = fs;
 
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 0.5d, Set.of("p")), null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 0.5d, Set.of("p", "q")), null);
 
         final var index = read(fileSystem);
@@ -84,9 +85,9 @@ public class FieldIndexNumericValueTest extends FileSystemTestBase {
     public void test_distinct_values_stay_on_separate_entries() throws Exception {
         final var fileSystem = fs;
 
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 1, Set.of("a")), null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 2, Set.of("b")), null);
 
         final var index = read(fileSystem);
@@ -96,7 +97,8 @@ public class FieldIndexNumericValueTest extends FileSystemTestBase {
     @Test
     public void test_non_finite_index_line_is_dropped_and_file_rewritten() throws Exception {
         final var fileSystem = fs;
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, numberEntry(5d, "finite"), null);
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+                numberEntry(5d, "finite"), null);
         Files.writeString(numberIndexFile().toPath(), "Infinity" + Globals.ID_SEPARATOR + "a" + Globals.NEWLINE,
                 StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
 
@@ -112,7 +114,8 @@ public class FieldIndexNumericValueTest extends FileSystemTestBase {
     @Test
     public void test_file_of_only_non_finite_lines_is_left_untouched() throws Exception {
         final var fileSystem = fs;
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, numberEntry(7d, "seed"), null);
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+                numberEntry(7d, "seed"), null);
         final var onlyNonFinite = "Infinity" + Globals.ID_SEPARATOR + "a" + Globals.NEWLINE;
         Files.writeString(numberIndexFile().toPath(), onlyNonFinite, StandardCharsets.UTF_8);
 

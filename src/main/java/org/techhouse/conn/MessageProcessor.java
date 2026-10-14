@@ -1,11 +1,10 @@
 package org.techhouse.conn;
 
-import java.io.BufferedWriter;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
+import java.io.OutputStream;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
@@ -21,6 +20,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.Client;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.Utf8Encoder;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ex.RequestTooLargeException;
 import org.techhouse.ioc.IocContainer;
@@ -93,16 +93,15 @@ public class MessageProcessor implements Runnable {
                 return;
             }
             completeTlsHandshake();
-            final var writer = new BufferedWriter(
-                    new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), Globals.BUFFER_SIZE);
+            final var out = new BufferedOutputStream(socket.getOutputStream(), Globals.BUFFER_SIZE);
             if (clientId != null && !preAuthAdmitted) {
                 ConnectionLog.warn(logger, "Refused a connection from " + remoteAddress() + ": " + remoteHost
                         + " already holds the maximum number of unauthenticated connections");
-                OutboundQueue.sendDirectly(writer, ErrorCode.TOO_MANY_UNAUTHENTICATED_CONNECTIONS);
+                OutboundQueue.sendDirectly(out, ErrorCode.TOO_MANY_UNAUTHENTICATED_CONNECTIONS);
             } else if (clientId != null) {
-                serveConnection(writer);
+                serveConnection(out);
             } else {
-                OutboundQueue.sendDirectly(writer, ErrorCode.MAX_CONNECTIONS_REACHED);
+                OutboundQueue.sendDirectly(out, ErrorCode.MAX_CONNECTIONS_REACHED);
             }
         } catch (SSLException e) {
             ConnectionLog.warn(logger, "Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
@@ -128,8 +127,8 @@ public class MessageProcessor implements Runnable {
         }
     }
 
-    private void serveConnection(BufferedWriter writer) throws IOException {
-        outbound = new OutboundQueue(writer, socket, configuration.sizeValue(ConfigKey.CLIENT_OUTBOUND_QUEUE_MAX_BYTES),
+    private void serveConnection(OutputStream out) throws IOException {
+        outbound = new OutboundQueue(out, socket, configuration.sizeValue(ConfigKey.CLIENT_OUTBOUND_QUEUE_MAX_BYTES),
                 OutboundQueue.VIRTUAL_DRAINER, this::outboundOverflowed);
         clientTracker.registerOutbound(clientId, outbound);
         writerLock = clientTracker.getWriterLock(clientId);
@@ -297,10 +296,10 @@ public class MessageProcessor implements Runnable {
         return String.valueOf(socket.getRemoteSocketAddress());
     }
 
-    private void enqueue(String line) {
+    private void enqueue(byte[] frame) {
         writerLock.lock();
         try {
-            outbound.offer(line);
+            outbound.offer(frame);
         } finally {
             writerLock.unlock();
         }
@@ -311,7 +310,7 @@ public class MessageProcessor implements Runnable {
         serving = true;
         inFlightRequests.enter();
         try {
-            String response;
+            byte[] response;
             UUID deliveredListen = null;
             OperationType requestType = null;
             try {
@@ -324,16 +323,16 @@ public class MessageProcessor implements Runnable {
             } catch (InvalidCommandException exception) {
                 ConnectionLog.warn(logger,
                         "Refused an unparseable request from " + remoteAddress() + ": " + causeMessageOf(exception));
-                response = exception.getMessage();
+                response = Utf8Encoder.encode(exception.getMessage());
             } catch (RuntimeException exception) {
                 logger.error("Request handling failed unexpectedly", exception);
-                response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
+                response = OutboundQueue.frameOf(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
             } catch (StackOverflowError error) {
                 logger.error("Request handling overflowed the stack", error);
-                response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
+                response = OutboundQueue.frameOf(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
             } catch (OutOfMemoryError error) {
                 logger.error("Request handling ran out of memory, closing the connection", error);
-                response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
+                response = OutboundQueue.frameOf(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
                 close = true;
             }
             clientTracker.updateLastCommandTime(clientId);
@@ -380,7 +379,7 @@ public class MessageProcessor implements Runnable {
         final var type = parsedMessage.getType();
         final var validationResult = RequestValidator.validate(parsedMessage);
         if (!validationResult.isValid()) {
-            return new Handled(eJson.toJson(
+            return new Handled(OutboundQueue.frameOf(
                     new OperationResponse(type, validationResult.getErrorMessage(), validationResult.getErrorCode())),
                     false, null);
         }
@@ -393,7 +392,7 @@ public class MessageProcessor implements Runnable {
 
     private Handled publicOperation(OperationRequest parsedMessage) {
         final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
-        return new Handled(eJson.toJson(responseObj), closesConnection(responseObj), null);
+        return new Handled(OutboundQueue.frameOf(responseObj), closesConnection(responseObj), null);
     }
 
     private Handled authorized(OperationRequest parsedMessage, String rawMessage, String username) {
@@ -410,7 +409,7 @@ public class MessageProcessor implements Runnable {
     }
 
     private static Handled refusal(OperationType type, ErrorCode code) {
-        return new Handled(eJson.toJson(new OperationResponse(type, code)), false, null);
+        return new Handled(OutboundQueue.frameOf(new OperationResponse(type, code)), false, null);
     }
 
     private ErrorCode firstRequestAfterReap(OperationType type) {
@@ -426,7 +425,7 @@ public class MessageProcessor implements Runnable {
                 : ErrorCode.TRANSACTION_IDLE_TIMEOUT;
     }
 
-    private record Handled(String response, boolean close, UUID deliveredListen) {
+    private record Handled(byte[] response, boolean close, UUID deliveredListen) {
     }
 
     private static boolean closesConnection(OperationResponse responseObj) {
@@ -463,13 +462,13 @@ public class MessageProcessor implements Runnable {
         parsedMessage.setTriggerDepth(0);
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
         if (schemaError != null) {
-            return new Handled(eJson.toJson(schemaError), false, null);
+            return new Handled(OutboundQueue.frameOf(schemaError), false, null);
         }
         final var forwarded = clusterRouter.forward(parsedMessage, withoutTriggerDepth(rawMessage, wireDepth),
                 clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
                 clientId);
         if (forwarded != null) {
-            return new Handled(forwarded, false, null);
+            return new Handled(Utf8Encoder.encode(forwarded), false, null);
         }
         final var analyze = parsedMessage instanceof AggregateRequest aggReq && aggReq.isAnalyze();
         final var analyzeStart = analyze ? System.currentTimeMillis() : 0L;
@@ -482,7 +481,7 @@ public class MessageProcessor implements Runnable {
             analyzeResult.setEndTime(analyzeEnd);
             analyzeResult.setDurationMillis(analyzeEnd - analyzeStart);
         }
-        return new Handled(eJson.toJson(responseObj), responseObj.getType() == OperationType.CLOSE_CONNECTION,
+        return new Handled(OutboundQueue.frameOf(responseObj), responseObj.getType() == OperationType.CLOSE_CONNECTION,
                 listenToDeliver(responseObj));
     }
 

@@ -16,7 +16,7 @@ public final class IndexValueCodec {
             case null -> JsonNull.INSTANCE;
             case JsonBaseElement element -> element;
             case Number number -> numberToElement(number);
-            case Boolean bool -> new JsonBoolean(bool);
+            case Boolean bool -> JsonBoolean.of(bool);
             case String string -> new JsonString(string);
             default -> throw new IllegalStateException("Unexpected index value: " + value);
         };

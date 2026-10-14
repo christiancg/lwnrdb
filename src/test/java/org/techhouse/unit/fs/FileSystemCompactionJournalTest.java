@@ -105,7 +105,7 @@ public class FileSystemCompactionJournalTest extends FileSystemTestBase {
         final var first = insert("1", "one");
         insert("2", "two");
 
-        fs.deleteForRelocation(first);
+        fs.deleteForRelocation(first, null);
         assertEquals(1, compactionMarkers().size());
         final var moved = updated(first);
         moved.setPage(1);
@@ -120,7 +120,7 @@ public class FileSystemCompactionJournalTest extends FileSystemTestBase {
         final var first = insert("1", "one");
         insert("2", "two");
         final var before = Files.readString(page0().toPath());
-        fs.deleteForRelocation(first);
+        fs.deleteForRelocation(first, null);
 
         assertTrue(fs.recoverInterruptedCompactions().isEmpty());
 

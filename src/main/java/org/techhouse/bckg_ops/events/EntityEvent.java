@@ -4,7 +4,7 @@ import java.util.Objects;
 import org.techhouse.data.DbEntry;
 
 public class EntityEvent extends CollectionScopedEvent {
-    private final DbEntry dbEntry;
+    private final EntityRef entity;
 
     public EntityEvent(EventType type, String dbName, String collName, DbEntry dbEntry) {
         this(type, dbName, collName, dbEntry, 0L);
@@ -16,12 +16,21 @@ public class EntityEvent extends CollectionScopedEvent {
 
     public EntityEvent(EventType type, String dbName, String collName, DbEntry dbEntry, long incarnation,
             long pendingGeneration) {
-        super(type, dbName, collName, incarnation, pendingGeneration);
-        this.dbEntry = dbEntry;
+        this(type, dbName, collName, EntityRef.of(dbEntry), incarnation, pendingGeneration);
     }
 
-    public DbEntry getDbEntry() {
-        return dbEntry;
+    public EntityEvent(EventType type, String dbName, String collName, EntityRef entity, long incarnation,
+            long pendingGeneration) {
+        super(type, dbName, collName, incarnation, pendingGeneration);
+        this.entity = entity;
+    }
+
+    public EntityRef getEntity() {
+        return entity;
+    }
+
+    public String getId() {
+        return entity.id();
     }
 
     @Override
@@ -32,18 +41,18 @@ public class EntityEvent extends CollectionScopedEvent {
             return false;
         if (!super.equals(o))
             return false;
-        return Objects.equals(dbEntry, that.dbEntry);
+        return Objects.equals(entity, that.entity);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), dbEntry);
+        return Objects.hash(super.hashCode(), entity);
     }
 
     @Override
     public String toString() {
         return "EntityEvent(super=" + super.toString() + ", dbName=" + getDbName() + ", collName=" + getCollName()
-                + ", incarnation=" + getIncarnation() + ", pendingGeneration=" + getPendingGeneration() + ", dbEntry="
-                + dbEntry + ")";
+                + ", incarnation=" + getIncarnation() + ", pendingGeneration=" + getPendingGeneration() + ", entity="
+                + entity + ")";
     }
 }

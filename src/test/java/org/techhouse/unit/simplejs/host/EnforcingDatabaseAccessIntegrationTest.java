@@ -390,7 +390,7 @@ public class EnforcingDatabaseAccessIntegrationTest {
     public void test_a_boolean_or_object_id_is_refused_the_same_way() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL,
-                docWithId(new org.techhouse.ejson.elements.JsonBoolean(true))));
+                docWithId(org.techhouse.ejson.elements.JsonBoolean.of(true))));
         assertThrows(JsThrowException.class,
                 () -> db.save(TestGlobals.DB, TestGlobals.COLL, docWithId(new JsonObject())));
     }

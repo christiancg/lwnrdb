@@ -112,7 +112,7 @@ public class IndexHelperReconcileTest {
         final var strResult = IndexHelper.elementToLookupValue(new JsonString("hello"));
         assertEquals("hello", strResult);
 
-        final var boolResult = IndexHelper.elementToLookupValue(new JsonBoolean(true));
+        final var boolResult = IndexHelper.elementToLookupValue(JsonBoolean.of(true));
         assertEquals(Boolean.TRUE, boolResult);
 
         assertNull(IndexHelper.elementToLookupValue(JsonNull.INSTANCE));
@@ -170,11 +170,11 @@ public class IndexHelperReconcileTest {
     public void test_reconcilePending_new_boolean_value_creates_entry_via_scalarEntryFor()
             throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
-        setupCollection(cache, entryWith("b1", "flag", new JsonBoolean(true)));
+        setupCollection(cache, entryWith("b1", "flag", JsonBoolean.of(true)));
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "flag");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("flag"));
 
-        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entryWith("b2", "flag", new JsonBoolean(false)));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entryWith("b2", "flag", JsonBoolean.of(false)));
         IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "b2");
 
         final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "flag");

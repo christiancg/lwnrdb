@@ -230,9 +230,9 @@ public class PageOccupancyReconcilerTest {
                 "an index-backed read must re-derive the adopted record before the worker indexes it");
         final var updates = queuedUpdates();
         assertEquals(1, updates.size());
-        final var adopted = updates.getFirst().getDbEntry();
-        assertEquals(ORPHAN, adopted.get_id());
-        assertEquals(adopted.byteSize(), adopted.getPreviousByteSize(),
+        final var adopted = updates.getFirst().getEntity();
+        assertEquals(ORPHAN, adopted.id());
+        assertEquals(adopted.byteSize(), adopted.previousByteSize(),
                 "the reconcile already counts the record, so its event must not move the page size again");
     }
 

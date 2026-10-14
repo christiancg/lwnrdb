@@ -6,8 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.io.BufferedWriter;
-import java.io.OutputStreamWriter;
+import java.io.BufferedOutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -29,7 +28,7 @@ import org.techhouse.conn.tls.TlsContextFactory;
 
 public class TlsOutboundOverflowTest {
     private static final long QUEUE_CAP = 64 * 1024L;
-    private static final String LINE = "x".repeat(16 * 1024);
+    private static final byte[] LINE = "x".repeat(16 * 1024).getBytes(StandardCharsets.UTF_8);
     private static final long STALL_PROBE_MILLIS = 200L;
     private static final int MAX_LINES = 10_000;
     private static final long CLOSE_WITHIN_MILLIS = 6_000L;
@@ -79,9 +78,8 @@ public class TlsOutboundOverflowTest {
     @Test
     public void test_an_overflowing_tls_connection_closes_while_its_writer_is_stalled() throws Exception {
         final var overflows = new AtomicInteger();
-        final var queue = new OutboundQueue(
-                new BufferedWriter(new OutputStreamWriter(accepted.getOutputStream(), StandardCharsets.UTF_8)),
-                accepted, QUEUE_CAP, OutboundQueue.VIRTUAL_DRAINER, overflows::incrementAndGet);
+        final var queue = new OutboundQueue(new BufferedOutputStream(accepted.getOutputStream()), accepted, QUEUE_CAP,
+                OutboundQueue.VIRTUAL_DRAINER, overflows::incrementAndGet);
         var stalled = false;
         for (var line = 0; line < MAX_LINES && !stalled; line++) {
             queue.offer(LINE);

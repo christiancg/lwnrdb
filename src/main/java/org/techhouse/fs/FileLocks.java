@@ -1,18 +1,18 @@
 package org.techhouse.fs;
 
-import java.io.BufferedReader;
+import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +30,8 @@ final class FileLocks {
 
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
     private static final byte LINE_FEED = '\n';
+    private static final byte CARRIAGE_RETURN = '\r';
+    private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
 
     private FileLocks() {
     }
@@ -166,28 +168,56 @@ final class FileLocks {
         }
     }
 
-    static List<String> decodeLines(byte[] bytes) throws IOException {
-        try (var reader = new BufferedReader(new StringReader(new String(bytes, StandardCharsets.UTF_8)))) {
-            return reader.lines().toList();
+    static List<String> decodeLines(byte[] bytes) {
+        final var lines = new ArrayList<String>();
+        var start = 0;
+        var i = 0;
+        while (i < bytes.length) {
+            final var current = bytes[i];
+            if (current == LINE_FEED || current == CARRIAGE_RETURN) {
+                lines.add(new String(bytes, start, i - start, StandardCharsets.UTF_8));
+                i++;
+                if (current == CARRIAGE_RETURN && i < bytes.length && bytes[i] == LINE_FEED) {
+                    i++;
+                }
+                start = i;
+            } else {
+                i++;
+            }
         }
+        if (start < bytes.length) {
+            lines.add(new String(bytes, start, bytes.length - start, StandardCharsets.UTF_8));
+        }
+        return lines;
     }
 
     static void rewriteFileAtomically(Path path, List<String> lines) throws IOException {
-        var chars = 0;
-        for (final var line : lines) {
-            chars += line.length() + Globals.NEWLINE.length();
+        rewriteFileAtomically(path, out -> {
+            for (final var line : lines) {
+                out.write(line.getBytes(StandardCharsets.UTF_8));
+                out.write(NEWLINE_BYTES);
+            }
+        });
+    }
+
+    static void rewriteFileAtomically(Path path, LineWriter content) throws IOException {
+        final var tmp = path.resolveSibling(path.getFileName() + ".repair");
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(tmp);
+        try (var out = new BufferedOutputStream(Files.newOutputStream(tmp, StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), Globals.BUFFER_SIZE)) {
+            content.writeTo(out);
         }
-        final var builder = new StringBuilder(chars);
-        for (final var line : lines) {
-            builder.append(line).append(Globals.NEWLINE);
-        }
-        rewriteFileAtomically(path, builder.toString().getBytes(StandardCharsets.UTF_8));
+        moveIntoPlace(tmp, path);
     }
 
     static void rewriteFileAtomically(Path path, byte[] content) throws IOException {
         final var tmp = path.resolveSibling(path.getFileName() + ".repair");
         OwnerOnlyPermissions.ensureOwnerOnlyFile(tmp);
         Files.write(tmp, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        moveIntoPlace(tmp, path);
+    }
+
+    private static void moveIntoPlace(Path tmp, Path path) throws IOException {
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {

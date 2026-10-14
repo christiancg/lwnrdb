@@ -141,20 +141,18 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
-        return AggregateDeadline
-                .watch(combinationResult.stream().flatMap(FilterOperatorHelper::distinctByConjunctionKey))
-                .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
-                .filter(matching -> matching.size() == matches).map(List::getFirst);
+        final var tally = new ConjunctionTally();
+        for (var index = 0; index < combinationResult.size(); index++) {
+            try (var child = AggregateDeadline.watch(distinctByConjunctionKey(combinationResult.set(index, null)))) {
+                child.forEach(tally::add);
+            }
+        }
+        return tally.rowsCounted(matches);
     }
 
     private static Stream<JsonObject> distinctByConjunctionKey(Stream<JsonObject> rows) {
         final var seen = new HashSet<>();
-        return rows.filter(jsonObject -> seen.add(conjunctionKey(jsonObject)));
-    }
-
-    private static Object conjunctionKey(JsonObject jsonObject) {
-        final var id = jsonObject.get(Globals.PK_FIELD);
-        return id != null ? id : jsonObject;
+        return rows.filter(jsonObject -> seen.add(ConjunctionTally.keyOf(jsonObject)));
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
@@ -165,9 +163,9 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined, String dbName,
             String collName) {
         final var wholeCollection = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
-        return AggregateDeadline.watch(Stream.concat(distinctByConjunctionKey(wholeCollection), combined))
-                .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
-                .filter(matching -> matching.size() == 1).map(List::getFirst);
+        final var tally = new ConjunctionTally();
+        AggregateDeadline.watch(Stream.concat(distinctByConjunctionKey(wholeCollection), combined)).forEach(tally::add);
+        return tally.rowsCounted(1);
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,

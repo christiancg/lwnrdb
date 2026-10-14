@@ -62,10 +62,19 @@ final class UserCacheSizes {
 
     long measureFieldIndex(String collId, String indexKey, List<FieldIndexEntry<?>> entries) {
         final var measured = CacheSizeEstimator.estimateFieldIndexSize(entries);
-        if (!entries.isEmpty()) {
-            fieldIndexBytesPerEntry.put(fieldIndexKey(collId, indexKey), measured / entries.size());
-        }
+        rememberFieldIndex(collId, indexKey, measured, entries.size());
         return measured;
+    }
+
+    void rememberFieldIndex(String collId, String indexKey, long bytes, int entryCount) {
+        if (entryCount > 0) {
+            fieldIndexBytesPerEntry.put(fieldIndexKey(collId, indexKey), bytes / entryCount);
+        }
+    }
+
+    void adjustFieldIndex(String collId, String indexKey, int previousCount, int entryCount, long deltaBytes) {
+        final var total = rememberedFieldIndexBytes(collId, indexKey, previousCount) + deltaBytes;
+        rememberFieldIndex(collId, indexKey, Math.max(0L, total), entryCount);
     }
 
     long rememberedFieldIndexBytes(String collId, String indexKey, int entryCount) {

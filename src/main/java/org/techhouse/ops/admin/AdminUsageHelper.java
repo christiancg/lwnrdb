@@ -52,18 +52,20 @@ public final class AdminUsageHelper {
                     counter.indexKey(), counter.getAccessCount(), counter.getLastAccessMillis());
             final var existingPk = cache.getPkIndexCollectionUsage(entryId);
             PkIndexEntry savedPk;
+            final var encodedLine = usageEntry.encodeLine();
             if (existingPk != null) {
                 usageEntry.setPage(existingPk.getPage());
                 usageEntry.setPreviousByteSize(existingPk.getLength());
-                final var updateResult = fs.updateFromCollection(usageEntry, existingPk);
+                final var updateResult = fs.updateFromCollection(usageEntry, existingPk, encodedLine,
+                        AdminResidentRows.of(Globals.ADMIN_COLLECTION_USAGE_NAME));
                 savedPk = updateResult.indexEntry();
                 cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
                 AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.UPDATED,
                         List.of(usageEntry));
             } else {
                 usageEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                        usageEntry.byteSize()));
-                savedPk = fs.insertIntoCollection(usageEntry);
+                        encodedLine.length));
+                savedPk = fs.insertIntoCollection(usageEntry, encodedLine);
                 AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.CREATED,
                         List.of(usageEntry));
             }
@@ -93,7 +95,8 @@ public final class AdminUsageHelper {
                 if (usage.getLastAccessMillis() < threshold) {
                     usage.setPreviousByteSize(pk.getLength());
                     usage.setPage(pk.getPage());
-                    final var compaction = fs.deleteFromCollection(pk);
+                    final var compaction = fs.deleteFromCollection(pk,
+                            AdminResidentRows.of(Globals.ADMIN_COLLECTION_USAGE_NAME));
                     cache.shiftPkPositionsAfterCompaction(compaction);
                     cache.removePkIndexCollectionUsage(pk.getValue());
                     memoryManagement.clearCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),

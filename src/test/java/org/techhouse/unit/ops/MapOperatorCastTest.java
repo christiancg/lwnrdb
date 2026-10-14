@@ -78,7 +78,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_boolean_to_number_returns_null() {
         JsonObject input = new JsonObject();
-        input.add("t", new JsonBoolean(true));
+        input.add("t", JsonBoolean.of(true));
         JsonObject result = MapOperatorHelper.processOperator(
                 new AddFieldMapOperator("n", null, new CastMidOperator("t", CastToType.NUMBER)), input);
         assertTrue(result.get("n").isJsonNull());
@@ -114,7 +114,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_boolean_to_string() {
         JsonObject input = new JsonObject();
-        input.add("flag", new JsonBoolean(true));
+        input.add("flag", JsonBoolean.of(true));
         CastMidOperator cast = new CastMidOperator("flag", CastToType.STRING);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
         assertEquals("true", result.get("out").asJsonString().getValue());
@@ -123,7 +123,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_boolean_to_boolean_returns_same() {
         JsonObject input = new JsonObject();
-        input.add("flag", new JsonBoolean(false));
+        input.add("flag", JsonBoolean.of(false));
         CastMidOperator cast = new CastMidOperator("flag", CastToType.BOOLEAN);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
         assertFalse(result.get("out").asJsonBoolean().getValue());

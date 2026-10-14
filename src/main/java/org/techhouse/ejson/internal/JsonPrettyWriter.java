@@ -41,7 +41,9 @@ public final class JsonPrettyWriter {
             }
             first = false;
             newLine(builder, indent, depth + 1);
-            builder.append('"').append(JsonStrings.escape(entry.getKey())).append("\": ");
+            builder.append('"');
+            JsonStrings.appendEscaped(builder, entry.getKey());
+            builder.append("\": ");
             write(builder, entry.getValue(), indent, depth + 1);
         }
         newLine(builder, indent, depth);

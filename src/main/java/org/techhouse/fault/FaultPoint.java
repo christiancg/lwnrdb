@@ -6,6 +6,7 @@ public enum FaultPoint {
     DELETE_TOMBSTONE_RESERVED(false),
     ANTI_ENTROPY_SNAPSHOTTED(false),
     PK_INDEX_REPLACED(false),
+    INDEX_BATCH_FLUSHED(false),
     PEER_REPLY(true);
     // @formatter:on
 

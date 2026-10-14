@@ -18,7 +18,7 @@ public class JsonUtilsCoverageTest {
 
     private static JsonObject sample() {
         final var obj = new JsonObject();
-        obj.add("bool", new JsonBoolean(true));
+        obj.add("bool", JsonBoolean.of(true));
         obj.add("intNum", new JsonNumber(42));
         obj.add("realNum", new JsonNumber(3.5));
         obj.add("str", new JsonString("a\"b\\c"));

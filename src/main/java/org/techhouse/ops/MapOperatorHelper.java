@@ -347,9 +347,9 @@ public final class MapOperatorHelper {
 
     private static JsonBaseElement booleanFromString(String text) {
         if ("true".equalsIgnoreCase(text)) {
-            return new JsonBoolean(true);
+            return JsonBoolean.of(true);
         }
-        return "false".equalsIgnoreCase(text) ? new JsonBoolean(false) : JsonNull.INSTANCE;
+        return "false".equalsIgnoreCase(text) ? JsonBoolean.of(false) : JsonNull.INSTANCE;
     }
 
     private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj,
@@ -389,7 +389,7 @@ public final class MapOperatorHelper {
                         yield primitive;
                     }
                     if (primitive.isJsonNumber()) {
-                        yield new JsonBoolean(primitive.asJsonNumber().getValue().doubleValue() != 0);
+                        yield JsonBoolean.of(primitive.asJsonNumber().getValue().doubleValue() != 0);
                     }
                     yield primitive.isJsonString()
                             ? booleanFromString(primitive.asJsonString().getValue())

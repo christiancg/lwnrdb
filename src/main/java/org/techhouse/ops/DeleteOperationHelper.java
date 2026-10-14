@@ -39,7 +39,8 @@ public final class DeleteOperationHelper {
             entryToBeDeleted.setPage(idxEntry.getPage());
             final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
             final var compaction = pendingIndexWrites.writeWhilePending(dbName, collName,
-                    List.of(entryToBeDeleted.get_id()), pendingGeneration, () -> fs.deleteFromCollection(idxEntry));
+                    List.of(entryToBeDeleted.get_id()), pendingGeneration,
+                    () -> fs.deleteFromCollection(idxEntry, primaryKeyIndex));
             cache.shiftPkPositionsAfterCompaction(compaction);
             primaryKeyIndex.remove(idxEntry);
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));

@@ -72,7 +72,7 @@ public final class PageOccupancyReconciler {
     }
 
     private static String pageRowCollectionOf(String dbName, String collName) {
-        return String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        return AdminPageEntry.pagesCollectionName(dbName, collName);
     }
 
     private static void healQuietly(String dbName, String collName) {

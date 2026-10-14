@@ -1,18 +1,12 @@
 package org.techhouse.fs;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -21,6 +15,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.utils.OwnerOnlyPermissions;
 
@@ -35,6 +30,7 @@ public class FileSystem {
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
     private final CompactionJournal compactionJournal = new CompactionJournal(paths);
     private final PageCompactor pageCompactor = new PageCompactor(paths, pkIndexStore, compactionJournal);
+    private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore);
     private final CompactionRecovery compactionRecovery = new CompactionRecovery(paths, pkIndexStore,
             compactionJournal);
 
@@ -59,17 +55,17 @@ public class FileSystem {
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        final var pagesDatabases = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesDatabases = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        final var pagesCollections = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesCollections = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        final var pagesUsers = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesUsers = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_USERS_COLLECTION_NAME);
-        final var pagesCollectionUsage = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesCollectionUsage = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
-        final var pagesTransactions = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesTransactions = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        final var pagesTriggerRuns = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesTriggerRuns = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesDatabases);
         createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollections);
@@ -228,108 +224,42 @@ public class FileSystem {
 
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
             final List<T> entries, final Function<? super T, Long> storagePageResolver) throws IOException {
-        final var indexEntries = new ArrayList<IndexedDbEntry>();
-        final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
-        final var lengthsBeforeAppend = new LinkedHashMap<File, Long>();
-        final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
-        try {
-            for (var groupedEntry : entrySet) {
-                final var page = groupedEntry.getKey();
-                final var pageEntries = groupedEntry.getValue();
-                final var file = paths.collectionPage(dbName, collName, page);
-                OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
-                final var lock = FileLocks.lockWrite(file);
-                try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
-                        Globals.BUFFER_SIZE)) {
-                    var currentOffset = file.length();
-                    lengthsBeforeAppend.putIfAbsent(file, currentOffset);
-                    final var separator = FileLocks.separatorBeforeAppend(file);
-                    writer.append(separator);
-                    currentOffset += separator.getBytes(StandardCharsets.UTF_8).length;
-                    for (var entry : pageEntries) {
-                        final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                        final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-                        final var length = bytes.length;
-                        writer.append(strData);
-                        final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, length,
-                                page, entry.getVersion());
-                        pkEntriesToIndex.add(pkEntry);
-                        final var indexedEntry = new IndexedDbEntry();
-                        indexedEntry.setIndex(pkEntry);
-                        indexedEntry.setCollectionName(collName);
-                        indexedEntry.setDatabaseName(dbName);
-                        indexedEntry.set_id(entry.get_id());
-                        indexedEntry.setData(entry.getData());
-                        indexedEntry.setVersion(entry.getVersion());
-                        indexEntries.add(indexedEntry);
-                        currentOffset += length;
-                    }
-                } finally {
-                    lock.unlock();
-                }
-            }
-            pkIndexStore.bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
-        } catch (IOException e) {
-            rollBackBulkAppends(lengthsBeforeAppend);
-            throw e;
-        }
-        return indexEntries;
+        return pageAppender.bulkInsert(dbName, collName, entries, storagePageResolver, DbEntry::encodeLine);
     }
 
-    private void rollBackBulkAppends(Map<File, Long> lengthsBeforeAppend) {
-        for (final var appended : lengthsBeforeAppend.entrySet()) {
-            final var lock = FileLocks.lockWrite(appended.getKey());
-            try {
-                FileLocks.truncateTo(appended.getKey(), appended.getValue());
-            } finally {
-                lock.unlock();
-            }
-        }
+    public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
+            final List<T> entries, final Function<? super T, Long> storagePageResolver,
+            final Function<? super T, byte[]> encodedLines) throws IOException {
+        return pageAppender.bulkInsert(dbName, collName, entries, storagePageResolver, encodedLines);
     }
 
     public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
-        final var dbName = entry.getDatabaseName();
-        final var collName = entry.getCollectionName();
-        final var page = entry.getPage();
-        final var file = paths.collectionPage(dbName, collName, page);
-        final var lock = FileLocks.lockWrite(file);
-        try {
-            final var strData = entry.toFileEntry() + Globals.NEWLINE;
-            final var length = strData.getBytes(StandardCharsets.UTF_8).length;
-            final var totalFileLength = file.length();
-            final var separator = FileLocks.separatorBeforeAppend(file);
-            try {
-                appendToPage(file, separator + strData);
-                return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(),
-                        totalFileLength + separator.getBytes(StandardCharsets.UTF_8).length, length, page,
-                        entry.getVersion());
-            } catch (IOException e) {
-                FileLocks.truncateTo(file, totalFileLength);
-                throw e;
-            }
-        } finally {
-            lock.unlock();
-        }
+        return pageAppender.insert(entry, entry.encodeLine());
     }
 
-    private void appendToPage(File file, String strData) throws IOException {
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
-        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
-            writer.append(strData);
-        }
+    public PkIndexEntry insertIntoCollection(DbEntry entry, byte[] encodedLine) throws IOException {
+        return pageAppender.insert(entry, encodedLine);
     }
 
     public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
-        return pageCompactor.delete(pkIndexEntry);
+        return deleteFromCollection(pkIndexEntry, null);
     }
 
-    public PkCompaction deleteForRelocation(PkIndexEntry source) {
-        return pageCompactor.deleteForRelocation(source);
+    public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry, List<PkIndexEntry> residentRows) {
+        return pageCompactor.delete(pkIndexEntry, residentRows);
+    }
+
+    public PkCompaction deleteForRelocation(PkIndexEntry source, List<PkIndexEntry> residentRows) {
+        return pageCompactor.deleteForRelocation(source, residentRows);
     }
 
     public PkIndexEntry insertRelocated(DbEntry entry, PkIndexEntry source) throws IOException {
+        return insertRelocated(entry, source, entry.encodeLine());
+    }
+
+    public PkIndexEntry insertRelocated(DbEntry entry, PkIndexEntry source, byte[] encodedLine) throws IOException {
         pageCompactor.retargetRelocation(source, entry.getPage());
-        return insertIntoCollection(entry);
+        return insertIntoCollection(entry, encodedLine);
     }
 
     public void endRelocation(PkIndexEntry source) {
@@ -342,11 +272,21 @@ public class FileSystem {
 
     public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
-        return pageCompactor.bulkUpdate(dbName, collName, entries);
+        return bulkUpdateFromCollection(dbName, collName, entries, null, null);
+    }
+
+    public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
+            List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines) throws IOException {
+        return pageCompactor.bulkUpdate(dbName, collName, entries, residentRows, encodedLines);
     }
 
     public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
-        return pageCompactor.update(entry, pkIndexEntry);
+        return updateFromCollection(entry, pkIndexEntry, entry.encodeLine(), null);
+    }
+
+    public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
+            List<PkIndexEntry> residentRows) throws IOException {
+        return pageCompactor.update(entry, encodedLine, pkIndexEntry, residentRows);
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
@@ -359,14 +299,14 @@ public class FileSystem {
         fieldIndexStore.writeHashIndexFile(dbName, collName, fieldName, kind, entries);
     }
 
-    public void updateHashIndexFiles(String dbName, String collName, String fieldName, IndexKind kind,
-            FieldIndexEntry<String> insertedEntry, FieldIndexEntry<String> removedEntry) throws IOException {
-        fieldIndexStore.updateHashIndexFiles(dbName, collName, fieldName, kind, insertedEntry, removedEntry);
+    public boolean indexTypeFileExists(String dbName, String collName, String fieldName, String typeLabel) {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
+        return indexFile != null && indexFile.exists();
     }
 
-    public <T, K> void updateIndexFiles(String dbName, String collName, String fieldName,
-            FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry) throws IOException {
-        fieldIndexStore.updateIndexFiles(dbName, collName, fieldName, insertedEntry, removedEntry);
+    public void rewriteIndexType(String dbName, String collName, String fieldName, String typeLabel,
+            List<? extends FieldIndexEntry<?>> entries) throws IOException {
+        fieldIndexStore.rewriteIndexType(dbName, collName, fieldName, typeLabel, entries);
     }
 
     public boolean dropIndex(String dbName, String collName, String fieldName) {

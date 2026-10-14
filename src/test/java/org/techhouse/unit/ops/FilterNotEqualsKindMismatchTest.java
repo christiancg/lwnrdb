@@ -72,7 +72,7 @@ public class FilterNotEqualsKindMismatchTest {
         rows.add(row("stringFieldNotEqualsNumberOperandMatches", FieldOperatorType.NOT_EQUALS, five,
                 new JsonString("a"), true));
         rows.add(row("booleanFieldNotEqualsNumberOperandMatches", FieldOperatorType.NOT_EQUALS, new JsonNumber(1),
-                new JsonBoolean(true), true));
+                JsonBoolean.of(true), true));
         rows.add(row("customFieldNotEqualsPlainStringMatches", FieldOperatorType.NOT_EQUALS, new JsonString("abc"),
                 new JsonGeo("#geo(1,2)"), true));
         rows.add(row("customFieldNotEqualsOtherCustomClassMatches", FieldOperatorType.NOT_EQUALS,
@@ -127,7 +127,7 @@ public class FilterNotEqualsKindMismatchTest {
     public void notEqualsAgreesWithNotInForEveryKind() {
         final var operand = new JsonString("b");
         final List<JsonBaseElement> storedValues = List.of(new JsonNumber(5), new JsonString("a"), new JsonString("B"),
-                new JsonBoolean(false), JsonNull.INSTANCE, arrayOf(new JsonNumber(1)), objectHolding(new JsonNumber(1)),
+                JsonBoolean.of(false), JsonNull.INSTANCE, arrayOf(new JsonNumber(1)), objectHolding(new JsonNumber(1)),
                 new JsonGeo("#geo(1,2)"));
         for (var i = 0; i < storedValues.size(); i++) {
             final var stored = storedValues.get(i);

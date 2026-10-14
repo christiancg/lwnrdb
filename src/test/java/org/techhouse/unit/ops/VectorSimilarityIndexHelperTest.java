@@ -34,7 +34,7 @@ public class VectorSimilarityIndexHelperTest {
         final var args = new JsonObject();
         args.add("value", query);
         args.add("k", new JsonNumber(5));
-        args.add("exact", new JsonBoolean(true));
+        args.add("exact", JsonBoolean.of(true));
         final var op = new CustomOperator("nearest", "embedding", query, args);
 
         assertNull(VectorSimilarityIndexHelper.candidateIds(op, "db", "coll"));
@@ -61,7 +61,7 @@ public class VectorSimilarityIndexHelperTest {
         final var args = new JsonObject();
         args.add("value", query);
         args.add("k", new JsonNumber(5));
-        args.add("exact", new JsonBoolean(false));
+        args.add("exact", JsonBoolean.of(false));
         return new CustomOperator("nearest", "embedding", query, args);
     }
 
@@ -100,7 +100,7 @@ public class VectorSimilarityIndexHelperTest {
         final var args = new JsonObject();
         args.add("value", query);
         args.add("k", new JsonNumber(Integer.MAX_VALUE / 10));
-        args.add("exact", new JsonBoolean(false));
+        args.add("exact", JsonBoolean.of(false));
         return new CustomOperator("nearest", "embedding", query, args);
     }
 

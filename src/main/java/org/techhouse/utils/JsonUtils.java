@@ -8,7 +8,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.function.ToIntBiFunction;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
@@ -283,6 +282,11 @@ public final class JsonUtils {
         parent.remove(segments.getLast());
     }
 
+    public static String rootOf(String path) {
+        final var segments = pathSegments(path);
+        return segments.isEmpty() ? null : segments.getFirst();
+    }
+
     private static List<String> pathSegments(String path) {
         if (path.indexOf('.') < 0) {
             return List.of(path);
@@ -326,9 +330,14 @@ public final class JsonUtils {
     }
 
     private static Collection<JsonBaseElement> childrenOf(JsonBaseElement element) {
-        return element instanceof JsonObject object
-                ? object.entrySet().stream().map(Map.Entry::getValue).toList()
-                : element.asJsonArray().asList();
+        if (!(element instanceof JsonObject object)) {
+            return element.asJsonArray().asList();
+        }
+        final var children = new ArrayList<JsonBaseElement>(object.size());
+        for (final var member : object.entrySet()) {
+            children.add(member.getValue());
+        }
+        return children;
     }
 
 }

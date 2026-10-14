@@ -204,7 +204,7 @@ public class ReflectionUtilsTest {
 
     @Test
     public void test_cast_non_number_to_primitive_is_unchanged() throws Exception {
-        assertEquals(Boolean.TRUE, cast(boolean.class, new org.techhouse.ejson.elements.JsonBoolean(true), null));
+        assertEquals(Boolean.TRUE, cast(boolean.class, org.techhouse.ejson.elements.JsonBoolean.of(true), null));
     }
 
     @Test

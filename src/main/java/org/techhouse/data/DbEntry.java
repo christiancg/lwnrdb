@@ -1,11 +1,11 @@
 package org.techhouse.data;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class DbEntry extends JsonDocumentEntry {
+    private static final int ENCODE_SIZE_HINT = 1024;
     private long page;
     private long version;
 
@@ -34,9 +34,17 @@ public class DbEntry extends JsonDocumentEntry {
             return 0;
         }
         if (cachedByteSize < 0) {
-            cachedByteSize = (toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8).length;
+            encodeLine();
         }
         return cachedByteSize;
+    }
+
+    public byte[] encodeLine() {
+        stampId();
+        final var line = eJson.toJsonLine(data, cachedByteSize > 0 ? cachedByteSize : ENCODE_SIZE_HINT,
+                Globals.NEWLINE);
+        cachedByteSize = line.length;
+        return line;
     }
 
     public long getPage() {

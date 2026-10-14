@@ -101,7 +101,7 @@ public class AdminUserEntry extends DbEntry {
         final var json = new JsonObject();
         json.add(Globals.PK_FIELD, new JsonString(this.get_id()));
         json.add(PASSWORD_HASH_FIELD, new JsonString(passwordHash));
-        json.add(ADMIN_FIELD, new JsonBoolean(admin));
+        json.add(ADMIN_FIELD, JsonBoolean.of(admin));
 
         final var globalPermsArray = new JsonArray();
         globalPermissions.forEach(perm -> globalPermsArray.add(new JsonString(perm.name())));
@@ -126,7 +126,7 @@ public class AdminUserEntry extends DbEntry {
     public JsonObject toResponseJson(List<String> ownedDatabases) {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(get_id()));
-        obj.add("admin", new JsonBoolean(admin));
+        obj.add("admin", JsonBoolean.of(admin));
 
         final var globalPermsArr = new JsonArray();
         globalPermissions.forEach(p -> globalPermsArr.add(new JsonString(p.name())));

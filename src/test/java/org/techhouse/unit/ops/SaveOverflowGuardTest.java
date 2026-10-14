@@ -13,6 +13,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
@@ -257,8 +258,8 @@ public class SaveOverflowGuardTest {
         updated.setPage(0);
         updated.setPreviousByteSize(updated.byteSize() - GROWTH);
 
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.UPDATED, List.of(updated),
-                0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.UPDATED,
+                List.of(EntityRef.of(updated)), 0L);
 
         assertEquals(sizeAfterTheWrite, inMemorySizeOfPageZero());
     }

@@ -5,8 +5,8 @@ import java.util.Objects;
 import org.techhouse.data.DbEntry;
 
 public class BulkEntityEvent extends CollectionScopedEvent {
-    private final List<DbEntry> insertedEntries;
-    private final List<DbEntry> updatedEntries;
+    private final List<EntityRef> inserted;
+    private final List<EntityRef> updated;
 
     public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries,
             List<DbEntry> updatedEntries) {
@@ -21,16 +21,16 @@ public class BulkEntityEvent extends CollectionScopedEvent {
     public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries, List<DbEntry> updatedEntries,
             long incarnation, long pendingGeneration) {
         super(EventType.CREATED, dbName, collName, incarnation, pendingGeneration);
-        this.insertedEntries = insertedEntries;
-        this.updatedEntries = updatedEntries;
+        this.inserted = EntityRef.allOf(insertedEntries);
+        this.updated = EntityRef.allOf(updatedEntries);
     }
 
-    public List<DbEntry> getInsertedEntries() {
-        return insertedEntries;
+    public List<EntityRef> getInserted() {
+        return inserted;
     }
 
-    public List<DbEntry> getUpdatedEntries() {
-        return updatedEntries;
+    public List<EntityRef> getUpdated() {
+        return updated;
     }
 
     @Override
@@ -41,19 +41,18 @@ public class BulkEntityEvent extends CollectionScopedEvent {
             return false;
         if (!super.equals(o))
             return false;
-        return Objects.equals(insertedEntries, that.insertedEntries)
-                && Objects.equals(updatedEntries, that.updatedEntries);
+        return Objects.equals(inserted, that.inserted) && Objects.equals(updated, that.updated);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), insertedEntries, updatedEntries);
+        return Objects.hash(super.hashCode(), inserted, updated);
     }
 
     @Override
     public String toString() {
         return "BulkEntityEvent(super=" + super.toString() + ", dbName=" + getDbName() + ", collName=" + getCollName()
-                + ", incarnation=" + getIncarnation() + ", pendingGeneration=" + getPendingGeneration()
-                + ", insertedEntries=" + insertedEntries + ", updatedEntries=" + updatedEntries + ")";
+                + ", incarnation=" + getIncarnation() + ", pendingGeneration=" + getPendingGeneration() + ", inserted="
+                + inserted + ", updated=" + updated + ")";
     }
 }

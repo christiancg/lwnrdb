@@ -7,6 +7,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
 public class OperationResponse {
+    private static final int BASE_JSON_CHARS = 256;
     private final OperationType type;
     private final OperationStatus status;
     private final String message;
@@ -58,6 +59,14 @@ public class OperationResponse {
             ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
             return new OperationResponse(type, errorCode);
         }
+    }
+
+    public int estimatedJsonChars() {
+        return BASE_JSON_CHARS;
+    }
+
+    protected static int withPayloadChars(long payloadChars) {
+        return (int) Math.min(BASE_JSON_CHARS + payloadChars, Integer.MAX_VALUE);
     }
 
     public OperationType getType() {

@@ -44,7 +44,7 @@ public class FilterConjunctionOperatorTest {
     @Test
     public void test_field_operator_equals_not_equals_primitives() {
         FieldOperator equalsOp = new FieldOperator(FieldOperatorType.EQUALS, "age", new JsonNumber(25));
-        FieldOperator notEqualsOp = new FieldOperator(FieldOperatorType.NOT_EQUALS, "active", new JsonBoolean(true));
+        FieldOperator notEqualsOp = new FieldOperator(FieldOperatorType.NOT_EQUALS, "active", JsonBoolean.of(true));
 
         JsonObject testObj1 = new JsonObject();
         testObj1.addProperty("age", 25);
@@ -161,8 +161,8 @@ public class FilterConjunctionOperatorTest {
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0));
 
         ConjunctionOperator xorOp = new ConjunctionOperator(ConjunctionOperatorType.XOR,
-                List.of(new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonBoolean(true)),
-                        new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonBoolean(true))));
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "a", JsonBoolean.of(true)),
+                        new FieldOperator(FieldOperatorType.EQUALS, "b", JsonBoolean.of(true))));
 
         List<JsonObject> result = FilterOperatorHelper.processOperator(xorOp, null, TestGlobals.DB, TestGlobals.COLL)
                 .toList();

@@ -124,6 +124,18 @@ public class EJson {
         return writer.toJson(obj, clazz);
     }
 
+    @SuppressWarnings("unchecked")
+    public <T> byte[] toJsonBytes(T obj, int sizeHint) {
+        final Class<T> clazz = (Class<T>) obj.getClass();
+        return writer.toJsonBytes(obj, clazz, sizeHint);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> byte[] toJsonLine(T obj, int sizeHint, String terminator) {
+        final Class<T> clazz = (Class<T>) obj.getClass();
+        return writer.toJsonLine(obj, clazz, sizeHint, terminator);
+    }
+
     public String toJson(JsonBaseElement element, String indent) {
         if (element == null) {
             return "null";

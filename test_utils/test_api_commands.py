@@ -120,6 +120,9 @@ COLL_TYPES = "types"
 COLL_FLOWS = "flows"
 COLL_PERM = "perm_coll"
 COLL_MATH = "map_math"
+COLL_SHARED_LEFT = "shared_left"
+COLL_SHARED_RIGHT = "shared_right"
+COLL_DISTINCT = "distinct_rows"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -1032,6 +1035,67 @@ def test_admin_database_reads_follow_admin_writes(c):
     check_status(f"DROP_DATABASE {second}", drop_db(c, second), "OK")
 
 
+def test_join_then_map_on_a_shared_group_stays_small(c):
+    section("JOIN then MAP over one shared group copies only what the MAP writes")
+    create_coll(c, COLL_SHARED_LEFT)
+    create_coll(c, COLL_SHARED_RIGHT)
+    payload = "p" * 10_000
+    for start in range(0, 50, 10):
+        bulk_save(c, COLL_SHARED_RIGHT, [{"_id": f"r{i:03d}", "key": "shared", "payload": payload}
+                                         for i in range(start, start + 10)])
+    for start in range(0, 2000, 500):
+        bulk_save(c, COLL_SHARED_LEFT, [{"_id": f"l{i:04d}", "key": "shared"} for i in range(start, start + 500)])
+    join = {"type": "JOIN", "joinCollection": COLL_SHARED_RIGHT, "localField": "key", "remoteField": "key",
+            "asField": "j"}
+    add_x = {"type": "MAP", "operators": [{"fieldName": "x", "operator": {"type": "CONCAT", "operands": ["-x"]}}]}
+
+    r = aggregate(c, COLL_SHARED_LEFT, [join, add_x, {"type": "COUNT"}])
+    check_field("2000 rows sharing a 500KB group, then MAP, then COUNT", r, "results.0.count", 2000)
+
+    r = aggregate(c, COLL_SHARED_LEFT, [join, add_x, {"type": "LIMIT", "limit": 1}])
+    row = (r.get("results") or [{}])[0]
+    check("the mapped row keeps the whole joined group and the new field",
+          len(row.get("j") or []) == 50 and row.get("x") == "x", detail=f"keys={sorted(row)}")
+
+    check_status("the server stays healthy afterwards", list_databases(c), "OK")
+    drop_coll(c, COLL_SHARED_LEFT)
+    drop_coll(c, COLL_SHARED_RIGHT)
+
+
+def canonical(row):
+    return json.dumps(row, sort_keys=True)
+
+
+def test_distinct_without_field_unchanged(c):
+    section("DISTINCT without a field drops _id and keeps the first row of each body")
+    create_coll(c, COLL_DISTINCT)
+    bodies = [{"kind": f"k{i % 4}", "nested": {"v": i % 4}} for i in range(40)]
+    bulk_save(c, COLL_DISTINCT, [{"_id": f"d{i:02d}", "n": i, **body} for i, body in enumerate(bodies)])
+    bulk_save(c, COLL_DISTINCT, [{"_id": f"e{i:02d}", **body} for i, body in enumerate(bodies)])
+
+    r = aggregate(c, COLL_DISTINCT, [filter_step("n", "GREATER_THAN_EQUALS", 0),
+                                     {"type": "MAP", "operators": [{"fieldName": "n"}]}, {"type": "DISTINCT"}])
+    check_status("DISTINCT after MAP (OK)", r, "OK")
+    rows = r.get("results") or []
+    check("four distinct bodies, none carrying _id",
+          len(rows) == 4 and all("_id" not in row for row in rows), detail=f"rows={rows}")
+    expected = sorted(canonical(body) for body in bodies[:4])
+    check("the distinct bodies are the expected ones", sorted(canonical(row) for row in rows) == expected,
+          detail=f"rows={rows}")
+
+    r = aggregate(c, COLL_DISTINCT, [{"type": "SORT", "fieldName": "_id", "ascending": True},
+                                     {"type": "DISTINCT"}])
+    rows = r.get("results") or []
+    check("whole-document DISTINCT keeps every row whose body differs", len(rows) == 44, detail=f"got {len(rows)}")
+    check("DISTINCT keeps the first occurrence order",
+          [row.get("n") for row in rows[:40]] == list(range(40))
+          and [row.get("kind") for row in rows[40:]] == ["k0", "k1", "k2", "k3"], detail=f"rows={rows[38:]}")
+
+    found = find_by_id(c, COLL_DISTINCT, "d00")
+    check_field("the source document still carries its _id", found, "object._id", "d00")
+    drop_coll(c, COLL_DISTINCT)
+
+
 def main():
     bu.banner("API commands & aggregations integration suite", HOST, PORT)
 
@@ -1061,6 +1125,8 @@ def main():
         test_conjunctions,
         test_aggregation_steps,
         test_aggregation_steps_write_dotted_fields_nested,
+        test_join_then_map_on_a_shared_group_stays_small,
+        test_distinct_without_field_unchanged,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,
         test_every_aggregate_response_is_strict_json,

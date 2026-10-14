@@ -1,11 +1,14 @@
 package org.techhouse.ejson.elements;
 
-public class JsonBoolean extends JsonPrimitive<Boolean> {
-    public JsonBoolean() {
-        this.value = false;
+public final class JsonBoolean extends JsonPrimitive<Boolean> {
+    public static final JsonBoolean TRUE = new JsonBoolean(true);
+    public static final JsonBoolean FALSE = new JsonBoolean(false);
+
+    private JsonBoolean(boolean value) {
+        this.value = value;
     }
 
-    public JsonBoolean(Boolean value) {
-        this.value = value;
+    public static JsonBoolean of(boolean value) {
+        return value ? TRUE : FALSE;
     }
 }

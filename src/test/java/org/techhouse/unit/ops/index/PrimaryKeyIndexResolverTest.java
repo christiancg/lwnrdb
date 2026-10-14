@@ -92,7 +92,7 @@ public class PrimaryKeyIndexResolverTest extends FilterResolutionSupport {
                 Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonArray",
                         FieldOperatorType.NOT_EQUALS, arrayOf()),
                 Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonBoolean",
-                        FieldOperatorType.NOT_EQUALS, new JsonBoolean(true)),
+                        FieldOperatorType.NOT_EQUALS, JsonBoolean.of(true)),
                 Arguments.of("test_not_equals_declines_every_operand_that_is_not_a_primary_key JsonDateTime",
                         FieldOperatorType.NOT_EQUALS, new JsonDateTime("#datetime(2024-01-01T10:00:00)")));
     }

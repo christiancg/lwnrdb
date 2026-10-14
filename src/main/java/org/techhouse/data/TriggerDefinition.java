@@ -94,8 +94,8 @@ public class TriggerDefinition extends StoredDefinition {
         json.add(PROCEDURE_NAME_FIELD, new JsonString(procedureName));
         json.add(MODE_FIELD, new JsonString(mode));
         json.add(TIMING_FIELD, new JsonString(timing));
-        json.add(ALLOW_CASCADE_FIELD, new JsonBoolean(allowCascade));
-        json.add(ENABLED_FIELD, new JsonBoolean(enabled));
+        json.add(ALLOW_CASCADE_FIELD, JsonBoolean.of(allowCascade));
+        json.add(ENABLED_FIELD, JsonBoolean.of(enabled));
         if (definer != null) {
             json.add(DEFINER_FIELD, new JsonString(definer));
         }
