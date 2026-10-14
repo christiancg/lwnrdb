@@ -100,7 +100,7 @@ public class JsonUtilsCustomOrderTest {
             mixed.add(new JsonString("#geo(" + i + ".0,0.0)"));
             mixed.add(new JsonString("value-" + i));
             mixed.add(new JsonNumber(i));
-            mixed.add(new JsonBoolean(i % 2 == 0));
+            mixed.add(JsonBoolean.of(i % 2 == 0));
         }
         final var array = mixed.toArray(JsonBaseElement[]::new);
 

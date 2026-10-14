@@ -134,7 +134,7 @@ public class MemoryManagement {
         if (config.isCacheUnlimited()) {
             return AdmissionDecision.ADMIT;
         }
-        return userCacheBytes() + estimatedBytes > config.getMaxMemoryBytes()
+        return userCacheBytes(Measure.REMEMBERED) + estimatedBytes > config.getMaxMemoryBytes()
                 ? AdmissionDecision.REJECT
                 : AdmissionDecision.ADMIT;
     }
@@ -147,7 +147,7 @@ public class MemoryManagement {
             return;
         }
         try {
-            evictDownTo(config.getMaxMemoryBytes());
+            evictDownTo(config.getMaxMemoryBytes(), Measure.FULL);
         } finally {
             sweepRunning.set(false);
         }
@@ -158,17 +158,17 @@ public class MemoryManagement {
             return;
         }
         final var maxBytes = config.getMaxMemoryBytes();
-        if (userCacheBytes() + nextPageEstimateBytes <= maxBytes) {
+        if (userCacheBytes(Measure.REMEMBERED) + nextPageEstimateBytes <= maxBytes) {
             return;
         }
-        evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes));
+        evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes), Measure.REMEMBERED);
     }
 
     private record RankedResource(CacheableResource resource, int tier, long accessCount, long lastAccess) {
     }
 
-    private void evictDownTo(long targetBytes) {
-        var resources = userCache.listCacheableResources();
+    private void evictDownTo(long targetBytes, Measure measure) {
+        final var resources = userCache.listCacheableResources(measure);
         var remaining = sumBytes(resources);
         if (remaining <= targetBytes) {
             return;
@@ -220,7 +220,11 @@ public class MemoryManagement {
     }
 
     public long userCacheBytes() {
-        return sumBytes(userCache.listCacheableResources());
+        return userCacheBytes(Measure.FULL);
+    }
+
+    private long userCacheBytes(Measure measure) {
+        return sumBytes(userCache.listCacheableResources(measure));
     }
 
     private long sumBytes(java.util.List<CacheableResource> resources) {

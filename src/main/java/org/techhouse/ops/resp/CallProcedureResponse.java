@@ -3,6 +3,7 @@ package org.techhouse.ops.resp;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonSizeEstimator;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -84,5 +85,10 @@ public class CallProcedureResponse extends OperationResponse {
 
     public void setRunId(String runId) {
         this.runId = runId;
+    }
+
+    @Override
+    public int estimatedJsonChars() {
+        return withPayloadChars(JsonSizeEstimator.estimate(result));
     }
 }

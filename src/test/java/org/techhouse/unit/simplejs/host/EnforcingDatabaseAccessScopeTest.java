@@ -154,7 +154,7 @@ public class EnforcingDatabaseAccessScopeTest {
             step.add("type", new JsonString(type));
             if ("SORT".equals(type)) {
                 step.add("fieldName", new JsonString("_id"));
-                step.add("ascending", new org.techhouse.ejson.elements.JsonBoolean(true));
+                step.add("ascending", org.techhouse.ejson.elements.JsonBoolean.of(true));
             } else {
                 step.add("limit", new org.techhouse.ejson.elements.JsonNumber(5));
             }

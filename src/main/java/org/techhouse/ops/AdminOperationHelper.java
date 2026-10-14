@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.UnaryOperator;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -24,6 +25,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.AdminPageHelper;
 import org.techhouse.ops.admin.AdminRecordStore;
+import org.techhouse.ops.admin.AdminResidentRows;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.AdminUsageHelper;
 import org.techhouse.ops.resp.OperationResponse;
@@ -53,14 +55,14 @@ public final class AdminOperationHelper {
             cache::removePkIndexTriggerRun, AdminTriggerRunEntry::fromJsonObject,
             (_, collName, type, entries) -> applyAdminPageDelta(collName, type, entries));
 
-    public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted,
+    public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<EntityRef> inserted,
             long incarnation) throws InterruptedException, IOException {
         AdminPageHelper.bulkUpdateEntryCount(dbName, collName, type, inserted, incarnation);
     }
 
-    public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry,
+    public static void updateEntryCount(String dbName, String collName, EventType type, EntityRef entity,
             long incarnation) throws InterruptedException, IOException {
-        AdminPageHelper.updateEntryCount(dbName, collName, type, dbEntry, incarnation);
+        AdminPageHelper.updateEntryCount(dbName, collName, type, entity, incarnation);
     }
 
     public static void createPageCollections(String dbName, String collName) throws IOException {
@@ -85,15 +87,17 @@ public final class AdminOperationHelper {
         if (VERSIONED_RECORDS.contains(collName) && entry.getVersion() <= 0) {
             entry.setVersion(AdminStamp.over(versionOf(existingPk)));
         }
+        final var encodedLine = entry.encodeLine();
         if (existingPk != null) {
             entry.setPage(existingPk.getPage());
-            final var updateResult = fs.updateFromCollection(entry, existingPk);
+            final var updateResult = fs.updateFromCollection(entry, existingPk, encodedLine,
+                    AdminResidentRows.of(collName));
             cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
             applyAdminPageDelta(collName, EventType.UPDATED, entry);
             return updateResult.indexEntry();
         }
-        entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, collName, entry.byteSize()));
-        final var pk = fs.insertIntoCollection(entry);
+        entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, collName, encodedLine.length));
+        final var pk = fs.insertIntoCollection(entry, encodedLine);
         applyAdminPageDelta(collName, EventType.CREATED, entry);
         return pk;
     }
@@ -115,7 +119,7 @@ public final class AdminOperationHelper {
             throws IOException, InterruptedException {
         entry.setPreviousByteSize(pk.getLength());
         entry.setPage(pk.getPage());
-        cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk));
+        cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk, AdminResidentRows.of(collName)));
         applyAdminPageDelta(collName, EventType.DELETED, entry);
     }
 

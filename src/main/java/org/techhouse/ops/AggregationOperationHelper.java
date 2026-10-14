@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AggregateDeadline;
@@ -35,6 +36,7 @@ import org.techhouse.ops.req.agg.step.MapAggregationStep;
 import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
+import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.utils.JsonUtils;
 
 public final class AggregationOperationHelper {
@@ -177,14 +179,36 @@ public final class AggregationOperationHelper {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var mapStep = (MapAggregationStep) baseMapStep;
         final var operators = mapStep.getOperators();
+        final var writtenRoots = writtenRoots(operators);
         return resultStream.map(jsonObject -> {
-            var mapped = jsonObject.deepCopy();
+            var mapped = jsonObject.copyForWrites(writtenRoots);
             final var budget = new MapResultBudget();
             for (var step : operators) {
                 mapped = MapOperatorHelper.processOperator(step, mapped, context, budget);
             }
             return mapped;
         });
+    }
+
+    private static Set<String> writtenRoots(List<MapOperator> operators) {
+        final var roots = new HashSet<String>();
+        for (var operator : operators) {
+            addRoot(roots, operator.getFieldName());
+        }
+        return roots;
+    }
+
+    private static Set<String> writtenRoot(String path) {
+        final var roots = new HashSet<String>();
+        addRoot(roots, path);
+        return roots;
+    }
+
+    private static void addRoot(Set<String> roots, String path) {
+        final var root = path == null ? null : JsonUtils.rootOf(path);
+        if (root != null) {
+            roots.add(root);
+        }
     }
 
     private static Stream<JsonObject> processReduceStep(BaseAggregationStep baseReduceStep,
@@ -274,6 +298,7 @@ public final class AggregationOperationHelper {
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
                 joinCollectionLocalField, transaction);
         final var withinEntrySize = new HashMap<JsonBaseElement, Boolean>();
+        final var asRoot = writtenRoot(as);
         return leftEntries.stream().map(jsonObject -> {
             final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
             if (localValue != null) {
@@ -281,7 +306,7 @@ public final class AggregationOperationHelper {
                 if (joined != null && !withinEntrySize.computeIfAbsent(localValue, _ -> fitsAnEntry(joined))) {
                     throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
                 }
-                final var copy = jsonObject.deepCopy();
+                final var copy = jsonObject.copyForWrites(asRoot);
                 JsonUtils.setPath(copy, as, joined);
                 return copy;
             }
@@ -354,13 +379,9 @@ public final class AggregationOperationHelper {
         }
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         if (fieldName == null || fieldName.isBlank()) {
-            return resultStream.map(jsonObject -> {
-                final var result = jsonObject.deepCopy();
-                if (result.has(Globals.PK_FIELD)) {
-                    result.remove(Globals.PK_FIELD);
-                }
-                return result;
-            }).distinct();
+            final var seen = new HashSet<RowWithoutId>();
+            return resultStream.filter(jsonObject -> seen.add(new RowWithoutId(jsonObject)))
+                    .map(jsonObject -> jsonObject.copyWithout(Globals.PK_FIELD));
         } else {
             return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
                 final var json = new JsonObject();
@@ -384,4 +405,42 @@ public final class AggregationOperationHelper {
         return resultStream.skip(skipStep.getSkip());
     }
 
+    private static final class RowWithoutId {
+        private final JsonObject row;
+        private final int hash;
+
+        private RowWithoutId(JsonObject row) {
+            this.row = row;
+            var membersHash = 0;
+            for (var entry : row.entrySet()) {
+                if (!Globals.PK_FIELD.equals(entry.getKey())) {
+                    membersHash += entry.hashCode();
+                }
+            }
+            this.hash = membersHash;
+        }
+
+        private int sizeWithoutId() {
+            return row.has(Globals.PK_FIELD) ? row.size() - 1 : row.size();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof RowWithoutId that) || hash != that.hash || sizeWithoutId() != that.sizeWithoutId()) {
+                return false;
+            }
+            for (var entry : row.entrySet()) {
+                if (!Globals.PK_FIELD.equals(entry.getKey())
+                        && !entry.getValue().equals(that.row.get(entry.getKey()))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
+        }
+    }
 }

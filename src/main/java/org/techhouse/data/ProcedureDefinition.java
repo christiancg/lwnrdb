@@ -52,7 +52,7 @@ public class ProcedureDefinition extends StoredDefinition {
         if (description != null) {
             json.add(DESCRIPTION_FIELD, new JsonString(description));
         }
-        json.add(ENABLED_FIELD, new JsonBoolean(enabled));
+        json.add(ENABLED_FIELD, JsonBoolean.of(enabled));
         writeAuditFields(json);
         return json;
     }

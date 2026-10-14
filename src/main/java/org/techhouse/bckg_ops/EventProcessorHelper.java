@@ -9,13 +9,13 @@ import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.CollectionScopedEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Globals;
-import org.techhouse.data.DbEntry;
 import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -123,12 +123,12 @@ public class EventProcessorHelper {
         }
         final var ids = new LinkedHashSet<String>();
         for (final var event : group) {
-            ids.add(event.getDbEntry().get_id());
+            ids.add(event.getId());
         }
         final var indexFailure = indexFailureOf(
                 () -> IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids)));
         for (final var event : group) {
-            AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry(),
+            AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getEntity(),
                     event.getIncarnation());
             if (indexFailure == null) {
                 clearPendingEvent(event);
@@ -146,8 +146,7 @@ public class EventProcessorHelper {
     }
 
     private static void clearPendingEvent(EntityEvent event) {
-        pendingIndexWrites.clear(event.getDbName(), event.getCollName(), event.getDbEntry().get_id(),
-                event.getPendingGeneration());
+        pendingIndexWrites.clear(event.getDbName(), event.getCollName(), event.getId(), event.getPendingGeneration());
     }
 
     public static void processEvent(Event event) throws IOException, InterruptedException {
@@ -166,37 +165,38 @@ public class EventProcessorHelper {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         if (belongsToAnotherIncarnation(event)) {
-            clearPending(event, event.getInsertedEntries());
-            clearPending(event, event.getUpdatedEntries());
+            clearPending(event, event.getInserted());
+            clearPending(event, event.getUpdated());
             return;
         }
-        final var indexFailure = indexFailureOf(() -> IndexHelper.bulkUpdateIndexes(dbName, collName,
-                idsOf(event.getInsertedEntries(), event.getUpdatedEntries())));
-        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries(),
+        final var indexFailure = indexFailureOf(
+                () -> IndexHelper.bulkUpdateIndexes(dbName, collName, idsOf(event.getInserted(), event.getUpdated())));
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInserted(),
                 event.getIncarnation());
-        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries(),
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdated(),
                 event.getIncarnation());
         if (indexFailure != null) {
             throw indexFailure;
         }
-        clearPending(event, event.getInsertedEntries());
-        clearPending(event, event.getUpdatedEntries());
+        clearPending(event, event.getInserted());
+        clearPending(event, event.getUpdated());
     }
 
-    private static void clearPending(BulkEntityEvent event, List<DbEntry> entries) {
+    private static void clearPending(BulkEntityEvent event, List<EntityRef> entries) {
+        final var ids = new ArrayList<String>(entries.size());
         for (var entry : entries) {
-            pendingIndexWrites.clear(event.getDbName(), event.getCollName(), entry.get_id(),
-                    event.getPendingGeneration());
+            ids.add(entry.id());
         }
+        pendingIndexWrites.clear(event.getDbName(), event.getCollName(), ids, event.getPendingGeneration());
     }
 
-    private static List<String> idsOf(List<DbEntry> inserted, List<DbEntry> updated) {
+    private static List<String> idsOf(List<EntityRef> inserted, List<EntityRef> updated) {
         final var ids = new ArrayList<String>(inserted.size() + updated.size());
         for (var entry : inserted) {
-            ids.add(entry.get_id());
+            ids.add(entry.id());
         }
         for (var entry : updated) {
-            ids.add(entry.get_id());
+            ids.add(entry.id());
         }
         return ids;
     }
@@ -204,18 +204,18 @@ public class EventProcessorHelper {
     private static void processEntityEvent(EntityEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
-        final var dbEntry = event.getDbEntry();
-        final var type = event.getType();
+        final var id = event.getId();
         if (belongsToAnotherIncarnation(event)) {
-            pendingIndexWrites.clear(dbName, collName, dbEntry.get_id(), event.getPendingGeneration());
+            pendingIndexWrites.clear(dbName, collName, id, event.getPendingGeneration());
             return;
         }
-        final var indexFailure = indexFailureOf(() -> IndexHelper.updateIndexes(dbName, collName, dbEntry.get_id()));
-        AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry, event.getIncarnation());
+        final var indexFailure = indexFailureOf(() -> IndexHelper.updateIndexes(dbName, collName, id));
+        AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getEntity(),
+                event.getIncarnation());
         if (indexFailure != null) {
             throw indexFailure;
         }
-        pendingIndexWrites.clear(dbName, collName, dbEntry.get_id(), event.getPendingGeneration());
+        pendingIndexWrites.clear(dbName, collName, id, event.getPendingGeneration());
     }
 
     private static boolean belongsToAnotherIncarnation(CollectionScopedEvent event) {

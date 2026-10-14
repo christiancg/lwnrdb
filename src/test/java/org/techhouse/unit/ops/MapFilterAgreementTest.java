@@ -51,8 +51,8 @@ public class MapFilterAgreementTest {
 
     private static ConjunctionOperator conjunctionOf(ConjunctionOperatorType type) {
         final List<BaseOperator> leaves = List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonBoolean(true)),
-                new FieldOperator(FieldOperatorType.EQUALS, "field2", new JsonBoolean(true)));
+                new FieldOperator(FieldOperatorType.EQUALS, "field1", JsonBoolean.of(true)),
+                new FieldOperator(FieldOperatorType.EQUALS, "field2", JsonBoolean.of(true)));
         return new ConjunctionOperator(type, leaves);
     }
 

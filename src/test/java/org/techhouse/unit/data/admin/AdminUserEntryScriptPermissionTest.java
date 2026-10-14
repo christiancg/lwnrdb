@@ -26,7 +26,7 @@ public class AdminUserEntryScriptPermissionTest {
     @Test
     public void test_legacy_boolean_true_reads_as_run() {
         final var raw = new JsonObject();
-        raw.add("mydb", new JsonBoolean(true));
+        raw.add("mydb", JsonBoolean.of(true));
         final var parsed = AdminUserEntry.fromJsonObject(recordWithRawScriptPermissions(raw));
         assertEquals(ScriptPermissionLevel.RUN, parsed.getScriptPermissions().get("mydb"));
         assertTrue(parsed.canRunScripts("mydb"));
@@ -36,7 +36,7 @@ public class AdminUserEntryScriptPermissionTest {
     @Test
     public void test_legacy_boolean_false_reads_as_none() {
         final var raw = new JsonObject();
-        raw.add("mydb", new JsonBoolean(false));
+        raw.add("mydb", JsonBoolean.of(false));
         final var parsed = AdminUserEntry.fromJsonObject(recordWithRawScriptPermissions(raw));
         assertEquals(ScriptPermissionLevel.NONE, parsed.getScriptPermissions().get("mydb"));
         assertFalse(parsed.canRunScripts("mydb"));
@@ -76,7 +76,7 @@ public class AdminUserEntryScriptPermissionTest {
     @Test
     public void test_rebuild_data_writes_the_string_form() {
         final var raw = new JsonObject();
-        raw.add("mydb", new JsonBoolean(true));
+        raw.add("mydb", JsonBoolean.of(true));
         final var parsed = AdminUserEntry.fromJsonObject(recordWithRawScriptPermissions(raw));
         parsed.setAdmin(false);
         assertEquals("RUN",
@@ -86,8 +86,8 @@ public class AdminUserEntryScriptPermissionTest {
     @Test
     public void test_can_run_scripts_unchanged_for_legacy_records() {
         final var raw = new JsonObject();
-        raw.add("granted", new JsonBoolean(true));
-        raw.add("revoked", new JsonBoolean(false));
+        raw.add("granted", JsonBoolean.of(true));
+        raw.add("revoked", JsonBoolean.of(false));
         final var parsed = AdminUserEntry.fromJsonObject(recordWithRawScriptPermissions(raw));
         assertTrue(parsed.canRunScripts("granted"));
         assertFalse(parsed.canRunScripts("revoked"));

@@ -23,6 +23,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.LegacyIndexLines;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -120,9 +121,9 @@ public class TornCodepointRecoveryTest {
     @Test
     public void test_a_field_index_truncated_mid_codepoint_self_heals() throws Exception {
         final var fileSystem = fs();
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "plain", Set.of("id1")), null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+        LegacyIndexLines.of(fileSystem).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, CJK, Set.of("id2")), null);
         truncateOneByte(fileNamed("-" + FIELD + "-String.idx"));
 

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -135,8 +136,8 @@ public class BulkSavePartialFailureTest {
         return taskQueue().stream().filter(BulkEntityEvent.class::isInstance).map(BulkEntityEvent.class::cast).toList();
     }
 
-    private static List<String> idsOf(List<DbEntry> entries) {
-        return entries.stream().map(DbEntry::get_id).toList();
+    private static List<String> idsOf(List<EntityRef> entries) {
+        return entries.stream().map(EntityRef::id).toList();
     }
 
     private String cachedValueOf(String id) throws Exception {
@@ -170,8 +171,8 @@ public class BulkSavePartialFailureTest {
                 () -> assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(UPDATED_ID),
                         "without the pending mark an index-backed read trusts the entry under the superseded value"),
                 () -> assertEquals(1, events.size(), "the committed update must reach background index maintenance"),
-                () -> assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdatedEntries())),
-                () -> assertEquals(List.of(), idsOf(events.getFirst().getInsertedEntries()),
+                () -> assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdated())),
+                () -> assertEquals(List.of(), idsOf(events.getFirst().getInserted()),
                         "the insert half rolled its appends back, so nothing was inserted"),
                 () -> assertEquals(List.of(UPDATED_ID),
                         cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
@@ -192,8 +193,8 @@ public class BulkSavePartialFailureTest {
 
         final var events = queuedBulkEvents();
         assertEquals(1, events.size(), "the happy path must submit exactly one bulk event");
-        assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdatedEntries()));
-        assertEquals(List.of(INSERTED_ID), idsOf(events.getFirst().getInsertedEntries()));
+        assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdated()));
+        assertEquals(List.of(INSERTED_ID), idsOf(events.getFirst().getInserted()));
         assertEquals("new", cachedValueOf(UPDATED_ID));
         assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).containsAll(Set.of(UPDATED_ID, INSERTED_ID)));
     }
@@ -216,7 +217,7 @@ public class BulkSavePartialFailureTest {
                 () -> assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(FAILING_ID),
                         "the entry that never landed on disk must not be marked as a pending index write"),
                 () -> assertEquals(1, events.size(), "the committed prefix must reach background index maintenance"),
-                () -> assertEquals(List.of(KEPT_ID), idsOf(events.getFirst().getUpdatedEntries())),
+                () -> assertEquals(List.of(KEPT_ID), idsOf(events.getFirst().getUpdated())),
                 () -> assertEquals(List.of(KEPT_ID), failure.committed().getUpdated(),
                         "the caller fires triggers and replicates exactly what landed, so it must be told what that is"),
                 () -> assertEquals(List.of(), failure.committed().getInserted()),

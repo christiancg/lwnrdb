@@ -15,6 +15,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.KeyTable;
 
 public final class DocumentHeapSizer {
     private static final Class<?> LINKED_HASH_MAP_ENTRY = HeapLayout.jdkClass("java.util.LinkedHashMap$Entry");
@@ -33,7 +34,7 @@ public final class DocumentHeapSizer {
             case JsonCustom<?> custom -> customSize(custom, layout);
             case JsonString string -> layout.shallowSize(string.getClass()) + stringSize(string.getValue(), layout);
             case JsonNumber number -> layout.shallowSize(number.getClass()) + boxSize(number.getValue(), layout);
-            case JsonBoolean bool -> layout.shallowSize(bool.getClass());
+            case JsonBoolean _ -> 0L;
             default -> layout.shallowSize(element.getClass());
         };
     }
@@ -54,9 +55,13 @@ public final class DocumentHeapSizer {
                 + layout.hashTableSize(object.size());
         final var entryBytes = layout.shallowSize(LINKED_HASH_MAP_ENTRY);
         for (final var member : object.entrySet()) {
-            total += entryBytes + layout.stringSize(member.getKey()) + sizeOf(member.getValue(), layout);
+            total += entryBytes + keySize(member.getKey(), layout) + sizeOf(member.getValue(), layout);
         }
         return total;
+    }
+
+    private static long keySize(String key, HeapLayout layout) {
+        return KeyTable.isPinned(key) ? 0L : layout.stringSize(key);
     }
 
     private static long arraySize(JsonArray array, HeapLayout layout) {

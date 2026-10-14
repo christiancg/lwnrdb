@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -368,8 +369,8 @@ public class OperationProcessorWriteTest {
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id("singleSaveId1");
         entry.setPage(0L);
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry),
-                0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                EntityRef.allOf(List.of(entry)), 0L);
 
         final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(p -> p.getPage() == 0L).findFirst();
@@ -402,8 +403,8 @@ public class OperationProcessorWriteTest {
         e1.setPage(0L);
         final var e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
         e2.setPage(0L);
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(e1, e2),
-                0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                EntityRef.allOf(List.of(e1, e2)), 0L);
 
         final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(p -> p.getPage() == 0L).findFirst();
@@ -488,12 +489,11 @@ public class OperationProcessorWriteTest {
 
         final var deleted = queue.stream()
                 .filter(event -> event instanceof EntityEvent entity && entity.getType() == EventType.DELETED
-                        && "reloc-event".equals(entity.getDbEntry().get_id()))
-                .map(event -> ((EntityEvent) event).getDbEntry()).findFirst().orElseThrow();
-        final var restored = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
-                .filter(entry -> entry.getValue().equals("reloc-event")).findFirst().orElseThrow();
-        assertEquals(originalPage, deleted.getPage(),
+                        && "reloc-event".equals(entity.getId()))
+                .map(event -> ((EntityEvent) event).getEntity()).findFirst().orElseThrow();
+        assertTrue(cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
+                .anyMatch(entry -> entry.getValue().equals("reloc-event")), "the failed relocation restored the copy");
+        assertEquals(originalPage, deleted.page(),
                 "the delete's page delta belongs to the page the document was removed from");
-        assertNotSame(cache.getById(TestGlobals.DB, TestGlobals.COLL, restored), deleted);
     }
 }

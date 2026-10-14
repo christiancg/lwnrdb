@@ -169,7 +169,7 @@ public final class DbModule {
             final var sort = new JsonObject();
             sort.add("type", new JsonString("SORT"));
             sort.add("fieldName", new JsonString(PK_FIELD));
-            sort.add("ascending", new JsonBoolean(true));
+            sort.add("ascending", JsonBoolean.of(true));
             final var ordered = new JsonArray();
             for (var i = 0; i < steps.size(); i++) {
                 if (i == index) {

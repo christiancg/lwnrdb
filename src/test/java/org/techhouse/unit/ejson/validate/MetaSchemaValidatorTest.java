@@ -19,8 +19,8 @@ public class MetaSchemaValidatorTest {
 
     @Test
     public void test_boolean_schema_is_valid() {
-        assertTrue(meta.validate(new JsonBoolean(true)).isValid());
-        assertTrue(meta.validate(new JsonBoolean(false)).isValid());
+        assertTrue(meta.validate(JsonBoolean.of(true)).isValid());
+        assertTrue(meta.validate(JsonBoolean.of(false)).isValid());
     }
 
     @Test

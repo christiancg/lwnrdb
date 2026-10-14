@@ -25,7 +25,7 @@ public class JsonObject extends JsonBaseElement {
     }
 
     public void addProperty(String property, Boolean value) {
-        put(property, value == null ? JsonNull.INSTANCE : new JsonBoolean(value));
+        put(property, value == null ? JsonNull.INSTANCE : JsonBoolean.of(value));
     }
 
     public void addProperty(String property, Integer value) {
@@ -77,6 +77,25 @@ public class JsonObject extends JsonBaseElement {
         JsonObject result = new JsonObject();
         for (Map.Entry<String, JsonBaseElement> entry : members.entrySet()) {
             result.add(entry.getKey(), entry.getValue().deepCopy());
+        }
+        return result;
+    }
+
+    public JsonObject copyForWrites(Set<String> writtenRoots) {
+        final var result = new JsonObject();
+        for (Map.Entry<String, JsonBaseElement> entry : members.entrySet()) {
+            final var value = entry.getValue();
+            result.add(entry.getKey(), writtenRoots.contains(entry.getKey()) ? value.deepCopy() : value);
+        }
+        return result;
+    }
+
+    public JsonObject copyWithout(String key) {
+        final var result = new JsonObject();
+        for (Map.Entry<String, JsonBaseElement> entry : members.entrySet()) {
+            if (!entry.getKey().equals(key)) {
+                result.members.put(entry.getKey(), entry.getValue());
+            }
         }
         return result;
     }

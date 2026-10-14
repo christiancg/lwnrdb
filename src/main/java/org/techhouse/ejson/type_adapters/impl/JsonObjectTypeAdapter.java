@@ -25,7 +25,9 @@ public class JsonObjectTypeAdapter implements TypeAdapter<JsonObject> {
                 out.append(',');
             }
             first = false;
-            out.append('"').append(JsonStrings.escape(entry.getKey())).append("\":");
+            out.append('"');
+            JsonStrings.appendEscaped(out, entry.getKey());
+            out.append("\":");
             elementAdapter.toJson(entry.getValue(), out);
         }
         out.append('}');

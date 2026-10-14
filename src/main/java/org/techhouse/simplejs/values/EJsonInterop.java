@@ -19,6 +19,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
 import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
+import org.techhouse.ejson.internal.KeyTable;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.JsonBuiltins;
@@ -85,7 +86,7 @@ public final class EJsonInterop {
             case JsNumber n -> numberToEjson(n, mode, path);
             case JsBigInt bigInt -> bigIntToEjson(bigInt, mode, path);
             case JsString s -> stringToEjson(s.getValue(), mode, path);
-            case JsBoolean b -> new JsonBoolean(b.getValue());
+            case JsBoolean b -> JsonBoolean.of(b.getValue());
             case JsNull ignored -> JsonNull.INSTANCE;
             case JsArray array -> arrayToEjson(array, mode, path);
             case JsObject wrapper when wrapper.getPrimitive() != null -> convert(wrapper.getPrimitive(), mode, path);
@@ -249,7 +250,7 @@ public final class EJsonInterop {
             mode.chargeChars(name.getValue());
             final var converted = convert(ops.getMember(proxy, name), mode, memberPath(path, name.getValue()));
             if (converted != null) {
-                result.add(name.getValue(), converted);
+                result.add(KeyTable.canonical(name.getValue()), converted);
             }
         }
         mode.visited().remove(proxy);
@@ -271,7 +272,7 @@ public final class EJsonInterop {
             mode.chargeChars(key);
             final var converted = convert(ownValue(object, key, mode.ops()), mode, memberPath(path, key));
             if (converted != null) {
-                result.add(key, converted);
+                result.add(KeyTable.canonical(key), converted);
             }
         }
         mode.visited().remove(object);

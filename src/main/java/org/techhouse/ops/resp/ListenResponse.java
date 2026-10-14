@@ -2,6 +2,7 @@ package org.techhouse.ops.resp;
 
 import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonSizeEstimator;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
@@ -49,5 +50,10 @@ public class ListenResponse extends OperationResponse {
 
     public void setUpdate(boolean isUpdate) {
         this.isUpdate = isUpdate;
+    }
+
+    @Override
+    public int estimatedJsonChars() {
+        return withPayloadChars(JsonSizeEstimator.estimate(results));
     }
 }

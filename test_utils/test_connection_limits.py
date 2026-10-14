@@ -19,6 +19,12 @@ TRANSACTION_MAX_OPS = 20
 TRANSACTION_MAX_AGE_S = 6.0
 DB = "connlimits_db"
 COLL = "items"
+CJK_COLL = "cjk_items"
+CJK_DOCS = 40
+CJK_CHARS_PER_DOC = 20_000
+CJK_UNREAD_AGGREGATES = 16
+OUTBOUND_CAP_BYTES = 16 * 1024 * 1024
+OVERFLOW_LOG = "exceeded clientOutboundQueueMaxBytes"
 
 bu.configure(host=HOST, port=PORT)
 
@@ -398,6 +404,39 @@ def test_an_idle_transaction_is_reaped_while_its_client_is_not_reading():
         holder.close()
 
 
+def test_outbound_cap_counts_utf8_bytes(log_path: str):
+    section("clientOutboundQueueMaxBytes counts a CJK backlog in UTF-8 bytes, not characters")
+    with Conn.authenticated() as admin:
+        check_status("CREATE_COLLECTION for the CJK documents",
+                     admin.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CJK_COLL}), "OK")
+        saved = [admin.send({"type": "SAVE", "databaseName": DB, "collectionName": CJK_COLL,
+                             "object": {"_id": f"cjk-{i}", "text": "界" * CJK_CHARS_PER_DOC}})
+                 for i in range(CJK_DOCS)]
+        check("Every CJK document is saved", all(r.get("status") == "OK" for r in saved), f"first={saved[0]}")
+    backlog_chars = CJK_UNREAD_AGGREGATES * CJK_DOCS * CJK_CHARS_PER_DOC
+    check("Counted in characters the unread backlog would stay under the default 16Mb cap",
+          backlog_chars < OUTBOUND_CAP_BYTES, f"chars={backlog_chars}")
+    overflows_before = bu.read_log(log_path).count(OVERFLOW_LOG)
+    reader = bu.non_reading_conn()
+    try:
+        for _ in range(CJK_UNREAD_AGGREGATES):
+            bu.send_without_reading(reader, {"type": "AGGREGATE", "databaseName": DB, "collectionName": CJK_COLL,
+                                             "aggregationSteps": []})
+        deadline = time.time() + 30.0
+        while bu.read_log(log_path).count(OVERFLOW_LOG) == overflows_before and time.time() < deadline:
+            time.sleep(0.2)
+        check("The unread backlog passes the cap counted in UTF-8 bytes (3 per character)",
+              bu.read_log(log_path).count(OVERFLOW_LOG) > overflows_before, "the server never logged the overflow")
+        check("The connection is then closed", bu.read_until_closed(reader, timeout=30.0),
+              "the server still held the connection open")
+    finally:
+        reader.close()
+    with Conn.authenticated() as fresh:
+        found = fresh.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": CJK_COLL, "_id": "cjk-0"})
+        check_status("Another connection still reads the CJK documents", found, "OK")
+        check("The document comes back intact", (found.get("object") or {}).get("text") == "界" * CJK_CHARS_PER_DOC)
+
+
 def test_an_unauthenticated_request_is_answered_401_1_without_validation():
     section("A request before authenticating is answered 401-1, never validated")
     with raw_socket() as sock:
@@ -475,6 +514,7 @@ def main():
         test_an_unauthenticated_request_is_answered_401_1_without_validation()
         test_well_formed_requests_before_authentication_close_the_connection()
         test_an_idle_transaction_is_reaped_while_its_client_is_not_reading()
+        test_outbound_cap_counts_utf8_bytes(log_path)
         test_max_connections_admits_exactly_the_limit_under_concurrency()
     finally:
         bu.stop_server(proc, port=PORT, wait_for_port=False)

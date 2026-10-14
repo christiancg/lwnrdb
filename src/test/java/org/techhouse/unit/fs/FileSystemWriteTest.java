@@ -164,9 +164,9 @@ public class FileSystemWriteTest extends FileSystemTestBase {
                 newEntries);
 
         final var first = entries.get(0);
-        first.getData().get("field").asJsonString().setValue("changed");
+        first.getData().addProperty("field", "changed");
         final var second = entries.get(1);
-        second.getData().get("field").asJsonString().setValue("changed");
+        second.getData().addProperty("field", "changed");
 
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries).updated();
 
@@ -187,7 +187,7 @@ public class FileSystemWriteTest extends FileSystemTestBase {
         seed.setVersion(11L);
         final var inserted = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, List.of(seed));
         final var updated = inserted.getFirst();
-        updated.getData().get("field").asJsonString().setValue("changed");
+        updated.getData().addProperty("field", "changed");
         updated.setVersion(22L);
 
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, List.of(updated));
@@ -224,7 +224,7 @@ public class FileSystemWriteTest extends FileSystemTestBase {
         final var inserted = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, toInsert);
         // All three live on page 0; change each value to a DIFFERENT-length string to force shifts.
         for (var ie : inserted) {
-            ie.getData().get("field").asJsonString().setValue("updated-value-for-" + ie.get_id() + "-longer");
+            ie.getData().addProperty("field", "updated-value-for-" + ie.get_id() + "-longer");
         }
 
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, inserted);

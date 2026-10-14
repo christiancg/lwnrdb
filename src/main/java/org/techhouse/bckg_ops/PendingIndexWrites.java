@@ -61,14 +61,18 @@ public class PendingIndexWrites {
     }
 
     public void clear(String dbName, String collName, String id, long generation) {
-        final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
+        clearIn(dbName, collName, Cache.getCollectionIdentifier(dbName, collName), id, generation);
+    }
+
+    private void clearIn(String dbName, String collName, String collId, String id, long generation) {
+        final var byId = pending.get(collId);
         if (byId == null) {
             return;
         }
-        final var markerLock = markerLockFor(dbName, collName);
+        final var markerLock = markerLocks.computeIfAbsent(collId, _ -> new java.util.concurrent.locks.ReentrantLock());
         markerLock.lock();
         try {
-            if (generation < currentGeneration(dbName, collName)) {
+            if (generation < generations.getOrDefault(collId, 0L)) {
                 return;
             }
             byId.computeIfPresent(id, (_, current) -> current - 1 <= 0 ? null : current - 1);
@@ -81,8 +85,9 @@ public class PendingIndexWrites {
     }
 
     public void clear(String dbName, String collName, Iterable<String> ids, long generation) {
+        final var collId = Cache.getCollectionIdentifier(dbName, collName);
         for (var id : ids) {
-            clear(dbName, collName, id, generation);
+            clearIn(dbName, collName, collId, id, generation);
         }
     }
 

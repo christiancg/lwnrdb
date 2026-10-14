@@ -70,6 +70,11 @@ public final class Globals {
     public static final int MAX_SCHEMA_EXPANDED_NODES = 100_000;
     public static final int MAX_UNAUTHENTICATED_REQUEST_BYTES = 65536;
     public static final int MIN_BYTES_PER_REQUEST_TOKEN = 4;
+    public static final int KEY_TABLE_SLOTS = 65_536;
+    public static final int KEY_TABLE_MAX_KEY_LENGTH = 64;
+    public static final int KEY_TABLE_PROBE_WINDOW = 8;
+    public static final int KEY_TABLE_MAX_PINNED = 16_384;
+    public static final int KEY_TABLE_PIN_HITS = 8;
     public static final long MAX_REQUEST_SIZE_CEILING = 1_073_741_824L;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";

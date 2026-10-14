@@ -23,6 +23,10 @@ SCHEMA_COLL = "schema_guarded"
 LOCK_COLL = "items"
 DIRTY_COLL = "dirty_index_docs"
 DIRTY_BATCH = 200
+CONVERGE_COLL = "converge_two_indexes"
+CONVERGE_DOCS = 20000
+CONVERGE_BULK = 2000
+CONVERGE_DEADLINE_S = 30.0
 HEAL_COLL = "heal_race_docs"
 SCRIPT_COLL = "script_written"
 NON_FINITE_COLL = "non_finite_numbers"
@@ -124,9 +128,9 @@ class Conn(bu.Conn):
 admin_conn = Conn.authenticated
 
 
-def write_config(work_dir: str, max_memory: str = "256mb"):
+def write_config(work_dir: str, max_memory: str = "256mb", faults: bool = False):
     bu.write_config(work_dir, PORT, maxMemory=max_memory, maxPageSize=MAX_PAGE_SIZE,
-                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True)
+                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True, faultInjectionEnabled=faults)
 
 
 def page_files(work_dir: str, db=DB, coll=COLL):
@@ -1628,34 +1632,53 @@ def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
     return sorted(f for f in os.listdir(folder) if f.endswith(("-indexes.dirty", "-indexes.unclean")))
 
 
-def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
+def kill_while_an_index_batch_is_half_flushed(conn: Conn, work_dir: str, proc) -> bool:
     check_status("create the collection whose indexes will be left dirty",
                  conn.create_coll(DIRTY_COLL), "OK")
     check_status("index a field on it",
                  conn.create_index("n", coll=DIRTY_COLL), "OK")
-    stop = threading.Event()
+    check_status("park the index worker right after it flushed the batch's first type file",
+                 conn.send({"type": "ARM_FAULT", "point": "INDEX_BATCH_FLUSHED", "action": "PAUSE",
+                            "match": f"{DB}|{DIRTY_COLL}"}), "OK")
+    check_status("write a batch the parked worker will be indexing",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": DIRTY_COLL,
+                            "objects": [{"_id": f"d0000-{i:03d}", "n": i, "pad": PAD}
+                                        for i in range(DIRTY_BATCH)]}), "OK")
+    check_status("the worker reached the flush point and is parked there",
+                 conn.send({"type": "AWAIT_FAULT", "point": "INDEX_BATCH_FLUSHED", "timeoutMs": 30000}), "OK")
+    marked = bool(dirty_markers(work_dir))
+    proc.kill()
+    return marked and bool(dirty_markers(work_dir))
 
-    def writer():
-        with admin_conn() as writer_conn:
-            batch = 0
-            while not stop.is_set():
-                writer_conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": DIRTY_COLL,
-                                  "objects": [{"_id": f"d{batch:04d}-{i:03d}", "n": batch * DIRTY_BATCH + i,
-                                               "pad": PAD} for i in range(DIRTY_BATCH)]})
-                batch += 1
 
-    thread = threading.Thread(target=writer, daemon=True)
-    thread.start()
-    try:
-        deadline = time.time() + 30.0
-        while time.time() < deadline:
-            if dirty_markers(work_dir):
-                proc.kill()
-                return bool(dirty_markers(work_dir))
-        return False
-    finally:
-        stop.set()
-        thread.join(timeout=5.0)
+def wait_for_drained_markers(work_dir: str, coll: str, deadline_s: float) -> float:
+    started = time.time()
+    while time.time() - started < deadline_s:
+        if not dirty_markers(work_dir, coll=coll):
+            return time.time() - started
+        time.sleep(0.2)
+    return -1.0
+
+
+def test_bulk_insert_with_two_indexes_converges_quickly(conn: Conn, work_dir: str):
+    section(f"{CONVERGE_DOCS} inserts into a collection with two indexes are indexed within {CONVERGE_DEADLINE_S:.0f}s")
+    check_status("create the collection", conn.create_coll(CONVERGE_COLL), "OK")
+    for field in ("cat", "email"):
+        check_status(f"index {field}", conn.create_index(field, coll=CONVERGE_COLL), "OK")
+    for start in range(0, CONVERGE_DOCS, CONVERGE_BULK):
+        check_status(f"bulk insert {start}..{start + CONVERGE_BULK - 1}",
+                     conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": CONVERGE_COLL,
+                                "objects": [{"_id": f"v{i:05d}", "cat": f"c{i % 20}", "email": f"u{i}@x.io"}
+                                            for i in range(start, start + CONVERGE_BULK)]}), "OK")
+    drained_after = wait_for_drained_markers(work_dir, CONVERGE_COLL, CONVERGE_DEADLINE_S)
+    check("field-index maintenance drained the pending marker in time", drained_after >= 0,
+          f"the -indexes.dirty marker was still there {CONVERGE_DEADLINE_S:.0f}s after the last acknowledgement")
+    for field, value in (("cat", "c7"), ("email", "u12345@x.io")):
+        equals = bu.filter_step(field, "EQUALS", value)
+        by_index = sorted(conn.ids(CONVERGE_COLL, [equals]))
+        by_scan = sorted(conn.ids(CONVERGE_COLL, [{"type": "SKIP", "skip": 0}, equals]))
+        check(f"the {field} index answers exactly what a scan answers", by_index == by_scan and by_index,
+              f"index={len(by_index)} scan={len(by_scan)}")
 
 
 def test_an_unclean_stop_is_reported_at_the_next_startup(log_path: str, log_offset: int):
@@ -1936,6 +1959,113 @@ def test_every_registered_collection_is_unregistered_when_its_database_is_droppe
     conn.send({"type": "DROP_DATABASE", "databaseName": REGISTRATION_DB})
 
 
+LARGE_COLL = "large_update_docs"
+LARGE_DOCS = 50_000
+LARGE_BATCH = 1000
+LARGE_UPDATES = 2000
+LARGE_UPDATE_BUDGET_S = 20.0
+MEMORY_PK_COLL = "pk_rewritten_from_memory"
+MEMORY_PK_DOCS = 3000
+MEMORY_PK_OPS = 1500
+
+
+def sized_doc(prefix: str, i: int, value: int) -> dict:
+    return {"_id": f"{prefix}_{i:05d}", "v": value, "pad": "q" * (20 + value % 7 * 9)}
+
+
+def bulk_insert(conn: Conn, coll: str, prefix: str, count: int) -> bool:
+    for start in range(0, count, LARGE_BATCH):
+        objects = [sized_doc(prefix, i, 0) for i in range(start, min(start + LARGE_BATCH, count))]
+        response = conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": objects})
+        if response.get("status") != "OK":
+            return check_status(f"bulk insert {coll} from {start}", response, "OK")
+    return True
+
+
+def values_by_id_lookup(conn: Conn, coll: str, ids: list) -> dict:
+    found = {}
+    for start in range(0, len(ids), LARGE_BATCH):
+        response = conn.aggregate(coll, [bu.filter_step("_id", "IN", ids[start:start + LARGE_BATCH])])
+        found.update({d.get("_id"): d.get("v") for d in response.get("results") or []})
+    return found
+
+
+def values_by_scan(conn: Conn, coll: str) -> dict:
+    return {d.get("_id"): d.get("v") for d in conn.aggregate(coll, FULL_SCAN).get("results") or []}
+
+
+def test_updates_on_a_large_collection_stay_fast(conn: Conn):
+    section(f"{LARGE_UPDATES} SAVE updates on a {LARGE_DOCS}-document collection stay fast and consistent")
+    check_status(f"create {LARGE_COLL}", conn.create_coll(LARGE_COLL), "OK")
+    if not bulk_insert(conn, LARGE_COLL, "large", LARGE_DOCS):
+        return
+    expected = {f"large_{i:05d}": 0 for i in range(LARGE_DOCS)}
+    refused = []
+    started = time.monotonic()
+    for update in range(LARGE_UPDATES):
+        doc = sized_doc("large", (update * 7919 + 13) % LARGE_DOCS, update + 1)
+        if conn.save(doc, coll=LARGE_COLL).get("status") != "OK":
+            refused.append(doc["_id"])
+        expected[doc["_id"]] = doc["v"]
+    elapsed = time.monotonic() - started
+    check("every update was acknowledged", not refused, f"refused: {refused[:5]}")
+    if elapsed >= LARGE_UPDATE_BUDGET_S:
+        bu.warn(f"the updates took {elapsed:.1f} s, over the {LARGE_UPDATE_BUDGET_S:.0f} s expected on an idle machine",
+                "timing is load-sensitive; AllocationBudgetTest is the deterministic guard")
+    by_id = values_by_id_lookup(conn, LARGE_COLL, sorted(expected))
+    check("every document reads back by id with its last value", by_id == expected,
+          f"wrong or missing: {sorted(k for k in expected if by_id.get(k) != expected[k])[:5]}")
+    scanned = values_by_scan(conn, LARGE_COLL)
+    check("and a scan answers the same", scanned == expected,
+          f"scanned={len(scanned)} expected={len(expected)}")
+
+
+def rewrite_a_pk_index_from_memory(conn: Conn) -> tuple:
+    section("Updates, deletes, relocations and inserts rewrite pk.idx from the resident rows")
+    check_status(f"create {MEMORY_PK_COLL}", conn.create_coll(MEMORY_PK_COLL), "OK")
+    bulk_insert(conn, MEMORY_PK_COLL, "mem", MEMORY_PK_DOCS)
+    live = [f"mem_{i:05d}" for i in range(MEMORY_PK_DOCS)]
+    expected = dict.fromkeys(live, 0)
+    deleted = []
+    refused = []
+    for op in range(MEMORY_PK_OPS):
+        target = live[(op * 7919 + 17) % len(live)]
+        if op % 10 < 7:
+            doc = sized_doc("mem", int(target[4:]), op + 1)
+            response = conn.save(doc, coll=MEMORY_PK_COLL)
+            expected[target] = doc["v"]
+        elif op % 10 < 9:
+            response = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": MEMORY_PK_COLL,
+                                  "_id": target})
+            live.remove(target)
+            del expected[target]
+            deleted.append(target)
+        else:
+            doc = sized_doc("mem", MEMORY_PK_DOCS + op, 1)
+            response = conn.save(doc, coll=MEMORY_PK_COLL)
+            live.append(doc["_id"])
+            expected[doc["_id"]] = 1
+        if response.get("status") != "OK":
+            refused.append(target)
+    check("every write was acknowledged", not refused, f"refused: {refused[:5]}")
+    return expected, deleted
+
+
+def test_pk_index_rewritten_from_memory_survives_restart(conn: Conn, written: tuple):
+    section("A pk.idx rewritten from memory serves every id after an unclean restart")
+    expected, deleted = written
+    wrong = [i for i, v in expected.items()
+             if (conn.find(i, coll=MEMORY_PK_COLL).get("object") or {}).get("v") != v]
+    check("FIND_BY_ID answers every surviving id with its last value", not wrong, f"wrong: {wrong[:5]}")
+    resurrected = [i for i in deleted if conn.find(i, coll=MEMORY_PK_COLL).get("status") == "OK"]
+    check("no deleted id is found", not resurrected, f"found: {resurrected[:5]}")
+    by_pk = conn.count_via_pk(coll=MEMORY_PK_COLL)
+    by_scan = conn.count_via_scan(coll=MEMORY_PK_COLL)
+    check("COUNT over the pk index equals the scan and the acknowledged writes",
+          by_pk == by_scan == len(expected), f"pk={by_pk} scan={by_scan} expected={len(expected)}")
+    check("the scan returns exactly the surviving values", values_by_scan(conn, MEMORY_PK_COLL) == expected)
+
+
 SHUTDOWN_COLL = "shutdown_writes"
 SHUTDOWN_TAG = "stopped"
 SHUTDOWN_SHUTTING_DOWN = "503-13"
@@ -2037,7 +2167,7 @@ def main():
 
     proc = None
     try:
-        write_config(work_dir)
+        write_config(work_dir, faults=True)
         print(f"  Starting server on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
@@ -2077,6 +2207,9 @@ def main():
             test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn)
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
+            test_bulk_insert_with_two_indexes_converges_quickly(conn, work_dir)
+            test_updates_on_a_large_collection_stay_fast(conn)
+            memory_pk_written = rewrite_a_pk_index_from_memory(conn)
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
             seed_a_collection_whose_page_tail_will_tear(conn)
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
@@ -2092,8 +2225,8 @@ def main():
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
-                  kill_while_the_indexes_are_dirty(conn, work_dir, proc),
-                  "the background queue drained before the kill landed")
+                  kill_while_an_index_batch_is_half_flushed(conn, work_dir, proc),
+                  "the index batch was not parked at INDEX_BATCH_FLUSHED when the kill landed")
         proc.wait(timeout=30)
         log_offset = os.path.getsize(log_path)
         proc = None
@@ -2120,6 +2253,7 @@ def main():
         test_an_unclean_stop_is_reported_at_the_next_startup(log_path, log_offset)
         with admin_conn() as conn:
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
+            test_pk_index_rewritten_from_memory_survives_restart(conn, memory_pk_written)
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
             test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
             test_a_lost_line_end_is_restored_at_startup(conn, work_dir)

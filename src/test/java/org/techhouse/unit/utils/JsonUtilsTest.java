@@ -168,9 +168,9 @@ public class JsonUtilsTest {
     @Test
     public void test_sort_ascending_boolean_fields() {
         JsonObject yes = new JsonObject();
-        yes.add("flag", new JsonBoolean(true));
+        yes.add("flag", JsonBoolean.of(true));
         JsonObject no = new JsonObject();
-        no.add("flag", new JsonBoolean(false));
+        no.add("flag", JsonBoolean.of(false));
         assertTrue(JsonUtils.sortFunctionAscending(no, yes, "flag") < 0);
         assertTrue(JsonUtils.sortFunctionAscending(yes, no, "flag") > 0);
         assertEquals(0, JsonUtils.sortFunctionAscending(yes, yes, "flag"));
@@ -226,9 +226,9 @@ public class JsonUtilsTest {
     @Test
     public void test_sort_descending_boolean_fields() {
         JsonObject yes = new JsonObject();
-        yes.add("flag", new JsonBoolean(true));
+        yes.add("flag", JsonBoolean.of(true));
         JsonObject no = new JsonObject();
-        no.add("flag", new JsonBoolean(false));
+        no.add("flag", JsonBoolean.of(false));
         assertTrue(JsonUtils.sortFunctionDescending(yes, no, "flag") < 0);
         assertTrue(JsonUtils.sortFunctionDescending(no, yes, "flag") > 0);
         assertEquals(0, JsonUtils.sortFunctionDescending(yes, yes, "flag"));
@@ -346,7 +346,7 @@ public class JsonUtilsTest {
         JsonObject strObj = new JsonObject();
         strObj.add("v", new JsonString("true"));
         JsonObject boolObj = new JsonObject();
-        boolObj.add("v", new JsonBoolean(true));
+        boolObj.add("v", JsonBoolean.of(true));
         assertNotEquals(JsonUtils.hashElement(strObj), JsonUtils.hashElement(boolObj));
         assertEquals("null", JsonUtils.canonicalize(JsonNull.INSTANCE));
     }
@@ -405,8 +405,8 @@ public class JsonUtilsTest {
 
     private static List<JsonObject> primitiveSamples() {
         final var samples = new ArrayList<JsonObject>();
-        samples.add(field(new JsonBoolean(true)));
-        samples.add(field(new JsonBoolean(false)));
+        samples.add(field(JsonBoolean.of(true)));
+        samples.add(field(JsonBoolean.of(false)));
         samples.add(field(new JsonNumber(42)));
         samples.add(field(new JsonNumber(7)));
         samples.add(field(new JsonString("hello")));

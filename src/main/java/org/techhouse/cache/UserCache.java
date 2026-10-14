@@ -104,7 +104,7 @@ public class UserCache {
 
     private long footprintBytes() {
         var total = 0L;
-        for (final var resource : listCacheableResources()) {
+        for (final var resource : listCacheableResources(Measure.REMEMBERED)) {
             total += resource.estimatedSizeBytes();
         }
         return total;
@@ -115,50 +115,63 @@ public class UserCache {
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType), true);
+                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType));
     }
 
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
         return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), true);
+                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
     }
 
-    public <T> List<FieldIndexEntry<T>> getFieldIndexForMaintenance(String dbName, String collName, String fieldName,
-            Class<T> indexType) throws IOException {
-        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType), false);
+    public List<FieldIndexEntry<?>> residentFieldIndex(String dbName, String collName, String indexIdentifier) {
+        final var index = fieldIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
+        return index == null ? null : index.get(indexIdentifier);
     }
 
-    public List<FieldIndexEntry<String>> getHashIndexForMaintenance(String dbName, String collName, String fieldName,
-            IndexKind kind) throws IOException {
-        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), false);
+    public void admitMaintainedFieldIndex(String dbName, String collName, String indexIdentifier,
+            List<FieldIndexEntry<?>> written) {
+        if (rl.holdsCollectionLock(dbName, collName) && residentFieldIndex(dbName, collName, indexIdentifier) == null) {
+            admitFieldIndex(dbName, collName, indexIdentifier, written);
+        }
+    }
+
+    public void rememberFieldIndexBatch(String dbName, String collName, String indexIdentifier, int previousCount,
+            long deltaBytes) {
+        final var resident = residentFieldIndex(dbName, collName, indexIdentifier);
+        if (resident != null) {
+            sizes.adjustFieldIndex(Cache.getCollectionIdentifier(dbName, collName), indexIdentifier, previousCount,
+                    resident.size(), deltaBytes);
+        }
     }
 
     private <T> List<FieldIndexEntry<T>> loadIndex(String dbName, String collName, String indexIdentifier,
-            IndexLoader<T> loader, boolean admit) throws IOException {
-        final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        final var index = fieldIndexMap.get(collectionIdentifier);
-        if (index == null || !index.containsKey(indexIdentifier)) {
-            final var indexEntries = loader.load();
-            if (indexEntries == null) {
-                return null;
-            }
-            if (admit && rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName,
-                    () -> CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
-                fieldIndexMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>()).put(indexIdentifier,
-                        new ArrayList<>(indexEntries));
-            }
-            return indexEntries;
+            IndexLoader<T> loader) throws IOException {
+        final var existingIndex = residentFieldIndex(dbName, collName, indexIdentifier);
+        if (existingIndex != null) {
+            @SuppressWarnings("unchecked")
+            final var typed = (List<FieldIndexEntry<T>>) (List<?>) existingIndex;
+            return typed;
         }
-        final var existingIndex = index.get(indexIdentifier);
-        if (existingIndex == null) {
-            return null;
+        final var indexEntries = loader.load();
+        if (indexEntries != null && rl.holdsCollectionLock(dbName, collName)) {
+            admitFieldIndex(dbName, collName, indexIdentifier, new ArrayList<>(indexEntries));
         }
-        @SuppressWarnings("unchecked")
-        final var typed = (List<FieldIndexEntry<T>>) (List<?>) existingIndex;
-        return typed;
+        return indexEntries;
+    }
+
+    private void admitFieldIndex(String dbName, String collName, String indexIdentifier,
+            List<FieldIndexEntry<?>> copy) {
+        if (isCachingDisabled(dbName)) {
+            return;
+        }
+        final var measured = CacheSizeEstimator.estimateFieldIndexSize(copy);
+        if (shouldCache(dbName, () -> measured)) {
+            final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+            fieldIndexMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>()).put(indexIdentifier,
+                    copy);
+            sizes.rememberFieldIndex(collectionIdentifier, indexIdentifier, measured, copy.size());
+        }
     }
 
     private interface IndexLoader<T> {
@@ -379,8 +392,6 @@ public class UserCache {
         }
     }
 
-    // The background index writer calls this after rewriting a field's .idx files, so the next read
-    // reloads from disk instead of answering from the now-stale cached lists.
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexes = fieldIndexMap.get(collIdentifier);
@@ -395,6 +406,10 @@ public class UserCache {
     }
 
     public List<CacheableResource> listCacheableResources() {
+        return listCacheableResources(Measure.FULL);
+    }
+
+    public List<CacheableResource> listCacheableResources(Measure measure) {
         final var result = new ArrayList<CacheableResource>();
         for (var entry : pkIndexMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
@@ -415,8 +430,10 @@ public class UserCache {
             if (parts.length < 2)
                 continue;
             for (var inner : entry.getValue().entrySet()) {
-                result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(),
-                        estimateFieldIndexUnderLock(parts[0], parts[1], inner.getKey(), inner.getValue())));
+                final var bytes = measure == Measure.FULL
+                        ? estimateFieldIndexUnderLock(parts[0], parts[1], inner.getKey(), inner.getValue())
+                        : sizes.rememberedFieldIndexBytes(entry.getKey(), inner.getKey(), inner.getValue().size());
+                result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(), bytes));
             }
         }
         return result;

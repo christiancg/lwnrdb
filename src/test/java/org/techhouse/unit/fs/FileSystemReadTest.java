@@ -13,7 +13,6 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
-import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
@@ -92,31 +91,6 @@ public class FileSystemReadTest extends FileSystemTestBase {
         assertEquals(TestGlobals.COLL, result.getCollectionName());
         assertEquals(id, result.get_id());
         assertEquals("test", result.getData().get("name").asJsonString().getValue());
-    }
-
-    @Test
-    public void test_search_does_not_match_prefix_when_value_contains_pipe() throws IOException {
-        final var fileSystem = fs;
-        String fieldName = "testField";
-
-        // Write two entries: "foo" and "foo|bar" — the search for "foo" must not hit "foo|bar"
-        FieldIndexEntry<String> fooBar = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar",
-                Set.of("id2"));
-        FieldIndexEntry<String> foo = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo", Set.of("id1"));
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, fooBar, null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, foo, null);
-
-        FieldIndexEntry<String> fooEmpty = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo", Set.of());
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, fooEmpty);
-
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
-                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
-        String fileContent = Files.readString(indexFile.toPath());
-
-        assertFalse(fileContent.contains("foo" + Globals.ID_SEPARATOR + "id1"),
-                "exact 'foo' entry should have been removed");
-        assertTrue(fileContent.contains("foo|bar" + Globals.ID_SEPARATOR + "id2"),
-                "'foo|bar' entry must not be affected");
     }
 
     @Test

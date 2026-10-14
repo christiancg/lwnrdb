@@ -83,7 +83,8 @@ final class CompactionFixture {
         final var file = page(entry.getPage());
         try (var raf = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final var total = file.length();
-            PageCompactor.shiftOtherEntriesToStart(raf, entry, total);
+            PageCompactor.shiftOtherEntriesToStart(raf, entry,
+                    PageCompactor.readRegion(raf, entry.getPosition(), total));
             raf.setLength(total - entry.getLength());
         }
     }

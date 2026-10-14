@@ -367,7 +367,7 @@ public class UserCacheIndexTest {
         var collName = "coll";
         var fieldName = "active";
         var arr = new JsonArray();
-        arr.add(new JsonBoolean(true));
+        arr.add(JsonBoolean.of(true));
         var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
         var idx = List.of(new FieldIndexEntry<>(dbName, collName, true, Set.of("id1")),
                 new FieldIndexEntry<>(dbName, collName, false, Set.of("id2")));

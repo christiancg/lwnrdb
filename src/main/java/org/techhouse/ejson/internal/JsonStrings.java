@@ -11,16 +11,41 @@ public final class JsonStrings {
         if (value == null || value.isEmpty()) {
             return value;
         }
-        final var length = value.length();
-        var start = 0;
-        while (start < length && !needsEscaping(value, start)) {
-            start++;
-        }
-        if (start == length) {
+        final var start = firstToEscape(value);
+        if (start == value.length()) {
             return value;
         }
-        final var builder = new StringBuilder(length + 8);
+        final var builder = new StringBuilder(value.length() + 8);
         builder.append(value, 0, start);
+        escapeFrom(builder, value, start);
+        return builder.toString();
+    }
+
+    public static void appendEscaped(final StringBuilder out, final String value) {
+        if (value == null) {
+            out.append((String) null);
+            return;
+        }
+        final var start = firstToEscape(value);
+        if (start == value.length()) {
+            out.append(value);
+            return;
+        }
+        out.append(value, 0, start);
+        escapeFrom(out, value, start);
+    }
+
+    private static int firstToEscape(final String value) {
+        final var length = value.length();
+        var index = 0;
+        while (index < length && !needsEscaping(value, index)) {
+            index++;
+        }
+        return index;
+    }
+
+    private static void escapeFrom(final StringBuilder builder, final String value, final int start) {
+        final var length = value.length();
         for (var i = start; i < length; i++) {
             final var c = value.charAt(i);
             switch (c) {
@@ -34,7 +59,6 @@ public final class JsonStrings {
                 default -> appendOther(builder, value, i);
             }
         }
-        return builder.toString();
     }
 
     private static void appendOther(final StringBuilder builder, final String value, final int index) {

@@ -105,9 +105,9 @@ public class RecoveredDeleteIndexCleanupTest {
                 "an index-backed read must stop answering the deleted id before the worker removes it");
         final var updates = queuedUpdates();
         assertEquals(1, updates.size());
-        final var queued = updates.getFirst().getDbEntry();
-        assertEquals(GONE, queued.get_id());
-        assertEquals(queued.byteSize(), queued.getPreviousByteSize(),
+        final var queued = updates.getFirst().getEntity();
+        assertEquals(GONE, queued.id());
+        assertEquals(queued.byteSize(), queued.previousByteSize(),
                 "the page rows were rebuilt from the page files, so the cleanup must not move them again");
     }
 
@@ -154,7 +154,6 @@ public class RecoveredDeleteIndexCleanupTest {
 
         PageOccupancyReconciler.scheduleIndexCleanupFor(List.of(first, second));
 
-        assertEquals(Set.of(GONE, KEPT),
-                Set.copyOf(queuedUpdates().stream().map(event -> event.getDbEntry().get_id()).toList()));
+        assertEquals(Set.of(GONE, KEPT), Set.copyOf(queuedUpdates().stream().map(EntityEvent::getId).toList()));
     }
 }

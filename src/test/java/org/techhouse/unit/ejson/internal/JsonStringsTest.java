@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
+import java.util.Random;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.internal.JsonStrings;
 
@@ -11,6 +12,8 @@ import org.techhouse.ejson.internal.JsonStrings;
 // escaping range: everything below it is escaped, the space itself passes through.
 @SuppressWarnings("UnnecessaryUnicodeEscape")
 public class JsonStringsTest {
+    private static final String ESCAPE_ALPHABET = "ab\"\\\b\f\n\r\t\u0000\u001f\u007f\u00e9\u2028\ud800\udc00\ud834\udd1e/";
+
     @Test
     public void test_escapes_quote_and_backslash() {
         assertEquals("he said \\\"hi\\\"", JsonStrings.escape("he said \"hi\""));
@@ -68,5 +71,37 @@ public class JsonStringsTest {
         final var pair = "𝄞";
         assertSame(pair, JsonStrings.escape(pair));
         assertEquals("a𝄞b", JsonStrings.escape("a𝄞b"));
+    }
+
+    @Test
+    public void appendEscapedMatchesEscape() {
+        final var rng = new Random(42L);
+        for (var sample = 0; sample < 20_000; sample++) {
+            final var value = new StringBuilder();
+            final var length = rng.nextInt(24);
+            for (var index = 0; index < length; index++) {
+                value.append(ESCAPE_ALPHABET.charAt(rng.nextInt(ESCAPE_ALPHABET.length())));
+            }
+            final var text = value.toString();
+            final var out = new StringBuilder("prefix:");
+
+            JsonStrings.appendEscaped(out, text);
+
+            assertEquals("prefix:" + JsonStrings.escape(text), out.toString(), text);
+        }
+    }
+
+    @Test
+    public void appendEscapedWithoutEscapesAppendsTheSameInstanceContent() {
+        final var plain = "plain text with caf\u00e9 and \ud834\udd1e";
+        final var out = new StringBuilder();
+
+        JsonStrings.appendEscaped(out, plain);
+
+        assertSame(plain, JsonStrings.escape(plain));
+        assertEquals(plain, out.toString());
+        final var nothing = new StringBuilder();
+        JsonStrings.appendEscaped(nothing, null);
+        assertEquals("null", nothing.toString());
     }
 }

@@ -4,8 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.BufferedWriter;
-import java.io.StringWriter;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -71,8 +71,8 @@ public class ListenStopRaceTest {
     public void test_an_update_is_not_pushed_after_the_listen_was_stopped() throws Exception {
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
-        final var written = new StringWriter();
-        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(new BufferedWriter(written)));
+        final var written = new ByteArrayOutputStream();
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(written));
         final var manager = new StoppedDuringRerun();
         final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of());
@@ -85,7 +85,7 @@ public class ListenStopRaceTest {
 
             assertTrue(manager.lookups.get() >= 2, "the worker must look the registration up again before writing");
             assertNull(manager.getRegistration(listenId));
-            assertEquals("", written.toString(),
+            assertEquals("", written.toString(StandardCharsets.UTF_8),
                     "the client was told the listen stopped, so no update frame may follow that answer");
         } finally {
             clientTracker.removeById(clientId);

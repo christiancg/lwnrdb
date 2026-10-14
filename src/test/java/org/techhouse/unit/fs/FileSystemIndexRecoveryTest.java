@@ -20,6 +20,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.LegacyIndexLines;
 import org.techhouse.test.TestGlobals;
 
 public class FileSystemIndexRecoveryTest extends FileSystemTestBase {
@@ -130,7 +131,7 @@ public class FileSystemIndexRecoveryTest extends FileSystemTestBase {
         final var fieldName = "selfHeal";
 
         final var entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "good", Set.of("id1"));
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
         final var indexFile = findIdxFile(fieldName);
         Files.writeString(indexFile.toPath(), "\nthis is not a valid field index line", StandardCharsets.UTF_8,

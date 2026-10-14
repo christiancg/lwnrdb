@@ -92,39 +92,29 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_update_index_files_with_insert_and_remove() throws IOException {
+    public void test_rewrite_index_type_replaces_the_whole_file() throws IOException {
         String fieldName = "testField";
+        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "String", List
+                .of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", new HashSet<>(Set.of("id3")))));
 
-        Set<String> ids1 = new HashSet<>(Arrays.asList("id1", "id2"));
-        Set<String> ids2 = new HashSet<>(Arrays.asList("id3", "id4"));
-
-        FieldIndexEntry<String> insertEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", ids1);
-        FieldIndexEntry<String> removeEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", ids2);
-
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, insertEntry, removeEntry);
+        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "String", List
+                .of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", new HashSet<>(Set.of("id1")))));
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
-        String fileContent = Files.readString(indexFile.toPath());
 
-        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2")
-                || fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1"));
-        assertFalse(fileContent.contains("value2" + Globals.ID_SEPARATOR + "id3" + Globals.ID_SEPARATOR + "id4")
-                || fileContent.contains("value2" + Globals.ID_SEPARATOR + "id4" + Globals.ID_SEPARATOR + "id3"));
+        assertEquals("value1" + Globals.ID_SEPARATOR + "id1" + Globals.NEWLINE, Files.readString(indexFile.toPath()));
     }
 
     @Test
-    public void test_update_index_files_with_empty_ids_remove() throws IOException {
-
+    public void test_rewrite_index_type_with_no_entries_deletes_the_file() throws IOException {
         String fieldName = "testField";
+        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number",
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123, new HashSet<>(Set.of("a")))));
 
-        Set<String> emptyIds = new HashSet<>();
-        FieldIndexEntry<Integer> removeEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123, emptyIds);
-
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, removeEntry);
+        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number", List.of());
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
-
         assertFalse(indexFile.exists(),
                 "an index left with no entries is deleted, not kept as an empty file another type's lookup"
                         + " would still count");
@@ -381,7 +371,7 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
         entry2.set_id("2");
         final var pk1 = fs.insertIntoCollection(entry1);
         fs.insertIntoCollection(entry2);
-        data.get("name").asJsonString().setValue("updated");
+        data.addProperty("name", "updated");
         final var updatedEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         updatedEntry.set_id("1");
 

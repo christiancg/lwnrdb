@@ -27,7 +27,7 @@ final class AdminPageCache {
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
 
     void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        final var pagesCollName = AdminPageEntry.pagesCollectionName(dbName, collName);
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         final var pkIdx = readPagesPkIndexOrEmpty(pagesCollName);
         pagesPkIndexes.put(pagesCollectionKey(pagesCollName), new ArrayList<>(pkIdx));
@@ -112,7 +112,7 @@ final class AdminPageCache {
     }
 
     private void underAdminPagesLock(String dbName, String collName, long page, long bytesDelta, Runnable apply) {
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        final var pagesCollName = AdminPageEntry.pagesCollectionName(dbName, collName);
         var reinterrupt = false;
         try {
             locks.lock(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);

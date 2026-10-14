@@ -3,11 +3,15 @@ package org.techhouse.fs;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileLocks.Parsed;
@@ -19,16 +23,31 @@ final class PkIndexStore {
             + " the pk index may list ids whose records are not on any page; REINDEX with \"primaryKey\": true"
             + " rebuilds it from the pages";
     private static final Parsed<List<PkIndexEntry>> EMPTY_PARSED = new Parsed<>(List.of(), List.of(), false, false);
+    private static final KnownFile ABSENT = new KnownFile(0L, null, 0L);
+    private static final Map<String, KnownFile> knownFiles = new ConcurrentHashMap<>();
 
     private final FilePaths paths;
+
+    private record KnownFile(long length, FileTime modified, long digest) {
+    }
 
     PkIndexStore(FilePaths paths) {
         this.paths = paths;
     }
 
     void bulkIndexNewPKValues(String dbName, String collName, List<PkIndexEntry> pkEntries) throws IOException {
-        FileLocks.appendLines(paths.pkIndexFile(dbName, collName), pkEntries, PkIndexEntry::toFileEntry,
-                PK_INDEX_ROLLBACK_FAILURE);
+        final var indexFile = paths.pkIndexFile(dbName, collName);
+        final var lock = FileLocks.lockWrite(indexFile);
+        try {
+            final var before = knownMatching(indexFile);
+            forget(indexFile);
+            FileLocks.appendLines(indexFile, pkEntries, PkIndexEntry::toFileEntry, PK_INDEX_ROLLBACK_FAILURE);
+            if (before != null) {
+                remember(indexFile, before.digest() + PkRowDigest.sum(pkEntries));
+            }
+        } finally {
+            lock.unlock();
+        }
     }
 
     PkIndexEntry indexNewPKValue(String dbName, String collectionName, String value, long position, int length,
@@ -39,15 +58,112 @@ final class PkIndexStore {
     }
 
     void deleteIndexValue(PkIndexEntry pkIndexEntry) throws IOException {
-        internalUpdatePKIndex(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), pkIndexEntry.getValue(),
-                null);
+        deleteIndexValue(pkIndexEntry, null);
+    }
+
+    void deleteIndexValue(PkIndexEntry pkIndexEntry, List<PkIndexEntry> residentRows) throws IOException {
+        rewriteFrom(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), residentRows,
+                PkChange.delete(pkIndexEntry.getValue()));
     }
 
     PkIndexEntry updateIndexValues(String dbName, String collectionName, String value, long position, int length,
-            long page, long version) throws IOException {
+            long page, long version, List<PkIndexEntry> residentRows) throws IOException {
         final var newIndexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page, version);
-        internalUpdatePKIndex(dbName, collectionName, value, newIndexEntry);
+        rewriteFrom(dbName, collectionName, residentRows, PkChange.update(newIndexEntry));
         return newIndexEntry;
+    }
+
+    void rewriteFrom(String dbName, String collectionName, List<PkIndexEntry> residentRows, PkChange change)
+            throws IOException {
+        final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        final var lock = FileLocks.lockWrite(indexFile);
+        try {
+            final var located = locateResident(indexFile, residentRows, change.removedId());
+            if (located == null) {
+                internalUpdatePKIndex(dbName, collectionName, change.removedId(), change.replacement());
+            } else {
+                writeFrom(indexFile, located, change.replacement());
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private static PkRowDigest.Located locateResident(File indexFile, List<PkIndexEntry> residentRows,
+            String removedId) {
+        if (residentRows == null || !indexFile.exists()) {
+            return null;
+        }
+        final var known = knownMatching(indexFile);
+        return known == null ? null : PkRowDigest.locate(residentRows, removedId, known.digest());
+    }
+
+    private static void writeFrom(File indexFile, PkRowDigest.Located located, PkIndexEntry replacement)
+            throws IOException {
+        final var removed = located.removed();
+        if (replacement != null) {
+            replacement.setPosition(replacement.getPosition() - removed.getLength());
+        }
+        final var digest = new long[1];
+        forget(indexFile);
+        FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
+            final var lines = new PkLineWriter(out);
+            for (final var row : located.rows()) {
+                if (row == removed) {
+                    if (replacement != null) {
+                        digest[0] += lines.write(replacement);
+                    }
+                } else if (row.getPage() == removed.getPage() && row.getPosition() > removed.getPosition()) {
+                    digest[0] += lines.write(row, row.getPosition() - removed.getLength());
+                } else {
+                    digest[0] += lines.write(row);
+                }
+            }
+        });
+        remember(indexFile, digest[0]);
+    }
+
+    private static void writeRows(File indexFile, List<PkIndexEntry> rows) throws IOException {
+        forget(indexFile);
+        FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
+            final var lines = new PkLineWriter(out);
+            for (final var row : rows) {
+                lines.write(row);
+            }
+        });
+        remember(indexFile, PkRowDigest.sum(rows));
+    }
+
+    private static KnownFile knownMatching(File indexFile) {
+        if (!indexFile.exists()) {
+            return ABSENT;
+        }
+        final var known = knownFiles.get(indexFile.getAbsolutePath());
+        if (known == null || known.modified() == null) {
+            return null;
+        }
+        try {
+            final var attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
+            return attributes.size() == known.length() && attributes.lastModifiedTime().equals(known.modified())
+                    ? known
+                    : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static void remember(File indexFile, long digest) {
+        try {
+            final var attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
+            knownFiles.put(indexFile.getAbsolutePath(),
+                    new KnownFile(attributes.size(), attributes.lastModifiedTime(), digest));
+        } catch (IOException e) {
+            forget(indexFile);
+        }
+    }
+
+    private static void forget(File indexFile) {
+        knownFiles.remove(indexFile.getAbsolutePath());
     }
 
     void internalUpdatePKIndex(String dbName, String collectionName, String value, PkIndexEntry newPkIndexEntry)
@@ -70,8 +186,7 @@ final class PkIndexStore {
             }
             final var changed = change.apply(new ArrayList<>(parsed.entries()));
             changed.sort(Comparator.comparing(PkIndexEntry::getValue));
-            FileLocks.rewriteFileAtomically(indexFile.toPath(),
-                    changed.stream().map(PkIndexEntry::toFileEntry).toList());
+            writeRows(indexFile, changed);
             return true;
         } finally {
             lock.unlock();
@@ -115,8 +230,7 @@ final class PkIndexStore {
         try {
             final var sorted = new ArrayList<>(entries);
             sorted.sort(Comparator.comparing(PkIndexEntry::getValue));
-            FileLocks.rewriteFileAtomically(indexFile.toPath(),
-                    sorted.stream().map(PkIndexEntry::toFileEntry).toList());
+            writeRows(indexFile, sorted);
         } finally {
             lock.unlock();
         }
@@ -175,6 +289,11 @@ final class PkIndexStore {
         }
         final var entries = new ArrayList<>(byValue.values());
         entries.sort(Comparator.comparing(PkIndexEntry::getValue));
+        if (dropped) {
+            forget(indexFile);
+        } else {
+            remember(indexFile, PkRowDigest.sum(entries));
+        }
         return new Parsed<>(entries, new ArrayList<>(lineByValue.values()), dropped, dropped && entries.isEmpty());
     }
 

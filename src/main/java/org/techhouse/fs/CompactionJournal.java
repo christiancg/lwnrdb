@@ -3,6 +3,8 @@ package org.techhouse.fs;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
@@ -45,19 +47,29 @@ final class CompactionJournal {
         this.paths = paths;
     }
 
+    @SuppressWarnings("ResultOfMethodCallIgnored")
     Marker begin(Kind kind, PkIndexEntry removed, long originalLength, byte[] tail) throws IOException {
         final var marker = new Marker(kind, removed.getDatabaseName(), removed.getCollectionName(), removed.getPage(),
                 removed.getPosition(), originalLength, removed.getLength(), removed.getValue(), removed.getVersion(),
                 NO_TARGET, 0L, tail);
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(markerFile(marker).toPath());
-        Files.write(markerFile(marker).toPath(), encode(marker), StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        final var path = markerFile(marker).toPath();
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(path);
+        try (var channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE)) {
+            final var parts = new ByteBuffer[]{ByteBuffer.wrap(header(marker)), ByteBuffer.wrap(tail)};
+            while (parts[0].hasRemaining() || parts[1].hasRemaining()) {
+                channel.write(parts);
+            }
+        }
         return marker;
     }
 
     Marker retarget(Marker marker, long targetPage, long targetLengthBefore) throws IOException {
         final var retargeted = marker.targeting(targetPage, targetLengthBefore);
-        FileLocks.rewriteFileAtomically(markerFile(retargeted).toPath(), encode(retargeted));
+        FileLocks.rewriteFileAtomically(markerFile(retargeted).toPath(), out -> {
+            out.write(header(retargeted));
+            out.write(retargeted.tail());
+        });
         return retargeted;
     }
 
@@ -121,19 +133,14 @@ final class CompactionJournal {
         return true;
     }
 
-    static byte[] encode(Marker marker) {
+    static byte[] header(Marker marker) {
         final var header = String.join(Globals.ID_SEPARATOR, marker.kind().name(),
                 FieldIndexEntry.escapeIndexToken(marker.dbName()), FieldIndexEntry.escapeIndexToken(marker.collName()),
                 Long.toString(marker.page()), Long.toString(marker.position()), Long.toString(marker.originalLength()),
                 Long.toString(marker.removedLength()), FieldIndexEntry.escapeIndexToken(marker.id()),
                 Long.toString(marker.version()), Long.toString(marker.targetPage()),
-                Long.toString(marker.targetLengthBefore()));
-        final var headerBytes = header.getBytes(StandardCharsets.UTF_8);
-        final var encoded = new byte[headerBytes.length + 1 + marker.tail().length];
-        System.arraycopy(headerBytes, 0, encoded, 0, headerBytes.length);
-        encoded[headerBytes.length] = HEADER_END;
-        System.arraycopy(marker.tail(), 0, encoded, headerBytes.length + 1, marker.tail().length);
-        return encoded;
+                Long.toString(marker.targetLengthBefore())) + (char) HEADER_END;
+        return header.getBytes(StandardCharsets.UTF_8);
     }
 
     static Marker decode(byte[] bytes) {

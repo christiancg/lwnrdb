@@ -296,8 +296,8 @@ public class AggregationSortViaIndexTest {
 
     @Test
     public void test_boolean_field_sorts_identically_via_index_and_scan() throws Exception {
-        insertTyped("f", new org.techhouse.ejson.elements.JsonBoolean(false));
-        insertTyped("t", new org.techhouse.ejson.elements.JsonBoolean(true));
+        insertTyped("f", org.techhouse.ejson.elements.JsonBoolean.of(false));
+        insertTyped("t", org.techhouse.ejson.elements.JsonBoolean.of(true));
         final var scanAscending = idsFrom(true, null);
         final var scanDescending = idsFrom(false, null);
         enableIndex();
@@ -312,7 +312,7 @@ public class AggregationSortViaIndexTest {
         insertTyped("n1", new org.techhouse.ejson.elements.JsonNumber(5));
         insertTyped("n2", new org.techhouse.ejson.elements.JsonNumber(7));
         insertTyped("s1", new JsonString("abc"));
-        insertTyped("b1", new org.techhouse.ejson.elements.JsonBoolean(true));
+        insertTyped("b1", org.techhouse.ejson.elements.JsonBoolean.of(true));
         final var scanAscending = idsFrom(true, null);
         final var scanDescending = idsFrom(false, null);
         enableIndex();
@@ -330,7 +330,7 @@ public class AggregationSortViaIndexTest {
             } else if (i % 3 == 1) {
                 insertTyped("d" + i, new JsonString("s" + i));
             } else {
-                insertTyped("d" + i, new org.techhouse.ejson.elements.JsonBoolean(i % 2 == 0));
+                insertTyped("d" + i, org.techhouse.ejson.elements.JsonBoolean.of(i % 2 == 0));
             }
         }
         final var scanOrder = ascendingSortKeys();
