@@ -36,10 +36,9 @@ import org.techhouse.utils.GeoPoint;
 
 public class DocumentHeapSizerTest {
     private static final HeapLayout LAYOUT = new HeapLayout(8, 12, 4);
-    private static final long JSON_OBJECT = 16L;
-    private static final long LINKED_HASH_MAP = 56L;
-    private static final long LINKED_HASH_MAP_ENTRY = 32L;
-    private static final long SIXTEEN_SLOT_TABLE = 80L;
+    private static final long JSON_OBJECT = 24L;
+    private static final long SMALL_OBJECT_ARRAYS = 64L;
+    private static final long PARSED_ONE_MEMBER_ARRAYS = 32L;
     private static final long JSON_STRING = 16L;
     private static final long JSON_NUMBER = 16L;
     private static final long JSON_ARRAY = 16L;
@@ -48,9 +47,8 @@ public class DocumentHeapSizerTest {
     private static final long BOX = 16L;
     private static final long STRING_UP_TO_4_CHARS = 40L;
     private static final long STRING_OF_5_TO_12_CHARS = 48L;
-    private static final long EMPTY_OBJECT = JSON_OBJECT + LINKED_HASH_MAP;
-    private static final long NESTING_LEVEL = EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + LINKED_HASH_MAP_ENTRY
-            + STRING_UP_TO_4_CHARS;
+    private static final long EMPTY_OBJECT = JSON_OBJECT;
+    private static final long NESTING_LEVEL = EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + STRING_UP_TO_4_CHARS;
 
     private final Map<String, Class<? extends JsonCustom<?>>> registeredBefore = new HashMap<>();
 
@@ -74,18 +72,18 @@ public class DocumentHeapSizerTest {
     }
 
     @Test
-    public void test_flat_object_sums_map_entries_keys_and_values() {
+    public void test_flat_object_sums_its_arrays_keys_and_values() {
         final var document = new JsonObject();
         document.addProperty(fresh("_id"), "c_000001");
         document.addProperty(fresh("name"), "abc");
 
-        final var idMember = LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS + JSON_STRING + STRING_OF_5_TO_12_CHARS;
-        final var nameMember = LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS + JSON_STRING + STRING_UP_TO_4_CHARS;
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + idMember + nameMember, size(document));
+        final var idMember = STRING_UP_TO_4_CHARS + JSON_STRING + STRING_OF_5_TO_12_CHARS;
+        final var nameMember = STRING_UP_TO_4_CHARS + JSON_STRING + STRING_UP_TO_4_CHARS;
+        assertEquals(EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + idMember + nameMember, size(document));
     }
 
     @Test
-    public void test_empty_object_has_no_table() {
+    public void test_empty_object_has_no_arrays() {
         assertEquals(EMPTY_OBJECT, size(new JsonObject()));
     }
 
@@ -102,10 +100,9 @@ public class DocumentHeapSizerTest {
         document.add(fresh("addr"), address);
 
         final var tagsValue = JSON_ARRAY + ARRAY_LIST + TEN_SLOT_ARRAY + 3 * (JSON_STRING + STRING_UP_TO_4_CHARS);
-        final var addressValue = EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS
-                + JSON_NUMBER + BOX;
-        final var members = 2 * (LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS) + tagsValue + addressValue;
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + members, size(document));
+        final var addressValue = EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + STRING_UP_TO_4_CHARS + JSON_NUMBER;
+        final var members = 2 * (STRING_UP_TO_4_CHARS) + tagsValue + addressValue;
+        assertEquals(EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + members, size(document));
     }
 
     @Test
@@ -114,12 +111,12 @@ public class DocumentHeapSizerTest {
     }
 
     @Test
-    public void test_numbers_count_their_box_except_the_integer_cache() {
+    public void test_numbers_hold_their_value_without_a_box() {
         assertEquals(JSON_NUMBER, size(new JsonNumber("5")));
         assertEquals(JSON_NUMBER, size(new JsonNumber("-128")));
-        assertEquals(JSON_NUMBER + BOX, size(new JsonNumber("500")));
-        assertEquals(JSON_NUMBER + BOX, size(new JsonNumber("1.5")));
-        assertEquals(JSON_NUMBER + BOX, size(new JsonNumber(3_000_000_000L)));
+        assertEquals(JSON_NUMBER, size(new JsonNumber("500")));
+        assertEquals(JSON_NUMBER, size(new JsonNumber("1.5")));
+        assertEquals(JSON_NUMBER, size(new JsonNumber(3_000_000_000L)));
         assertEquals(JSON_NUMBER, size(new JsonNumber(7L)));
         assertEquals(JSON_NUMBER, size(new JsonNumber((Number) null)));
     }
@@ -136,8 +133,7 @@ public class DocumentHeapSizerTest {
         final var document = new JsonObject();
         document.add(fresh("a"), JsonNull.INSTANCE);
         document.add(fresh("b"), JsonNull.INSTANCE);
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + 2 * (LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS),
-                size(document));
+        assertEquals(EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + 2 * (STRING_UP_TO_4_CHARS), size(document));
     }
 
     @Test
@@ -240,8 +236,9 @@ public class DocumentHeapSizerTest {
 
         assertSame(key, document.entrySet().iterator().next().getKey());
         assertFalse(KeyTable.isPinned(key));
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + LINKED_HASH_MAP_ENTRY + LAYOUT.stringSize(key) + JSON_STRING
-                + STRING_UP_TO_4_CHARS, size(document));
+        assertEquals(
+                EMPTY_OBJECT + PARSED_ONE_MEMBER_ARRAYS + LAYOUT.stringSize(key) + JSON_STRING + STRING_UP_TO_4_CHARS,
+                size(document));
     }
 
     @Test
@@ -257,8 +254,7 @@ public class DocumentHeapSizerTest {
 
         assertSame(key, document.entrySet().iterator().next().getKey());
         assertTrue(KeyTable.isPinned(key), "a pinned key outlives any amount of churn");
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + LINKED_HASH_MAP_ENTRY + JSON_STRING + STRING_UP_TO_4_CHARS,
-                size(document));
+        assertEquals(EMPTY_OBJECT + PARSED_ONE_MEMBER_ARRAYS + JSON_STRING + STRING_UP_TO_4_CHARS, size(document));
     }
 
     @Test
@@ -307,5 +303,17 @@ public class DocumentHeapSizerTest {
         public JsonBaseElement deepCopy() {
             return this;
         }
+    }
+
+    @Test
+    public void anObjectPastSixteenMembersAlsoPaysForItsIndex() {
+        final var document = new JsonObject(17);
+        for (var member = 0; member < 17; member++) {
+            document.add(fresh("k" + member), JsonNull.INSTANCE);
+        }
+
+        final var arrays = 2 * LAYOUT.referenceArraySize(17);
+        assertEquals(EMPTY_OBJECT + arrays + LAYOUT.arraySize(Integer.BYTES, 64) + 17 * STRING_UP_TO_4_CHARS,
+                size(document));
     }
 }

@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.internal.EncodedJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
@@ -171,7 +173,7 @@ public class OutboundQueueTest {
 
     @Test
     public void test_close_frame_is_a_close_connection_response_carrying_the_code() {
-        final var frame = new String(OutboundQueue.closeFrame(ErrorCode.OUTBOUND_BACKLOG), StandardCharsets.UTF_8);
+        final var frame = text(OutboundQueue.closeFrame(ErrorCode.OUTBOUND_BACKLOG));
 
         assertTrue(frame.contains("\"type\":\"CLOSE_CONNECTION\""), frame);
         assertTrue(frame.contains("\"errorCode\":\"413-1\""), frame);
@@ -182,10 +184,11 @@ public class OutboundQueueTest {
         assertEquals(
                 "{\"type\":\"CLOSE_CONNECTION\",\"status\":\"ERROR\","
                         + "\"message\":\"The connection's outbound buffer overflowed\",\"errorCode\":\"413-1\"}",
-                new String(OutboundQueue.closeFrame(ErrorCode.OUTBOUND_BACKLOG), StandardCharsets.UTF_8));
+                text(OutboundQueue.closeFrame(ErrorCode.OUTBOUND_BACKLOG)));
         for (final var code : ErrorCode.values()) {
             final var legacy = eJson.toJson(new OperationResponse(OperationType.CLOSE_CONNECTION, code));
-            assertArrayEquals(legacy.getBytes(StandardCharsets.UTF_8), OutboundQueue.closeFrame(code), code.name());
+            assertArrayEquals(legacy.getBytes(StandardCharsets.UTF_8), exact(OutboundQueue.closeFrame(code)),
+                    code.name());
             assertArrayEquals(legacyDirectSend(legacy), directSend(code), code.name());
         }
     }
@@ -203,5 +206,13 @@ public class OutboundQueueTest {
         final var sink = new ByteArrayOutputStream();
         OutboundQueue.sendDirectly(sink, code);
         return sink.toByteArray();
+    }
+
+    private static byte[] exact(EncodedJson frame) {
+        return Arrays.copyOf(frame.bytes(), frame.length());
+    }
+
+    private static String text(EncodedJson frame) {
+        return new String(frame.bytes(), 0, frame.length(), StandardCharsets.UTF_8);
     }
 }

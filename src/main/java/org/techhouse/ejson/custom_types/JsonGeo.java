@@ -141,7 +141,7 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     private boolean applyDistance(Map<String, JsonBaseElement> args) {
         final var target = toGeoPoint(args.get("value"));
         final var comparator = GeoDistanceComparator.valueOf(args.get("comparator").asJsonString().getValue());
-        final var threshold = args.get("distance").asJsonNumber().getValue().doubleValue();
+        final var threshold = args.get("distance").asJsonNumber().doubleValue();
         final var distance = GeoUtils.haversineMeters(customValue, target);
         return switch (comparator) {
             case SMALLER_THAN -> distance < threshold;

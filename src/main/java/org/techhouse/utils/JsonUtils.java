@@ -5,6 +5,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
@@ -83,8 +84,8 @@ public final class JsonUtils {
             return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
         }
         if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-            return FieldIndexEntry.compareIndexedNumbers(o1Primitive.asJsonNumber().getValue(),
-                    o2Primitive.asJsonNumber().getValue());
+            return FieldIndexEntry.compareIndexedNumbers(o1Primitive.asJsonNumber().doubleValue(),
+                    o2Primitive.asJsonNumber().doubleValue());
         }
         if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
             return Boolean.compare(o1Primitive.asJsonBoolean().getValue(), o2Primitive.asJsonBoolean().getValue());
@@ -142,18 +143,19 @@ public final class JsonUtils {
     }
 
     private static void appendCanonicalObject(JsonObject object, StringBuilder sb) {
-        final var entries = new ArrayList<>(object.entrySet());
-        entries.sort(java.util.Map.Entry.comparingByKey());
+        final var keys = new String[object.size()];
+        for (var i = 0; i < keys.length; i++) {
+            keys[i] = object.keyAt(i);
+        }
+        Arrays.sort(keys);
         sb.append('{');
-        var first = true;
-        for (final var entry : entries) {
-            if (!first) {
+        for (var i = 0; i < keys.length; i++) {
+            if (i > 0) {
                 sb.append(',');
             }
-            first = false;
-            appendCanonicalString(entry.getKey(), sb);
+            appendCanonicalString(keys[i], sb);
             sb.append(':');
-            appendCanonical(entry.getValue(), sb);
+            appendCanonical(object.get(keys[i]), sb);
         }
         sb.append('}');
     }

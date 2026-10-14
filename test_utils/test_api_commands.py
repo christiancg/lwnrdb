@@ -382,6 +382,42 @@ def test_a_line_with_a_second_value_or_a_nan_point_is_refused(c):
                  c.send_raw(save_prefix + '{"_id":"finite_geo","p":"#geo(1,2)"}}'), "OK")
 
 
+def send_raw_bytes(c, line: bytes) -> dict:
+    c.s.sendall(line + b"\n")
+    return c._read_response()
+
+
+def test_non_ascii_and_malformed_utf8_requests_round_trip(c):
+    section("Requests are parsed from their UTF-8 bytes: non-ASCII text round-trips and malformed bytes decode leniently")
+    check_status("a document with non-ASCII keys and values is saved",
+                 save(c, COLL_TYPES, {"_id": "utf8_doc", "clé": "日本語😀", "ü": {"ñ": "ç"}}), "OK")
+    found = find_by_id(c, COLL_TYPES, "utf8_doc")
+    check_field("a non-ASCII value reads back unchanged", found, "object.clé", "日本語😀")
+    check_field("a nested non-ASCII key reads back unchanged", found, "object.ü.ñ", "ç")
+    matched = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_TYPES,
+                      "aggregationSteps": [{"type": "FILTER", "operator": {
+                          "fieldOperatorType": "EQUALS", "field": "clé", "value": "日本語😀"}}]})
+    check("a filter on a non-ASCII key and value finds the document",
+          [row.get("_id") for row in matched.get("results") or []] == ["utf8_doc"], str(matched))
+    prefix = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":').encode()
+    check_status("a string holding a malformed byte is accepted",
+                 send_raw_bytes(c, prefix + b'{"_id":"utf8_bad","v":"a\xffb"}}'), "OK")
+    check_field("the malformed byte reads back as the replacement character",
+                find_by_id(c, COLL_TYPES, "utf8_bad"), "object.v", "a\ufffdb")
+    check_client_refusal("a malformed byte outside a string is refused as an invalid command",
+                         send_raw_bytes(c, prefix + b'{"_id":"utf8_bad2","v":\xff}}'))
+    check("nothing was stored for utf8_bad2", find_by_id(c, COLL_TYPES, "utf8_bad2").get("status") != "OK")
+    check_status("numbers past fifteen digits, negative zero and exponents are accepted",
+                 c.send_raw('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES
+                            + '","object":{"_id":"utf8_nums","a":1234567890123456,"b":-0,"c":2.5e3,"d":7}}'), "OK")
+    numbers = find_by_id(c, COLL_TYPES, "utf8_nums")
+    check_field("a sixteen-digit integer reads back exactly", numbers, "object.a", 1234567890123456)
+    check_field("negative zero reads back as zero", numbers, "object.b", 0)
+    check_field("an exponent reads back as its integral value", numbers, "object.c", 2500)
+    check_field("a small integer reads back without a fraction", numbers, "object.d", 7)
+    check_field("the connection still answers afterwards", find_by_id(c, COLL_TYPES, "t_int"), "object.v", 42)
+
+
 def nested_value(depth: int) -> str:
     return '{"a":' * (depth - 1) + '1' + '}' * (depth - 1)
 
@@ -1120,6 +1156,7 @@ def main():
         test_a_malformed_document_is_refused_as_a_client_error,
         test_a_line_with_a_second_value_or_a_nan_point_is_refused,
         test_deep_nesting_is_refused_not_dropped,
+        test_non_ascii_and_malformed_utf8_requests_round_trip,
         test_filter_operators,
         test_filter_with_indexes,
         test_conjunctions,

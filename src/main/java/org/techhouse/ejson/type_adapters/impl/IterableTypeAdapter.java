@@ -6,6 +6,8 @@ import java.util.Spliterators;
 import java.util.stream.StreamSupport;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.internal.CharJsonOut;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
@@ -19,13 +21,13 @@ public class IterableTypeAdapter<T> implements TypeAdapter<Iterable<T>> {
 
     @Override
     public String toJson(Iterable<T> value) {
-        final var out = new StringBuilder();
+        final var out = new CharJsonOut();
         toJson(value, out);
         return out.toString();
     }
 
     @Override
-    public void toJson(Iterable<T> value, StringBuilder out) {
+    public void toJson(Iterable<T> value, JsonOut out) {
         final var elementAdapter = Objects.requireNonNull(TypeAdapterFactory.getAdapter(tClass));
         out.append('[');
         var first = true;

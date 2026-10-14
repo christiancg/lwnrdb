@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.internal.EncodedJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
@@ -22,7 +23,7 @@ public class OutboundQueue {
     private static final byte[] LINE_END = System.lineSeparator().getBytes(StandardCharsets.US_ASCII);
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition idle = lock.newCondition();
-    private final ArrayDeque<byte[]> pending = new ArrayDeque<>();
+    private final ArrayDeque<EncodedJson> pending = new ArrayDeque<>();
     private final OutputStream out;
     private final Closeable connection;
     private final long maxQueuedBytes;
@@ -41,11 +42,11 @@ public class OutboundQueue {
         this.onOverflow = onOverflow;
     }
 
-    public static byte[] frameOf(OperationResponse response) {
-        return eJson.toJsonBytes(response, response.estimatedJsonChars());
+    public static EncodedJson frameOf(OperationResponse response) {
+        return eJson.toJsonFrame(response, response.estimatedJsonChars());
     }
 
-    public static byte[] closeFrame(ErrorCode code) {
+    public static EncodedJson closeFrame(ErrorCode code) {
         return frameOf(new OperationResponse(OperationType.CLOSE_CONNECTION, code));
     }
 
@@ -54,16 +55,20 @@ public class OutboundQueue {
         out.flush();
     }
 
-    private static void writeFrame(OutputStream out, byte[] frame) throws IOException {
-        out.write(frame);
+    private static void writeFrame(OutputStream out, EncodedJson frame) throws IOException {
+        out.write(frame.bytes(), 0, frame.length());
         out.write(LINE_END);
     }
 
-    private static long queuedLengthOf(byte[] frame) {
-        return (long) frame.length + LINE_END.length;
+    private static long queuedLengthOf(EncodedJson frame) {
+        return (long) frame.length() + LINE_END.length;
     }
 
     public boolean offer(byte[] frame) {
+        return offer(EncodedJson.of(frame));
+    }
+
+    public boolean offer(EncodedJson frame) {
         final boolean overflowed;
         final boolean startDrain;
         lock.lock();
@@ -141,27 +146,41 @@ public class OutboundQueue {
         }
     }
 
-    private byte[] nextFrame() {
-        final byte[] frame;
-        final boolean finished;
+    private EncodedJson nextFrame() {
+        final EncodedJson frame;
         lock.lock();
         try {
             frame = pending.poll();
-            if (frame != null && !closed) {
-                queuedBytes -= queuedLengthOf(frame);
+            if (frame != null) {
+                if (!closed) {
+                    queuedBytes -= queuedLengthOf(frame);
+                }
+                return frame;
             }
-            finished = frame == null && closed;
-            if (frame == null) {
-                draining = false;
-                idle.signalAll();
+            if (!closed) {
+                finishDraining();
+                return null;
             }
         } finally {
             lock.unlock();
         }
-        if (finished) {
-            closeQuietly();
+        closeThenFinishDraining();
+        return null;
+    }
+
+    private void finishDraining() {
+        draining = false;
+        idle.signalAll();
+    }
+
+    private void closeThenFinishDraining() {
+        closeQuietly();
+        lock.lock();
+        try {
+            finishDraining();
+        } finally {
+            lock.unlock();
         }
-        return frame;
     }
 
     private boolean nothingPending() {
@@ -179,12 +198,10 @@ public class OutboundQueue {
             closed = true;
             pending.clear();
             queuedBytes = 0;
-            draining = false;
-            idle.signalAll();
         } finally {
             lock.unlock();
         }
-        closeQuietly();
+        closeThenFinishDraining();
     }
 
     private void closeAfterGrace() {

@@ -23,6 +23,13 @@ public final class ParserOutcomes {
         return outcome(() -> JsonParser.parse(input, maxDepth, maxTokens));
     }
 
+    public static String currentFromBytes(byte[] utf8, int maxDepth, int maxTokens) {
+        final var padded = new byte[utf8.length + 6];
+        java.util.Arrays.fill(padded, (byte) '"');
+        System.arraycopy(utf8, 0, padded, 3, utf8.length);
+        return outcome(() -> JsonParser.parse(padded, 3, 3 + utf8.length, maxDepth, maxTokens));
+    }
+
     public static String legacy(String input, int maxDepth, int maxTokens) {
         return outcome(() -> LEGACY.parse(input, maxDepth, maxTokens));
     }
@@ -68,7 +75,7 @@ public final class ParserOutcomes {
             case JsonCustom<?> custom -> out.append(custom.getClass().getSimpleName()).append('(')
                     .append(custom.getValue()).append('|').append(customValueText(custom.getCustomValue())).append(')');
             case JsonNumber number -> out.append(number.getValue().getClass().getSimpleName()).append('(')
-                    .append(number.getValue()).append('|').append(number.getStrLength()).append(')');
+                    .append(number.getValue()).append(')');
             case JsonPrimitive<?> primitive ->
                 out.append(primitive.getClass().getSimpleName()).append('(').append(primitive.getValue()).append(')');
             default -> out.append(element.getClass().getSimpleName());

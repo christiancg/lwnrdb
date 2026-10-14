@@ -48,11 +48,11 @@ public class HeapLayoutTest {
         sizes.put(HeapLayout.jdkClass("java.util.HashMap$Node"), new long[]{24, 32, 40, 40});
         sizes.put(HashSet.class, new long[]{16, 16, 16, 24});
         sizes.put(ArrayList.class, new long[]{24, 24, 24, 32});
-        sizes.put(JsonObject.class, new long[]{16, 16, 16, 24});
+        sizes.put(JsonObject.class, new long[]{24, 32, 40, 40});
         sizes.put(JsonString.class, new long[]{16, 16, 16, 24});
         sizes.put(JsonBoolean.class, new long[]{16, 16, 16, 24});
         sizes.put(JsonArray.class, new long[]{16, 16, 16, 24});
-        sizes.put(JsonNumber.class, new long[]{16, 24, 24, 24});
+        sizes.put(JsonNumber.class, new long[]{16, 24, 16, 24});
         sizes.put(JsonDateTime.class, new long[]{16, 24, 24, 32});
         sizes.put(JsonGeo.class, new long[]{24, 24, 32, 40});
         sizes.put(JsonVector.class, new long[]{24, 24, 32, 40});

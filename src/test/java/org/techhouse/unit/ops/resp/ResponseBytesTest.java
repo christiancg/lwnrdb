@@ -10,6 +10,7 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
@@ -124,7 +125,9 @@ public class ResponseBytesTest {
             final var legacy = eJson.toJson(response).getBytes(StandardCharsets.UTF_8);
             assertArrayEquals(legacy, eJson.toJsonBytes(response, response.estimatedJsonChars()),
                     response.getClass().getSimpleName());
-            assertArrayEquals(legacy, OutboundQueue.frameOf(response), response.getClass().getSimpleName());
+            final var frame = OutboundQueue.frameOf(response);
+            assertArrayEquals(legacy, Arrays.copyOf(frame.bytes(), frame.length()),
+                    response.getClass().getSimpleName());
             assertArrayEquals(legacy, eJson.toJsonBytes(response, 0), response.getClass().getSimpleName());
         }
     }

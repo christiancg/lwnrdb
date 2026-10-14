@@ -40,7 +40,7 @@ public class RequestParserAggregationTest {
         assertEquals(FieldOperatorType.EQUALS, fieldOperator.getFieldOperatorType());
         assertEquals("age", fieldOperator.getField());
         final var value = fieldOperator.getValue().asJsonObject().get("$numberInt").asJsonNumber().getValue();
-        assertEquals(30, value);
+        assertEquals(30.0, value);
     }
 
     @Test

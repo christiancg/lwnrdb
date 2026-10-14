@@ -199,7 +199,7 @@ public class MetaSchemaValidator {
     private void checkPositiveNumber(JsonBaseElement value, String path, List<String> errors) {
         if (!value.isJsonNumber()) {
             errors.add(at(path) + ": must be a number");
-        } else if (value.asJsonNumber().getValue().doubleValue() <= 0) {
+        } else if (value.asJsonNumber().doubleValue() <= 0) {
             errors.add(at(path) + ": must be greater than 0");
         }
     }
@@ -209,7 +209,7 @@ public class MetaSchemaValidator {
             errors.add(at(path) + ": must be a non-negative integer");
             return;
         }
-        final var number = value.asJsonNumber().getValue().doubleValue();
+        final var number = value.asJsonNumber().doubleValue();
         if (number < 0 || number % 1.0 != 0) {
             errors.add(at(path) + ": must be a non-negative integer");
         }

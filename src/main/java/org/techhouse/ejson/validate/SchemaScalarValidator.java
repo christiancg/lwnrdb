@@ -27,24 +27,24 @@ class SchemaScalarValidator {
 
     void validateNumber(double value, JsonObject obj, String path, List<String> errors) {
         final var minimum = obj.get(SchemaKeywords.MINIMUM);
-        if (minimum != null && value < minimum.asJsonNumber().getValue().doubleValue()) {
+        if (minimum != null && value < minimum.asJsonNumber().doubleValue()) {
             errors.add(SchemaValidator.at(path) + ": value is less than the minimum");
         }
         final var maximum = obj.get(SchemaKeywords.MAXIMUM);
-        if (maximum != null && value > maximum.asJsonNumber().getValue().doubleValue()) {
+        if (maximum != null && value > maximum.asJsonNumber().doubleValue()) {
             errors.add(SchemaValidator.at(path) + ": value is greater than the maximum");
         }
         final var exclusiveMinimum = obj.get(SchemaKeywords.EXCLUSIVE_MINIMUM);
-        if (exclusiveMinimum != null && value <= exclusiveMinimum.asJsonNumber().getValue().doubleValue()) {
+        if (exclusiveMinimum != null && value <= exclusiveMinimum.asJsonNumber().doubleValue()) {
             errors.add(SchemaValidator.at(path) + ": value is not greater than the exclusive minimum");
         }
         final var exclusiveMaximum = obj.get(SchemaKeywords.EXCLUSIVE_MAXIMUM);
-        if (exclusiveMaximum != null && value >= exclusiveMaximum.asJsonNumber().getValue().doubleValue()) {
+        if (exclusiveMaximum != null && value >= exclusiveMaximum.asJsonNumber().doubleValue()) {
             errors.add(SchemaValidator.at(path) + ": value is not less than the exclusive maximum");
         }
         final var multipleOf = obj.get(SchemaKeywords.MULTIPLE_OF);
         if (multipleOf != null) {
-            final var divisor = multipleOf.asJsonNumber().getValue().doubleValue();
+            final var divisor = multipleOf.asJsonNumber().doubleValue();
             if (isNotMultiple(value, divisor)) {
                 errors.add(SchemaValidator.at(path) + ": value is not a multiple of " + divisor);
             }

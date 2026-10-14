@@ -2,6 +2,9 @@ package org.techhouse.fs;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -20,6 +23,7 @@ import org.techhouse.log.Logger;
 
 final class PageCompactor {
     private static final Logger logger = Logger.logFor(PageCompactor.class);
+    private static final int SHIFT_CHUNK_BYTES = 64 * 1024;
 
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
@@ -82,18 +86,17 @@ final class PageCompactor {
         final var file = paths.collectionPage(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
                 pkIndexEntry.getPage());
         final var lock = FileLocks.lockWrite(file);
-        try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            final long totalFileLength = file.length();
+        try (var page = FileChannel.open(file.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            final long totalFileLength = page.size();
             requireWithinPage(pkIndexEntry, totalFileLength);
-            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
-            final var marker = journal.begin(kind, pkIndexEntry, totalFileLength, tail);
+            final var marker = journal.begin(kind, pkIndexEntry, totalFileLength, page);
             try {
-                final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, tail);
-                writer.setLength(totalFileLength - pkIndexEntry.getLength());
+                final var compacted = shiftTailOver(page, pkIndexEntry, totalFileLength);
+                page.truncate(totalFileLength - pkIndexEntry.getLength());
                 pkIndexStore.deleteIndexValue(pkIndexEntry, residentRows);
                 return new Compacted(marker, compacted ? compactionFor(pkIndexEntry) : null);
             } catch (IOException e) {
-                restoreAndEnd(writer, marker, pkIndexEntry, tail, totalFileLength);
+                restoreAndEnd(page, marker, pkIndexEntry, totalFileLength);
                 throw e;
             }
         } finally {
@@ -101,10 +104,44 @@ final class PageCompactor {
         }
     }
 
-    private void restoreAndEnd(RandomAccessFile writer, Marker marker, PkIndexEntry pkIndexEntry, byte[] tail,
-            long totalFileLength) {
-        restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
+    private void restoreAndEnd(FileChannel page, Marker marker, PkIndexEntry pkIndexEntry, long totalFileLength) {
+        try {
+            final var tail = ByteBuffer.wrap(journal.tailOf(marker));
+            var at = pkIndexEntry.getPosition();
+            while (tail.hasRemaining()) {
+                at += page.write(tail, at);
+            }
+            page.truncate(totalFileLength);
+        } catch (IOException restoreFailure) {
+            logger.error("Could not restore the page after a failed page or index write; run REINDEX on this"
+                    + " collection", restoreFailure);
+        }
         journal.end(marker);
+    }
+
+    static boolean shiftTailOver(FileChannel page, PkIndexEntry removed, long totalFileLength) throws IOException {
+        final var from = removed.getPosition() + removed.getLength();
+        final var remaining = totalFileLength - from;
+        if (remaining <= 0) {
+            return false;
+        }
+        final var chunk = ByteBuffer.allocate((int) Math.min(remaining, SHIFT_CHUNK_BYTES));
+        var moved = 0L;
+        while (moved < remaining) {
+            chunk.clear().limit((int) Math.min(chunk.capacity(), remaining - moved));
+            while (chunk.hasRemaining()) {
+                if (page.read(chunk, from + moved + chunk.position()) < 0) {
+                    throw new IOException("The page ended while its tail was being shifted");
+                }
+            }
+            chunk.flip();
+            var written = 0L;
+            while (chunk.hasRemaining()) {
+                written += page.write(chunk, removed.getPosition() + moved + written);
+            }
+            moved += written;
+        }
+        return true;
     }
 
     private static PkCompaction compactionFor(PkIndexEntry pkIndexEntry) {
@@ -194,24 +231,25 @@ final class PageCompactor {
         final var page = entry.getPage();
         final var file = paths.collectionPage(entry.getDatabaseName(), entry.getCollectionName(), page);
         final var lock = FileLocks.lockWrite(file);
-        try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            final long totalFileLength = file.length();
+        try (var channel = FileChannel.open(file.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            final long totalFileLength = channel.size();
             requireWithinPage(pkIndexEntry, totalFileLength);
-            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
-            final var marker = journal.begin(Kind.UPDATE, pkIndexEntry, totalFileLength, tail);
+            final var marker = journal.begin(Kind.UPDATE, pkIndexEntry, totalFileLength, channel);
             try {
-                final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, tail);
-                writer.seek(totalFileLength - pkIndexEntry.getLength());
-                final var length = line.length;
-                writer.write(line, 0, length);
-                writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
+                final var compacted = shiftTailOver(channel, pkIndexEntry, totalFileLength);
+                final var lineStart = totalFileLength - pkIndexEntry.getLength();
+                final var buffer = ByteBuffer.wrap(line);
+                while (buffer.hasRemaining()) {
+                    channel.write(buffer, lineStart + buffer.position());
+                }
+                channel.truncate(lineStart + line.length);
                 entry.setPreviousByteSize(pkIndexEntry.getLength());
                 final var updated = pkIndexStore.updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(),
-                        entry.get_id(), totalFileLength, length, page, entry.getVersion(), residentRows);
+                        entry.get_id(), totalFileLength, line.length, page, entry.getVersion(), residentRows);
                 journal.end(marker);
                 return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
             } catch (IOException e) {
-                restoreAndEnd(writer, marker, pkIndexEntry, tail, totalFileLength);
+                restoreAndEnd(channel, marker, pkIndexEntry, totalFileLength);
                 throw e;
             }
         } finally {
@@ -236,19 +274,6 @@ final class PageCompactor {
         writer.seek(from);
         writer.readFully(buffer, 0, length);
         return buffer;
-    }
-
-    static void restoreRegion(RandomAccessFile writer, long from, byte[] region, long originalLength) {
-        try {
-            if (region.length > 0) {
-                writer.seek(from);
-                writer.write(region, 0, region.length);
-            }
-            writer.setLength(originalLength);
-        } catch (IOException restoreFailure) {
-            logger.error("Could not restore the page after a failed page or index write; run REINDEX on this"
-                    + " collection", restoreFailure);
-        }
     }
 
     static boolean shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, byte[] tail)

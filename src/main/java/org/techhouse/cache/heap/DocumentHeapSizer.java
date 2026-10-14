@@ -4,7 +4,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonArray;
@@ -18,7 +17,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.KeyTable;
 
 public final class DocumentHeapSizer {
-    private static final Class<?> LINKED_HASH_MAP_ENTRY = HeapLayout.jdkClass("java.util.LinkedHashMap$Entry");
     private static final long SMALLEST_SHARED_BOX = -128L;
     private static final long LARGEST_SHARED_BOX = 127L;
 
@@ -33,7 +31,7 @@ public final class DocumentHeapSizer {
             case JsonArray array -> arraySize(array, layout);
             case JsonCustom<?> custom -> customSize(custom, layout);
             case JsonString string -> layout.shallowSize(string.getClass()) + stringSize(string.getValue(), layout);
-            case JsonNumber number -> layout.shallowSize(number.getClass()) + boxSize(number.getValue(), layout);
+            case JsonNumber number -> layout.shallowSize(number.getClass());
             case JsonBoolean _ -> 0L;
             default -> layout.shallowSize(element.getClass());
         };
@@ -51,11 +49,16 @@ public final class DocumentHeapSizer {
     }
 
     private static long objectSize(JsonObject object, HeapLayout layout) {
-        var total = layout.shallowSize(JsonObject.class) + layout.shallowSize(LinkedHashMap.class)
-                + layout.hashTableSize(object.size());
-        final var entryBytes = layout.shallowSize(LINKED_HASH_MAP_ENTRY);
-        for (final var member : object.entrySet()) {
-            total += entryBytes + keySize(member.getKey(), layout) + sizeOf(member.getValue(), layout);
+        final var capacity = object.capacity();
+        var total = layout.shallowSize(JsonObject.class);
+        if (capacity > 0) {
+            total += 2 * layout.referenceArraySize(capacity);
+        }
+        if (object.indexSlots() > 0) {
+            total += layout.arraySize(Integer.BYTES, object.indexSlots());
+        }
+        for (var i = 0; i < object.size(); i++) {
+            total += keySize(object.keyAt(i), layout) + sizeOf(object.valueAt(i), layout);
         }
         return total;
     }

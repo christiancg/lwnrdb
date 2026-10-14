@@ -2,6 +2,8 @@ package org.techhouse.ejson.type_adapters.impl;
 
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.internal.CharJsonOut;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
@@ -9,13 +11,13 @@ public class JsonArrayTypeAdapter implements TypeAdapter<JsonArray> {
 
     @Override
     public String toJson(JsonArray value) {
-        final var out = new StringBuilder();
+        final var out = new CharJsonOut();
         toJson(value, out);
         return out.toString();
     }
 
     @Override
-    public void toJson(JsonArray value, StringBuilder out) {
+    public void toJson(JsonArray value, JsonOut out) {
         final var elementAdapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
         out.append('[');
         var first = true;

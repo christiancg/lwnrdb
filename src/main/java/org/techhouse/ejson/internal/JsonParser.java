@@ -1,5 +1,7 @@
 package org.techhouse.ejson.internal;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.NoSuchElementException;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -25,10 +27,14 @@ public final class JsonParser {
     private static final String TRUE_LITERAL = "true";
     private static final String FALSE_LITERAL = "false";
     private static final String NULL_LITERAL = "null";
-    private static final int UNICODE_ESCAPE_DIGITS = 4;
-    private static final int HEX_RADIX = 16;
+    private static final int MAX_UTF8_CHAR_BYTES = 4;
+    private static final int MAX_EXACT_DIGITS = 15;
+    private static final int BYTE_MASK = 0xFF;
+    private static final int INITIAL_MEMBER_STACK = 16;
 
     private final String input;
+    private final byte[] bytes;
+    private final int origin;
     private final int length;
     private final int maxTokens;
     private final KeyTable keyTable;
@@ -39,10 +45,16 @@ public final class JsonParser {
     private int textStart;
     private int textEnd;
     private String decoded;
+    private String[] memberKeys = new String[0];
+    private JsonBaseElement[] memberValues = new JsonBaseElement[0];
+    private int memberCount;
 
-    private JsonParser(String input, int maxTokens, KeyTable keyTable) {
+    private JsonParser(String input, byte[] bytes, int start, int end, int maxTokens, KeyTable keyTable) {
         this.input = input;
-        this.length = input.length();
+        this.bytes = bytes;
+        this.origin = start;
+        this.length = end;
+        this.position = start;
         this.maxTokens = maxTokens;
         this.keyTable = keyTable;
     }
@@ -52,7 +64,26 @@ public final class JsonParser {
     }
 
     public static JsonBaseElement parse(String input, int maxDepth, int maxTokens, KeyTable keyTable) {
-        return new JsonParser(input, maxTokens, keyTable).parseRoot(maxDepth);
+        return new JsonParser(input, null, 0, input.length(), maxTokens, keyTable).parseRoot(maxDepth);
+    }
+
+    public static JsonBaseElement parse(byte[] utf8, int start, int end, int maxDepth, int maxTokens) {
+        return parse(utf8, start, end, maxDepth, maxTokens, null);
+    }
+
+    public static JsonBaseElement parse(byte[] utf8, int start, int end, int maxDepth, int maxTokens,
+            KeyTable keyTable) {
+        return new JsonParser(null, utf8, start, end, maxTokens, keyTable).parseRoot(maxDepth);
+    }
+
+    private int charAt(int index) {
+        return input != null ? input.charAt(index) : bytes[index] & BYTE_MASK;
+    }
+
+    private String slice(int start, int end) {
+        return input != null
+                ? input.substring(start, end)
+                : new String(bytes, start, end - start, StandardCharsets.UTF_8);
     }
 
     private JsonBaseElement parseRoot(int maxDepth) {
@@ -89,27 +120,49 @@ public final class JsonParser {
     }
 
     private JsonObject parseObject(int remainingDepth) {
-        final var object = new JsonObject();
         var token = nextPresent();
         if (token == Token.RIGHT_BRACE) {
-            return object;
+            return new JsonObject();
         }
+        final var base = memberCount;
         for (;;) {
             final var key = keyOf(token);
             token = nextPresent();
             if (token != Token.COLON) {
                 throw fail("Expected colon after key in object, got: " + typeOf(token));
             }
-            object.add(key, parseValue(next(), remainingDepth));
+            pushMember(key, parseValue(next(), remainingDepth));
             token = nextPresent();
             if (token == Token.RIGHT_BRACE) {
-                return object;
+                return popObject(base);
             }
             if (token != Token.COMMA) {
                 throw fail("Expected comma after pair in object, got: " + typeOf(token));
             }
             token = nextPresent();
         }
+    }
+
+    private void pushMember(String key, JsonBaseElement member) {
+        if (memberCount == memberKeys.length) {
+            final var capacity = Math.max(INITIAL_MEMBER_STACK, memberKeys.length * 2);
+            memberKeys = Arrays.copyOf(memberKeys, capacity);
+            memberValues = Arrays.copyOf(memberValues, capacity);
+        }
+        memberKeys[memberCount] = key;
+        memberValues[memberCount] = member;
+        memberCount++;
+    }
+
+    private JsonObject popObject(int base) {
+        final var object = new JsonObject(memberCount - base);
+        for (var index = base; index < memberCount; index++) {
+            object.add(memberKeys[index], memberValues[index]);
+            memberKeys[index] = null;
+            memberValues[index] = null;
+        }
+        memberCount = base;
+        return object;
     }
 
     private JsonArray parseArray(int remainingDepth) {
@@ -136,6 +189,11 @@ public final class JsonParser {
             if (decoded != null) {
                 return canonicalKey(decoded, 0, decoded.length());
             }
+            if (input == null) {
+                return keyTable == null
+                        ? KeyTable.canonical(bytes, textStart, textEnd)
+                        : keyTable.lookup(bytes, textStart, textEnd);
+            }
             return canonicalKey(input, textStart, textEnd);
         }
         if (token == Token.VALUE && value.isJsonString()) {
@@ -157,7 +215,7 @@ public final class JsonParser {
     }
 
     private String text() {
-        return decoded != null ? decoded : input.substring(textStart, textEnd);
+        return decoded != null ? decoded : slice(textStart, textEnd);
     }
 
     private MalformedJsonException fail(String message) {
@@ -178,7 +236,7 @@ public final class JsonParser {
 
     private Token next() {
         while (position < length) {
-            final var c = input.charAt(position);
+            final var c = charAt(position);
             switch (c) {
                 case '"' -> {
                     return lexString();
@@ -218,20 +276,45 @@ public final class JsonParser {
         return counted(token);
     }
 
-    private Token lexOther(char c) {
+    private Token lexOther(int c) {
         if (isNumberCharacter(c)) {
             return lexNumber();
         }
-        if (input.startsWith(TRUE_LITERAL, position)) {
+        if (startsWithAt(TRUE_LITERAL)) {
             return literal(JsonBoolean.TRUE, TRUE_LITERAL.length());
         }
-        if (input.startsWith(FALSE_LITERAL, position)) {
+        if (startsWithAt(FALSE_LITERAL)) {
             return literal(JsonBoolean.FALSE, FALSE_LITERAL.length());
         }
-        if (input.startsWith(NULL_LITERAL, position)) {
+        if (startsWithAt(NULL_LITERAL)) {
             return literal(JsonNull.INSTANCE, NULL_LITERAL.length());
         }
-        throw new UnexpectedCharacterException(c, position);
+        throw unexpectedCharacter();
+    }
+
+    private boolean startsWithAt(String literal) {
+        if (input != null) {
+            return input.startsWith(literal, position);
+        }
+        if (position + literal.length() > length) {
+            return false;
+        }
+        for (var offset = 0; offset < literal.length(); offset++) {
+            if (bytes[position + offset] != literal.charAt(offset)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private UnexpectedCharacterException unexpectedCharacter() {
+        if (input != null) {
+            return new UnexpectedCharacterException(input.charAt(position), position);
+        }
+        final var charIndex = new String(bytes, origin, position - origin, StandardCharsets.UTF_8).length();
+        final var window = Math.min(length - position, MAX_UTF8_CHAR_BYTES);
+        final var character = new String(bytes, position, window, StandardCharsets.UTF_8).charAt(0);
+        return new UnexpectedCharacterException(character, charIndex);
     }
 
     private Token literal(JsonBaseElement literal, int literalLength) {
@@ -252,51 +335,85 @@ public final class JsonParser {
         }
     }
 
-    private static boolean isNumberCharacter(char c) {
+    private static boolean isNumberCharacter(int c) {
         return (c >= '0' && c <= '9') || c == '-' || c == '.';
     }
 
     private Token lexNumber() {
         final var start = position;
         var index = start;
-        while (index < length && isNumberCharacter(input.charAt(index))) {
+        while (index < length && isNumberCharacter(charAt(index))) {
             index++;
         }
         final var end = exponentEnd(index);
-        value = new JsonNumber(input.substring(start, end));
+        value = input != null ? new JsonNumber(input.substring(start, end)) : numberFromBytes(start, end);
         position = end;
         return counted(Token.VALUE);
     }
 
+    private JsonNumber numberFromBytes(int start, int end) {
+        final var negative = bytes[start] == '-';
+        final var digitsStart = negative ? start + 1 : start;
+        final var digits = end - digitsStart;
+        if (digits < 1 || digits > MAX_EXACT_DIGITS) {
+            return new JsonNumber(slice(start, end));
+        }
+        var magnitude = 0L;
+        for (var index = digitsStart; index < end; index++) {
+            final var digit = bytes[index] - '0';
+            if (digit < 0 || digit > 9) {
+                return new JsonNumber(slice(start, end));
+            }
+            magnitude = magnitude * 10 + digit;
+        }
+        return new JsonNumber(negative && magnitude != 0 ? -(double) magnitude : magnitude);
+    }
+
     private int exponentEnd(int start) {
         var index = start;
-        if (index >= length || (input.charAt(index) != 'e' && input.charAt(index) != 'E')) {
+        if (index >= length || (charAt(index) != 'e' && charAt(index) != 'E')) {
             return start;
         }
         index++;
-        if (index < length && (input.charAt(index) == '+' || input.charAt(index) == '-')) {
+        if (index < length && (charAt(index) == '+' || charAt(index) == '-')) {
             index++;
         }
-        if (index >= length || !Character.isDigit(input.charAt(index))) {
+        var width = digitWidthAt(index);
+        if (width == 0) {
             return start;
         }
-        while (index < length && Character.isDigit(input.charAt(index))) {
-            index++;
+        while (width > 0) {
+            index += width;
+            width = digitWidthAt(index);
         }
         return index;
+    }
+
+    private int digitWidthAt(int index) {
+        if (index >= length) {
+            return 0;
+        }
+        final var c = charAt(index);
+        if (input != null || c < 0x80) {
+            return Character.isDigit((char) c) ? 1 : 0;
+        }
+        final var window = new String(bytes, index, Math.min(length - index, MAX_UTF8_CHAR_BYTES),
+                StandardCharsets.UTF_8);
+        final var decodedChar = window.charAt(0);
+        return Character.isDigit(decodedChar) ? String.valueOf(decodedChar).getBytes(StandardCharsets.UTF_8).length : 0;
     }
 
     private Token lexString() {
         final var start = position + 1;
         var index = start;
         while (index < length) {
-            final var c = input.charAt(index);
+            final var c = charAt(index);
             if (c == '"') {
                 textStart = start;
                 textEnd = index;
                 decoded = null;
                 position = index + 1;
-                return finishString(index > start && input.charAt(start) == '#');
+                return finishString(index > start && charAt(start) == '#');
             }
             if (c == '\\') {
                 return lexEscapedString(start, index);
@@ -307,22 +424,21 @@ public final class JsonParser {
     }
 
     private Token lexEscapedString(int start, int firstEscape) {
-        final var builder = new StringBuilder(firstEscape - start + 16);
-        builder.append(input, start, firstEscape);
+        final var end = endOfEscapedString(firstEscape);
+        final var raw = slice(start, end);
+        decoded = JsonEscapes.unescape(raw, raw.indexOf('\\'));
+        position = end + 1;
+        return finishString(!decoded.isEmpty() && decoded.charAt(0) == '#');
+    }
+
+    private int endOfEscapedString(int firstEscape) {
         var index = firstEscape;
         while (index < length) {
-            final var c = input.charAt(index);
+            final var c = charAt(index);
             if (c == '"') {
-                decoded = builder.toString();
-                position = index + 1;
-                return finishString(!decoded.isEmpty() && decoded.charAt(0) == '#');
+                return index;
             }
-            if (c == '\\' && index + 1 < length) {
-                index = appendEscape(builder, index + 1);
-            } else {
-                builder.append(c);
-                index++;
-            }
+            index += c == '\\' && index + 1 < length ? 2 : 1;
         }
         throw new MissingEndOfStringException();
     }
@@ -348,42 +464,5 @@ public final class JsonParser {
             throw new MalformedJsonException("A custom value has more components than the allowed limit");
         }
         customComponents += components;
-    }
-
-    private int appendEscape(StringBuilder builder, int escaped) {
-        final var c = input.charAt(escaped);
-        switch (c) {
-            case '"' -> builder.append('"');
-            case '\\' -> builder.append('\\');
-            case '/' -> builder.append('/');
-            case 'b' -> builder.append('\b');
-            case 'f' -> builder.append('\f');
-            case 'n' -> builder.append('\n');
-            case 'r' -> builder.append('\r');
-            case 't' -> builder.append('\t');
-            case 'u' -> {
-                return appendUnicodeEscape(builder, escaped + 1);
-            }
-            default -> builder.append('\\').append(c);
-        }
-        return escaped + 1;
-    }
-
-    private int appendUnicodeEscape(StringBuilder builder, int digits) {
-        if (digits + UNICODE_ESCAPE_DIGITS > length) {
-            builder.append("\\u");
-            return digits;
-        }
-        var codeUnit = 0;
-        for (var offset = 0; offset < UNICODE_ESCAPE_DIGITS; offset++) {
-            final var digit = Character.digit(input.charAt(digits + offset), HEX_RADIX);
-            if (digit < 0) {
-                builder.append("\\u");
-                return digits;
-            }
-            codeUnit = codeUnit * HEX_RADIX + digit;
-        }
-        builder.append((char) codeUnit);
-        return digits + UNICODE_ESCAPE_DIGITS;
     }
 }

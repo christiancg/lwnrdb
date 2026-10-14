@@ -46,8 +46,8 @@ public class NameValidationsTest {
     }
 
     @Test
-    public void isIdAgreesWithTheIdPattern() throws Exception {
-        final var regex = pattern("ID_PATTERN");
+    public void isIdAgreesWithTheIdPattern() {
+        final var regex = "^[a-zA-Z0-9_-]{1,64}$";
         for (final var input : INPUTS) {
             assertEquals(input.matches(regex), NameValidations.isId(input), () -> "isId disagrees on " + input);
         }

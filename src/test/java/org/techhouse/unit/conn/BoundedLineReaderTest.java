@@ -1,6 +1,8 @@
 package org.techhouse.unit.conn;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,6 +19,7 @@ import java.util.Deque;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.BoundedLineReader;
+import org.techhouse.conn.RequestLine;
 import org.techhouse.ex.RequestTooLargeException;
 import org.techhouse.test.TestUtils;
 
@@ -247,5 +250,39 @@ public class BoundedLineReaderTest {
 
         assertEquals("short", reader.readLine(LIMIT));
         assertThrows(RequestTooLargeException.class, () -> reader.readLine(10));
+    }
+
+    @Test
+    public void readLineBytesReturnsAViewOfTheLineWithoutItsTerminator() throws IOException {
+        final var reader = reader("{\"a\":\"é\"}\r\nnext\n");
+
+        final var first = reader.readLineBytes(0, LIMIT);
+        assertNotNull(first);
+
+        assertEquals("{\"a\":\"é\"}", first.text());
+        assertEquals("{\"a\":\"é\"}".getBytes(StandardCharsets.UTF_8).length, first.end() - first.start());
+        final var second = reader.readLineBytes(0, LIMIT);
+        assertNotNull(second);
+        assertEquals("next", second.text());
+        assertNull(reader.readLineBytes(0, LIMIT));
+    }
+
+    @Test
+    public void readLineBytesEnforcesTheSameLimit() {
+        final var reader = reader("x".repeat(LIMIT + 1) + "\n");
+
+        assertThrows(RequestTooLargeException.class, () -> reader.readLineBytes(0, LIMIT));
+    }
+
+    @Test
+    public void aLineIsBlankOnlyWhenEveryCharacterIsWhitespace() {
+        for (final var blank : new String[]{"", " ", "\t \u000b", "\u3000 "}) {
+            final var utf8 = blank.getBytes(StandardCharsets.UTF_8);
+            assertTrue(new RequestLine(utf8, 0, utf8.length).isBlank(), blank);
+        }
+        for (final var text : new String[]{" x", "é", "{}"}) {
+            final var utf8 = text.getBytes(StandardCharsets.UTF_8);
+            assertFalse(new RequestLine(utf8, 0, utf8.length).isBlank(), text);
+        }
     }
 }

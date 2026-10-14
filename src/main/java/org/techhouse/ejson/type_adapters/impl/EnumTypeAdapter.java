@@ -3,6 +3,7 @@ package org.techhouse.ejson.type_adapters.impl;
 import java.util.HashMap;
 import java.util.Map;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.log.Logger;
 
@@ -30,7 +31,7 @@ public class EnumTypeAdapter<T extends Enum<T>> implements TypeAdapter<T> {
     }
 
     @Override
-    public void toJson(T value, StringBuilder out) {
+    public void toJson(T value, JsonOut out) {
         out.append('"').append(nameOf(value)).append('"');
     }
 

@@ -27,6 +27,14 @@ public final class NumberFormatter {
         return value < 0 ? "-" + magnitude : magnitude;
     }
 
+    public static void appendJs(final double value, final JsonOut out) {
+        if (Math.abs(value) < TWO_POW_53 && value == Math.floor(value)) {
+            out.appendLong((long) value);
+        } else {
+            out.append(toJsString(value));
+        }
+    }
+
     public static int toInt32(final double value) {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
             return 0;

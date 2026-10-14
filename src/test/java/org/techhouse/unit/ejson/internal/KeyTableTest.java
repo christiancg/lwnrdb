@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
@@ -213,5 +214,30 @@ public class KeyTableTest {
         assertEquals(Globals.KEY_TABLE_SLOTS, table.capacity());
         assertTrue(table.occupiedSlots() <= Globals.KEY_TABLE_SLOTS);
         assertTrue(table.occupiedSlots() > Globals.KEY_TABLE_SLOTS / 2);
+    }
+
+    @Test
+    public void byteLookupsReturnTheInstanceTheCharLookupReturns() {
+        final var table = new KeyTable(Globals.KEY_TABLE_SLOTS);
+        for (final var key : new String[]{"plain-byte-key", "clé", "日本語", "😀"}) {
+            final var fromChars = table.lookup(fresh(key), 0, key.length());
+            final var utf8 = ("[" + key + "]").getBytes(StandardCharsets.UTF_8);
+            assertSame(fromChars, table.lookup(utf8, 1, utf8.length - 1), key);
+        }
+        final var firstSeenAsBytes = "first-seen-as-bytes".getBytes(StandardCharsets.UTF_8);
+        final var admitted = table.lookup(firstSeenAsBytes, 0, firstSeenAsBytes.length);
+        assertSame(admitted, table.lookup(fresh("first-seen-as-bytes"), 0, admitted.length()));
+    }
+
+    @Test
+    public void longByteKeysAreDecodedButNotCanonicalised() {
+        final var table = new KeyTable(Globals.KEY_TABLE_SLOTS);
+        final var key = "k".repeat(Globals.KEY_TABLE_MAX_KEY_LENGTH + 1);
+        final var utf8 = key.getBytes(StandardCharsets.UTF_8);
+
+        final var first = table.lookup(utf8, 0, utf8.length);
+
+        assertEquals(key, first);
+        assertFalse(table.holds(first));
     }
 }

@@ -1,10 +1,13 @@
 package org.techhouse.ops.index;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.FieldIndexLookup;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
@@ -21,12 +24,16 @@ import org.techhouse.utils.JsonUtils;
 
 public final class FieldIndexBatch {
     private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    private static final Cache cache = IocContainer.get(Cache.class);
 
     private final String dbName;
     private final String collName;
     private final String fieldName;
-    private final Map<String, FieldIndexSlot> slots = new LinkedHashMap<>();
-    private final Map<String, FieldIndexSlot.Located> idToEntry = new HashMap<>();
+    private final List<FieldIndexSlot> slots = new ArrayList<>();
+    private final Map<String, FieldIndexSlot> slotsByIdentifier = new HashMap<>();
+    private final Map<Class<?>, FieldIndexSlot> scalarSlots = new HashMap<>();
+    private final Map<IndexKind, FieldIndexSlot> hashSlots = new EnumMap<>(IndexKind.class);
+    private FieldIndexLookup lookup;
     private boolean loaded;
 
     private FieldIndexBatch(String dbName, String collName, String fieldName) {
@@ -45,31 +52,53 @@ public final class FieldIndexBatch {
     public void apply(String id, JsonBaseElement currentValue) throws IOException {
         loadEveryType();
         final var target = targetOf(currentValue);
-        final var current = idToEntry.get(id);
-        if (current != null && target != null && current.alreadyHolds(target.slot(), target.key())) {
+        final var current = lookup.locate(id);
+        if (current != null && target != null && alreadyHolds(current, target)) {
             return;
         }
         if (current != null) {
-            current.removeEverywhere(id);
-            idToEntry.remove(id);
+            for (var at = current; at != null; at = at.next()) {
+                slotsByIdentifier.get(at.typeIdentifier()).removeId(id, at.entry());
+            }
         }
         if (target != null) {
             final var entry = target.slot().addId(id, target.key(), target.value());
-            idToEntry.put(id, new FieldIndexSlot.Located(target.slot(), entry, null));
+            lookup.moved(id, new FieldIndexLookup.Located(target.slot().identifier(), entry, null));
+        } else {
+            lookup.moved(id, null);
         }
+    }
+
+    private static boolean alreadyHolds(FieldIndexLookup.Located current, Target target) {
+        return current.next() == null && current.typeIdentifier().equals(target.slot().identifier())
+                && target.slot().find(target.key(), target.value()) == current.entry();
     }
 
     public void flush() throws IOException {
         var firstWritten = false;
-        for (final var slot : slots.values()) {
+        for (final var slot : slots) {
             if (slot.write() && !firstWritten) {
                 firstWritten = true;
                 faultInjector.at(FaultPoint.INDEX_BATCH_FLUSHED, Cache.getCollectionIdentifier(dbName, collName));
             }
         }
-        for (final var slot : slots.values()) {
+        for (final var slot : slots) {
             slot.publish();
         }
+        keepLookupWhileCovered();
+    }
+
+    private void keepLookupWhileCovered() {
+        if (lookup == null) {
+            return;
+        }
+        for (final var slot : slots) {
+            if (!slot.coveredByCache()) {
+                cache.evictFieldIndexLookup(dbName, collName, fieldName);
+                return;
+            }
+        }
+        cache.admitFieldIndexLookup(dbName, collName, fieldName, lookup);
     }
 
     private void loadEveryType() throws IOException {
@@ -77,29 +106,41 @@ public final class FieldIndexBatch {
             return;
         }
         loaded = true;
+        var covered = true;
         for (final var type : IndexKind.scalarIndexClasses()) {
-            slotFor(type);
+            covered &= register(
+                    scalarSlots.computeIfAbsent(type, _ -> FieldIndexSlot.scalar(dbName, collName, fieldName, type)));
         }
         for (final var kind : IndexKind.HASH_KINDS) {
-            slotFor(kind);
+            covered &= register(
+                    hashSlots.computeIfAbsent(kind, _ -> FieldIndexSlot.hash(dbName, collName, fieldName, kind)));
         }
+        lookup = covered && slots.stream().anyMatch(FieldIndexSlot::isResident)
+                ? cache.fieldIndexLookup(dbName, collName, fieldName)
+                : null;
+        if (lookup == null) {
+            lookup = new FieldIndexLookup();
+            for (final var slot : slots) {
+                slot.indexInto(lookup);
+            }
+        }
+    }
+
+    private boolean register(FieldIndexSlot slot) throws IOException {
+        slots.add(slot);
+        slotsByIdentifier.put(slot.identifier(), slot);
+        return slot.attach();
     }
 
     private FieldIndexSlot slotFor(Class<?> type) throws IOException {
-        final var identifier = Cache.getIndexIdentifier(fieldName, type);
-        final var existing = slots.get(identifier);
-        return existing != null ? existing : register(FieldIndexSlot.scalar(dbName, collName, fieldName, type));
-    }
-
-    private FieldIndexSlot slotFor(IndexKind kind) throws IOException {
-        final var identifier = Cache.getHashIndexIdentifier(fieldName, kind.label());
-        final var existing = slots.get(identifier);
-        return existing != null ? existing : register(FieldIndexSlot.hash(dbName, collName, fieldName, kind));
-    }
-
-    private FieldIndexSlot register(FieldIndexSlot slot) throws IOException {
-        slots.put(slot.identifier(), slot);
-        slot.load(idToEntry);
+        final var existing = scalarSlots.get(type);
+        if (existing != null) {
+            return existing;
+        }
+        final var slot = FieldIndexSlot.scalar(dbName, collName, fieldName, type);
+        scalarSlots.put(type, slot);
+        register(slot);
+        slot.indexInto(lookup);
         return slot;
     }
 
@@ -110,7 +151,7 @@ public final class FieldIndexBatch {
         if (value != JsonNull.INSTANCE && value.isJsonPrimitive()) {
             final var primitive = value.asJsonPrimitive();
             return switch (primitive) {
-                case JsonNumber number -> scalarTarget(Number.class, canonicalNumber(number.getValue()));
+                case JsonNumber number -> scalarTarget(Number.class, number.doubleValue() + 0.0);
                 case JsonString string -> string.isJsonCustom()
                         ? customTarget(CustomTypeFactory.getCustomTypeInstance(string))
                         : scalarTarget(String.class, string.getValue());
@@ -127,10 +168,6 @@ public final class FieldIndexBatch {
         return null;
     }
 
-    private static Double canonicalNumber(Number number) {
-        return number.doubleValue() + 0.0;
-    }
-
     private Target scalarTarget(Class<?> type, Object value) throws IOException {
         return new Target(slotFor(type), FieldIndexEntry.fileKeyOf(value), value);
     }
@@ -139,7 +176,7 @@ public final class FieldIndexBatch {
         return scalarTarget(custom.getClass(), custom);
     }
 
-    private Target hashTarget(IndexKind kind, String hash) throws IOException {
-        return new Target(slotFor(kind), FieldIndexEntry.fileKeyOf(hash), hash);
+    private Target hashTarget(IndexKind kind, String hash) {
+        return new Target(hashSlots.get(kind), FieldIndexEntry.fileKeyOf(hash), hash);
     }
 }

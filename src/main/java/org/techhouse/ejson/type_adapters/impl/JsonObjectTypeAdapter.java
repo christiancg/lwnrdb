@@ -2,6 +2,8 @@ package org.techhouse.ejson.type_adapters.impl;
 
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.CharJsonOut;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.internal.JsonStrings;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
@@ -10,25 +12,23 @@ public class JsonObjectTypeAdapter implements TypeAdapter<JsonObject> {
 
     @Override
     public String toJson(JsonObject value) {
-        final var out = new StringBuilder();
+        final var out = new CharJsonOut();
         toJson(value, out);
         return out.toString();
     }
 
     @Override
-    public void toJson(JsonObject value, StringBuilder out) {
+    public void toJson(JsonObject value, JsonOut out) {
         final var elementAdapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
         out.append('{');
-        var first = true;
-        for (final var entry : value.entrySet()) {
-            if (!first) {
+        for (var i = 0; i < value.size(); i++) {
+            if (i > 0) {
                 out.append(',');
             }
-            first = false;
             out.append('"');
-            JsonStrings.appendEscaped(out, entry.getKey());
+            JsonStrings.appendEscaped(out, value.keyAt(i));
             out.append("\":");
-            elementAdapter.toJson(entry.getValue(), out);
+            elementAdapter.toJson(value.valueAt(i), out);
         }
         out.append('}');
     }

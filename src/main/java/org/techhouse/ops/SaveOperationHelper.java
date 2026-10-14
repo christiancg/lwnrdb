@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
@@ -133,6 +134,14 @@ public final class SaveOperationHelper {
         return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue(), eventType == EventType.CREATED);
     }
 
+    private static Set<String> idSetOf(List<IndexedDbEntry> entries) {
+        final var ids = new HashSet<String>(entries.size() * 2);
+        for (final var entry : entries) {
+            ids.add(entry.get_id());
+        }
+        return ids;
+    }
+
     private static long stampFor(long version) {
         if (version <= 0) {
             return hybridClock.next();
@@ -221,11 +230,12 @@ public final class SaveOperationHelper {
             // Fix the in-memory positions of survivors shifted by the batch before replacing the updated ones.
             bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
             applyUpdateSizeDeltas(dbName, collName, bulkResult.updated());
-            primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
-                    .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
+            final var updatedIds = idSetOf(updatedIndexEntries);
+            primaryKeyIndex.removeIf(pkIndexEntry -> updatedIds.contains(pkIndexEntry.getValue()));
         }
-        final var entriesToInsert = entries.stream().filter(dbEntry -> indexedDbEntriesToUpdate.stream()
-                .noneMatch(indexedDbEntry -> indexedDbEntry.get_id().equals(dbEntry.get_id()))).toList();
+        final var idsToUpdate = idSetOf(indexedDbEntriesToUpdate);
+        final var entriesToInsert = entries.stream().filter(dbEntry -> !idsToUpdate.contains(dbEntry.get_id()))
+                .toList();
         final var insertedIndexEntries = new ArrayList<IndexedDbEntry>();
         try {
             primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());

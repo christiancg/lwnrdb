@@ -46,7 +46,7 @@ public class JsonParserScanTest {
 
     @Test
     public void objectWithEveryValueKind() {
-        assertEquals("{1:a=Integer(1|1),1:b=JsonString(x),1:c=JsonBoolean(true),1:d=JsonBoolean(false),1:e=JsonNull,}",
+        assertEquals("{1:a=Double(1.0),1:b=JsonString(x),1:c=JsonBoolean(true),1:d=JsonBoolean(false),1:e=JsonNull,}",
                 shape("{\"a\":1,\"b\":\"x\",\"c\":true,\"d\":false,\"e\":null}"));
     }
 
@@ -54,16 +54,16 @@ public class JsonParserScanTest {
     public void stringsAndNumbersEndExactlyWhereTheyShould() {
         assertEquals("[JsonString(a),JsonString(b),]", shape("[\"a\",\"b\"]"));
         assertEquals("[JsonString(),JsonString(),]", shape("[\"\",\"\"]"));
-        assertEquals("[Double(-1.5|4),Integer(0|1),]", shape("[-1.5,0]"));
+        assertEquals("[Double(-1.5),Double(0.0),]", shape("[-1.5,0]"));
     }
 
     @Test
     public void exponentForms() {
-        assertEquals(100000, single("1e5").asJsonNumber().getValue());
-        assertEquals(100000, single("1E5").asJsonNumber().getValue());
-        assertEquals(100000, single("1e+5").asJsonNumber().getValue());
+        assertEquals(100000.0, single("1e5").asJsonNumber().getValue());
+        assertEquals(100000.0, single("1E5").asJsonNumber().getValue());
+        assertEquals(100000.0, single("1e+5").asJsonNumber().getValue());
         assertEquals(1.0E-5, single("1e-5").asJsonNumber().getValue());
-        assertEquals(1500, single("1.5e3").asJsonNumber().getValue());
+        assertEquals(1500.0, single("1.5e3").asJsonNumber().getValue());
         assertEquals(1e21, single("1e+21").asJsonNumber().getValue().doubleValue());
         assertEquals(-4.9e-324, single("-4.9E-324").asJsonNumber().getValue().doubleValue());
         assertEquals(Double.MAX_VALUE, single("1.7976931348623157e308").asJsonNumber().getValue().doubleValue());
@@ -102,7 +102,7 @@ public class JsonParserScanTest {
 
     @Test
     public void escapedKeysAreDecoded() {
-        assertEquals(1, parse("{\"k\\u0041\":1}").asJsonObject().get("kA").asJsonNumber().getValue());
+        assertEquals(1.0, parse("{\"k\\u0041\":1}").asJsonObject().get("kA").asJsonNumber().getValue());
     }
 
     @Test
@@ -128,8 +128,8 @@ public class JsonParserScanTest {
 
     @Test
     public void whitespaceBetweenTokensIsSkipped() {
-        assertEquals("{1:a=Integer(1|1),}", shape("{ \"a\" :\t1\n}"));
-        assertEquals("[Integer(1|1),]", shape("[\b1\r]"));
+        assertEquals("{1:a=Double(1.0),}", shape("{ \"a\" :\t1\n}"));
+        assertEquals("[Double(1.0),]", shape("[\b1\r]"));
     }
 
     @Test

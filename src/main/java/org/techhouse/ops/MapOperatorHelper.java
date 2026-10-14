@@ -180,15 +180,13 @@ public final class MapOperatorHelper {
             return null;
         }
         if (operand.isJsonNumber()) {
-            return operand.asJsonNumber().getValue().doubleValue();
+            return operand.asJsonNumber().doubleValue();
         }
         if (!operand.isJsonString()) {
             return null;
         }
         final var resolved = JsonUtils.getFromPath(obj, operand.asJsonString().getValue());
-        return !resolved.isJsonNull() && resolved.isJsonNumber()
-                ? resolved.asJsonNumber().getValue().doubleValue()
-                : null;
+        return !resolved.isJsonNull() && resolved.isJsonNumber() ? resolved.asJsonNumber().doubleValue() : null;
     }
 
     private static Double finiteOrNull(Double value) {
@@ -247,7 +245,7 @@ public final class MapOperatorHelper {
         final var element = JsonUtils.getFromPath(obj, operand);
         Double absValue = null;
         if (element.isJsonNumber()) {
-            final var doubleValue = element.asJsonNumber().getValue().doubleValue();
+            final var doubleValue = element.asJsonNumber().doubleValue();
             absValue = Math.abs(doubleValue);
         }
         JsonUtils.setPath(obj, addFieldName, numberOrNull(absValue));
@@ -363,9 +361,7 @@ public final class MapOperatorHelper {
             casted = switch (type) {
                 case NUMBER -> {
                     if (primitive.isJsonNumber()) {
-                        yield Double.isFinite(primitive.asJsonNumber().getValue().doubleValue())
-                                ? primitive
-                                : JsonNull.INSTANCE;
+                        yield Double.isFinite(primitive.asJsonNumber().doubleValue()) ? primitive : JsonNull.INSTANCE;
                     }
                     yield primitive.isJsonString()
                             ? numberFromString(primitive.asJsonString().getValue())
@@ -377,8 +373,7 @@ public final class MapOperatorHelper {
                     } else if (primitive.isJsonString()) {
                         yield primitive;
                     } else if (primitive.isJsonNumber()) {
-                        yield new JsonString(
-                                NumberFormatter.toJsString(primitive.asJsonNumber().getValue().doubleValue()));
+                        yield new JsonString(NumberFormatter.toJsString(primitive.asJsonNumber().doubleValue()));
                     } else if (primitive.isJsonBoolean()) {
                         yield new JsonString(Boolean.toString(primitive.asJsonBoolean().getValue()));
                     }
@@ -389,7 +384,7 @@ public final class MapOperatorHelper {
                         yield primitive;
                     }
                     if (primitive.isJsonNumber()) {
-                        yield JsonBoolean.of(primitive.asJsonNumber().getValue().doubleValue() != 0);
+                        yield JsonBoolean.of(primitive.asJsonNumber().doubleValue() != 0);
                     }
                     yield primitive.isJsonString()
                             ? booleanFromString(primitive.asJsonString().getValue())

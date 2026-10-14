@@ -10,6 +10,7 @@ import org.mockito.MockedStatic;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.CharJsonOut;
 import org.techhouse.ejson.type_adapters.impl.EnumTypeAdapter;
 import org.techhouse.log.LogWriter;
 
@@ -32,7 +33,7 @@ public class EnumTypeAdapterTest {
         EnumTypeAdapter<RenamedInToString> adapter = new EnumTypeAdapter<>(RenamedInToString.class);
 
         final var serialised = adapter.toJson(RenamedInToString.ACTIVE);
-        final var builder = new StringBuilder();
+        final var builder = new CharJsonOut();
         adapter.toJson(RenamedInToString.ACTIVE, builder);
 
         assertEquals("\"ACTIVE\"", serialised,

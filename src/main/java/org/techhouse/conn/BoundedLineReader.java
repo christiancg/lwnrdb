@@ -3,7 +3,6 @@ package org.techhouse.conn;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 import org.techhouse.config.Globals;
@@ -39,6 +38,11 @@ public final class BoundedLineReader {
     }
 
     public String readLine(long budgetMillis, int maxLineBytes) throws IOException {
+        final var line = readLineBytes(budgetMillis, maxLineBytes);
+        return line == null ? null : line.text();
+    }
+
+    public RequestLine readLineBytes(long budgetMillis, int maxLineBytes) throws IOException {
         if (refused) {
             throw new RequestTooLargeException(maxLineBytes);
         }
@@ -70,7 +74,7 @@ public final class BoundedLineReader {
         return -1;
     }
 
-    private String takeLine(int contentEnd, int next, int maxLineBytes) throws RequestTooLargeException {
+    private RequestLine takeLine(int contentEnd, int next, int maxLineBytes) throws RequestTooLargeException {
         var length = contentEnd - start;
         if (length > 0 && buffer[contentEnd - 1] == CARRIAGE_RETURN) {
             length--;
@@ -78,7 +82,7 @@ public final class BoundedLineReader {
         if (length > maxLineBytes) {
             throw refuse(maxLineBytes);
         }
-        final var line = new String(buffer, start, length, StandardCharsets.UTF_8);
+        final var line = new RequestLine(buffer, start, start + length);
         start = next;
         scanned = 0;
         if (start == end) {

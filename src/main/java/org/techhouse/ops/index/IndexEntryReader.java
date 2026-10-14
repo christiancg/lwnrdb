@@ -261,7 +261,7 @@ public final class IndexEntryReader {
             String id) {
         final var ids = new HashSet<>(Set.of(id));
         return switch (primitive) {
-            case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
+            case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.doubleValue() + 0.0, ids);
             case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
             case JsonString jsonString -> jsonString.isJsonCustom()
                     ? new FieldIndexEntry<>(dbName, collName, CustomTypeFactory.getCustomTypeInstance(jsonString), ids)

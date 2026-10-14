@@ -3,6 +3,7 @@ package org.techhouse.unit.ejson.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -55,6 +56,51 @@ public class JsonParserEquivalenceTest {
         assertEquals(ParserOutcomes.legacy(input, Globals.MAX_REQUEST_NESTING_DEPTH, budget),
                 ParserOutcomes.current(input, Globals.MAX_REQUEST_NESTING_DEPTH, budget), input);
         assertEquals(ParserOutcomes.legacy(input, 2, 12), ParserOutcomes.current(input, 2, 12), input);
+        assertSameOutcomeFromBytes(input.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void assertSameOutcomeFromBytes(byte[] utf8) {
+        final var decoded = new String(utf8, StandardCharsets.UTF_8);
+        final var budget = Math.max(1, decoded.length() / Globals.MIN_BYTES_PER_REQUEST_TOKEN);
+        assertEquals(ParserOutcomes.legacy(decoded, Integer.MAX_VALUE, Integer.MAX_VALUE),
+                ParserOutcomes.currentFromBytes(utf8, Integer.MAX_VALUE, Integer.MAX_VALUE), decoded);
+        assertEquals(ParserOutcomes.legacy(decoded, Globals.MAX_REQUEST_NESTING_DEPTH, budget),
+                ParserOutcomes.currentFromBytes(utf8, Globals.MAX_REQUEST_NESTING_DEPTH, budget), decoded);
+        assertEquals(ParserOutcomes.legacy(decoded, 2, 12), ParserOutcomes.currentFromBytes(utf8, 2, 12), decoded);
+    }
+
+    @Test
+    public void malformedUtf8ParsesLikeItsLenientDecode() {
+        final var inputs = new ArrayList<byte[]>();
+        for (final var fixture : fixtures()) {
+            final var utf8 = fixture.getBytes(StandardCharsets.UTF_8);
+            inputs.add(java.util.Arrays.copyOf(utf8, Math.max(0, utf8.length - 1)));
+        }
+        inputs.add(bytesOf("{\"a\":\"caf", 0xC3, "\"}"));
+        inputs.add(bytesOf("{\"a\":\"x", 0xE6, 0x97, "\"}"));
+        inputs.add(bytesOf("{\"a\":\"x", 0xF0, 0x9F, 0x98, "\"}"));
+        inputs.add(bytesOf("{\"a\":", 0xFF, "}"));
+        inputs.add(bytesOf("{\"a\":1}", 0xC0, 0x80));
+        inputs.add(bytesOf("{\"", 0xC0, 0xAF, "\":1}"));
+        inputs.add(bytesOf("{\"a\":\"\\", 0xC3, 0xA9, "x\\u00", 0xE9, "\"}"));
+        inputs.add(bytesOf("{\"a\":1e", 0xD9, 0xA3, "}"));
+        inputs.add(bytesOf("{\"a\":[1,", 0xE2, 0x82, 0xAC, "]}"));
+        inputs.add(bytesOf("{\"\\u00e9", 0xC3, 0xA9, "\":", 0xF0, 0x9F, 0x98, 0x80, "}"));
+        for (final var input : inputs) {
+            assertSameOutcomeFromBytes(input);
+        }
+    }
+
+    private static byte[] bytesOf(Object... parts) {
+        final var out = new java.io.ByteArrayOutputStream();
+        for (final var part : parts) {
+            if (part instanceof String text) {
+                out.writeBytes(text.getBytes(StandardCharsets.UTF_8));
+            } else {
+                out.write((Integer) part);
+            }
+        }
+        return out.toByteArray();
     }
 
     @Test

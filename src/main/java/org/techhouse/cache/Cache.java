@@ -22,6 +22,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
 public class Cache implements UserCacheDelegate, AdminCacheDelegate {
+    private static final String FIELD_LOOKUP_LABEL = "~lookup";
     private static final Comparator<DbEntry> BY_ID = Comparator.comparing(DbEntry::get_id);
     private static final Comparator<DbEntry> BY_PAGE_THEN_ID = Comparator.comparingLong(DbEntry::getPage)
             .thenComparing(DbEntry::get_id);
@@ -52,6 +53,14 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public static String getIndexIdentifier(String fieldName, String typeLabel) {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
+    }
+
+    public static String getFieldLookupIdentifier(String fieldName) {
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + FIELD_LOOKUP_LABEL;
+    }
+
+    public static boolean isFieldLookupIdentifier(String indexIdentifier) {
+        return indexIdentifier.endsWith(Globals.COLL_IDENTIFIER_SEPARATOR + FIELD_LOOKUP_LABEL);
     }
 
     public static String getHashIndexIdentifier(String fieldName, String typeLabel) {

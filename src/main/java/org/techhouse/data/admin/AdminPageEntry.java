@@ -3,6 +3,7 @@ package org.techhouse.data.admin;
 import java.util.Objects;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class AdminPageEntry extends DbEntry {
@@ -55,12 +56,21 @@ public class AdminPageEntry extends DbEntry {
 
     public void setEntryCount(int entryCount) {
         this.entryCount = entryCount;
-        syncData();
+        syncField(ENTRY_COUNT_FIELD_NAME, entryCount);
     }
 
     public void setPageSize(long pageSize) {
         this.pageSize = pageSize;
-        syncData();
+        syncField(PAGE_SIZE_FIELD_NAME, pageSize);
+    }
+
+    private void syncField(String field, double value) {
+        final var data = getData();
+        if (data == null) {
+            return;
+        }
+        data.add(field, new JsonNumber(value));
+        setData(data);
     }
 
     private void syncData() {

@@ -6,6 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -13,6 +18,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.BeforeEach;
@@ -140,6 +146,29 @@ public class PageCompactorTailTest {
         assertArrayEquals(before, Files.readAllBytes(fx.page(0).toPath()));
         assertArrayEquals(pkBefore, Files.readAllBytes(fx.paths.pkIndexFile(DB, COLL).toPath()));
         assertEquals(0, fx.markers().length);
+    }
+
+    @Test
+    public void anUnreadableMarkerDuringARestoreIsEndedNotLeftToReplay() throws IOException {
+        final var store = spy(fx.store);
+        final var compactor = new PageCompactor(fx.paths, store, fx.journal);
+        final var before = Files.readAllBytes(fx.page(0).toPath());
+        doAnswer(_ -> {
+            for (final var marker : fx.markers()) {
+                Files.write(marker.toPath(), new byte[]{'U', 'P'});
+            }
+            throw new IOException("index write failed");
+        }).when(store).updateIndexValues(any(), any(), any(), anyLong(), anyInt(), anyLong(), anyLong(), any());
+        final var target = fx.indexed("b");
+        final var entry = indexedUpdate(target, "grown-" + "x".repeat(40)).toDbEntry();
+
+        final var thrown = assertThrows(IOException.class,
+                () -> compactor.update(entry, entry.encodeLine(), target, fx.store.readWholePkIndexFile(DB, COLL)));
+
+        assertEquals("index write failed", thrown.getMessage());
+        assertEquals(0, fx.markers().length, "a marker whose tail cannot be read back must not replay at startup");
+        assertFalse(Arrays.equals(before, Files.readAllBytes(fx.page(0).toPath())),
+                "without a readable marker the page stays shifted until REINDEX, as the error log says");
     }
 
     @Test

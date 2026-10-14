@@ -127,6 +127,15 @@ final class FieldIndexBatchSupport {
         }
     }
 
+    void applyBatchHoldingTheCollection(String fieldName, List<String> ids) throws IOException, InterruptedException {
+        locks.lockRead(DB, COLL);
+        try {
+            applyBatch(fieldName, ids);
+        } finally {
+            locks.releaseRead(DB, COLL);
+        }
+    }
+
     static List<String> randomIds(Random random, int count, int pool) {
         final var ids = new ArrayList<String>(count);
         for (var i = 0; i < count; i++) {
@@ -168,6 +177,51 @@ final class FieldIndexBatchSupport {
             byType.put(label, lines);
         }
         return byType;
+    }
+
+    String lookupMismatch(String fieldName, int pool) throws IOException {
+        final var lookup = cache.fieldIndexLookup(DB, COLL, fieldName);
+        if (lookup == null) {
+            return null;
+        }
+        final var expected = placementsOnDisk(fieldName);
+        for (var i = 0; i < pool; i++) {
+            final var id = "id" + i;
+            final var actual = new TreeSet<String>();
+            for (var at = lookup.locate(id); at != null; at = at.next()) {
+                actual.add(at.typeIdentifier() + "=" + FieldIndexEntry.fileKeyOf(at.entry().getValue()));
+            }
+            final var onDisk = expected.getOrDefault(id, new TreeSet<>());
+            if (!actual.equals(onDisk)) {
+                return id + " is " + actual + " in the cached lookup but " + onDisk + " on disk";
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, Set<String>> placementsOnDisk(String fieldName) throws IOException {
+        final var identifiers = new TreeMap<String, String>();
+        for (final var type : IndexKind.scalarIndexClasses()) {
+            identifiers.put(IndexKind.fileLabel(type), Cache.getIndexIdentifier(fieldName, type));
+        }
+        for (final var kind : IndexKind.HASH_KINDS) {
+            identifiers.put(kind.label(), Cache.getHashIndexIdentifier(fieldName, kind.label()));
+        }
+        final var placements = new TreeMap<String, Set<String>>();
+        for (final var label : identifiers.entrySet()) {
+            final var file = indexFile(fieldName, label.getKey());
+            if (!file.exists()) {
+                continue;
+            }
+            for (final var line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
+                final var tokens = line.split(Globals.ID_SEPARATOR, -1);
+                for (var i = 1; i < tokens.length; i++) {
+                    placements.computeIfAbsent(FieldIndexEntry.unescapeIndexToken(tokens[i]), _ -> new TreeSet<>())
+                            .add(label.getValue() + "=" + tokens[0]);
+                }
+            }
+        }
+        return placements;
     }
 
     void admitEveryType(String fieldName) throws IOException, InterruptedException {

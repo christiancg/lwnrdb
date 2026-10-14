@@ -6,6 +6,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.CharJsonOut;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.internal.ReflectionUtils;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
@@ -40,13 +42,13 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
     @Override
     public String toJson(T value) {
-        final var out = new StringBuilder();
+        final var out = new CharJsonOut();
         toJson(value, out);
         return out.toString();
     }
 
     @Override
-    public void toJson(T value, StringBuilder out) {
+    public void toJson(T value, JsonOut out) {
         out.append('{');
         final var actualClass = value.getClass();
         final var fields = ReflectionUtils.getFields(actualClass);
@@ -55,13 +57,13 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             out.append(fields[i].getName());
             out.append('"');
             out.append(':');
-            final var mark = out.length();
+            final var mark = out.mark();
             try {
                 appendFieldValue(fields[i], value, out);
             } catch (Exception e) {
                 logger.error("Serialising " + actualClass.getName() + "." + fields[i].getName()
                         + " failed; emitting null in its place", e);
-                out.setLength(mark);
+                out.reset(mark);
                 out.append("null");
             }
             if (i < fields.length - 1) {
@@ -102,7 +104,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
         }
     }
 
-    private <U> void appendFieldValue(Field field, U instance, StringBuilder out)
+    private <U> void appendFieldValue(Field field, U instance, JsonOut out)
             throws IllegalAccessException, ClassNotFoundException {
         Object value = ReflectionUtils.getFieldValue(field, instance);
         if (value != null) {
@@ -112,7 +114,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
         }
     }
 
-    private <P> void appendHardCast(Object value, Class<P> pClass, Field field, StringBuilder out)
+    private <P> void appendHardCast(Object value, Class<P> pClass, Field field, JsonOut out)
             throws ClassNotFoundException {
         P casted;
         if (field.getType().isPrimitive()) {

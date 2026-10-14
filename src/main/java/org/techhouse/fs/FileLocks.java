@@ -168,6 +168,15 @@ final class FileLocks {
         }
     }
 
+    static byte[] readAllBytesLocked(File file) throws IOException {
+        final var lock = lockRead(file);
+        try {
+            return Files.readAllBytes(file.toPath());
+        } finally {
+            lock.unlock();
+        }
+    }
+
     static List<String> decodeLines(byte[] bytes) {
         final var lines = new ArrayList<String>();
         var start = 0;

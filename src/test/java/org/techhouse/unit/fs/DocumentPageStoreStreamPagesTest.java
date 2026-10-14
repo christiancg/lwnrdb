@@ -5,10 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.sun.management.UnixOperatingSystemMXBean;
+import java.io.File;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -71,5 +76,35 @@ public class DocumentPageStoreStreamPagesTest extends FileSystemTestBase {
     private void consumeWithoutClosing() throws IOException {
         fs.streamPages(TestGlobals.DB, TestGlobals.COLL).forEach(_ -> {
         });
+    }
+
+    private Map<String, DbEntry> pageWith(String content) throws IOException {
+        final var page = new java.io.File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator
+                + TestGlobals.COLL + File.separator + TestGlobals.COLL + "-7.dat");
+        Files.writeString(page.toPath(), content, StandardCharsets.UTF_8);
+        return fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 7L);
+    }
+
+    @Test
+    public void every_line_terminator_frames_a_record() throws IOException {
+        final var read = pageWith("{\"_id\":\"lf\"}\n{\"_id\":\"crlf\"}\r\n{\"_id\":\"cr\"}\r{\"_id\":\"last\"}");
+
+        assertEquals(Set.of("lf", "crlf", "cr", "last"), read.keySet());
+        assertEquals(7L, read.get("last").getPage());
+    }
+
+    @Test
+    public void empty_and_blank_lines_are_skipped() throws IOException {
+        final var read = pageWith("\n\n{\"_id\":\"a\"}\n          \n\r\n{\"_id\":\"b\",\"v\":\"é😀\"}\n");
+
+        assertEquals(Set.of("a", "b"), read.keySet());
+        assertEquals("é😀", read.get("b").getData().get("v").asJsonString().getValue());
+    }
+
+    @Test
+    public void a_malformed_line_is_skipped_and_later_lines_still_read() throws IOException {
+        final var read = pageWith("{\"_id\":\"a\"}\n{\"_id\":\"torn\n{\"_id\":\"b\"}\n");
+
+        assertEquals(Set.of("a", "b"), read.keySet());
     }
 }

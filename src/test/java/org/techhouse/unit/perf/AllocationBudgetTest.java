@@ -11,7 +11,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
-import org.techhouse.ejson.EJson;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -33,13 +33,12 @@ public class AllocationBudgetTest {
     private static final int DOCS = 10_000;
     private static final int BULK = 1_000;
     private static final int WARM_UPS = 5;
-    private static final long MB = 1024L * 1024L;
     private static final long KB = 1024L;
-    private static final long SAVE_UPDATE_BUDGET = 6 * MB;
-    private static final long INSERT_BUDGET_PER_DOC = 15 * KB;
-    private static final long COLD_SCAN_BUDGET_PER_DOC = 9 * KB;
-    private static final long BATCH_OF_ONE_BUDGET = 4 * MB;
-    private static final double RESPONSE_BUDGET_RATIO = 2.5;
+    private static final long SAVE_UPDATE_BUDGET = 150 * KB;
+    private static final long INSERT_BUDGET_PER_DOC = 4 * KB;
+    private static final long COLD_SCAN_BUDGET_PER_DOC = 4 * KB;
+    private static final long BATCH_OF_ONE_BUDGET = 44 * KB;
+    private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
             {"type":"FILTER","operator":{"fieldOperatorType":"SMALLER_THAN","field":"qty","value":1}},
@@ -52,7 +51,6 @@ public class AllocationBudgetTest {
     private static final com.sun.management.ThreadMXBean THREADS = (com.sun.management.ThreadMXBean) ManagementFactory
             .getThreadMXBean();
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final EJson eJson = IocContainer.get(EJson.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static int nextInsertId = DOCS;
 
@@ -109,14 +107,23 @@ public class AllocationBudgetTest {
     }
 
     private static void bulkSave(int start) throws Exception {
-        SaveOperationHelper.executeBulkSave(bulkRequest(start));
+        holdingTheCollection(() -> SaveOperationHelper.executeBulkSave(bulkRequest(start)));
+    }
+
+    private static void holdingTheCollection(ThrowingAction action) throws Exception {
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            action.run();
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
     }
 
     private static void saveUpdate(int i) throws Exception {
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("d" + i);
         request.setObject(document(i, 1 + i % 5));
-        SaveOperationHelper.executeSave(request);
+        holdingTheCollection(() -> SaveOperationHelper.executeSave(request));
     }
 
     private static long allocatedBy(ThrowingAction action) throws Exception {
@@ -150,7 +157,8 @@ public class AllocationBudgetTest {
         for (var round = 0; round < WARM_UPS; round++) {
             final var request = bulkRequest(nextInsertId);
             nextInsertId += BULK;
-            cheapest = Math.min(cheapest, allocatedBy(() -> SaveOperationHelper.executeBulkSave(request)));
+            cheapest = Math.min(cheapest,
+                    allocatedBy(() -> holdingTheCollection(() -> SaveOperationHelper.executeBulkSave(request))));
         }
         final var perDoc = cheapest / BULK;
         assertTrue(perDoc <= INSERT_BUDGET_PER_DOC, report("one inserted document", perDoc, INSERT_BUDGET_PER_DOC));
@@ -195,8 +203,7 @@ public class AllocationBudgetTest {
         }
         final var response = new AggregateResponse("Ok", rows);
         final long[] size = {0};
-        final var measured = cheapestOf(
-                () -> size[0] = eJson.toJsonBytes(response, response.estimatedJsonChars()).length);
+        final var measured = cheapestOf(() -> size[0] = OutboundQueue.frameOf(response).length());
         final var budget = (long) (size[0] * RESPONSE_BUDGET_RATIO);
         assertTrue(measured <= budget, report("serialising a " + size[0] + "-byte response", measured, budget));
     }

@@ -358,7 +358,7 @@ public class AntiEntropyServiceTest extends AntiEntropyTestBase {
         request.set_id("a");
         final var response = processor.processMessage(request);
         if (response instanceof org.techhouse.ops.resp.FindByIdResponse found && found.getObject() != null) {
-            return found.getObject().get("v").asJsonNumber().getValue().toString();
+            return String.valueOf(found.getObject().get("v").asJsonNumber().asInteger());
         }
         return null;
     }

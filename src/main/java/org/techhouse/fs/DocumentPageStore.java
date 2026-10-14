@@ -3,7 +3,6 @@ package org.techhouse.fs;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -24,6 +23,8 @@ import org.techhouse.log.Logger;
 
 final class DocumentPageStore {
     private static final Logger logger = Logger.logFor(DocumentPageStore.class);
+    private static final byte LINE_FEED = '\n';
+    private static final byte CARRIAGE_RETURN = '\r';
     private final EJson eJson = IocContainer.get(EJson.class);
 
     private final FilePaths paths;
@@ -73,20 +74,50 @@ final class DocumentPageStore {
             return new HashMap<>();
         }
         final var result = new HashMap<String, DbEntry>();
-        for (var line : FileLocks.readAllLinesLocked(collectionFile)) {
-            if (line.isEmpty())
-                continue;
-            try {
-                final var entry = DbEntry.fromString(dbName, collectionName, line);
-                entry.setPage(page);
-                result.put(entry.get_id(), entry);
-            } catch (Exception e) {
-                // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
-                // line here would invalidate every later entry's recorded position.
-                logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
+        final var bytes = FileLocks.readAllBytesLocked(collectionFile);
+        var start = 0;
+        while (start < bytes.length) {
+            final var end = lineEnd(bytes, start);
+            if (end > start && !isBlank(bytes, start, end)) {
+                try {
+                    final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
+                    entry.setPage(page);
+                    result.put(entry.get_id(), entry);
+                } catch (Exception e) {
+                    // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
+                    // line here would invalidate every later entry's recorded position.
+                    logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
+                }
             }
+            start = nextLineStart(bytes, end);
         }
         return result;
+    }
+
+    private static int lineEnd(byte[] bytes, int start) {
+        var index = start;
+        while (index < bytes.length && bytes[index] != LINE_FEED && bytes[index] != CARRIAGE_RETURN) {
+            index++;
+        }
+        return index;
+    }
+
+    private static int nextLineStart(byte[] bytes, int lineEnd) {
+        if (lineEnd >= bytes.length) {
+            return bytes.length;
+        }
+        final var afterTerminator = lineEnd + 1;
+        return bytes[lineEnd] == CARRIAGE_RETURN && afterTerminator < bytes.length
+                && bytes[afterTerminator] == LINE_FEED ? afterTerminator + 1 : afterTerminator;
+    }
+
+    private static boolean isBlank(byte[] bytes, int start, int end) {
+        for (var index = start; index < end; index++) {
+            if (bytes[index] != ' ') {
+                return false;
+            }
+        }
+        return true;
     }
 
     Stream<Map<String, DbEntry>> streamPages(String dbName, String collName) throws IOException {
@@ -146,8 +177,7 @@ final class DocumentPageStore {
         final var entryLength = (int) pkIndexEntry.getLength();
         byte[] buffer = new byte[entryLength];
         reader.readFully(buffer, 0, entryLength);
-        final var strEntry = new String(buffer, StandardCharsets.UTF_8);
-        final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
+        final var jsonObject = eJson.fromJson(buffer, 0, entryLength, JsonObject.class);
         final var storedId = jsonObject.get(Globals.PK_FIELD);
         if (storedId != null && storedId.isJsonString()
                 && !storedId.asJsonString().getValue().equals(pkIndexEntry.getValue())) {

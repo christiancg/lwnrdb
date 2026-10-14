@@ -39,7 +39,6 @@ src/main/java/org/techhouse/ejson/custom_types/CustomTypeFactory.java 1
 src/main/java/org/techhouse/ejson/custom_types/GeoDistanceComparator.java 1
 src/main/java/org/techhouse/ejson/custom_types/JsonGeo.java 2
 src/main/java/org/techhouse/ejson/custom_types/JsonVector.java 1
-src/main/java/org/techhouse/ejson/elements/JsonNumber.java 2
 src/main/java/org/techhouse/ejson/internal/JsonStrings.java 2
 src/main/java/org/techhouse/ejson/internal/NumberFormatter.java 2
 src/main/java/org/techhouse/ejson/internal/ReflectionUtils.java 4
@@ -76,7 +75,6 @@ src/main/java/org/techhouse/ops/admin/ReadPathHelper.java 1
 src/main/java/org/techhouse/ops/auth/AuthorizationChecker.java 4
 src/main/java/org/techhouse/ops/index/IndexEntryReader.java 4
 src/main/java/org/techhouse/ops/index/IndexOperationHelper.java 4
-src/main/java/org/techhouse/ops/index/IndexValueCodec.java 2
 src/main/java/org/techhouse/ops/index/PendingWriteReconciler.java 2
 src/main/java/org/techhouse/ops/req/OperationRequest.java 2
 src/main/java/org/techhouse/ops/req/RequestParser.java 3

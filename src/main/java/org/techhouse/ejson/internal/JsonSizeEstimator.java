@@ -42,8 +42,8 @@ public final class JsonSizeEstimator {
 
     private static long estimateObject(JsonObject object) {
         long total = 2;
-        for (final var entry : object.entrySet()) {
-            total += lengthOf(entry.getKey()) + 4 + estimate(entry.getValue());
+        for (var i = 0; i < object.size(); i++) {
+            total += lengthOf(object.keyAt(i)) + 4 + estimate(object.valueAt(i));
         }
         return total;
     }
@@ -61,16 +61,12 @@ public final class JsonSizeEstimator {
     }
 
     private static long estimateNumber(JsonNumber number) {
-        final var value = number.getValue();
-        if (value == null) {
-            return NULL_CHARS;
-        }
-        final var asDouble = value.doubleValue();
+        final var asDouble = number.doubleValue();
         final var magnitude = Math.abs(asDouble);
         if (magnitude < TWO_POW_53 && magnitude == Math.floor(magnitude)) {
             return digitsOf((long) magnitude) + (asDouble < 0 ? 1 : 0);
         }
-        return number.getStrLength() > 0 ? number.getStrLength() : FRACTION_CHARS;
+        return FRACTION_CHARS;
     }
 
     private static int digitsOf(long magnitude) {

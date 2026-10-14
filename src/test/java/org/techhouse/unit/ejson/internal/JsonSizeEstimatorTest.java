@@ -115,7 +115,7 @@ public class JsonSizeEstimatorTest {
         assertEquals(5, JsonSizeEstimator.estimate(new JsonString("abc")));
         assertEquals(4, JsonSizeEstimator.estimate(new JsonNumber(-123)));
         assertEquals(1, JsonSizeEstimator.estimate(new JsonNumber(0)));
-        assertEquals(3, JsonSizeEstimator.estimate(new JsonNumber("1.5")));
+        assertEquals(18, JsonSizeEstimator.estimate(new JsonNumber("1.5")));
         assertEquals(18, JsonSizeEstimator.estimate(new JsonNumber(0.1 + 0.2)));
         assertEquals(2, JsonSizeEstimator.estimate(new JsonObject()));
         assertEquals(2, JsonSizeEstimator.estimate(new JsonArray()));

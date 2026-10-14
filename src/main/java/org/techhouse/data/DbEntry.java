@@ -29,6 +29,16 @@ public class DbEntry extends JsonDocumentEntry {
         return entry;
     }
 
+    public static DbEntry fromBytes(String databaseName, String collectionName, byte[] utf8, int start, int end) {
+        final var entry = new DbEntry();
+        entry.setDatabaseName(databaseName);
+        entry.setCollectionName(collectionName);
+        final var data = eJson.fromJson(utf8, start, end, JsonObject.class);
+        entry.setData(data);
+        entry.set_id(data.has(Globals.PK_FIELD) ? data.get(Globals.PK_FIELD).asJsonString().getValue() : null);
+        return entry;
+    }
+
     public int byteSize() {
         if (data == null) {
             return 0;

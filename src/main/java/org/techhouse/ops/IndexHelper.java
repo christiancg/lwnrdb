@@ -94,7 +94,7 @@ public class IndexHelper {
                         final var primitive = key.asJsonPrimitive();
                         return switch (primitive) {
                             case JsonNumber jsonNumber ->
-                                new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
+                                new FieldIndexEntry<>(dbName, collName, jsonNumber.doubleValue() + 0.0, ids);
                             case JsonString jsonString -> {
                                 if (jsonString.isJsonCustom()) {
                                     final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);

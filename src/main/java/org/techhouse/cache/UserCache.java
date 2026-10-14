@@ -27,6 +27,7 @@ public class UserCache {
     private final UsageTracker usageTracker = IocContainer.get(UsageTracker.class);
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
+    private final FieldIndexLookups fieldLookups = new FieldIndexLookups();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
     private final UserCacheSizes sizes = new UserCacheSizes();
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
@@ -143,6 +144,28 @@ public class UserCache {
             sizes.adjustFieldIndex(Cache.getCollectionIdentifier(dbName, collName), indexIdentifier, previousCount,
                     resident.size(), deltaBytes);
         }
+    }
+
+    public FieldIndexLookup fieldIndexLookup(String dbName, String collName, String fieldName) {
+        return fieldLookups.get(Cache.getCollectionIdentifier(dbName, collName), fieldName);
+    }
+
+    public void admitFieldIndexLookup(String dbName, String collName, String fieldName, FieldIndexLookup lookup) {
+        if (!rl.holdsCollectionLock(dbName, collName) || isCachingDisabled(dbName)) {
+            evictFieldIndexLookup(dbName, collName, fieldName);
+            return;
+        }
+        final var resident = fieldIndexLookup(dbName, collName, fieldName);
+        if (resident == lookup
+                || shouldCache(dbName, () -> CacheSizeEstimator.estimateFieldIndexLookupSize(lookup.size()))) {
+            fieldLookups.put(Cache.getCollectionIdentifier(dbName, collName), fieldName, lookup);
+        } else {
+            evictFieldIndexLookup(dbName, collName, fieldName);
+        }
+    }
+
+    public void evictFieldIndexLookup(String dbName, String collName, String fieldName) {
+        fieldLookups.evict(Cache.getCollectionIdentifier(dbName, collName), fieldName);
     }
 
     private <T> List<FieldIndexEntry<T>> loadIndex(String dbName, String collName, String indexIdentifier,
@@ -353,6 +376,7 @@ public class UserCache {
         removeByPrefix(pkIndexMap, prefix);
         removeByPrefix(collectionMap, prefix);
         removeByPrefix(fieldIndexMap, prefix);
+        fieldLookups.evictByPrefix(prefix);
         sizes.forgetByPrefix(prefix);
     }
 
@@ -365,6 +389,7 @@ public class UserCache {
         pkIndexMap.remove(collIdentifier);
         collectionMap.remove(collIdentifier);
         fieldIndexMap.remove(collIdentifier);
+        fieldLookups.evictCollection(collIdentifier);
         sizes.forgetCollection(collIdentifier);
     }
 
@@ -381,6 +406,10 @@ public class UserCache {
     }
 
     public void evictFieldIndex(String dbName, String collName, String indexKey) {
+        evictFieldIndexLookup(dbName, collName, CacheableResource.indexedFieldOf(indexKey));
+        if (Cache.isFieldLookupIdentifier(indexKey)) {
+            return;
+        }
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
@@ -393,6 +422,7 @@ public class UserCache {
     }
 
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
+        evictFieldIndexLookup(dbName, collName, fieldName);
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
@@ -436,6 +466,7 @@ public class UserCache {
                 result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(), bytes));
             }
         }
+        fieldLookups.addResources(result);
         return result;
     }
 

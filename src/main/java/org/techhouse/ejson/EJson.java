@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
+import org.techhouse.ejson.internal.EncodedJson;
 import org.techhouse.ejson.internal.JsonPrettyWriter;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
@@ -113,6 +114,14 @@ public class EJson {
         return reader.fromJson(jsonString, tClass, maxDepth, maxTokens);
     }
 
+    public <T> T fromJson(byte[] utf8, int start, int end, Class<T> tClass) {
+        return reader.fromJson(utf8, start, end, tClass, Integer.MAX_VALUE, Integer.MAX_VALUE);
+    }
+
+    public <T> T fromJson(byte[] utf8, int start, int end, Class<T> tClass, int maxDepth, int maxTokens) {
+        return reader.fromJson(utf8, start, end, tClass, maxDepth, maxTokens);
+    }
+
     public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass) {
         final var adapter = TypeAdapterFactory.getAdapter(tClass);
         return adapter.fromJson(jsonObject);
@@ -128,6 +137,12 @@ public class EJson {
     public <T> byte[] toJsonBytes(T obj, int sizeHint) {
         final Class<T> clazz = (Class<T>) obj.getClass();
         return writer.toJsonBytes(obj, clazz, sizeHint);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> EncodedJson toJsonFrame(T obj, int sizeHint) {
+        final Class<T> clazz = (Class<T>) obj.getClass();
+        return writer.toJsonFrame(obj, clazz, sizeHint);
     }
 
     @SuppressWarnings("unchecked")

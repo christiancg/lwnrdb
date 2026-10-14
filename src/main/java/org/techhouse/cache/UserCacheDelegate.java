@@ -51,6 +51,18 @@ interface UserCacheDelegate {
         userCache().rememberFieldIndexBatch(dbName, collName, indexIdentifier, previousCount, deltaBytes);
     }
 
+    default FieldIndexLookup fieldIndexLookup(String dbName, String collName, String fieldName) {
+        return userCache().fieldIndexLookup(dbName, collName, fieldName);
+    }
+
+    default void admitFieldIndexLookup(String dbName, String collName, String fieldName, FieldIndexLookup lookup) {
+        userCache().admitFieldIndexLookup(dbName, collName, fieldName, lookup);
+    }
+
+    default void evictFieldIndexLookup(String dbName, String collName, String fieldName) {
+        userCache().evictFieldIndexLookup(dbName, collName, fieldName);
+    }
+
     default void evictFieldIndex(String dbName, String collName, String indexIdentifier) {
         userCache().evictFieldIndex(dbName, collName, indexIdentifier);
     }

@@ -2,6 +2,7 @@ package org.techhouse.unit.data.admin;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminPageEntry;
@@ -112,5 +113,22 @@ public class AdminPageEntryTest {
     public void test_toString_not_null() {
         AdminPageEntry entry = new AdminPageEntry("db", "coll", 0L);
         assertNotNull(entry.toString());
+    }
+
+    @Test
+    public void test_each_setter_rewrites_only_its_field_and_the_encoded_line_follows() {
+        AdminPageEntry entry = new AdminPageEntry("myDb", "myColl", 4L);
+        entry.setEntryCount(2);
+        entry.setPageSize(100L);
+        final var before = new String(entry.encodeLine(), StandardCharsets.UTF_8);
+
+        entry.setPageSize(250L);
+        entry.setEntryCount(3);
+
+        final var after = new String(entry.encodeLine(), StandardCharsets.UTF_8);
+        assertTrue(before.contains("\"size\":100"), before);
+        assertTrue(after.contains("\"size\":250") && after.contains("\"entryCount\":3") && after.contains("\"page\":4"),
+                after);
+        assertEquals(250L, entry.getData().get("size").asJsonNumber().getValue().longValue());
     }
 }

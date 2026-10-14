@@ -130,6 +130,16 @@ public final class CacheSizeEstimator {
         return total;
     }
 
+    public static long estimateFieldIndexLookupSize(int ids) {
+        return estimateFieldIndexLookupSize(ids, HeapLayout.current());
+    }
+
+    public static long estimateFieldIndexLookupSize(int ids, HeapLayout layout) {
+        return layout.shallowSize(FieldIndexLookup.class) + layout.shallowSize(HashMap.class)
+                + layout.hashTableSize(ids)
+                + (long) ids * (layout.shallowSize(HASH_MAP_NODE) + layout.shallowSize(FieldIndexLookup.Located.class));
+    }
+
     private static long fieldEntryOverhead(HeapLayout layout) {
         return layout.referenceBytes() + layout.shallowSize(FieldIndexEntry.class) + layout.shallowSize(HashSet.class)
                 + layout.shallowSize(HashMap.class);

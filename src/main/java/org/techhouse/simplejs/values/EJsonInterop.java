@@ -337,7 +337,7 @@ public final class EJsonInterop {
             return customFromEjson(custom);
         }
         return switch (element.getJsonType()) {
-            case NUMBER -> new JsNumber(element.asJsonNumber().getValue().doubleValue());
+            case NUMBER -> new JsNumber(element.asJsonNumber().doubleValue());
             case STRING -> new JsString(element.asJsonString().getValue());
             case BOOLEAN -> JsBoolean.of(element.asJsonBoolean().getValue());
             case NULL -> JsNull.getInstance();

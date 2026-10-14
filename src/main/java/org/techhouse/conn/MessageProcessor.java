@@ -13,6 +13,7 @@ import java.util.function.Supplier;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSocket;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -20,6 +21,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.Client;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.EncodedJson;
 import org.techhouse.ejson.internal.Utf8Encoder;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ex.RequestTooLargeException;
@@ -49,6 +51,7 @@ public class MessageProcessor implements Runnable {
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
+    private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final Logger logger = Logger.logFor(MessageProcessor.class);
     private final Configuration configuration = Configuration.getInstance();
     private final Socket socket;
@@ -194,7 +197,7 @@ public class MessageProcessor implements Runnable {
         }
     }
 
-    private String readNextLine(BoundedLineReader reader) throws IOException {
+    private RequestLine readNextLine(BoundedLineReader reader) throws IOException {
         while (true) {
             if (!everAuthenticated() && authRemainingMillis() <= 0) {
                 return closeUnauthenticated();
@@ -204,7 +207,7 @@ public class MessageProcessor implements Runnable {
             }
             final var budget = nextReadBudget();
             try {
-                return reader.readLine(budget.millis(), nextLineLimitBytes());
+                return reader.readLineBytes(budget.millis(), nextLineLimitBytes());
             } catch (SocketTimeoutException timeout) {
                 if (!everAuthenticated()) {
                     return closeUnauthenticated();
@@ -219,7 +222,7 @@ public class MessageProcessor implements Runnable {
         }
     }
 
-    private String closeUnauthenticated() {
+    private RequestLine closeUnauthenticated() {
         ConnectionLog.warn(logger, "Closed a connection from " + remoteAddress() + " that did not authenticate within "
                 + configuration.getAuthTimeoutMs() + " ms");
         enqueue(OutboundQueue.closeFrame(ErrorCode.AUTHENTICATION_TIMEOUT));
@@ -296,7 +299,7 @@ public class MessageProcessor implements Runnable {
         return String.valueOf(socket.getRemoteSocketAddress());
     }
 
-    private void enqueue(byte[] frame) {
+    private void enqueue(EncodedJson frame) {
         writerLock.lock();
         try {
             outbound.offer(frame);
@@ -305,16 +308,17 @@ public class MessageProcessor implements Runnable {
         }
     }
 
-    private boolean serveLine(String message, int maxTokens) {
+    private boolean serveLine(RequestLine message, int maxTokens) {
         var close = false;
         serving = true;
         inFlightRequests.enter();
         try {
-            byte[] response;
+            EncodedJson response;
             UUID deliveredListen = null;
             OperationType requestType = null;
             try {
-                final var parsedMessage = RequestParser.parseRequest(message, maxTokens);
+                final var parsedMessage = RequestParser.parseRequest(message.bytes(), message.start(), message.end(),
+                        maxTokens);
                 requestType = parsedMessage.getType();
                 final var handled = dispatch(parsedMessage, message);
                 response = handled.response();
@@ -323,7 +327,7 @@ public class MessageProcessor implements Runnable {
             } catch (InvalidCommandException exception) {
                 ConnectionLog.warn(logger,
                         "Refused an unparseable request from " + remoteAddress() + ": " + causeMessageOf(exception));
-                response = Utf8Encoder.encode(exception.getMessage());
+                response = EncodedJson.of(Utf8Encoder.encode(exception.getMessage()));
             } catch (RuntimeException exception) {
                 logger.error("Request handling failed unexpectedly", exception);
                 response = OutboundQueue.frameOf(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
@@ -357,7 +361,7 @@ public class MessageProcessor implements Runnable {
         return limit != 0 && unauthenticatedInvalidRequests >= limit;
     }
 
-    private Handled dispatch(OperationRequest parsedMessage, String rawMessage) {
+    private Handled dispatch(OperationRequest parsedMessage, RequestLine rawMessage) {
         final var type = parsedMessage.getType();
         if (isRefusedDuringShutdown(type)) {
             return refusal(type, ErrorCode.SERVER_SHUTTING_DOWN);
@@ -395,7 +399,7 @@ public class MessageProcessor implements Runnable {
         return new Handled(OutboundQueue.frameOf(responseObj), closesConnection(responseObj), null);
     }
 
-    private Handled authorized(OperationRequest parsedMessage, String rawMessage, String username) {
+    private Handled authorized(OperationRequest parsedMessage, RequestLine rawMessage, String username) {
         final var type = parsedMessage.getType();
         final var user = cache.getAdminUserEntry(username);
         if (user == null) {
@@ -425,7 +429,7 @@ public class MessageProcessor implements Runnable {
                 : ErrorCode.TRANSACTION_IDLE_TIMEOUT;
     }
 
-    private record Handled(byte[] response, boolean close, UUID deliveredListen) {
+    private record Handled(EncodedJson response, boolean close, UUID deliveredListen) {
     }
 
     private static boolean closesConnection(OperationResponse responseObj) {
@@ -456,7 +460,7 @@ public class MessageProcessor implements Runnable {
         return type == OperationType.ROLLBACK_TRANSACTION && clientTracker.getActiveTransaction(clientId) != null;
     }
 
-    private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
+    private Handled handleAuthorized(OperationRequest parsedMessage, RequestLine rawMessage, UUID clientId) {
         final var wireDepth = parsedMessage.getTriggerDepth();
         // A cascade depth that arrived on the wire is never trusted: only a running trigger may set one.
         parsedMessage.setTriggerDepth(0);
@@ -464,11 +468,12 @@ public class MessageProcessor implements Runnable {
         if (schemaError != null) {
             return new Handled(OutboundQueue.frameOf(schemaError), false, null);
         }
-        final var forwarded = clusterRouter.forward(parsedMessage, withoutTriggerDepth(rawMessage, wireDepth),
+        final var rawJson = clusterConfig.isEnabled() ? withoutTriggerDepth(rawMessage.text(), wireDepth) : null;
+        final var forwarded = clusterRouter.forward(parsedMessage, rawJson,
                 clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
                 clientId);
         if (forwarded != null) {
-            return new Handled(Utf8Encoder.encode(forwarded), false, null);
+            return new Handled(EncodedJson.of(Utf8Encoder.encode(forwarded)), false, null);
         }
         final var analyze = parsedMessage instanceof AggregateRequest aggReq && aggReq.isAnalyze();
         final var analyzeStart = analyze ? System.currentTimeMillis() : 0L;

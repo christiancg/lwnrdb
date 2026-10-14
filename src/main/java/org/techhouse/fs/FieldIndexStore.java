@@ -51,8 +51,9 @@ final class FieldIndexStore {
                 return;
             }
             FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
+                final var lines = new IndexLineWriter(out);
                 for (final var entry : entries) {
-                    out.write((entry.toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8));
+                    lines.write(entry);
                 }
             });
         } finally {

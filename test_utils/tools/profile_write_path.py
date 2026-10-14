@@ -26,6 +26,7 @@ BULK = 5000
 
 BUCKETS = (
     ("field-index full reload", "FieldIndexLoader.load"),
+    ("field-index lookup rebuild", "FieldIndexSlot.load"),
     ("field-index line rewrite", "IndexLine"),
     ("field-index batch", "FieldIndexBatch"),
     ("pk.idx rewrite", "PkIndexStore"),
@@ -36,7 +37,7 @@ BUCKETS = (
 )
 
 TARGETS = {
-    "save_update": ("MB per op", 15.0),
+    "save_update": ("MB per op", 2.5),
     "bulk_insert": ("seconds", 60.0),
     "insert_noindex": ("KB per doc", 5.0),
     "cold_scan": ("KB per doc", 3.0),
@@ -108,22 +109,38 @@ def document(i: int) -> dict:
             "notes": "lorem ipsum dolor sit amet " * 20}
 
 
-def bucket_report(recording: pathlib.Path, units: int) -> tuple[float, list[tuple[str, float]]]:
+def sampled_events(recording: pathlib.Path) -> list:
     out = subprocess.run([str(java_bin() / "jfr"), "print", "--json", "--stack-depth", "64", "--events",
                           "jdk.ObjectAllocationSample", str(recording)], capture_output=True, text=True).stdout
+    return [event["values"] for event in json.loads(out)["recording"]["events"]]
+
+
+def frame_names(values: dict) -> list[tuple[str, str]]:
+    frames = (values.get("stackTrace") or {}).get("frames") or []
+    return [(frame["method"]["type"]["name"], frame["method"]["name"]) for frame in frames]
+
+
+def short_name(type_name: str, method: str) -> str:
+    return type_name.split("/")[-1].split("$$")[0] + "." + method
+
+
+def bucket_report(recording: pathlib.Path, units: int, frames: int) -> tuple[float, list, list]:
     total = 0
     weights: collections.Counter = collections.Counter()
-    for event in json.loads(out)["recording"]["events"]:
-        values = event["values"]
+    chains: collections.Counter = collections.Counter()
+    for values in sampled_events(recording):
         weight = values["weight"]
         total += weight
-        frames = (values.get("stackTrace") or {}).get("frames") or []
-        stack = " ".join(frame["method"]["type"]["name"].split("/")[-1].split("$$")[0] + "."
-                         + frame["method"]["name"] for frame in frames)
+        names = frame_names(values)
+        stack = " ".join(short_name(type_name, method) for type_name, method in names)
         label = next((name for name, key in BUCKETS if key in stack), "other")
         weights[label] += weight
+        if frames:
+            own = [short_name(type_name, method) for type_name, method in names if "techhouse" in type_name]
+            chains[" < ".join(own[:3]) if own else (short_name(*names[0]) if names else "?")] += weight
     shares = [(label, weight / total * 100) for label, weight in weights.most_common()] if total else []
-    return exact_allocated_bytes(recording) / max(units, 1), shares
+    top = [(chain, weight / total * 100) for chain, weight in chains.most_common(frames)] if total else []
+    return exact_allocated_bytes(recording) / max(units, 1), shares, top
 
 
 def exact_allocated_bytes(recording: pathlib.Path) -> int:
@@ -138,9 +155,10 @@ def exact_allocated_bytes(recording: pathlib.Path) -> int:
 
 
 class Profiler:
-    def __init__(self, server: Server, out_dir: pathlib.Path):
+    def __init__(self, server: Server, out_dir: pathlib.Path, frames: int):
         self.server = server
         self.out_dir = out_dir
+        self.frames = frames
         self.rows: list[tuple[str, str, float, list[tuple[str, float]]]] = []
 
     def phase(self, name: str, units: int, unit_label: str, action: Callable[[], object], settle: bool = False) -> None:
@@ -154,7 +172,7 @@ class Profiler:
         recording = self.out_dir / f"{name}.jfr"
         self.server.jcmd("JFR.dump", f"name={name}", f"filename={recording}")
         self.server.jcmd("JFR.stop", f"name={name}")
-        per_unit, shares = bucket_report(recording, units)
+        per_unit, shares, chains = bucket_report(recording, units, self.frames)
         if unit_label == "MB per op":
             value = per_unit / 1e6
         elif unit_label == "seconds":
@@ -164,6 +182,8 @@ class Profiler:
         self.rows.append((name, unit_label, value, shares))
         print(f"{name:16s} {value:10.2f} {unit_label:11s} wall {elapsed:7.1f}s  "
               + ", ".join(f"{label} {share:.0f}%" for label, share in shares[:4]), flush=True)
+        for chain, share in chains:
+            print(f"    {share:5.1f}%  {chain}", flush=True)
 
 
 def aggregate(conn: b.Conn, steps: list, coll: str = COLL) -> dict:
@@ -207,6 +227,12 @@ def warm_phases(profiler: Profiler) -> None:
             conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": changed})
 
     profiler.phase("save_update", 2000, "MB per op", update_some, settle=True)
+
+    def update_in_bulk():
+        changed = [dict(document(i), qty=2) for i in range(BULK, 2 * BULK)]
+        bulk_save(conn, COLL, changed)
+
+    profiler.phase("bulk_update", BULK, "KB per doc", update_in_bulk, settle=True)
     concat = {"type": "MAP", "operators": [{"fieldName": "label", "operator": {
         "type": "CONCAT", "operands": ["name", "-: ", "email"]}}]}
     profiler.phase("map_concat", 3 * DOCS, "KB per doc",
@@ -256,6 +282,8 @@ def main() -> int:
                     "storage-efficiency targets. Builds nothing: run `mvn package -DskipTests` first.")
     parser.add_argument("--out", default=None, help="directory for the .jfr recordings (default: a temp dir)")
     parser.add_argument("--only", choices=("warm", "cold"), default=None, help="run one half only")
+    parser.add_argument("--frames", type=int, default=0,
+                        help="also print each phase's top N chains of its first three org.techhouse frames")
     args = parser.parse_args()
     if not JAR.exists():
         raise SystemExit(f"{JAR} is missing; build it first")
@@ -267,7 +295,7 @@ def main() -> int:
             continue
         server = Server(max_memory)
         try:
-            profiler = Profiler(server, out_dir)
+            profiler = Profiler(server, out_dir, args.frames)
             runner(profiler)
             rows.extend(profiler.rows)
         finally:

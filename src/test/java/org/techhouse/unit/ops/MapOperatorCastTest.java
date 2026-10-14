@@ -249,7 +249,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_integral_string_to_number_narrows_like_the_parser() {
         assertEquals(new JsonNumber("5").getValue(), castToNumber("5").asJsonNumber().getValue());
-        assertInstanceOf(Integer.class, castToNumber("5").asJsonNumber().getValue());
+        assertInstanceOf(Double.class, castToNumber("5").asJsonNumber().getValue());
         assertEquals(new JsonNumber("2147483647").getValue(), castToNumber("2147483647").asJsonNumber().getValue());
         assertEquals(new JsonNumber("2147483648").getValue(), castToNumber("2147483648").asJsonNumber().getValue());
     }
@@ -314,5 +314,11 @@ public class MapOperatorCastTest {
         }
         assertEquals(List.of(), disagreeing,
                 "CAST to STRING must spell a number exactly as the document serializer spells it");
+    }
+
+    @Test
+    public void test_cast_negative_zero_to_number_is_positive_zero() {
+        assertEquals(0, Double.compare(0.0, castToNumber("-0").asJsonNumber().doubleValue()));
+        assertEquals(0, Double.compare(0.0, castToNumber("-0.0").asJsonNumber().doubleValue()));
     }
 }

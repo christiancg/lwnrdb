@@ -174,7 +174,7 @@ public class JsonObjectTest {
         jsonObject.addProperty(propertyName, testValue);
 
         JsonNumber storedValue = (JsonNumber) jsonObject.get(propertyName);
-        assertEquals(testValue, storedValue.getValue());
+        assertEquals(testValue.doubleValue(), storedValue.doubleValue());
         assertEquals(testValue.intValue(), storedValue.asInteger());
     }
 
@@ -197,7 +197,7 @@ public class JsonObjectTest {
         jsonObject.addProperty(property, value);
 
         JsonNumber result = (JsonNumber) jsonObject.get(property);
-        assertEquals(value, result.getValue());
+        assertEquals(value.doubleValue(), result.doubleValue());
     }
 
     @Test
@@ -244,7 +244,7 @@ public class JsonObjectTest {
         assertTrue(entries.stream()
                 .anyMatch(e -> e.getKey().equals("key1") && e.getValue().asJsonString().getValue().equals("value1")));
         assertTrue(entries.stream()
-                .anyMatch(e -> e.getKey().equals("key2") && e.getValue().asJsonNumber().getValue().equals(123)));
+                .anyMatch(e -> e.getKey().equals("key2") && e.getValue().asJsonNumber().doubleValue() == 123));
         assertTrue(entries.stream()
                 .anyMatch(e -> e.getKey().equals("key3") && e.getValue().asJsonBoolean().getValue().equals(true)));
     }

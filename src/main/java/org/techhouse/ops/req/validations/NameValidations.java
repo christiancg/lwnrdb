@@ -5,7 +5,6 @@ import org.techhouse.ops.req.OperationRequest;
 
 public final class NameValidations {
     static final String NAME_PATTERN = "^[a-zA-Z0-9_-]{3,64}$";
-    static final String ID_PATTERN = "^[a-zA-Z0-9_-]{1,64}$";
     static final String USERNAME_PATTERN = NAME_PATTERN;
     static final String INDEX_FIELD_PATTERN = "^[A-Za-z0-9_.-]{1,64}$";
     private static final int MIN_NAME_LENGTH = 3;
@@ -111,7 +110,7 @@ public final class NameValidations {
         if (dbName == null || dbName.isBlank()) {
             return ValidationResult.fail("databaseName is required");
         }
-        if (!dbName.matches(NAME_PATTERN)) {
+        if (!isName(dbName)) {
             return ValidationResult.fail("databaseName must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
         if (rejectAdmin && isReservedDbName(dbName)) {
@@ -124,7 +123,7 @@ public final class NameValidations {
         if (collectionName == null || collectionName.isBlank()) {
             return ValidationResult.fail("collectionName is required");
         }
-        if (!collectionName.matches(NAME_PATTERN)) {
+        if (!isName(collectionName)) {
             return ValidationResult
                     .fail("collectionName must be 3-64 alphanumeric characters, underscores, or hyphens");
         }

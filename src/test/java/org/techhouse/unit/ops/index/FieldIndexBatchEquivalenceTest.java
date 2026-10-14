@@ -34,6 +34,16 @@ public class FieldIndexBatchEquivalenceTest {
     @ParameterizedTest
     @ValueSource(longs = {1L, 42L, 20261013L})
     public void batchResultEqualsLegacyPerIdResult(long seed) throws Exception {
+        runAgainstLegacy(seed, false);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {7L, 20261014L})
+    public void aCachedLookupStaysEqualToTheFilesAcrossBatches(long seed) throws Exception {
+        runAgainstLegacy(seed, true);
+    }
+
+    private void runAgainstLegacy(long seed, boolean holdingTheCollection) throws Exception {
         final var random = new Random(seed);
         final var support = new FieldIndexBatchSupport();
         final var legacy = new LegacyIndexMaintenance(IocContainer.get(FileSystem.class), FieldIndexBatchSupport.DB,
@@ -54,11 +64,16 @@ public class FieldIndexBatchEquivalenceTest {
             for (final var id : ids) {
                 legacy.apply(id, support.documentOf(id, LEGACY_FIELD));
             }
-            support.applyBatch(BATCH_FIELD, ids);
+            if (holdingTheCollection) {
+                support.applyBatchHoldingTheCollection(BATCH_FIELD, ids);
+            } else {
+                support.applyBatch(BATCH_FIELD, ids);
+            }
 
             assertEquals(FieldIndexBatchSupport.snapshot(LEGACY_FIELD), FieldIndexBatchSupport.snapshot(BATCH_FIELD),
                     "seed " + seed + ", batch " + batches + " of ids " + ids);
             assertNull(support.residentMismatch(BATCH_FIELD), "seed " + seed + ", batch " + batches);
+            assertNull(support.lookupMismatch(BATCH_FIELD, ID_POOL), "seed " + seed + ", batch " + batches);
         }
     }
 }

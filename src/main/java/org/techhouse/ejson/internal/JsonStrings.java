@@ -35,6 +35,37 @@ public final class JsonStrings {
         escapeFrom(out, value, start);
     }
 
+    public static void appendEscaped(final JsonOut out, final String value) {
+        if (value == null) {
+            out.append("null");
+            return;
+        }
+        final var length = value.length();
+        var runStart = 0;
+        for (var i = 0; i < length; i++) {
+            if (needsEscaping(value, i)) {
+                out.append(value, runStart, i);
+                appendEscape(out, value.charAt(i));
+                runStart = i + 1;
+            }
+        }
+        out.append(value, runStart, length);
+    }
+
+    private static void appendEscape(final JsonOut out, final char c) {
+        switch (c) {
+            case '"' -> out.append('\\').append('"');
+            case '\\' -> out.append('\\').append('\\');
+            case '\b' -> out.append('\\').append('b');
+            case '\f' -> out.append('\\').append('f');
+            case '\n' -> out.append('\\').append('n');
+            case '\r' -> out.append('\\').append('r');
+            case '\t' -> out.append('\\').append('t');
+            default -> out.append('\\').append('u').append(HEX[(c >> 12) & 0xF]).append(HEX[(c >> 8) & 0xF])
+                    .append(HEX[(c >> 4) & 0xF]).append(HEX[c & 0xF]);
+        }
+    }
+
     private static int firstToEscape(final String value) {
         final var length = value.length();
         var index = 0;

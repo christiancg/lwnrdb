@@ -29,10 +29,10 @@ public class JsonPrimitiveTest {
         JsonBoolean booleanPrimitive = JsonBoolean.of(true);
 
         assertEquals("test", stringPrimitive.getValue());
-        assertEquals(42, numberPrimitive.getValue());
+        assertEquals(42.0, numberPrimitive.getValue());
         assertEquals(true, booleanPrimitive.getValue());
         assertEquals("updated", new JsonString("updated").getValue());
-        assertEquals(99, new JsonNumber(99).getValue());
+        assertEquals(99.0, new JsonNumber(99).getValue());
         assertEquals(false, JsonBoolean.of(false).getValue());
     }
 

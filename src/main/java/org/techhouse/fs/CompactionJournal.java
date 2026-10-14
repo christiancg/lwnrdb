@@ -4,7 +4,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
@@ -64,13 +66,65 @@ final class CompactionJournal {
         return marker;
     }
 
+    Marker begin(Kind kind, PkIndexEntry removed, long originalLength, FileChannel page) throws IOException {
+        final var marker = new Marker(kind, removed.getDatabaseName(), removed.getCollectionName(), removed.getPage(),
+                removed.getPosition(), originalLength, removed.getLength(), removed.getValue(), removed.getVersion(),
+                NO_TARGET, 0L, null);
+        final var path = markerFile(marker).toPath();
+        OwnerOnlyPermissions.ensureOwnerOnlyFile(path);
+        try (var channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                StandardOpenOption.WRITE)) {
+            final var header = ByteBuffer.wrap(header(marker));
+            var written = 0L;
+            while (written < header.capacity()) {
+                written += channel.write(header);
+            }
+            copyRegion(page, marker.position(), originalLength, channel);
+        }
+        return marker;
+    }
+
+    static void copyRegion(FileChannel source, long from, long to, WritableByteChannel target) throws IOException {
+        var next = from;
+        while (next < to) {
+            final var copied = source.transferTo(next, to - next, target);
+            if (copied <= 0) {
+                throw new IOException("The page ended at " + next + " before the " + to + " bytes being journaled");
+            }
+            next += copied;
+        }
+    }
+
     Marker retarget(Marker marker, long targetPage, long targetLengthBefore) throws IOException {
         final var retargeted = marker.targeting(targetPage, targetLengthBefore);
-        FileLocks.rewriteFileAtomically(markerFile(retargeted).toPath(), out -> {
-            out.write(header(retargeted));
-            out.write(retargeted.tail());
-        });
+        final var path = markerFile(retargeted).toPath();
+        if (marker.tail() != null) {
+            FileLocks.rewriteFileAtomically(path, out -> {
+                out.write(header(retargeted));
+                out.write(retargeted.tail());
+            });
+            return retargeted;
+        }
+        final var tailStart = header(marker).length;
+        try (var previous = FileChannel.open(path, StandardOpenOption.READ)) {
+            final var tailEnd = previous.size();
+            FileLocks.rewriteFileAtomically(path, out -> {
+                out.write(header(retargeted));
+                copyRegion(previous, tailStart, tailEnd, Channels.newChannel(out));
+            });
+        }
         return retargeted;
+    }
+
+    byte[] tailOf(Marker marker) throws IOException {
+        if (marker.tail() != null) {
+            return marker.tail();
+        }
+        final var stored = decode(Files.readAllBytes(markerFile(marker).toPath()));
+        if (stored == null) {
+            throw new IOException("The compaction marker " + markerFile(marker).getName() + " could not be read back");
+        }
+        return stored.tail();
     }
 
     void end(Marker marker) {

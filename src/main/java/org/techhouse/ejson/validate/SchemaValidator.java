@@ -64,8 +64,7 @@ public class SchemaValidator {
             case OBJECT -> objectValidator.validateObject(instance.asJsonObject(), obj, schema, path, errors);
             case ARRAY -> arrayValidator.validateArray(instance.asJsonArray(), obj, schema, path, errors);
             case STRING, CUSTOM -> scalarValidator.validateString(instance.asJsonString(), obj, schema, path, errors);
-            case NUMBER ->
-                scalarValidator.validateNumber(instance.asJsonNumber().getValue().doubleValue(), obj, path, errors);
+            case NUMBER -> scalarValidator.validateNumber(instance.asJsonNumber().doubleValue(), obj, path, errors);
             default -> {
                 /* boolean / null: only the generic keywords above apply */ }
         }
@@ -101,7 +100,7 @@ public class SchemaValidator {
             case SchemaKeywords.T_STRING -> instance.isJsonString();
             case SchemaKeywords.T_NUMBER -> instance.isJsonNumber();
             case SchemaKeywords.T_INTEGER ->
-                instance.isJsonNumber() && instance.asJsonNumber().getValue().doubleValue() % 1.0 == 0;
+                instance.isJsonNumber() && instance.asJsonNumber().doubleValue() % 1.0 == 0;
             case SchemaKeywords.T_BOOLEAN -> instance.isJsonBoolean();
             case SchemaKeywords.T_NULL -> instance.isJsonNull();
             default -> false;

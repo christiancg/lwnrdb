@@ -2,14 +2,17 @@ package org.techhouse.ops.index;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheSizeEstimator;
+import org.techhouse.cache.FieldIndexLookup;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.fs.FieldIndexLoader;
@@ -28,27 +31,14 @@ final class FieldIndexSlot {
     private final String fileLabel;
     private final Comparator<FieldIndexEntry<Object>> order;
     private final Loader loader;
-    private final Map<String, FieldIndexEntry<Object>> byKey = new HashMap<>();
-    private final List<FieldIndexEntry<Object>> created = new ArrayList<>();
+    private final Map<String, FieldIndexEntry<Object>> created = new HashMap<>();
     private final Map<FieldIndexEntry<Object>, Boolean> touched = new IdentityHashMap<>();
     private List<FieldIndexEntry<Object>> resident;
     private boolean onDisk;
     private List<FieldIndexEntry<Object>> entries;
-    private List<FieldIndexEntry<Object>> written;
+    private int previousCount;
     private long bytesBefore;
     private boolean dirty;
-
-    record Located(FieldIndexSlot slot, FieldIndexEntry<Object> entry, Located next) {
-        boolean alreadyHolds(FieldIndexSlot target, String key) {
-            return next == null && slot == target && slot.byKey.get(key) == entry;
-        }
-
-        void removeEverywhere(String id) {
-            for (var at = this; at != null; at = at.next) {
-                at.slot.removeId(id, at.entry);
-            }
-        }
-    }
 
     @FunctionalInterface
     private interface Loader {
@@ -87,7 +77,7 @@ final class FieldIndexSlot {
         return identifier;
     }
 
-    void load(Map<String, Located> idToEntry) throws IOException {
+    boolean attach() throws IOException {
         resident = cast(cache.residentFieldIndex(dbName, collName, identifier));
         if (resident != null) {
             entries = resident;
@@ -102,20 +92,50 @@ final class FieldIndexSlot {
             }
             entries = fromDisk != null ? cast(fromDisk) : new ArrayList<>();
         }
+        previousCount = entries.size();
+        return resident != null || entries.isEmpty();
+    }
+
+    boolean isResident() {
+        return resident != null;
+    }
+
+    void indexInto(FieldIndexLookup lookup) {
         for (final var entry : entries) {
-            byKey.putIfAbsent(FieldIndexEntry.fileKeyOf(entry.getValue()), entry);
             for (final var id : entry.getIds()) {
-                idToEntry.put(id, new Located(this, entry, idToEntry.get(id)));
+                lookup.add(id, identifier, entry);
             }
         }
     }
 
+    FieldIndexEntry<Object> find(String key, Object value) {
+        final var fresh = created.get(key);
+        if (fresh != null) {
+            return fresh;
+        }
+        final var probe = new FieldIndexEntry<>(dbName, collName, value, Set.of());
+        final var at = Collections.binarySearch(entries, probe, order);
+        if (at < 0) {
+            return null;
+        }
+        for (var i = at; i >= 0 && order.compare(entries.get(i), probe) == 0; i--) {
+            if (FieldIndexEntry.fileKeyOf(entries.get(i).getValue()).equals(key)) {
+                return entries.get(i);
+            }
+        }
+        for (var i = at + 1; i < entries.size() && order.compare(entries.get(i), probe) == 0; i++) {
+            if (FieldIndexEntry.fileKeyOf(entries.get(i).getValue()).equals(key)) {
+                return entries.get(i);
+            }
+        }
+        return null;
+    }
+
     FieldIndexEntry<Object> addId(String id, String key, Object value) {
-        var entry = byKey.get(key);
+        var entry = find(key, value);
         if (entry == null) {
             entry = new FieldIndexEntry<>(dbName, collName, value, new HashSet<>());
-            byKey.put(key, entry);
-            created.add(entry);
+            created.put(key, entry);
             if (resident != null) {
                 touched.put(entry, Boolean.TRUE);
             }
@@ -127,7 +147,7 @@ final class FieldIndexSlot {
         return entry;
     }
 
-    private void removeId(String id, FieldIndexEntry<Object> entry) {
+    void removeId(String id, FieldIndexEntry<Object> entry) {
         touch(entry);
         if (entry.getIds().remove(id)) {
             dirty = true;
@@ -144,9 +164,20 @@ final class FieldIndexSlot {
         if (!dirty) {
             return false;
         }
-        written = survivors();
-        fs.rewriteIndexType(dbName, collName, fieldName, fileLabel, written);
+        applyInPlace();
+        fs.rewriteIndexType(dbName, collName, fieldName, fileLabel, entries);
         return true;
+    }
+
+    private void applyInPlace() {
+        entries.removeIf(entry -> entry.getIds().isEmpty());
+        for (final var entry : created.values()) {
+            if (entry.getIds().isEmpty()) {
+                continue;
+            }
+            final var at = Collections.binarySearch(entries, entry, order);
+            entries.add(at < 0 ? -at - 1 : at, entry);
+        }
     }
 
     void publish() {
@@ -157,20 +188,20 @@ final class FieldIndexSlot {
         if (!dirty) {
             return;
         }
-        if (written.isEmpty()) {
+        if (entries.isEmpty()) {
             cache.evictFieldIndex(dbName, collName, identifier);
             return;
         }
-        final var previousCount = resident.size();
-        resident.clear();
-        resident.addAll(written);
         cache.rememberFieldIndexBatch(dbName, collName, identifier, previousCount, bytesAfter() - bytesBefore);
     }
 
+    boolean coveredByCache() {
+        return entries.isEmpty() || cache.residentFieldIndex(dbName, collName, identifier) != null;
+    }
+
     private void admitWhatWasLoaded() {
-        final var current = dirty ? written : entries;
-        if ((dirty || onDisk) && !current.isEmpty()) {
-            cache.admitMaintainedFieldIndex(dbName, collName, identifier, cast(current));
+        if ((dirty || onDisk) && !entries.isEmpty()) {
+            cache.admitMaintainedFieldIndex(dbName, collName, identifier, cast(entries));
         }
     }
 
@@ -186,30 +217,5 @@ final class FieldIndexSlot {
 
     private static long sizeOf(FieldIndexEntry<Object> entry) {
         return CacheSizeEstimator.estimateFieldIndexSize(List.of(entry));
-    }
-
-    private List<FieldIndexEntry<Object>> survivors() {
-        final var fresh = new ArrayList<FieldIndexEntry<Object>>(created.size());
-        for (final var entry : created) {
-            if (!entry.getIds().isEmpty()) {
-                fresh.add(entry);
-            }
-        }
-        fresh.sort(order);
-        final var kept = new ArrayList<FieldIndexEntry<Object>>(entries.size() + fresh.size());
-        var next = 0;
-        for (final var entry : entries) {
-            if (entry.getIds().isEmpty()) {
-                continue;
-            }
-            while (next < fresh.size() && order.compare(fresh.get(next), entry) < 0) {
-                kept.add(fresh.get(next++));
-            }
-            kept.add(entry);
-        }
-        while (next < fresh.size()) {
-            kept.add(fresh.get(next++));
-        }
-        return kept;
     }
 }

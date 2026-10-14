@@ -1,5 +1,6 @@
 package org.techhouse.ejson.internal;
 
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
@@ -73,6 +74,35 @@ public final class KeyTable {
             }
         }
         return admit(source.subSequence(start, end).toString(), home);
+    }
+
+    public static String canonical(byte[] utf8, int start, int end) {
+        return SHARED.lookup(utf8, start, end);
+    }
+
+    public String lookup(byte[] utf8, int start, int end) {
+        for (var index = start; index < end; index++) {
+            if (utf8[index] < 0) {
+                final var decoded = new String(utf8, start, end - start, StandardCharsets.UTF_8);
+                return lookup(decoded, 0, decoded.length());
+            }
+        }
+        final var length = end - start;
+        if (length > Globals.KEY_TABLE_MAX_KEY_LENGTH) {
+            return new String(utf8, start, length, StandardCharsets.ISO_8859_1);
+        }
+        final var hash = hashOf(utf8, start, end);
+        final var home = homeSlot(hash);
+        for (var probe = 0; probe < window; probe++) {
+            final var slot = (home + probe) & mask;
+            final var stored = slots.get(slot);
+            final var candidate = keyOf(stored);
+            if (candidate != null && candidate.hashCode() == hash && sameText(candidate, utf8, start, length)) {
+                recordHit(slot, stored);
+                return candidate;
+            }
+        }
+        return admit(new String(utf8, start, length, StandardCharsets.ISO_8859_1), home);
     }
 
     public boolean holds(String key) {
@@ -185,6 +215,26 @@ public final class KeyTable {
             hash = 31 * hash + source.charAt(index);
         }
         return hash;
+    }
+
+    private static int hashOf(byte[] ascii, int start, int end) {
+        var hash = 0;
+        for (var index = start; index < end; index++) {
+            hash = 31 * hash + ascii[index];
+        }
+        return hash;
+    }
+
+    private static boolean sameText(String candidate, byte[] ascii, int start, int length) {
+        if (candidate.length() != length) {
+            return false;
+        }
+        for (var offset = 0; offset < length; offset++) {
+            if (candidate.charAt(offset) != ascii[start + offset]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean sameText(String candidate, CharSequence source, int start, int length) {
