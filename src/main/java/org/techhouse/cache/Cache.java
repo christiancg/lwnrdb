@@ -225,11 +225,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return result;
     }
 
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
-            Map<Long, Long> pendingPageBytes) {
-        return adminCache.selectPageForInsert(dbName, collName, entryByteSize, pendingPageBytes);
-    }
-
     public boolean hasNoIndex(String dbName, String collName, String fieldName) {
         return !adminCache.hasIndex(dbName, collName, fieldName)
                 || fs.indexMarkers().isMarked(dbName, collName, fieldName);

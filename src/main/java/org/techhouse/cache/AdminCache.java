@@ -145,6 +145,10 @@ public class AdminCache {
         pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta);
     }
 
+    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta, int addedEntries) {
+        pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta, addedEntries);
+    }
+
     public void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
         pageCache.updatePageSizeForUpdateInMemory(dbName, collName, page, bytesDelta);
     }
@@ -185,9 +189,8 @@ public class AdminCache {
         return pageCache.selectPageForInsert(dbName, collName, entryByteSize);
     }
 
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
-            Map<Long, Long> pendingBytesByPage) {
-        return pageCache.selectPageForInsert(dbName, collName, entryByteSize, pendingBytesByPage);
+    public long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
+        return pageCache.selectPagesForInsert(dbName, collName, entryByteSizes);
     }
 
     public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {

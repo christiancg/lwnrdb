@@ -177,6 +177,23 @@ final class FileLocks {
         }
     }
 
+    static int lineEnd(byte[] bytes, int start) {
+        var index = start;
+        while (index < bytes.length && bytes[index] != LINE_FEED && bytes[index] != CARRIAGE_RETURN) {
+            index++;
+        }
+        return index;
+    }
+
+    static int nextLineStart(byte[] bytes, int lineEnd) {
+        if (lineEnd >= bytes.length) {
+            return bytes.length;
+        }
+        final var afterTerminator = lineEnd + 1;
+        return bytes[lineEnd] == CARRIAGE_RETURN && afterTerminator < bytes.length
+                && bytes[afterTerminator] == LINE_FEED ? afterTerminator + 1 : afterTerminator;
+    }
+
     static List<String> decodeLines(byte[] bytes) {
         final var lines = new ArrayList<String>();
         var start = 0;

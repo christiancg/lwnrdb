@@ -109,7 +109,6 @@ src/test/java/org/techhouse/unit/bckg_ops/ScheduleExecutorTest.java 5
 src/test/java/org/techhouse/unit/bckg_ops/TriggerExecutorTest.java 4
 src/test/java/org/techhouse/unit/bckg_ops/events/EventTest.java 1
 src/test/java/org/techhouse/unit/cache/AdminCacheBoundsTest.java 3
-src/test/java/org/techhouse/unit/cache/AdminCachePageTest.java 2
 src/test/java/org/techhouse/unit/cache/AdminCacheProcedureTest.java 1
 src/test/java/org/techhouse/unit/cache/AdminCacheTest.java 2
 src/test/java/org/techhouse/unit/cache/AdminCacheTriggerTest.java 1

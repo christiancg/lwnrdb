@@ -165,13 +165,11 @@ public class AdminCachePageTest {
         final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(cache), "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
-        // 1MB existing + 500KB pending + 100KB new = 1.6MB, still under 2MB cap
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 500_000L));
-        assertEquals(0L, target, "Within-batch pending bytes still leave room on page 0");
-
-        // 1MB existing + 1.5MB pending + 100KB new = 2.6MB, exceeds 2MB cap
-        long target2 = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 1_500_000L));
-        assertEquals(1L, target2, "Pending bytes can push selection to a new page");
+        assertArrayEquals(new long[]{0L, 0L}, cache.selectPagesForInsert("myDb", "myColl", new int[]{500_000, 100_000}),
+                "Within-batch pending bytes still leave room on page 0");
+        assertArrayEquals(new long[]{0L, 0L, 1L, 1L},
+                cache.selectPagesForInsert("myDb", "myColl", new int[]{500_000, 500_000, 500_000, 100_000}),
+                "Pending bytes can push selection to a new page");
     }
 
     @Test
@@ -213,24 +211,24 @@ public class AdminCachePageTest {
     @Test
     public void test_select_page_for_insert_packs_into_pending_only_page() {
         AdminCache cache = new AdminCache();
-        long first = cache.selectPageForInsert("myDb", "myColl", 100);
-        assertEquals(0L, first, "First insert allocates page 0");
-        long second = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 100L));
-        assertEquals(0L, second, "Second insert reuses the pending (not-yet-committed) page 0");
+        assertArrayEquals(new long[]{0L, 0L}, cache.selectPagesForInsert("myDb", "myColl", new int[]{100, 100}),
+                "Second insert reuses the pending (not-yet-committed) page 0");
     }
 
     @Test
     public void test_select_page_for_insert_allocates_new_when_pending_only_page_full() {
         AdminCache cache = new AdminCache();
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 2_097_100L));
-        assertEquals(1L, target, "Full pending-only page forces a new page allocation");
+        assertArrayEquals(new long[]{0L, 1L},
+                cache.selectPagesForInsert("myDb", "myColl", new int[]{2_097_100, 100_000}),
+                "Full pending-only page forces a new page allocation");
     }
 
     @Test
     public void test_select_page_for_insert_prefers_lowest_pending_only_page() {
         AdminCache cache = new AdminCache();
-        long target = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 2_097_150L, 1L, 100L));
-        assertEquals(1L, target, "First pending page with room is chosen in ascending order");
+        assertArrayEquals(new long[]{0L, 1L, 1L},
+                cache.selectPagesForInsert("myDb", "myColl", new int[]{2_097_150, 100, 100}),
+                "First pending page with room is chosen in ascending order");
     }
 
     @Test

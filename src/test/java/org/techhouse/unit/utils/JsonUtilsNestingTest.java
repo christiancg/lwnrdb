@@ -58,6 +58,15 @@ public class JsonUtilsNestingTest {
     }
 
     @Test
+    public void a_limit_past_the_recursion_cap_is_still_enforced() {
+        assertTrue(JsonUtils.nestingExceeds(chainOf(5_001), 5_000));
+        assertFalse(JsonUtils.nestingExceeds(chainOf(5_000), 5_000));
+        final var array = new JsonArray();
+        array.add(chainOf(5_000));
+        assertTrue(JsonUtils.nestingExceeds(array, 5_000));
+    }
+
+    @Test
     public void a_very_deep_chain_is_walked_without_overflowing() {
         assertTrue(JsonUtils.nestingExceeds(chainOf(100_000), LIMIT));
         assertFalse(JsonUtils.nestingExceeds(chainOf(100_000), 100_000));

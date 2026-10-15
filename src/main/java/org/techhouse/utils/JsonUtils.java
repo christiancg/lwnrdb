@@ -25,6 +25,7 @@ import org.techhouse.ejson.internal.JsonStrings;
 
 public final class JsonUtils {
     private static final double MAX_EXACT_LONG = 9007199254740992d;
+    private static final int MAX_RECURSIVE_NESTING_LIMIT = 1024;
 
     private JsonUtils() {
     }
@@ -310,6 +311,13 @@ public final class JsonUtils {
     }
 
     public static boolean nestingExceeds(JsonBaseElement root, int limit) {
+        if (limit > MAX_RECURSIVE_NESTING_LIMIT) {
+            return nestingExceedsIteratively(root, limit);
+        }
+        return nestingExceeds(root, 1, limit);
+    }
+
+    private static boolean nestingExceedsIteratively(JsonBaseElement root, int limit) {
         final var pending = new ArrayDeque<NestedElement>();
         pending.push(new NestedElement(root, 1));
         while (!pending.isEmpty()) {
@@ -336,10 +344,40 @@ public final class JsonUtils {
             return element.asJsonArray().asList();
         }
         final var children = new ArrayList<JsonBaseElement>(object.size());
-        for (final var member : object.entrySet()) {
-            children.add(member.getValue());
+        for (var index = 0; index < object.size(); index++) {
+            children.add(object.valueAt(index));
         }
         return children;
+    }
+
+    private static boolean nestingExceeds(JsonBaseElement element, int depth, int limit) {
+        switch (element) {
+            case JsonObject object -> {
+                if (depth > limit) {
+                    return true;
+                }
+                for (var index = 0; index < object.size(); index++) {
+                    if (nestingExceeds(object.valueAt(index), depth + 1, limit)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            case JsonArray array -> {
+                if (depth > limit) {
+                    return true;
+                }
+                for (var index = 0; index < array.size(); index++) {
+                    if (nestingExceeds(array.get(index), depth + 1, limit)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            default -> {
+                return false;
+            }
+        }
     }
 
 }

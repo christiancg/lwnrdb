@@ -2,7 +2,7 @@ package org.techhouse.cache;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -102,8 +102,12 @@ final class AdminPageCache {
     }
 
     void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
+        updatePageSizeInMemory(dbName, collName, page, bytesDelta, 1);
+    }
+
+    void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta, int addedEntries) {
         underAdminPagesLock(dbName, collName, page, bytesDelta,
-                () -> applyPageSizeDelta(dbName, collName, page, bytesDelta));
+                () -> applyPageSizeDelta(dbName, collName, page, bytesDelta, addedEntries));
     }
 
     void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
@@ -147,16 +151,16 @@ final class AdminPageCache {
         return false;
     }
 
-    private void applyPageSizeDelta(String dbName, String collName, long page, long bytesDelta) {
+    private void applyPageSizeDelta(String dbName, String collName, long page, long bytesDelta, int addedEntries) {
         final var pageEntries = pageList(dbName, collName);
         final var existing = findPage(pageEntries, page);
         if (existing != null) {
             existing.setPageSize(existing.getPageSize() + bytesDelta);
-            existing.setEntryCount(existing.getEntryCount() + 1);
+            existing.setEntryCount(existing.getEntryCount() + addedEntries);
         } else {
             final var newEntry = new AdminPageEntry(dbName, collName, page);
             newEntry.setPageSize(bytesDelta);
-            newEntry.setEntryCount(1);
+            newEntry.setEntryCount(addedEntries);
             pageEntries.add(newEntry);
         }
     }
@@ -188,21 +192,29 @@ final class AdminPageCache {
     }
 
     long selectPageForInsert(String dbName, String collName, int entryByteSize) {
-        return selectPageForInsert(dbName, collName, entryByteSize, Map.of());
+        return selectPageForInsert(pageList(dbName, collName), entryByteSize, Map.of());
     }
 
-    long selectPageForInsert(String dbName, String collName, int entryByteSize, Map<Long, Long> pendingPageBytes) {
-        final var maxPageBytes = configuration.getMaxPageSize();
+    long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
         final var pageEntries = pageList(dbName, collName);
+        final var pendingPageBytes = new HashMap<Long, Long>();
+        final var targets = new long[entryByteSizes.length];
+        for (var index = 0; index < entryByteSizes.length; index++) {
+            final var size = entryByteSizes[index];
+            targets[index] = selectPageForInsert(pageEntries, size, pendingPageBytes);
+            pendingPageBytes.merge(targets[index], (long) size, Long::sum);
+        }
+        return targets;
+    }
+
+    private long selectPageForInsert(List<AdminPageEntry> pageEntries, int entryByteSize,
+            Map<Long, Long> pendingPageBytes) {
+        final var maxPageBytes = configuration.getMaxPageSize();
         // Without the pending pages, a bulk insert into a fresh collection scatters one entry per page.
         var bestFit = -1L;
         var maxPage = -1L;
-        final var committed = new HashSet<Long>();
         for (final var entry : pageEntries) {
             final var page = entry.getPage();
-            if (!pendingPageBytes.isEmpty()) {
-                committed.add(page);
-            }
             if (page > maxPage) {
                 maxPage = page;
             }
@@ -216,7 +228,7 @@ final class AdminPageCache {
             if (page > maxPage) {
                 maxPage = page;
             }
-            if (committed.contains(page)) {
+            if (findPage(pageEntries, page) != null) {
                 continue;
             }
             if (pending.getValue() + entryByteSize <= maxPageBytes && (bestFit < 0 || page < bestFit)) {

@@ -2,7 +2,6 @@ package org.techhouse.ops.admin;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.stream.Collectors;
 import org.techhouse.bckg_ops.events.EntityRef;
@@ -152,13 +151,13 @@ public final class AdminPageHelper {
 
     private static void insertAdminPages(String pagesPerCollectionName, List<AdminPageEntry> newPages)
             throws IOException {
-        final var pendingPageBytes = new HashMap<Long, Long>();
-        for (var p : newPages) {
-            final var size = p.byteSize();
-            final var target = cache.selectPageForInsert(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, size,
-                    pendingPageBytes);
-            p.setStoragePage(target);
-            pendingPageBytes.merge(target, (long) size, Long::sum);
+        final var sizes = new int[newPages.size()];
+        for (var index = 0; index < sizes.length; index++) {
+            sizes[index] = newPages.get(index).byteSize();
+        }
+        final var targets = cache.selectPagesForInsert(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, sizes);
+        for (var index = 0; index < sizes.length; index++) {
+            newPages.get(index).setStoragePage(targets[index]);
         }
         final var inserted = fs.bulkInsertIntoCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, newPages,
                 AdminPageEntry::getStoragePage);

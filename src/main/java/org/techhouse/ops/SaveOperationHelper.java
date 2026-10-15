@@ -240,18 +240,17 @@ public final class SaveOperationHelper {
         try {
             primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
             if (!entriesToInsert.isEmpty()) {
-                final var pendingPageBytes = new HashMap<Long, Long>();
-                for (var e : entriesToInsert) {
-                    final var size = linesById.get(e.get_id()).length;
-                    final var target = cache.selectPageForInsert(dbName, collName, size, pendingPageBytes);
-                    e.setPage(target);
-                    pendingPageBytes.merge(target, (long) size, Long::sum);
+                final var sizes = new int[entriesToInsert.size()];
+                for (var index = 0; index < sizes.length; index++) {
+                    sizes[index] = linesById.get(entriesToInsert.get(index).get_id()).length;
+                }
+                final var targets = cache.selectPagesForInsert(dbName, collName, sizes);
+                for (var index = 0; index < sizes.length; index++) {
+                    entriesToInsert.get(index).setPage(targets[index]);
                 }
                 insertedIndexEntries.addAll(fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert,
                         DbEntry::getPage, inserted -> linesById.get(inserted.get_id())));
-                for (var ie : insertedIndexEntries) {
-                    cache.updatePageSizeInMemory(dbName, collName, ie.getIndex().getPage(), ie.getIndex().getLength());
-                }
+                addInsertedPageSizes(dbName, collName, insertedIndexEntries);
             }
             primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
         } catch (Exception e) {
@@ -270,6 +269,18 @@ public final class SaveOperationHelper {
         publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
+    }
+
+    private static void addInsertedPageSizes(String dbName, String collName, List<IndexedDbEntry> inserted) {
+        final var totalsByPage = new HashMap<Long, long[]>();
+        for (final var insertedEntry : inserted) {
+            final var index = insertedEntry.getIndex();
+            final var totals = totalsByPage.computeIfAbsent(index.getPage(), _ -> new long[2]);
+            totals[0] += index.getLength();
+            totals[1]++;
+        }
+        totalsByPage.forEach(
+                (page, totals) -> cache.updatePageSizeInMemory(dbName, collName, page, totals[0], (int) totals[1]));
     }
 
     private static void applyUpdateSizeDeltas(String dbName, String collName, List<IndexedDbEntry> updated) {

@@ -23,8 +23,6 @@ import org.techhouse.log.Logger;
 
 final class DocumentPageStore {
     private static final Logger logger = Logger.logFor(DocumentPageStore.class);
-    private static final byte LINE_FEED = '\n';
-    private static final byte CARRIAGE_RETURN = '\r';
     private final EJson eJson = IocContainer.get(EJson.class);
 
     private final FilePaths paths;
@@ -77,7 +75,7 @@ final class DocumentPageStore {
         final var bytes = FileLocks.readAllBytesLocked(collectionFile);
         var start = 0;
         while (start < bytes.length) {
-            final var end = lineEnd(bytes, start);
+            final var end = FileLocks.lineEnd(bytes, start);
             if (end > start && !isBlank(bytes, start, end)) {
                 try {
                     final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
@@ -89,26 +87,9 @@ final class DocumentPageStore {
                     logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
                 }
             }
-            start = nextLineStart(bytes, end);
+            start = FileLocks.nextLineStart(bytes, end);
         }
         return result;
-    }
-
-    private static int lineEnd(byte[] bytes, int start) {
-        var index = start;
-        while (index < bytes.length && bytes[index] != LINE_FEED && bytes[index] != CARRIAGE_RETURN) {
-            index++;
-        }
-        return index;
-    }
-
-    private static int nextLineStart(byte[] bytes, int lineEnd) {
-        if (lineEnd >= bytes.length) {
-            return bytes.length;
-        }
-        final var afterTerminator = lineEnd + 1;
-        return bytes[lineEnd] == CARRIAGE_RETURN && afterTerminator < bytes.length
-                && bytes[afterTerminator] == LINE_FEED ? afterTerminator + 1 : afterTerminator;
     }
 
     private static boolean isBlank(byte[] bytes, int start, int end) {

@@ -7,7 +7,6 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -268,33 +267,48 @@ final class PkIndexStore {
 
     private Parsed<List<PkIndexEntry>> parsePkIndex(String dbName, String collectionName, File indexFile)
             throws IOException {
-        final var byValue = new LinkedHashMap<String, PkIndexEntry>();
-        final var lineByValue = new LinkedHashMap<String, String>();
-        boolean dropped = false;
-        for (var line : FileLocks.decodeLines(Files.readAllBytes(indexFile.toPath()))) {
-            if (line.isEmpty())
-                continue;
-            try {
-                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
-                if (byValue.put(entry.getValue(), entry) != null) {
+        final var bytes = Files.readAllBytes(indexFile.toPath());
+        final var entries = new ArrayList<PkIndexEntry>();
+        var dropped = false;
+        var start = 0;
+        while (start < bytes.length) {
+            final var end = FileLocks.lineEnd(bytes, start);
+            if (end > start) {
+                try {
+                    entries.add(PkIndexEntry.fromIndexFileBytes(dbName, collectionName, bytes, start, end));
+                } catch (Exception e) {
                     dropped = true;
-                    logger.warning("Removing duplicate PK index entry for '" + entry.getValue() + "' in "
-                            + indexFile.getName() + ", keeping the last occurrence");
+                    logger.warning(
+                            "Removing malformed PK index entry in " + indexFile.getName() + ": " + e.getMessage());
                 }
-                lineByValue.put(entry.getValue(), line);
-            } catch (Exception e) {
-                dropped = true;
-                logger.warning("Removing malformed PK index entry in " + indexFile.getName() + ": " + e.getMessage());
             }
+            start = FileLocks.nextLineStart(bytes, end);
         }
-        final var entries = new ArrayList<>(byValue.values());
         entries.sort(Comparator.comparing(PkIndexEntry::getValue));
+        dropped |= keepLastOfEachId(entries, indexFile);
         if (dropped) {
             forget(indexFile);
         } else {
             remember(indexFile, PkRowDigest.sum(entries));
         }
-        return new Parsed<>(entries, new ArrayList<>(lineByValue.values()), dropped, dropped && entries.isEmpty());
+        final List<String> lines = dropped ? entries.stream().map(PkIndexEntry::toFileEntry).toList() : List.of();
+        return new Parsed<>(entries, lines, dropped, dropped && entries.isEmpty());
+    }
+
+    private static boolean keepLastOfEachId(List<PkIndexEntry> sortedInFileOrder, File indexFile) {
+        var kept = 0;
+        for (final var row : sortedInFileOrder) {
+            if (kept > 0 && sortedInFileOrder.get(kept - 1).getValue().equals(row.getValue())) {
+                logger.warning("Removing duplicate PK index entry for '" + row.getValue() + "' in "
+                        + indexFile.getName() + ", keeping the last occurrence");
+                sortedInFileOrder.set(kept - 1, row);
+            } else {
+                sortedInFileOrder.set(kept++, row);
+            }
+        }
+        final var removed = kept < sortedInFileOrder.size();
+        sortedInFileOrder.subList(kept, sortedInFileOrder.size()).clear();
+        return removed;
     }
 
 }
