@@ -12,8 +12,6 @@ import org.techhouse.log.Logger;
 
 final class TornPageTail {
     private static final Logger logger = Logger.logFor(TornPageTail.class);
-    private static final int SCAN_CHUNK = 8192;
-    private static final byte LINE_END = (byte) Globals.NEWLINE.charAt(Globals.NEWLINE.length() - 1);
 
     private TornPageTail() {
     }
@@ -27,7 +25,7 @@ final class TornPageTail {
         List<PkIndexEntry> entries = null;
         for (final var page : pages) {
             final var file = paths.collectionPage(dbName, collName, page);
-            if (endOfLastCompleteLine(file) < 0) {
+            if (FileLocks.endOfLastCompleteLine(file) < 0) {
                 continue;
             }
             if (entries == null) {
@@ -40,7 +38,7 @@ final class TornPageTail {
     static boolean heal(File page, long pageNumber, List<PkIndexEntry> entries) throws IOException {
         final var lock = FileLocks.lockWrite(page);
         try {
-            final var cut = endOfLastCompleteLine(page);
+            final var cut = FileLocks.endOfLastCompleteLine(page);
             if (cut < 0) {
                 return false;
             }
@@ -95,33 +93,5 @@ final class TornPageTail {
         file.seek(file.length() - suffix.length);
         file.readFully(tail);
         return Arrays.equals(tail, suffix);
-    }
-
-    private static long endOfLastCompleteLine(File page) throws IOException {
-        try (var reader = new RandomAccessFile(page, Globals.R_PERMISSIONS)) {
-            final var length = reader.length();
-            if (length == 0) {
-                return -1;
-            }
-            reader.seek(length - 1);
-            if (reader.readByte() == LINE_END) {
-                return -1;
-            }
-            final var buffer = new byte[SCAN_CHUNK];
-            var end = length;
-            while (end > 0) {
-                final var start = Math.max(0, end - SCAN_CHUNK);
-                final var read = (int) (end - start);
-                reader.seek(start);
-                reader.readFully(buffer, 0, read);
-                for (var i = read - 1; i >= 0; i--) {
-                    if (buffer[i] == LINE_END) {
-                        return start + i + 1;
-                    }
-                }
-                end = start;
-            }
-            return 0;
-        }
     }
 }

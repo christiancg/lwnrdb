@@ -46,7 +46,11 @@ public class FileSystemEncodedWriteTest extends FileSystemTestBase {
     }
 
     private void expectRemovedFromFirstPage(String id) {
-        expectedPages.get(0L).removeIf(line -> line.contains("\"_id\":\"" + id + "\""));
+        expectedPages.get(0L).replaceAll(line -> line.contains("\"_id\":\"" + id + "\"") ? hole(line) : line);
+    }
+
+    private static String hole(String line) {
+        return " ".repeat(line.getBytes(StandardCharsets.UTF_8).length - Globals.NEWLINE.length()) + Globals.NEWLINE;
     }
 
     private static File page(long page) {
@@ -97,15 +101,13 @@ public class FileSystemEncodedWriteTest extends FileSystemTestBase {
         assertPagesAsLegacy();
 
         final var source = indexed("bulk-2");
-        fs.deleteForRelocation(source, resident());
         final var relocated = document("bulk-2", "moved", 1L);
-        fs.insertRelocated(relocated, source);
-        fs.endRelocation(source);
+        fs.relocate(relocated, source, 1L, relocated.encodeLine(), resident());
         expectRemovedFromFirstPage("bulk-2");
         expectAppended(1L, "bulk-2", "moved");
         assertPagesAsLegacy();
 
-        fs.deleteFromCollection(indexed("single"), resident());
+        fs.deleteFromCollection(indexed("single"));
         expectRemovedFromFirstPage("single");
         assertPagesAsLegacy();
     }

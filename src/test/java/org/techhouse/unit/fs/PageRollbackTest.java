@@ -101,21 +101,21 @@ public class PageRollbackTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_a_failed_delete_index_write_restores_the_page() throws Exception {
+    public void test_a_failed_delete_index_write_leaves_the_page() throws Exception {
         final var first = fs.insertIntoCollection(entry("first"));
         fs.insertIntoCollection(entry("second"));
         final var before = Files.readAllBytes(pageFile().toPath());
         replacePkIndexWithAnUnwritableDirectory();
 
-        assertThrows(RuntimeException.class, () -> fs.deleteFromCollection(first),
+        assertThrows(IOException.class, () -> fs.deleteFromCollection(first),
                 "a delete whose index write fails must surface the failure");
 
         assertArrayEquals(before, Files.readAllBytes(pageFile().toPath()),
-                "the page is compacted before the index is rewritten, so a failed rewrite must put it back");
+                "the delete row is the commit, so a page is blanked only after it lands");
     }
 
     @Test
-    public void test_a_failed_update_index_write_restores_the_page() throws Exception {
+    public void test_a_failed_update_index_write_truncates_its_copy() throws Exception {
         final var first = fs.insertIntoCollection(entry("first"));
         fs.insertIntoCollection(entry("second"));
         final var before = Files.readAllBytes(pageFile().toPath());
@@ -127,7 +127,7 @@ public class PageRollbackTest extends FileSystemTestBase {
                 "an update whose index write fails must surface the failure");
 
         assertArrayEquals(before, Files.readAllBytes(pageFile().toPath()),
-                "the page is rewritten before the index, so a failed index write must put it back");
+                "the new copy is appended before the index, so a failed index write must cut it back");
     }
 
     @Test

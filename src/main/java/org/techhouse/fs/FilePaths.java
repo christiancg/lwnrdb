@@ -34,12 +34,21 @@ final class FilePaths {
                 + Globals.DB_FILE_EXTENSION);
     }
 
+    File vacuumFile(String dbName, String collectionName, long page) {
+        return new File(collectionPrefix(dbName, collectionName) + Globals.FILE_PAGE_SEPARATOR + page
+                + Globals.VACUUM_FILE_EXTENSION);
+    }
+
     File indexFile(String dbName, String collectionName, String fieldName, String indexType) {
         if (isReservedFileName(fieldName)) {
             return null;
         }
         return new File(collectionPrefix(dbName, collectionName) + Globals.INDEX_FILE_NAME_SEPARATOR
                 + embedded(fieldName) + Globals.INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
+    }
+
+    static File logFileOf(File indexFile) {
+        return new File(indexFile.getPath() + Globals.INDEX_LOG_SUFFIX);
     }
 
     private static boolean isReservedFileName(String fieldName) {

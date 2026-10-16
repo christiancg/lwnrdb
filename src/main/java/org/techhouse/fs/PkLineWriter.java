@@ -23,20 +23,22 @@ final class PkLineWriter {
         this.out = out;
     }
 
-    long write(PkIndexEntry row) throws IOException {
-        return write(row, row.getPosition());
-    }
-
-    long write(PkIndexEntry row, long position) throws IOException {
+    void write(PkIndexEntry row) throws IOException {
         size = 0;
         appendValue(FieldIndexEntry.escapeIndexToken(row.getValue()));
-        appendField(position);
+        appendField(row.getPosition());
         appendField(row.getLength());
         appendField(row.getPage());
         appendField(row.getVersion());
         append(NEWLINE);
         out.write(line, 0, size);
-        return PkRowDigest.of(row, position);
+    }
+
+    void writeDelete(String id) throws IOException {
+        size = 0;
+        appendValue(PkIndexEntry.toDeleteRow(id));
+        append(NEWLINE);
+        out.write(line, 0, size);
     }
 
     private void appendValue(String value) {

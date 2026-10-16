@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
@@ -20,6 +21,7 @@ import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class FileSystem {
+    private final Configuration configuration = Configuration.getInstance();
     private final FilePaths paths = new FilePaths();
     private final IndexMarkers indexMarkers = new IndexMarkers(paths);
     private final TombstoneStore tombstones = new TombstoneStore(paths);
@@ -28,14 +30,20 @@ public class FileSystem {
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
-    private final CompactionJournal compactionJournal = new CompactionJournal(paths);
-    private final PageCompactor pageCompactor = new PageCompactor(paths, pkIndexStore, compactionJournal);
-    private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore);
-    private final CompactionRecovery compactionRecovery = new CompactionRecovery(paths, pkIndexStore,
-            compactionJournal);
+    private final WriteIntentJournal writeIntentJournal = new WriteIntentJournal(paths);
+    private final PageVacuum pageVacuum = new PageVacuum(paths, pkIndexStore, writeIntentJournal);
+    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, writeIntentJournal,
+            pageVacuum);
+    private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore, pageVacuum);
+    private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
+            writeIntentJournal);
+
+    public void onVacuum(Consumer<VacuumedPage> listener) {
+        pageVacuum.onVacuum(listener);
+    }
 
     public void createBaseDbPath() {
-        paths.useDbPath(Configuration.getInstance().getFilePath());
+        paths.useDbPath(configuration.getFilePath());
         final var directory = new File(paths.dbPath());
         if (!directory.exists()) {
             try {
@@ -241,52 +249,43 @@ public class FileSystem {
         return pageAppender.insert(entry, encodedLine);
     }
 
-    public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
-        return deleteFromCollection(pkIndexEntry, null);
+    public void deleteFromCollection(PkIndexEntry pkIndexEntry) throws IOException {
+        recordReplacer.delete(pkIndexEntry);
     }
 
-    public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry, List<PkIndexEntry> residentRows) {
-        return pageCompactor.delete(pkIndexEntry, residentRows);
+    public PkIndexEntry relocate(DbEntry entry, PkIndexEntry oldRow, long targetPage, byte[] encodedLine,
+            List<PkIndexEntry> residentRows) throws IOException {
+        entry.setPage(targetPage);
+        return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows);
     }
 
-    public PkCompaction deleteForRelocation(PkIndexEntry source, List<PkIndexEntry> residentRows) {
-        return pageCompactor.deleteForRelocation(source, residentRows);
+    public List<PkIndexEntry> recoverWriteIntents() throws IOException {
+        return writeIntentRecovery.recoverAll();
     }
 
-    public PkIndexEntry insertRelocated(DbEntry entry, PkIndexEntry source) throws IOException {
-        return insertRelocated(entry, source, entry.encodeLine());
-    }
-
-    public PkIndexEntry insertRelocated(DbEntry entry, PkIndexEntry source, byte[] encodedLine) throws IOException {
-        pageCompactor.retargetRelocation(source, entry.getPage());
-        return insertIntoCollection(entry, encodedLine);
-    }
-
-    public void endRelocation(PkIndexEntry source) {
-        pageCompactor.endRelocation(source);
-    }
-
-    public List<PkIndexEntry> recoverInterruptedCompactions() throws IOException {
-        return compactionRecovery.recoverAll();
-    }
-
-    public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
+    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
         return bulkUpdateFromCollection(dbName, collName, entries, null, null);
     }
 
-    public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
+    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
             List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines) throws IOException {
-        return pageCompactor.bulkUpdate(dbName, collName, entries, residentRows, encodedLines);
+        return recordReplacer.bulkReplace(dbName, collName, entries, residentRows, encodedLines);
     }
 
-    public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
+    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
         return updateFromCollection(entry, pkIndexEntry, entry.encodeLine(), null);
     }
 
-    public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
+    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
             List<PkIndexEntry> residentRows) throws IOException {
-        return pageCompactor.update(entry, encodedLine, pkIndexEntry, residentRows);
+        return updateFromCollection(entry, pkIndexEntry, encodedLine, null, residentRows);
+    }
+
+    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
+            PagePlacement placement, List<PkIndexEntry> residentRows) throws IOException {
+        return recordReplacer.replace(entry, encodedLine, pkIndexEntry, pkIndexEntry.getPage(), placement,
+                residentRows);
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
@@ -301,12 +300,12 @@ public class FileSystem {
 
     public boolean indexTypeFileExists(String dbName, String collName, String fieldName, String typeLabel) {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
-        return indexFile != null && indexFile.exists();
+        return indexFile != null && (indexFile.exists() || FilePaths.logFileOf(indexFile).exists());
     }
 
-    public void rewriteIndexType(String dbName, String collName, String fieldName, String typeLabel,
-            List<? extends FieldIndexEntry<?>> entries) throws IOException {
-        fieldIndexStore.rewriteIndexType(dbName, collName, fieldName, typeLabel, entries);
+    public void appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors) throws IOException {
+        fieldIndexStore.appendIndexLog(dbName, collName, fieldName, typeLabel, changes, survivors);
     }
 
     public boolean dropIndex(String dbName, String collName, String fieldName) {
@@ -340,6 +339,10 @@ public class FileSystem {
         return documentPageStore.pageFileLengths(dbName, collName);
     }
 
+    public long pageFileLength(String dbName, String collName, long page) {
+        return paths.collectionPage(dbName, collName, page).length();
+    }
+
     public void healTornPageTails(String dbName, String collName) throws IOException {
         TornPageTail.healAll(paths, dbName, collName, pageFileLengths(dbName, collName).keySet(),
                 () -> readWholePkIndexFile(dbName, collName));
@@ -351,9 +354,9 @@ public class FileSystem {
 
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
-            compactionRecovery.recoverPagesOf(dbName, collName);
+            writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
-            refuseStaleCompactionMarkers(dbName, collName);
+            refuseStaleWriteIntents(dbName, collName);
         }
         return PkIndexRebuild.plan(paths, pkIndexStore, dbName, collName, pageFileLengths(dbName, collName).keySet());
     }
@@ -362,12 +365,13 @@ public class FileSystem {
         PkIndexRebuild.apply(pkIndexStore, dbName, collName, rebuild);
     }
 
-    private void refuseStaleCompactionMarkers(String dbName, String collName) throws IOException {
-        final var stale = compactionRecovery.replayableMarkersOf(dbName, collName);
+    private void refuseStaleWriteIntents(String dbName, String collName) throws IOException {
+        final var stale = writeIntentRecovery.replayableMarkersOf(dbName, collName);
         if (!stale.isEmpty()) {
-            throw PkIndexRebuild.refused(dbName, collName, "compaction marker(s) " + stale + " were left by writes"
-                    + " this process could not clean up after; their saved tails are stale, and replaying one would"
-                    + " truncate every record written since. Fix what stopped their removal, then delete them");
+            throw PkIndexRebuild.refused(dbName, collName, "write intent(s) " + stale + " were left by writes this"
+                    + " process could not clean up after, and a rebuild would freeze whatever half of each write the"
+                    + " pages hold. Restart the server, which recovers them, or fix what stopped their removal and"
+                    + " delete them");
         }
     }
 

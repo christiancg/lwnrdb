@@ -94,8 +94,8 @@ public class FieldIndexBatchLookupTest {
         assertNotNull(lookup());
         final var spied = spy(realFs);
         TestUtils.setPrivateStaticField(Class.forName(SLOT_CLASS), "fs", spied);
-        doThrow(new IOException("disk full")).when(spied).rewriteIndexType(anyString(), anyString(), anyString(),
-                anyString(), any());
+        doThrow(new IOException("disk full")).when(spied).appendIndexLog(anyString(), anyString(), anyString(),
+                anyString(), any(), any());
         final var object = new JsonObject();
         object.addProperty("_id", "a");
         object.addProperty(FIELD, "w");

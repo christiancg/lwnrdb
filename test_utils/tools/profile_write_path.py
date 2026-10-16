@@ -29,15 +29,18 @@ BUCKETS = (
     ("field-index lookup rebuild", "FieldIndexSlot.load"),
     ("field-index line rewrite", "IndexLine"),
     ("field-index batch", "FieldIndexBatch"),
-    ("pk.idx rewrite", "PkIndexStore"),
-    ("page in-place update", "PageCompactor"),
+    ("pk.idx append", "PkIndexStore"),
+    ("page append-and-blank update", "RecordReplacer"),
+    ("page vacuum", "PageVacuum"),
+    ("field-index log", "FieldIndexLog"),
     ("request parse", "JsonReader"),
     ("response serialisation", "EJson.toJson"),
     ("page read", "DocumentPageStore"),
 )
 
 TARGETS = {
-    "save_update": ("MB per op", 2.5),
+    "save_update": ("MB per op", 0.25),
+    "bulk_update": ("KB per doc", 6.0),
     "bulk_insert": ("seconds", 60.0),
     "insert_noindex": ("KB per doc", 5.0),
     "cold_scan": ("KB per doc", 3.0),

@@ -14,7 +14,6 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
-import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -168,7 +167,7 @@ public class FileSystemWriteTest extends FileSystemTestBase {
         final var second = entries.get(1);
         second.getData().addProperty("field", "changed");
 
-        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries).updated();
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
 
         assertNotNull(result);
         assertEquals(2, result.size());
@@ -192,8 +191,8 @@ public class FileSystemWriteTest extends FileSystemTestBase {
 
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, List.of(updated));
 
-        assertEquals(22L, result.updated().getFirst().getIndex().getVersion());
-        assertEquals(22L, result.updated().getFirst().toDbEntry().getVersion(),
+        assertEquals(22L, result.getFirst().getIndex().getVersion());
+        assertEquals(22L, result.getFirst().toDbEntry().getVersion(),
                 "the published document must not differ from the pk index that describes it");
         assertEquals(22L, fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).getFirst().getVersion());
     }
@@ -207,8 +206,7 @@ public class FileSystemWriteTest extends FileSystemTestBase {
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
 
         assertNotNull(result);
-        assertTrue(result.updated().isEmpty());
-        assertTrue(result.compactions().isEmpty());
+        assertTrue(result.isEmpty());
     }
 
     @Test
@@ -229,7 +227,7 @@ public class FileSystemWriteTest extends FileSystemTestBase {
 
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, inserted);
 
-        for (var ie : result.updated()) {
+        for (var ie : result) {
             final var read = fileSystem.getById(ie.getIndex());
             assertEquals("updated-value-for-" + ie.get_id() + "-longer",
                     read.getData().get("field").asJsonString().getValue(),
@@ -289,7 +287,7 @@ public class FileSystemWriteTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_bulk_update_mid_batch_failure_throws_partial_bulk_update_exception() throws Exception {
+    public void test_bulk_update_mid_batch_failure_commits_nothing() throws Exception {
         FileSystem fs = FileSystemTestBase.freshFs();
         final var idxA = FileSystemTestBase.insertOnPage(fs, "a", 0);
         final var idxB = FileSystemTestBase.insertOnPage(fs, "b", 1);
@@ -302,14 +300,10 @@ public class FileSystemWriteTest extends FileSystemTestBase {
         assertTrue(pageBFile.delete());
         assertTrue(pageBFile.mkdir(), "page b's path must be unwritable for this test to inject a failure");
 
-        final var thrown = assertThrows(PartialBulkUpdateException.class,
-                () -> fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates));
+        assertThrows(IOException.class, () -> fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates));
 
-        final var partial = thrown.getPartialResult();
-        assertEquals(1, partial.updated().size(), "only the entry before the failing one committed");
-        assertEquals("a", partial.updated().getFirst().get_id());
-        assertEquals("updated-value-for-a", FileSystemTestBase.readValueFromDisk(fs, "a"),
-                "the entry before the failing one must be durably readable back from disk");
+        assertEquals("short", FileSystemTestBase.readValueFromDisk(fs, "a"),
+                "the copy appended for the entry before the failing one is cut back");
     }
 
     @Test

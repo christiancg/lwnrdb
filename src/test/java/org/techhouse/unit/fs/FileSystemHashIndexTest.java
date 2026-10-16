@@ -24,12 +24,12 @@ public class FileSystemHashIndexTest extends FileSystemTestBase {
 
         FieldIndexEntry<String> inserted = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "cccc3333",
                 new HashSet<>(Set.of("id1")));
-        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT.label(), List.of(inserted));
+        fs.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT, List.of(inserted));
         var index = fs.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT);
         assertNotNull(index);
         assertEquals(1, index.size());
 
-        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT.label(), List.of());
+        fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT.label(), List.of(), List.of());
         assertNull(fs.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT));
     }
 

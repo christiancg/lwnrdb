@@ -399,10 +399,11 @@ Returns `404-6` if a named field has no registered index.
 `"primaryKey": true` also rebuilds the collection's primary-key index (`pk.idx`) from its page files, which are
 authoritative, and then its page-occupancy metadata. It is the repair for a `pk.idx` that cannot be read (every
 read and write of the collection answers an error until then), that points at the wrong bytes, or that lost or
-kept a record the pages say otherwise about. When the old `pk.idx` cannot be read, a page-compaction journal that
-startup left for that reason is completed or undone first, exactly as startup would. When it can be read, any
-journal still on disk was left by a write this process could not clean up after: its saved tail is stale, so
-the rebuild refuses with `409-15` and names it rather than replay it over newer records.
+kept a record the pages say otherwise about. When the old `pk.idx` cannot be read, a write intent (`.intent`) that startup left for that reason is settled on
+the page side first: an update whose old copy is still on its page has its new copies blanked, a delete
+is blanked, and a vacuum's temporary file is removed. When it can be read, any intent still on disk was left by a
+write this process could not clean up after, so the rebuild refuses with `409-15` and names it; a restart
+recovers it. The page scan skips holes, the blank lines an update or delete leaves behind.
 ```json
 {"type":"REINDEX","databaseName":"my_db","collectionName":"my_coll","primaryKey":true}
 ```
@@ -1245,7 +1246,10 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `DELETE_TOMBSTONE_RESERVED` | A clustered delete wrote its tombstone and has not deleted the document yet | `<db>\|<collection>` |
 | `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
 | `PK_INDEX_REPLACED` | A `REINDEX` with `"primaryKey": true` wrote the rebuilt `pk.idx` and has not rebuilt the page rows or field indexes yet | `<db>\|<collection>` |
-| `INDEX_BATCH_FLUSHED` | A background field-index batch wrote the first of the type files it changed and has not written the others yet | `<db>\|<collection>` |
+| `INDEX_BATCH_FLUSHED` | A background field-index batch appended to the first of the type logs it changed and has not appended to the others yet | `<db>\|<collection>` |
+| `PAGE_COPY_APPENDED` | An update, relocation or bulk update appended its new copies to their page and has not committed them in `pk.idx` yet | `<db>\|<collection>` |
+| `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete committed its rows in `pk.idx` and has not blanked the copies they supersede yet | `<db>\|<collection>` |
+| `PAGE_VACUUM_RENAMED` | A page vacuum moved its rewritten page into place and has not appended the moved records' rows to `pk.idx` yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
 
 | Action | Effect |
@@ -1808,7 +1812,7 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Guaranteed**
 
 - **An acknowledged write survives a process crash.** Writes go to the files before the response is sent, so a `kill -9` or a JVM crash loses nothing that was acknowledged.
-- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the page files, and an in-place update, delete or relocation that was interrupted is completed or restored from its `.compacting` journal. That last step needs a readable `pk.idx`; when it is not, startup logs the affected pages and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` recovers them and rebuilds the `pk.idx` from the pages.
+- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, commits it with one appended `pk.idx` row, then blanks the old copy into a hole, all under a `.intent` file written first. An interrupted one is kept or undone at startup according to whether its `pk.idx` row landed, and an interrupted page vacuum re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.

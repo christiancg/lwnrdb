@@ -6,6 +6,7 @@ import threading
 import time
 
 import base_utils as bu
+import write_intent_kills
 from base_utils import check, check_code, check_field, check_status, section
 
 HOST = "127.0.0.1"
@@ -169,13 +170,17 @@ def recorded_pages(work_dir: str, db=DB, coll=COLL) -> dict:
     return rows
 
 
+def live_records(content: bytes) -> list:
+    return [line + b"\n" for line in content.split(b"\n")[:-1] if line and not line.startswith(b" ")]
+
+
 def actual_pages(work_dir: str, db=DB, coll=COLL) -> dict:
     folder = os.path.join(work_dir, "db", db, coll)
     pages = {}
     for name in page_files(work_dir, db, coll):
         with open(os.path.join(folder, name), "rb") as fp:
-            content = fp.read()
-        pages[int(name[len(coll) + 1:-len(".dat")])] = (len(content), content.count(b"\n"))
+            records = live_records(fp.read())
+        pages[int(name[len(coll) + 1:-len(".dat")])] = (sum(len(record) for record in records), len(records))
     return pages
 
 
@@ -691,7 +696,7 @@ def leave_the_index_half_built(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, HALF_BUILT_COLL)
     prefix = f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}-"
     for name in os.listdir(folder):
-        if name.startswith(prefix) and name.endswith(".idx"):
+        if name.startswith(prefix) and name.endswith((".idx", ".idxlog")):
             os.remove(os.path.join(folder, name))
     with open(os.path.join(folder, f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}.building"), "w") as marker:
         marker.write("0")
@@ -730,121 +735,14 @@ def leave_an_unindexed_record(work_dir: str):
         page.write(record.encode("utf-8"))
 
 
-KILLED_UPDATE_COLL = "killed_update_docs"
-KILLED_DELETE_COLL = "killed_delete_docs"
-KILLED_RELOCATE_COLL = "killed_relocate_docs"
-KILLED_DOCS = 5
-KILLED_ID = "killed1"
-
-
-def killed_doc(i: int, value: str = "acknowledged") -> dict:
-    return {"_id": f"killed{i}", "v": f"{value}-{i}"}
-
-
-def seed_collections_whose_compactions_a_kill_will_interrupt(conn: Conn):
-    section("Seed collections whose in-place update, delete and relocation a kill will interrupt")
-    for coll in (KILLED_UPDATE_COLL, KILLED_DELETE_COLL, KILLED_RELOCATE_COLL):
-        check_status(f"create {coll}",
-                     conn.create_coll(coll), "OK")
-        for i in range(KILLED_DOCS):
-            check_status(f"save killed{i} into {coll}", conn.save(killed_doc(i), coll=coll), "OK")
-    check_status(f"index v in {KILLED_DELETE_COLL}",
-                 conn.create_index("v", coll=KILLED_DELETE_COLL), "OK")
-
-
-def interrupt_a_compaction(work_dir: str, coll: str, kind: str):
-    folder = os.path.join(work_dir, "db", DB, coll)
-    pk_path = pk_index_file(work_dir, DB, coll)
-    rows = bu.read_pk_rows(pk_path)
-    row = next(r for r in rows if r[0] == KILLED_ID)
-    _, position, length, page, _ = row
-    page_path = os.path.join(folder, f"{coll}-{page}.dat")
-    with open(page_path, "rb") as fp:
-        page_bytes = fp.read()
-    bu.write_compaction_marker(folder, kind, DB, coll, row, page_bytes)
-    shifted = page_bytes[:position] + page_bytes[position + length:]
-    if kind == "UPDATE":
-        shifted += (json.dumps(killed_doc(1, "unacknowledged"), separators=(",", ":")) + "\n").encode("utf-8")
-    with open(page_path, "wb") as fp:
-        fp.write(shifted)
-    if kind == "RELOCATE":
-        kept = [r for r in rows if r[0] != KILLED_ID]
-        for r in kept:
-            if r[3] == page and r[1] > position:
-                r[1] -= length
-        bu.write_pk_rows(pk_path, kept)
-
-
-def interrupt_the_compactions(work_dir: str):
-    interrupt_a_compaction(work_dir, KILLED_UPDATE_COLL, "UPDATE")
-    interrupt_a_compaction(work_dir, KILLED_DELETE_COLL, "DELETE")
-    interrupt_a_compaction(work_dir, KILLED_RELOCATE_COLL, "RELOCATE")
-
-
-def found_value(conn: Conn, coll: str, doc_id: str):
-    response = conn.find(doc_id, coll=coll)
-    return (response.get("object") or {}).get("v") if response.get("status") == "OK" else None
-
-
-def compaction_markers_left(work_dir: str, coll: str) -> list:
-    folder = os.path.join(work_dir, "db", DB, coll)
-    return [name for name in os.listdir(folder) if name.endswith(".compacting")]
-
-
-def check_every_document_is_acknowledged(conn: Conn, work_dir: str, coll: str, expected_ids: list):
-    values = {f"killed{i}": found_value(conn, coll, f"killed{i}") for i in range(KILLED_DOCS)}
-    expected = {f"killed{i}": (f"acknowledged-{i}" if f"killed{i}" in expected_ids else None)
-                for i in range(KILLED_DOCS)}
-    check("FIND_BY_ID answers every document with its last acknowledged value", values == expected,
-          f"expected {expected} got {values}")
-    scanned = conn.ids(coll, FULL_SCAN)
-    check("a full scan lists exactly the same documents", scanned == sorted(expected_ids),
-          f"expected {sorted(expected_ids)} got {scanned}")
-    pk = conn.count_via_pk(coll=coll)
-    check("the index-only COUNT agrees with the scan", pk == len(expected_ids), f"count={pk}")
-    check("the compaction marker is gone", not compaction_markers_left(work_dir, coll),
-          f"left: {compaction_markers_left(work_dir, coll)}")
-
-
-def test_an_update_killed_mid_compaction_is_undone_at_startup(conn: Conn, work_dir: str):
-    section("An in-place update a kill interrupted mid-compaction is undone at startup")
-    check_every_document_is_acknowledged(conn, work_dir, KILLED_UPDATE_COLL,
-                                         [f"killed{i}" for i in range(KILLED_DOCS)])
-
-
-def test_a_delete_killed_mid_compaction_is_completed_at_startup(conn: Conn, work_dir: str):
-    section("A delete a kill interrupted mid-compaction is completed at startup")
-    check_every_document_is_acknowledged(conn, work_dir, KILLED_DELETE_COLL,
-                                         [f"killed{i}" for i in range(KILLED_DOCS) if f"killed{i}" != KILLED_ID])
-
-
-def killed_value_count(conn: Conn, prefix: list) -> int:
-    return conn.count(KILLED_DELETE_COLL, prefix + [bu.filter_step("v", "EQUALS", killed_doc(1)["v"])]) or 0
-
-
-def test_a_delete_killed_mid_compaction_leaves_no_index_entry(conn: Conn):
-    section("A delete a kill interrupted mid-compaction leaves no field-index entry behind")
-    scanned = killed_value_count(conn, FULL_SCAN)
-    bu.wait_until(lambda: killed_value_count(conn, []) == 0, timeout_s=15, interval_s=0.2)
-    indexed = killed_value_count(conn, [])
-    check("the scan no longer finds the deleted document", scanned == 0, f"scan={scanned}")
-    check("the index-only COUNT agrees with the scan once startup removed the deleted id",
-          indexed == scanned, f"indexed={indexed} scan={scanned}")
-
-
-def test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn: Conn, work_dir: str):
-    section("A grow-relocation a kill interrupted between its delete and its insert keeps the document")
-    check_every_document_is_acknowledged(conn, work_dir, KILLED_RELOCATE_COLL,
-                                         [f"killed{i}" for i in range(KILLED_DOCS)])
-
-
 def leftover_rows_folder(work_dir: str) -> str:
     return os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{LEFTOVER_ROWS_COLL}")
 
 
 def page_rows_mid_compaction(work_dir: str, coll: str) -> bool:
     folder = os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{coll}")
-    return os.path.isdir(folder) and any(name.endswith(".compacting") for name in os.listdir(folder))
+    return os.path.isdir(folder) and any(name.endswith((".intent", ".vacuum"))
+                                         for name in os.listdir(folder))
 
 
 def wait_for_settled_page_rows(work_dir: str, coll: str, timeout_s=15.0):
@@ -878,7 +776,8 @@ def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
     check("its page rows reached disk", settled, f"recorded {recorded} actual {actual}")
     copy = os.path.join(work_dir, LEFTOVER_ROWS_COPY)
     shutil.rmtree(copy, ignore_errors=True)
-    shutil.copytree(leftover_rows_folder(work_dir), copy, ignore=shutil.ignore_patterns("*.compacting"))
+    shutil.copytree(leftover_rows_folder(work_dir), copy,
+                    ignore=shutil.ignore_patterns("*.intent", "*.vacuum"))
     check_status("drop it", conn.send({"type": "DROP_COLLECTION", "databaseName": DB,
                                        "collectionName": LEFTOVER_ROWS_COLL}), "OK")
 
@@ -1060,7 +959,7 @@ def index_files(work_dir: str, db: str, coll: str) -> dict:
         return {}
     sizes = {}
     for f in os.listdir(folder):
-        if f.endswith(".idx"):
+        if f.endswith((".idx", ".idxlog")):
             try:
                 sizes[f] = os.path.getsize(os.path.join(folder, f))
             except FileNotFoundError:
@@ -1070,11 +969,15 @@ def index_files(work_dir: str, db: str, coll: str) -> dict:
 
 def await_index_file(work_dir: str, coll: str, name: str, present: bool,
                      timeout: float = 15.0) -> bool:
-    return bool(bu.wait_until(lambda: (name in index_files(work_dir, DB, coll)) == present, timeout, 0.2))
+    def type_present() -> bool:
+        files = index_files(work_dir, DB, coll)
+        return name in files or name + "log" in files
+
+    return bool(bu.wait_until(lambda: type_present() == present, timeout, 0.2))
 
 
 def test_an_index_with_no_entries_left_is_removed(conn: Conn, work_dir: str):
-    section("An index file whose last line was removed is deleted, not left empty")
+    section("An index type whose last entry was removed is deleted, base and log alike, not left empty")
     boolean_index = f"{EMPTY_IDX_COLL}-mixed-Boolean.idx"
     check_status("create the collection",
                  conn.create_coll(EMPTY_IDX_COLL), "OK")
@@ -1933,8 +1836,9 @@ def admin_collection_rows(work_dir: str) -> str:
     folder = os.path.join(work_dir, "db", "admin", "collections")
     text = []
     for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
-        with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as fp:
-            text.append(fp.read())
+        if name.endswith(".dat"):
+            with open(os.path.join(folder, name), "rb") as fp:
+                text.extend(record.decode("utf-8", errors="replace") for record in live_records(fp.read()))
     return "\n".join(text)
 
 
@@ -2216,7 +2120,6 @@ def main():
             seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn)
             seed_collections_for_primary_key_rebuilds(conn)
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
-            seed_collections_whose_compactions_a_kill_will_interrupt(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
             seed_a_collection_its_database_will_stop_listing(conn)
             seed_a_database_whose_collection_will_be_a_symlink(conn)
@@ -2242,7 +2145,6 @@ def main():
         damage_the_pk_indexes_to_rebuild(work_dir)
         leave_the_index_half_built(work_dir)
         leave_an_unindexed_record(work_dir)
-        interrupt_the_compactions(work_dir)
         interrupt_the_drops(work_dir)
         unlist_the_collection(work_dir)
         tear_an_admin_page_tail(work_dir)
@@ -2264,10 +2166,6 @@ def main():
             test_reindex_primary_key_restores_a_record_pk_idx_lost(conn)
             test_reindex_primary_key_refuses_a_duplicated_record(conn, work_dir)
             test_an_unindexed_record_is_adopted_at_startup(conn)
-            test_an_update_killed_mid_compaction_is_undone_at_startup(conn, work_dir)
-            test_a_delete_killed_mid_compaction_is_completed_at_startup(conn, work_dir)
-            test_a_delete_killed_mid_compaction_leaves_no_index_entry(conn)
-            test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn, work_dir)
             test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn)
             test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn, work_dir)
             test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
@@ -2297,6 +2195,24 @@ def main():
         with admin_conn() as conn:
             test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_connected(conn, acknowledged)
             test_every_registered_collection_is_unregistered_when_its_database_is_dropped(conn, work_dir)
+        bu.stop_server(proc)
+        proc = None
+
+        proc, kill_rounds = write_intent_kills.run(work_dir, log_path, admin_conn,
+                                                   lambda: write_config(work_dir, faults=True))
+        with admin_conn() as conn:
+            write_intent_kills.test_every_killed_write_recovers_to_what_its_pk_index_committed(conn, work_dir,
+                                                                                               kill_rounds)
+            latest = write_intent_kills.churn(conn)
+            write_intent_kills.test_update_churn_keeps_every_page_within_a_quarter_of_dead_space(conn, work_dir, latest,
+                                                                                                MAX_PAGE_BYTES)
+            write_intent_kills.test_pk_idx_compacts_under_update_churn(work_dir, latest)
+        bu.stop_server(proc)
+        proc = None
+
+        print(f"  Restarting server on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path)
+        write_intent_kills.test_page_rows_equal_live_bytes_after_a_restart(work_dir, recorded_pages)
     finally:
         bu.stop_server(proc)
 

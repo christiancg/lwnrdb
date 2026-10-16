@@ -2,15 +2,13 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
-import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 
-final class CompactionFixture {
+final class StorageFixture {
     static final long OLD_VERSION = 1_700_000_000_000L;
     static final long NEW_VERSION = 1_800_000_000_000L;
 
@@ -18,18 +16,18 @@ final class CompactionFixture {
     final String collName;
     final FilePaths paths;
     final PkIndexStore store;
-    final CompactionJournal journal;
-    final CompactionRecovery recovery;
+    final WriteIntentJournal journal;
+    final WriteIntentRecovery recovery;
 
-    CompactionFixture(File root, String dbName, String collName) throws IOException {
+    StorageFixture(File root, String dbName, String collName) throws IOException {
         this.dbName = dbName;
         this.collName = collName;
         paths = new FilePaths();
         paths.useDbPath(root.getAbsolutePath());
         Files.createDirectories(paths.collectionFolder(dbName, collName).toPath());
         store = new PkIndexStore(paths);
-        journal = new CompactionJournal(paths);
-        recovery = new CompactionRecovery(paths, store, journal);
+        journal = new WriteIntentJournal(paths);
+        recovery = new WriteIntentRecovery(paths, store, journal);
     }
 
     static String record(String id, String value) {
@@ -65,28 +63,8 @@ final class CompactionFixture {
         return new String(bytes, (int) entry.getPosition(), (int) entry.getLength(), StandardCharsets.UTF_8);
     }
 
-    String pageText(long page) throws IOException {
-        return Files.readString(page(page).toPath(), StandardCharsets.UTF_8);
-    }
-
-    CompactionJournal.Marker begin(CompactionJournal.Kind kind, String id) throws IOException {
-        final var entry = indexed(id);
-        final var file = page(entry.getPage());
-        try (var raf = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            final var tail = PageCompactor.readRegion(raf, entry.getPosition(), file.length());
-            return journal.begin(kind, entry, file.length(), tail);
-        }
-    }
-
-    void shiftAndCut(String id) throws IOException {
-        final var entry = indexed(id);
-        final var file = page(entry.getPage());
-        try (var raf = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            final var total = file.length();
-            PageCompactor.shiftOtherEntriesToStart(raf, entry,
-                    PageCompactor.readRegion(raf, entry.getPosition(), total));
-            raf.setLength(total - entry.getLength());
-        }
+    String firstPageText() throws IOException {
+        return Files.readString(page(0).toPath(), StandardCharsets.UTF_8);
     }
 
     long appendUpdatedCopy(String id, long page) throws IOException {
@@ -95,13 +73,6 @@ final class CompactionFixture {
         Files.writeString(page(page).toPath(), text, StandardCharsets.UTF_8, StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND);
         return position;
-    }
-
-    void indexUpdatedCopy(String id, long position) throws IOException {
-        final var length = record(id, "new-" + id).getBytes(StandardCharsets.UTF_8).length;
-        final var current = indexed(id);
-        store.internalUpdatePKIndex(dbName, collName, id, new PkIndexEntry(dbName, collName, id,
-                position + current.getLength(), length, current.getPage(), NEW_VERSION));
     }
 
     boolean everyRowReadsItsOwnRecord() throws IOException {
@@ -115,7 +86,7 @@ final class CompactionFixture {
 
     File[] markers() {
         final var found = paths.collectionFolder(dbName, collName)
-                .listFiles((_, name) -> name.endsWith(CompactionJournal.MARKER_EXTENSION));
+                .listFiles((_, name) -> name.endsWith(WriteIntentJournal.MARKER_EXTENSION));
         return found == null ? new File[0] : found;
     }
 }

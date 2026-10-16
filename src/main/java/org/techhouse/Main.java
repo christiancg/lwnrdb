@@ -90,7 +90,7 @@ public class Main {
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
         fs.createAdminDatabase();
-        final var recoveredDeletes = fs.recoverInterruptedCompactions();
+        final var recoveredDeletes = fs.recoverWriteIntents();
         cache.loadAdminData();
         AdminPasswordGuard.refuseUnsetPasswordWhenBootstrapping(cache);
         seedHybridClock();

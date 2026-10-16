@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.function.Function;
 import org.techhouse.data.FieldIndexEntry;
@@ -41,8 +42,29 @@ public final class FieldIndexLoader {
             String label, Function<String, FieldIndexEntry<T>> parser, Comparator<FieldIndexEntry<T>> order)
             throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, indexTypeLabel);
-        if (indexFile == null || !indexFile.exists()) {
+        if (indexFile == null) {
             return null;
+        }
+        final var logFile = FilePaths.logFileOf(indexFile);
+        if (!indexFile.exists() && !logFile.exists()) {
+            return null;
+        }
+        final var entries = readBase(indexFile, label, parser);
+        if (entries == null) {
+            return null;
+        }
+        final var replayed = logFile.exists() ? replayLog(indexFile, logFile, entries, label, parser) : entries;
+        if (replayed == null) {
+            return null;
+        }
+        replayed.sort(order);
+        return replayed;
+    }
+
+    private <T> List<FieldIndexEntry<T>> readBase(File indexFile, String label,
+            Function<String, FieldIndexEntry<T>> parser) throws IOException {
+        if (!indexFile.exists()) {
+            return new ArrayList<>();
         }
         final var parsed = FileLocks.readHealing(indexFile, file -> parseIndex(file, label, parser));
         if (parsed == null) {
@@ -54,8 +76,35 @@ public final class FieldIndexLoader {
                     + " Run REINDEX on this collection to rebuild it from the stored documents.");
             return null;
         }
-        parsed.entries().sort(order);
         return parsed.entries();
+    }
+
+    private static <T> List<FieldIndexEntry<T>> replayLog(File indexFile, File logFile, List<FieldIndexEntry<T>> base,
+            String label, Function<String, FieldIndexEntry<T>> parser) throws IOException {
+        final var byKey = new LinkedHashMap<String, FieldIndexEntry<T>>(base.size() * 2);
+        for (final var entry : base) {
+            byKey.put(FieldIndexEntry.fileKeyOf(entry.getValue()), entry);
+        }
+        final var lock = FileLocks.lockRead(indexFile);
+        final FieldIndexLog.Replayed replayed;
+        try {
+            replayed = FieldIndexLog.replay(logFile, byKey, label, parser);
+        } finally {
+            lock.unlock();
+        }
+        if (replayed == FieldIndexLog.Replayed.UNRECOGNISED) {
+            logger.error("No line in " + logFile.getName() + " could be read as a " + label + " index log entry, so"
+                    + " the index is declined and the field is answered by a scan. Run REINDEX on this collection to"
+                    + " rebuild it from the stored documents.");
+            return null;
+        }
+        final var entries = new ArrayList<FieldIndexEntry<T>>(byKey.size());
+        for (final var entry : byKey.values()) {
+            if (!entry.getIds().isEmpty()) {
+                entries.add(entry);
+            }
+        }
+        return entries;
     }
 
     private <T> Parsed<List<FieldIndexEntry<T>>> parseIndex(File indexFile, String label,
@@ -94,9 +143,14 @@ public final class FieldIndexLoader {
             return (o1, o2) -> Boolean.compare((Boolean) o1.getValue(), (Boolean) o2.getValue());
         }
         if (indexType == String.class) {
-            return (o1, o2) -> CaseFolding.compare((String) o1.getValue(), (String) o2.getValue());
+            return (o1, o2) -> compareStrings((String) o1.getValue(), (String) o2.getValue());
         }
         return (o1, o2) -> compareCustom((JsonCustom<?>) o1.getValue(), o2.getValue());
+    }
+
+    private static int compareStrings(String left, String right) {
+        final var folded = CaseFolding.compare(left, right);
+        return folded != 0 ? folded : left.compareTo(right);
     }
 
     public static Comparator<FieldIndexEntry<String>> hashOrder() {
@@ -106,6 +160,7 @@ public final class FieldIndexLoader {
     private static int compareCustom(JsonCustom<?> custom, Object other) {
         final var customClass = custom.getClass();
         //noinspection unchecked
-        return customClass.cast(custom).compareToCustom(customClass.cast(other));
+        final var compared = customClass.cast(custom).compareToCustom(customClass.cast(other));
+        return compared != 0 ? compared : FieldIndexEntry.fileKeyOf(custom).compareTo(FieldIndexEntry.fileKeyOf(other));
     }
 }

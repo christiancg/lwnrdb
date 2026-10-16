@@ -34,7 +34,7 @@ public class MainStartupOrderTest {
     @Test
     public void interruptedCompactionsAreRecoveredBeforeAdminDataIsLoaded() throws IOException {
         final var body = mainBody();
-        final var recovery = positionOf(body, "fs.recoverInterruptedCompactions();");
+        final var recovery = positionOf(body, "fs.recoverWriteIntents();");
 
         assertTrue(positionOf(body, "fs.createAdminDatabase();") < recovery,
                 "recovery walks the folders the admin database creates");
@@ -87,7 +87,7 @@ public class MainStartupOrderTest {
         final var body = mainBody();
         final var cleanup = positionOf(body, "PageOccupancyReconciler.scheduleIndexCleanupFor(recoveredDeletes);");
 
-        assertTrue(positionOf(body, "fs.recoverInterruptedCompactions();") < cleanup);
+        assertTrue(positionOf(body, "fs.recoverWriteIntents();") < cleanup);
         assertTrue(positionOf(body, "PageOccupancyReconciler.reconcileAll();") < cleanup,
                 "the cleanup events carry no page delta because the rows were just rebuilt from the page files");
         assertTrue(cleanup < positionOf(body, "backgroundTaskManager.startBackgroundWorkers();"));

@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EntityEvent;
@@ -26,6 +27,9 @@ public final class PageOccupancyReconciler {
     @SuppressWarnings("FieldMayBeFinal")
     private static BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final Logger logger = Logger.logFor(PageOccupancyReconciler.class);
+    private static final int ENTRY_COUNT = 0;
+    private static final int LIVE_BYTES = 1;
+    private static final long[] NOTHING_LIVE = new long[2];
 
     private PageOccupancyReconciler() {
     }
@@ -109,29 +113,30 @@ public final class PageOccupancyReconciler {
         if (!adopted.isEmpty()) {
             scheduleIndexMaintenanceFor(dbName, collName, adopted);
         }
-        final var fileLengths = fs.pageFileLengths(dbName, collName);
+        final var pages = fs.pageFileLengths(dbName, collName).keySet();
+        final var occupancy = occupancyByPage(dbName, collName);
         final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
-        if (adopted.isEmpty() && retired.isEmpty() && agreesWithFiles(rows, fileLengths)) {
+        if (adopted.isEmpty() && retired.isEmpty() && agreesWithLiveBytes(rows, pages, occupancy)) {
             return false;
         }
-        replaceRows(dbName, collName, fileLengths, rows);
+        replaceRows(dbName, collName, pages, occupancy, rows);
         return true;
     }
 
     public static void rebuildRows(String dbName, String collName) throws Exception {
-        replaceRows(dbName, collName, fs.pageFileLengths(dbName, collName),
+        replaceRows(dbName, collName, fs.pageFileLengths(dbName, collName).keySet(), occupancyByPage(dbName, collName),
                 rowsByPage(cache.getAdminPageEntries(dbName, collName)));
     }
 
-    private static void replaceRows(String dbName, String collName, Map<Long, Long> fileLengths,
+    private static void replaceRows(String dbName, String collName, Set<Long> pages, Map<Long, long[]> occupancy,
             Map<Long, AdminPageEntry> rows) throws Exception {
-        final var counts = entryCountsByPage(dbName, collName);
         final var corrected = new ArrayList<AdminPageEntry>();
-        for (final var file : fileLengths.entrySet()) {
-            corrected.add(row(dbName, collName, file.getKey(), counts.getOrDefault(file.getKey(), 0), file.getValue()));
+        for (final var page : pages) {
+            final var live = occupancy.getOrDefault(page, NOTHING_LIVE);
+            corrected.add(row(dbName, collName, page, (int) live[ENTRY_COUNT], live[LIVE_BYTES]));
         }
         for (final var page : rows.keySet()) {
-            if (!fileLengths.containsKey(page)) {
+            if (!pages.contains(page)) {
                 corrected.add(row(dbName, collName, page, 0, 0L));
             }
         }
@@ -159,28 +164,31 @@ public final class PageOccupancyReconciler {
         return byPage;
     }
 
-    private static boolean agreesWithFiles(Map<Long, AdminPageEntry> rows, Map<Long, Long> fileLengths) {
-        for (final var file : fileLengths.entrySet()) {
-            final var row = rows.get(file.getKey());
+    private static boolean agreesWithLiveBytes(Map<Long, AdminPageEntry> rows, Set<Long> pages,
+            Map<Long, long[]> occupancy) {
+        for (final var page : pages) {
+            final var row = rows.get(page);
             final var recordedSize = row == null ? 0L : row.getPageSize();
-            if (recordedSize != file.getValue()) {
+            if (recordedSize != occupancy.getOrDefault(page, NOTHING_LIVE)[LIVE_BYTES]) {
                 return false;
             }
         }
         for (final var row : rows.values()) {
-            if (!fileLengths.containsKey(row.getPage()) && (row.getPageSize() != 0 || row.getEntryCount() != 0)) {
+            if (!pages.contains(row.getPage()) && (row.getPageSize() != 0 || row.getEntryCount() != 0)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static Map<Long, Integer> entryCountsByPage(String dbName, String collName) throws Exception {
-        final var counts = new HashMap<Long, Integer>();
+    private static Map<Long, long[]> occupancyByPage(String dbName, String collName) throws Exception {
+        final var occupancy = new HashMap<Long, long[]>();
         for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
-            counts.merge(pkEntry.getPage(), 1, Integer::sum);
+            final var live = occupancy.computeIfAbsent(pkEntry.getPage(), _ -> new long[2]);
+            live[ENTRY_COUNT]++;
+            live[LIVE_BYTES] += pkEntry.getLength();
         }
-        return counts;
+        return occupancy;
     }
 
     private static AdminPageEntry row(String dbName, String collName, long page, int entryCount, long pageSize) {

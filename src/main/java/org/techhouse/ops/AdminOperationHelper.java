@@ -90,11 +90,10 @@ public final class AdminOperationHelper {
         final var encodedLine = entry.encodeLine();
         if (existingPk != null) {
             entry.setPage(existingPk.getPage());
-            final var updateResult = fs.updateFromCollection(entry, existingPk, encodedLine,
+            final var updatedPk = fs.updateFromCollection(entry, existingPk, encodedLine,
                     AdminResidentRows.of(collName));
-            cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
             applyAdminPageDelta(collName, EventType.UPDATED, entry);
-            return updateResult.indexEntry();
+            return updatedPk;
         }
         entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, collName, encodedLine.length));
         final var pk = fs.insertIntoCollection(entry, encodedLine);
@@ -119,7 +118,7 @@ public final class AdminOperationHelper {
             throws IOException, InterruptedException {
         entry.setPreviousByteSize(pk.getLength());
         entry.setPage(pk.getPage());
-        cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk, AdminResidentRows.of(collName)));
+        fs.deleteFromCollection(pk);
         applyAdminPageDelta(collName, EventType.DELETED, entry);
     }
 

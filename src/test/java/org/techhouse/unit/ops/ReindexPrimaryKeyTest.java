@@ -38,7 +38,7 @@ import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
-import org.techhouse.fs.StaleCompactionMarker;
+import org.techhouse.fs.StaleWriteIntent;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.IndexHelper;
@@ -372,7 +372,7 @@ public class ReindexPrimaryKeyTest {
     public void test_a_stale_marker_with_a_readable_pk_index_is_refused() throws Exception {
         save("a");
         save("b");
-        final var marker = StaleCompactionMarker.writeUpdateMarker(new File(TestGlobals.PATH).getAbsolutePath(),
+        final var marker = StaleWriteIntent.writeReplaceIntent(new File(TestGlobals.PATH).getAbsolutePath(),
                 TestGlobals.DB, TestGlobals.COLL, "a");
         save("c");
         final var page = Files.readAllBytes(collectionFile("-0.dat").toPath());
@@ -388,9 +388,9 @@ public class ReindexPrimaryKeyTest {
     }
 
     @Test
-    public void test_an_emptied_marker_does_not_block_the_rebuild() throws Exception {
+    public void test_an_emptied_intent_does_not_block_the_rebuild() throws Exception {
         save("a");
-        Files.writeString(collectionFile("-0.compacting").toPath(), "", StandardCharsets.UTF_8);
+        Files.writeString(collectionFile("-0000000000001-000000001.intent").toPath(), "", StandardCharsets.UTF_8);
 
         assertEquals(OperationStatus.OK, reindex().getStatus());
     }

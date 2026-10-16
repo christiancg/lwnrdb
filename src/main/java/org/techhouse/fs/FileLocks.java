@@ -32,6 +32,8 @@ final class FileLocks {
     private static final byte LINE_FEED = '\n';
     private static final byte CARRIAGE_RETURN = '\r';
     private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
+    private static final int SCAN_CHUNK = 8192;
+    private static final byte LINE_END = (byte) Globals.NEWLINE.charAt(Globals.NEWLINE.length() - 1);
 
     private FileLocks() {
     }
@@ -243,7 +245,7 @@ final class FileLocks {
         moveIntoPlace(tmp, path);
     }
 
-    private static void moveIntoPlace(Path tmp, Path path) throws IOException {
+    static void moveIntoPlace(Path tmp, Path path) throws IOException {
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
@@ -263,6 +265,46 @@ final class FileLocks {
         try (var raf = new RandomAccessFile(file, "r")) {
             raf.seek(raf.length() - 1);
             return raf.readByte() != LINE_FEED;
+        }
+    }
+
+    static void cutUnterminatedTail(File file) throws IOException {
+        final var cut = file.exists() ? endOfLastCompleteLine(file) : -1L;
+        if (cut < 0) {
+            return;
+        }
+        try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+            writer.setLength(cut);
+        }
+        logger.warning("Cut the unterminated last line of " + file.getName() + " before appending to it: it was torn"
+                + " by an interrupted append");
+    }
+
+    static long endOfLastCompleteLine(File page) throws IOException {
+        try (var reader = new RandomAccessFile(page, Globals.R_PERMISSIONS)) {
+            final var length = reader.length();
+            if (length == 0) {
+                return -1;
+            }
+            reader.seek(length - 1);
+            if (reader.readByte() == LINE_END) {
+                return -1;
+            }
+            final var buffer = new byte[SCAN_CHUNK];
+            var end = length;
+            while (end > 0) {
+                final var start = Math.max(0, end - SCAN_CHUNK);
+                final var read = (int) (end - start);
+                reader.seek(start);
+                reader.readFully(buffer, 0, read);
+                for (var i = read - 1; i >= 0; i--) {
+                    if (buffer[i] == LINE_END) {
+                        return start + i + 1;
+                    }
+                }
+                end = start;
+            }
+            return 0;
         }
     }
 

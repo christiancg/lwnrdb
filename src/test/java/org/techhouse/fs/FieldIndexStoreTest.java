@@ -62,7 +62,7 @@ public class FieldIndexStoreTest {
     }
 
     private static void rewrite(Fixture fixture, List<FieldIndexEntry<String>> entries) throws IOException {
-        fixture.store().rewriteIndexType(DB, COLL, FIELD, "String", entries);
+        FieldIndexStore.replaceType(fixture.indexFile(), FilePaths.logFileOf(fixture.indexFile()), entries);
     }
 
     @Test

@@ -8,6 +8,8 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
     private static final int FIELD_COUNT = 5;
     private static final int MAX_UNCHECKED_DIGITS = 18;
     private static final byte SEPARATOR = (byte) Globals.ID_SEPARATOR.charAt(0);
+    private static final String DELETE_MARK = "-";
+    private static final byte DELETE_MARK_BYTE = '-';
     private String value;
     private long position;
     private long length;
@@ -56,6 +58,18 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
         return new PkIndexEntry(databaseName, collectionName, FieldIndexEntry.unescapeIndexToken(value),
                 parseLong(line, valueEnd + 1, positionEnd), parseLong(line, positionEnd + 1, lengthEnd),
                 parseLong(line, lengthEnd + 1, pageEnd), parseLong(line, pageEnd + 1, end));
+    }
+
+    public static String toDeleteRow(String id) {
+        return FieldIndexEntry.escapeIndexToken(id) + Globals.ID_SEPARATOR + DELETE_MARK;
+    }
+
+    public static String deletedIdOf(byte[] line, int start, int end) {
+        final var valueEnd = nextSeparator(line, start, end);
+        if (valueEnd + 2 != end || line[valueEnd + 1] != DELETE_MARK_BYTE) {
+            return null;
+        }
+        return FieldIndexEntry.unescapeIndexToken(new String(line, start, valueEnd - start, StandardCharsets.UTF_8));
     }
 
     private static int nextSeparator(byte[] line, int from, int end) {

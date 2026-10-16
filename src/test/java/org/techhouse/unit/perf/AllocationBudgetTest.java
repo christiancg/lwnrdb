@@ -34,10 +34,11 @@ public class AllocationBudgetTest {
     private static final int BULK = 1_000;
     private static final int WARM_UPS = 5;
     private static final long KB = 1024L;
-    private static final long SAVE_UPDATE_BUDGET = 150 * KB;
-    private static final long INSERT_BUDGET_PER_DOC = 4 * KB;
+    private static final long SAVE_UPDATE_BUDGET = 30 * KB;
+    private static final long INSERT_BUDGET_PER_DOC = 3 * KB;
     private static final long COLD_SCAN_BUDGET_PER_DOC = 4 * KB;
     private static final long BATCH_OF_ONE_BUDGET = 44 * KB;
+    private static final long BULK_UPDATE_BUDGET_PER_DOC = 5 * KB;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
@@ -162,6 +163,24 @@ public class AllocationBudgetTest {
         }
         final var perDoc = cheapest / BULK;
         assertTrue(perDoc <= INSERT_BUDGET_PER_DOC, report("one inserted document", perDoc, INSERT_BUDGET_PER_DOC));
+    }
+
+    @Test
+    void bulkUpdateAllocatesUnderBudgetPerDoc() throws Exception {
+        var cheapest = Long.MAX_VALUE;
+        for (var round = 0; round < WARM_UPS; round++) {
+            final var objects = new ArrayList<JsonObject>(BULK);
+            for (var i = round * BULK; i < (round + 1) * BULK; i++) {
+                objects.add(document(i, 100 + round));
+            }
+            final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.setObjects(objects);
+            cheapest = Math.min(cheapest,
+                    allocatedBy(() -> holdingTheCollection(() -> SaveOperationHelper.executeBulkSave(request))));
+        }
+        final var perDoc = cheapest / BULK;
+        assertTrue(perDoc <= BULK_UPDATE_BUDGET_PER_DOC,
+                report("one bulk-updated document", perDoc, BULK_UPDATE_BUDGET_PER_DOC));
     }
 
     @Test

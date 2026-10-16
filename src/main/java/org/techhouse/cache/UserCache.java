@@ -17,6 +17,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
@@ -72,16 +73,11 @@ public class UserCache {
         }
     }
 
-    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
-            long removedLength) {
-        final var primaryKeyIndex = pkIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
-        if (primaryKeyIndex == null) {
-            return;
-        }
-        for (final var entry : primaryKeyIndex) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
+    public void repositionAfterVacuum(VacuumedPage vacuumed) {
+        final var primaryKeyIndex = pkIndexMap
+                .get(Cache.getCollectionIdentifier(vacuumed.dbName(), vacuumed.collName()));
+        if (primaryKeyIndex != null) {
+            vacuumed.reposition(primaryKeyIndex);
         }
     }
 
@@ -330,8 +326,6 @@ public class UserCache {
             return result;
         }
         final var pkIndex = getPkIndexAndLoadIfNecessary(dbName, collName);
-        // Detached copies: shiftPkPositionsAfterCompaction mutates position in place and could
-        // otherwise move the offset between here and the read.
         final var toRead = new ArrayList<PkIndexEntry>();
         for (var id : missingIds) {
             final var pos = Collections.binarySearch(pkIndex, id);

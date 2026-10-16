@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -17,6 +18,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.fs.FieldIndexLoader;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.IndexLogChange;
 import org.techhouse.ioc.IocContainer;
 
 final class FieldIndexSlot {
@@ -33,6 +35,7 @@ final class FieldIndexSlot {
     private final Loader loader;
     private final Map<String, FieldIndexEntry<Object>> created = new HashMap<>();
     private final Map<FieldIndexEntry<Object>, Boolean> touched = new IdentityHashMap<>();
+    private Map<String, Map<String, Boolean>> logged;
     private List<FieldIndexEntry<Object>> resident;
     private boolean onDisk;
     private List<FieldIndexEntry<Object>> entries;
@@ -143,6 +146,7 @@ final class FieldIndexSlot {
             touch(entry);
         }
         entry.getIds().add(id);
+        log(key, id, true);
         dirty = true;
         return entry;
     }
@@ -150,8 +154,16 @@ final class FieldIndexSlot {
     void removeId(String id, FieldIndexEntry<Object> entry) {
         touch(entry);
         if (entry.getIds().remove(id)) {
+            log(FieldIndexEntry.fileKeyOf(entry.getValue()), id, false);
             dirty = true;
         }
+    }
+
+    private void log(String key, String id, boolean present) {
+        if (logged == null) {
+            logged = new LinkedHashMap<>();
+        }
+        logged.computeIfAbsent(key, _ -> new LinkedHashMap<>()).put(id, present);
     }
 
     private void touch(FieldIndexEntry<Object> entry) {
@@ -165,8 +177,24 @@ final class FieldIndexSlot {
             return false;
         }
         applyInPlace();
-        fs.rewriteIndexType(dbName, collName, fieldName, fileLabel, entries);
+        fs.appendIndexLog(dbName, collName, fieldName, fileLabel, changes(), entries);
         return true;
+    }
+
+    private List<IndexLogChange> changes() {
+        if (logged == null) {
+            return List.of();
+        }
+        final var changes = new ArrayList<IndexLogChange>(logged.size());
+        for (final var key : logged.entrySet()) {
+            final var added = new ArrayList<String>();
+            final var removed = new ArrayList<String>();
+            for (final var id : key.getValue().entrySet()) {
+                (id.getValue() ? added : removed).add(id.getKey());
+            }
+            changes.add(new IndexLogChange(key.getKey(), added, removed));
+        }
+        return changes;
     }
 
     private void applyInPlace() {

@@ -1,6 +1,7 @@
 package org.techhouse.ops.admin;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -14,9 +15,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
-import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.FileSystem;
-import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -25,6 +24,7 @@ public final class AdminPageHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final Logger logger = Logger.logFor(AdminPageHelper.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private AdminPageHelper() {
     }
@@ -223,16 +223,9 @@ public final class AdminPageHelper {
             indexedEntriesToUpdate.add(indexedEntry);
         }
         if (!indexedEntriesToUpdate.isEmpty()) {
-            try {
-                final var bulkResult = fs.bulkUpdateFromCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName,
-                        indexedEntriesToUpdate, pkIdxList, null);
-                applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, bulkResult.updated(),
-                        bulkResult.compactions());
-            } catch (PartialBulkUpdateException e) {
-                final var partial = e.getPartialResult();
-                applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, partial.updated(), partial.compactions());
-                throw e;
-            }
+            final var updated = fs.bulkUpdateFromCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName,
+                    indexedEntriesToUpdate, pkIdxList, null);
+            applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, updated);
         }
         if (!firstTouchPages.isEmpty()) {
             insertAdminPages(pagesPerCollectionName, firstTouchPages);
@@ -240,8 +233,7 @@ public final class AdminPageHelper {
     }
 
     private static void applyBulkUpdateResult(String pagesPerCollectionName, List<PkIndexEntry> pkIdxList,
-            List<IndexedDbEntry> updated, List<PkCompaction> compactions) {
-        compactions.forEach(cache::shiftPkPositionsAfterCompaction);
+            List<IndexedDbEntry> updated) {
         for (var ie : updated) {
             pkIdxList.removeIf(pk -> pk.getValue().equals(ie.get_id()));
             pkIdxList.add(ie.getIndex());
@@ -326,7 +318,11 @@ public final class AdminPageHelper {
         final var pkIdxList = cache.getAdminPagePkIndexes(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         final var ownRows = pkIdxList.stream().filter(pk -> pk.getValue().startsWith(ownPrefix)).toList();
         for (final var row : ownRows) {
-            cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(row, pkIdxList));
+            try {
+                fs.deleteFromCollection(row);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
             pkIdxList.remove(row);
             trackInMemoryAdminPageRemoval(pagesCollName, row);
         }
@@ -344,8 +340,7 @@ public final class AdminPageHelper {
     private static boolean lockAdminPagesForDrop(String dbName, String collName) {
         try {
             final var acquired = locks.tryLockWrite(Globals.ADMIN_PAGES_DB_NAME,
-                    AdminPageEntry.pagesCollectionName(dbName, collName),
-                    Configuration.getInstance().getTransactionLockTimeoutMs());
+                    AdminPageEntry.pagesCollectionName(dbName, collName), configuration.getTransactionLockTimeoutMs());
             if (!acquired) {
                 logger.warning("Dropping the page metadata of " + dbName + "|" + collName + " without its"
                         + " admin_pages lock: the background page writer may re-create rows for a collection"

@@ -241,7 +241,7 @@ def _folder_contains(folder: str, token: str, suffixes: tuple) -> bool:
 
 def holds_tx_record(node, tx_id, suffix="") -> bool:
     return _folder_contains(os.path.join(node.work_dir, "db", "admin", "transactions"),
-                            f"{tx_id}|{suffix}", (".idx", ".dat"))
+                            f"{tx_id}|{suffix}", (".dat",))
 
 
 def commit_in_background(conn: Conn, node, tx_id, marker, timeout_s, interval_s):
@@ -624,19 +624,37 @@ def test_index_replication():
     check("index-backed query is correct on every node", wait_until(_query_ok, timeout_s=15.0))
 
 
-def _index_file(node, coll, field) -> str:
-    folder = os.path.join(node.work_dir, "db", DB, coll)
-    names = [n for n in os.listdir(folder) if n.startswith(f"{coll}-{field}-") and n.endswith(".idx")]
-    return os.path.join(folder, names[0]) if names else ""
+INDEX_TOKEN_SEPARATOR = "\x1f"
+
+
+def _index_folder(node, coll) -> str:
+    return os.path.join(node.work_dir, "db", DB, coll)
 
 
 def _index_lines(node, coll, field) -> list:
-    path = _index_file(node, coll, field)
-    if not path:
-        return []
-    with open(path, encoding="utf-8") as fp:
-        content = fp.read()
-    return [line for line in content.split("\n") if line]
+    folder = _index_folder(node, coll)
+    names = sorted(n for n in os.listdir(folder) if n.startswith(f"{coll}-{field}-"))
+    entries = {}
+    for name in [n for n in names if n.endswith(".idx")] + [n for n in names if n.endswith(".idxlog")]:
+        with open(os.path.join(folder, name), encoding="utf-8") as fp:
+            for line in fp.read().split("\n")[:-1]:
+                tokens = line.split(INDEX_TOKEN_SEPARATOR)
+                if name.endswith(".idx"):
+                    entries.setdefault(tokens[0], set()).update(tokens[1:])
+                elif tokens[0] == "+":
+                    entries.setdefault(tokens[1], set()).update(tokens[2:])
+                elif tokens[0] == "-":
+                    entries.get(tokens[1], set()).difference_update(tokens[2:])
+    return sorted(INDEX_TOKEN_SEPARATOR.join([key] + sorted(ids)) for key, ids in entries.items() if ids)
+
+
+def _damage_string_index(node, coll, field, kept: list):
+    folder = _index_folder(node, coll)
+    with open(os.path.join(folder, f"{coll}-{field}-String.idx"), "w", encoding="utf-8") as fp:
+        fp.write("".join(line + "\n" for line in kept))
+    log = os.path.join(folder, f"{coll}-{field}-String.idxlog")
+    if os.path.exists(log):
+        os.remove(log)
 
 
 def test_reindex_rebuilds_the_index_on_every_node():
@@ -647,9 +665,7 @@ def test_reindex_rebuilds_the_index_on_every_node():
           wait_until(lambda: len(_index_lines(victim, "indexed", "email")) == 2, timeout_s=20.0),
           detail=str(_index_lines(victim, "indexed", "email")))
     lines = _index_lines(victim, "indexed", "email")
-    damaged = [line for line in lines if not line.startswith("a@x.io")]
-    with open(_index_file(victim, "indexed", "email"), "w", encoding="utf-8") as fp:
-        fp.write("".join(line + "\n" for line in damaged))
+    _damage_string_index(victim, "indexed", "email", [line for line in lines if not line.startswith("a@x.io")])
     check("node-2's index file lost the a@x.io line", len(_index_lines(victim, "indexed", "email")) == 1)
 
     check_status("REINDEX via node-1", op_with_retry(lambda: op(nodes[1].client_port, {

@@ -56,10 +56,8 @@ public final class AdminUsageHelper {
             if (existingPk != null) {
                 usageEntry.setPage(existingPk.getPage());
                 usageEntry.setPreviousByteSize(existingPk.getLength());
-                final var updateResult = fs.updateFromCollection(usageEntry, existingPk, encodedLine,
+                savedPk = fs.updateFromCollection(usageEntry, existingPk, encodedLine,
                         AdminResidentRows.of(Globals.ADMIN_COLLECTION_USAGE_NAME));
-                savedPk = updateResult.indexEntry();
-                cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
                 AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.UPDATED,
                         List.of(usageEntry));
             } else {
@@ -95,9 +93,7 @@ public final class AdminUsageHelper {
                 if (usage.getLastAccessMillis() < threshold) {
                     usage.setPreviousByteSize(pk.getLength());
                     usage.setPage(pk.getPage());
-                    final var compaction = fs.deleteFromCollection(pk,
-                            AdminResidentRows.of(Globals.ADMIN_COLLECTION_USAGE_NAME));
-                    cache.shiftPkPositionsAfterCompaction(compaction);
+                    fs.deleteFromCollection(pk);
                     cache.removePkIndexCollectionUsage(pk.getValue());
                     memoryManagement.clearCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
                             usage.getIndexKey());

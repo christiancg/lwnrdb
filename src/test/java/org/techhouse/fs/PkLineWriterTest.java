@@ -38,18 +38,11 @@ public class PkLineWriterTest {
     public void linesAreTheFileEntryBytes() throws IOException {
         final var random = new Random(31L);
         for (var round = 0; round < 20_000; round++) {
-            final var position = number(random);
-            final var override = number(random);
-            final var entry = row(random, position);
+            final var entry = row(random, number(random));
             final var out = new ByteArrayOutputStream();
-            final var writer = new PkLineWriter(out);
-            final var digest = writer.write(entry, override);
-            final var expected = new PkIndexEntry("db", "coll", entry.getValue(), override, entry.getLength(),
-                    entry.getPage(), entry.getVersion());
-            assertArrayEquals((expected.toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8),
+            new PkLineWriter(out).write(entry);
+            assertArrayEquals((entry.toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8),
                     out.toByteArray());
-            assertEquals(PkRowDigest.of(expected), digest);
-            assertEquals(position, entry.getPosition());
         }
     }
 
@@ -70,6 +63,17 @@ public class PkLineWriterTest {
     }
 
     @Test
+    public void aDeleteRowIsTheEscapedIdAndADash() throws IOException {
+        final var out = new ByteArrayOutputStream();
+        new PkLineWriter(out).writeDelete("a\u001Fb");
+
+        assertArrayEquals((PkIndexEntry.toDeleteRow("a\u001Fb") + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8),
+                out.toByteArray());
+        final var bytes = out.toByteArray();
+        assertEquals("a\u001Fb", PkIndexEntry.deletedIdOf(bytes, 0, FileLocks.lineEnd(bytes, 0)));
+    }
+
+    @Test
     public void writingAnAsciiRowAllocatesNothingPerRow() throws IOException {
         final List<PkIndexEntry> rows = new ArrayList<>();
         for (var i = 0; i < 50_000; i++) {
@@ -83,7 +87,7 @@ public class PkLineWriterTest {
         final var threadId = Thread.currentThread().threadId();
         final var before = threads.getThreadAllocatedBytes(threadId);
         for (final var entry : rows) {
-            writer.write(entry, entry.getPosition() - 5);
+            writer.write(entry);
         }
         final var allocated = threads.getThreadAllocatedBytes(threadId) - before;
         assertTrue(allocated < 64 * 1024, "writing 50000 rows allocated " + allocated + " bytes");

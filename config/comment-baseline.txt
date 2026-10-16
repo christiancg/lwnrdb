@@ -6,7 +6,7 @@ src/main/java/org/techhouse/cache/AdminCache.java 8
 src/main/java/org/techhouse/cache/AdminPageCache.java 1
 src/main/java/org/techhouse/cache/Cache.java 3
 src/main/java/org/techhouse/cache/DefinitionCache.java 3
-src/main/java/org/techhouse/cache/UserCache.java 6
+src/main/java/org/techhouse/cache/UserCache.java 4
 src/main/java/org/techhouse/cluster/ClusterConnectionHandler.java 8
 src/main/java/org/techhouse/cluster/ClusterCoordinator.java 6
 src/main/java/org/techhouse/cluster/ClusterRouter.java 4
@@ -51,8 +51,6 @@ src/main/java/org/techhouse/fs/DocumentPageStore.java 2
 src/main/java/org/techhouse/fs/FieldIndexLoader.java 3
 src/main/java/org/techhouse/fs/FileLocks.java 3
 src/main/java/org/techhouse/fs/FilePaths.java 4
-src/main/java/org/techhouse/fs/PkCompaction.java 1
-src/main/java/org/techhouse/fs/PkIndexStore.java 1
 src/main/java/org/techhouse/ops/AdminOperationHelper.java 4
 src/main/java/org/techhouse/ops/AggregationOperationHelper.java 1
 src/main/java/org/techhouse/ops/AnalyzeHelper.java 1
@@ -63,7 +61,7 @@ src/main/java/org/techhouse/ops/FilterOperatorHelper.java 10
 src/main/java/org/techhouse/ops/GeoSpatialIndexHelper.java 4
 src/main/java/org/techhouse/ops/OperationProcessor.java 2
 src/main/java/org/techhouse/ops/ReplicatedApplyHelper.java 3
-src/main/java/org/techhouse/ops/SaveOperationHelper.java 8
+src/main/java/org/techhouse/ops/SaveOperationHelper.java 7
 src/main/java/org/techhouse/ops/SchemaOperationHelper.java 1
 src/main/java/org/techhouse/ops/SchemaValidationHelper.java 2
 src/main/java/org/techhouse/ops/TransactionOperationHelper.java 4
@@ -119,7 +117,7 @@ src/test/java/org/techhouse/unit/cache/MemoryManagementTest.java 2
 src/test/java/org/techhouse/unit/cache/UserCacheAdmissionTest.java 3
 src/test/java/org/techhouse/unit/cache/UserCacheEntryTest.java 2
 src/test/java/org/techhouse/unit/cache/UserCacheEvictionTest.java 1
-src/test/java/org/techhouse/unit/cache/UserCacheIndexTest.java 4
+src/test/java/org/techhouse/unit/cache/UserCacheIndexTest.java 2
 src/test/java/org/techhouse/unit/cluster/ClusterConnectionHandlerTest.java 13
 src/test/java/org/techhouse/unit/cluster/ClusterReplicationCoverageTest.java 1
 src/test/java/org/techhouse/unit/cluster/ClusterRouterTest.java 3
@@ -149,8 +147,6 @@ src/test/java/org/techhouse/unit/ejson/internal/JsonStringsTest.java 3
 src/test/java/org/techhouse/unit/ejson/type_adapters/TypeAdapterFactoryTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/impl/JsonCustomTypeAdapterTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/impl/ReflectionTypeAdapterTest.java 4
-src/test/java/org/techhouse/unit/fs/FileSystemFieldIndexTest.java 1
-src/test/java/org/techhouse/unit/fs/FileSystemPkIndexTest.java 2
 src/test/java/org/techhouse/unit/fs/FileSystemReadTest.java 2
 src/test/java/org/techhouse/unit/fs/FileSystemWriteTest.java 1
 src/test/java/org/techhouse/unit/fs/TornCodepointRecoveryTest.java 2

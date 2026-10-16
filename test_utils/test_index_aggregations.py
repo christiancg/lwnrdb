@@ -550,6 +550,56 @@ def wait_for_background():
 DISTINCT_STATUS_STEPS = [{"type": "DISTINCT", "fieldName": "status"}]
 
 
+LOGGED_DOCS = 60
+LOGGED_UPDATES = 500
+LOGGED_JOIN_LEFT = "idx_cons_logged_left"
+
+
+def logged_status(i: int, round_number: int) -> str:
+    return f"logged_{(i * 7 + round_number) % 13}"
+
+
+def probe_index_log_after_many_updates(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": LOGGED_JOIN_LEFT})
+    for value in range(13):
+        save_doc(c, LOGGED_JOIN_LEFT, {"_id": f"left_{value}", "joinKey": f"logged_{value}"})
+    for i in range(LOGGED_DOCS):
+        save_doc(c, CONS_JOIN, {"_id": f"logged_{i}", "joinKey": logged_status(i, 0), "status": "x"})
+    for round_number in range(1, LOGGED_UPDATES + 1):
+        i = round_number % LOGGED_DOCS
+        save_doc(c, CONS_JOIN, {"_id": f"logged_{i}", "joinKey": logged_status(i, round_number), "status": "x"})
+    wait_for_background()
+    bad = []
+    for value in range(13):
+        steps = [bu.filter_step("joinKey", "EQUALS", f"logged_{value}")]
+        if sorted(agg_ids(c, CONS_JOIN, steps)) != sorted(agg_ids(c, CONS_JOIN, forced_scan(steps))):
+            bad.append(f"FILTER logged_{value}")
+    for label, steps, signature in (
+            ("DISTINCT", [{"type": "DISTINCT", "fieldName": "joinKey"}],
+             lambda r: sorted({d.get("joinKey") for d in (r.get("results") or [])})),
+            ("GROUP_BY", [{"type": "GROUP_BY", "fieldName": "joinKey"}],
+             lambda r: sorted((d.get("joinKey"), len(d.get("group") or [])) for d in (r.get("results") or []))),
+    ):
+        if signature(agg(c, CONS_JOIN, steps)) != signature(agg(c, CONS_JOIN, forced_scan(steps))):
+            bad.append(label)
+    join_steps = [{"type": "JOIN", "joinCollection": CONS_JOIN, "localField": "joinKey", "remoteField": "joinKey",
+                   "asField": "joined"}]
+    joined = sorted((row.get("_id"), sorted(d.get("_id") for d in (row.get("joined") or [])))
+                    for row in (agg(c, LOGGED_JOIN_LEFT, join_steps).get("results") or []))
+    expected = sorted((f"left_{value}", sorted(f"logged_{i}" for i in range(LOGGED_DOCS)
+                                               if logged_status(i, last_round(i)) == f"logged_{value}"))
+                      for value in range(13))
+    if [row for row in joined if row[1]] != [row for row in expected if row[1]]:
+        bad.append("JOIN")
+    check(f"after {LOGGED_UPDATES} updates through the field-index log, index-backed answers equal the scan",
+          not bad, detail=f"disagreeing: {bad}")
+
+
+def last_round(i: int) -> int:
+    rounds = [r for r in range(1, LOGGED_UPDATES + 1) if r % LOGGED_DOCS == i]
+    return rounds[-1] if rounds else 0
+
+
 def consistency_suite(c):
     section("Consistency under asynchronous index maintenance (pending-write window)")
     setup_consistency(c)
@@ -568,6 +618,7 @@ def consistency_suite(c):
     probe_concurrent_save_during_create_index(c)
     probe_drop_burst_no_background_errors(c)
     probe_bulk_update_same_page_no_corruption(c)
+    probe_index_log_after_many_updates(c)
     probe_convergence(c)
 
 

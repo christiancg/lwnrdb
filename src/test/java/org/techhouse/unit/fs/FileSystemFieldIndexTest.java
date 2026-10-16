@@ -92,26 +92,12 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_rewrite_index_type_replaces_the_whole_file() throws IOException {
+    public void test_an_index_log_append_that_empties_the_type_deletes_the_file() throws IOException {
         String fieldName = "testField";
-        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "String", List
-                .of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", new HashSet<>(Set.of("id3")))));
+        fs.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, Map.of(Double.class,
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123.0, new HashSet<>(Set.of("a"))))));
 
-        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "String", List
-                .of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", new HashSet<>(Set.of("id1")))));
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
-                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
-
-        assertEquals("value1" + Globals.ID_SEPARATOR + "id1" + Globals.NEWLINE, Files.readString(indexFile.toPath()));
-    }
-
-    @Test
-    public void test_rewrite_index_type_with_no_entries_deletes_the_file() throws IOException {
-        String fieldName = "testField";
-        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number",
-                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123, new HashSet<>(Set.of("a")))));
-
-        fs.rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number", List.of());
+        fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number", List.of(), List.of());
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
@@ -362,7 +348,7 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_update_returns_index_entry_and_compaction() throws IOException {
+    public void test_update_returns_the_appended_index_entry() throws IOException {
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -375,13 +361,10 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
         final var updatedEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         updatedEntry.set_id("1");
 
-        // Updating entry "1" (not the last one) relocates it to the end, so a survivor moves.
         final var result = fs.updateFromCollection(updatedEntry, pk1);
 
-        assertNotNull(result.indexEntry());
-        assertEquals("1", result.indexEntry().getValue());
-        assertNotNull(result.compaction());
-        assertEquals(pk1.getPosition(), result.compaction().removedPosition());
-        assertEquals(pk1.getLength(), result.compaction().removedLength());
+        assertNotNull(result);
+        assertEquals("1", result.getValue());
+        assertTrue(result.getPosition() > pk1.getPosition(), "the new copy is appended, nothing moves");
     }
 }

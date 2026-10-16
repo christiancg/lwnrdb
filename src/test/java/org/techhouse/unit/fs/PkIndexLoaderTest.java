@@ -14,7 +14,7 @@ import org.techhouse.test.TestGlobals;
 public class PkIndexLoaderTest extends FileSystemTestBase {
     @Test
     public void lf_crlf_and_lone_cr_rows_and_empty_lines_all_load() throws Exception {
-        write(row("c", 3) + "\r\n" + row("a", 1) + "\n\n" + row("b", 2) + "\r" + "\r\n" + row("d", 4));
+        write(row("c", 3) + "\r\n" + row("a", 1) + "\n\n" + row("b", 2) + "\r" + "\r\n" + row("d", 4) + "\n");
 
         final var read = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
 
@@ -34,15 +34,16 @@ public class PkIndexLoaderTest extends FileSystemTestBase {
     }
 
     @Test
-    public void a_duplicated_id_keeps_its_last_row_and_the_file_is_healed() throws Exception {
-        write(row("b", 1) + "\n" + row("a", 5) + "\n" + row("b", 2) + "\n" + row("b", 3) + "\n");
+    public void a_duplicated_id_keeps_its_last_row_and_the_log_is_left_as_written() throws Exception {
+        final var content = row("b", 1) + "\n" + row("a", 5) + "\n" + row("b", 2) + "\n" + row("b", 3) + "\n";
+        write(content);
 
         final var read = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
 
         assertEquals(List.of("a", "b"), ids(read));
         assertEquals(3L, read.get(1).getVersion(), "the last occurrence in file order must win");
-        final var healed = Files.readAllLines(pkIndexFile().toPath(), StandardCharsets.UTF_8);
-        assertEquals(List.of(row("a", 5), row("b", 3)), healed);
+        assertEquals(content, Files.readString(pkIndexFile().toPath(), StandardCharsets.UTF_8),
+                "a superseded row is a log entry, not damage, so it is not healed away");
     }
 
     @Test

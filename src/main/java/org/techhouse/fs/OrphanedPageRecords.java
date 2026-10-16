@@ -58,7 +58,7 @@ final class OrphanedPageRecords {
             }
         }
         if (!adoptedIndexEntries.isEmpty()) {
-            pkIndexStore.bulkIndexNewPKValues(dbName, collName, adoptedIndexEntries);
+            pkIndexStore.appendRows(dbName, collName, adoptedIndexEntries);
             logger.warning("Adopted " + adopted.size() + " record(s) of " + dbName + "|" + collName
                     + " that were on a page but missing from its PK index, left by an interrupted write: "
                     + adopted.stream().map(DbEntry::get_id).toList());
@@ -136,7 +136,7 @@ final class OrphanedPageRecords {
                     continue;
                 }
                 final var lineEnd = i + 1;
-                final var text = recordText(tail, lineStart, i);
+                final var text = PageHoles.isHole(tail, lineStart) ? "" : recordText(tail, lineStart, i);
                 if (!text.isEmpty()) {
                     final var record = parseOrphan(page, dbName, collName, pageNumber, text);
                     if (record == null) {

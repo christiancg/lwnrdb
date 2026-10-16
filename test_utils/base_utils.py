@@ -372,26 +372,26 @@ def local_commit_markers(work_dir: str) -> int:
     return total
 
 
+def read_pk_log(pk_path: str) -> list:
+    with open(pk_path, "rb") as fp:
+        lines = fp.read().decode("utf-8", errors="replace").split("\n")
+    return [line.rstrip("\r").split(PK_FIELD_SEPARATOR) for line in lines[:-1]]
+
+
 def read_pk_rows(pk_path: str) -> list:
-    with open(pk_path, "r", encoding="utf-8") as fp:
-        rows = [[fields[0]] + [int(value) for value in fields[1:]]
-                for fields in (line.rstrip("\r\n").split(PK_FIELD_SEPARATOR) for line in fp) if len(fields) == 5]
-    return rows
+    folded = {}
+    for fields in read_pk_log(pk_path):
+        if len(fields) == 2 and fields[1] == "-":
+            folded.pop(fields[0], None)
+        elif len(fields) == 5:
+            folded[fields[0]] = [fields[0]] + [int(value) for value in fields[1:]]
+    return [folded[doc_id] for doc_id in sorted(folded)]
 
 
 def write_pk_rows(pk_path: str, rows: list) -> None:
     with open(pk_path, "w", encoding="utf-8", newline="") as fp:
         for row in sorted(rows, key=lambda r: r[0]):
             fp.write(PK_FIELD_SEPARATOR.join(str(value) for value in row) + "\n")
-
-
-def write_compaction_marker(collection_folder: str, kind: str, db: str, coll: str, row: list, page_bytes: bytes,
-                            target_page: int = -1, target_length_before: int = 0) -> None:
-    doc_id, position, length, page, version = row
-    header = PK_FIELD_SEPARATOR.join(str(value) for value in (
-        kind, db, coll, page, position, len(page_bytes), length, doc_id, version, target_page, target_length_before))
-    with open(os.path.join(collection_folder, f"{coll}-{page}.compacting"), "wb") as fp:
-        fp.write(header.encode("utf-8") + b"\n" + page_bytes[position:])
 
 
 def read_log(log_path: str) -> str:

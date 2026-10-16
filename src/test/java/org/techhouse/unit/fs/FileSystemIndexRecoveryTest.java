@@ -108,9 +108,9 @@ public class FileSystemIndexRecoveryTest extends FileSystemTestBase {
         final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
                 + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
-        Files.writeString(
-                indexFile.toPath(), "\ndup" + Globals.ID_SEPARATOR + "172" + Globals.ID_SEPARATOR + "172"
-                        + Globals.ID_SEPARATOR + "0" + Globals.ID_SEPARATOR + "0",
+        Files.writeString(indexFile.toPath(),
+                "dup" + Globals.ID_SEPARATOR + "172" + Globals.ID_SEPARATOR + "172" + Globals.ID_SEPARATOR + "0"
+                        + Globals.ID_SEPARATOR + "0" + Globals.NEWLINE,
                 StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
 
         final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
@@ -119,8 +119,8 @@ public class FileSystemIndexRecoveryTest extends FileSystemTestBase {
         assertEquals(172L, firstRead.getFirst().getPosition(), "the last occurrence (freshest) must win");
 
         final var diskLines = Files.readAllLines(indexFile.toPath());
-        assertEquals(1, diskLines.stream().filter(l -> !l.isEmpty()).count(),
-                "the duplicate line should have been rewritten away");
+        assertEquals(2, diskLines.stream().filter(l -> !l.isEmpty()).count(),
+                "pk.idx is a log: a superseded row stays until a compaction, it is not a heal");
 
         final var secondRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, secondRead.size());

@@ -17,7 +17,7 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
-import org.techhouse.fs.PkCompaction;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
@@ -32,6 +32,13 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
             .get(org.techhouse.concurrency.ResourceLocking.class);
+
+    public Cache() {
+        final var admins = adminCache;
+        final var users = userCache;
+        fs.onVacuum(vacuumed -> reposition(vacuumed, admins, users));
+    }
+
     @Override
     public UserCache userCache() {
         return userCache;
@@ -67,17 +74,11 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + Globals.HASH_INDEX_KEY_PREFIX + typeLabel;
     }
 
-    public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
-        if (compaction == null) {
-            return;
-        }
-        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())
-                || Globals.ADMIN_PAGES_DB_NAME.equals(compaction.dbName())) {
-            adminCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
-                    compaction.removedPosition(), compaction.removedLength());
+    private static void reposition(VacuumedPage vacuumed, AdminCache admins, UserCache users) {
+        if (Globals.ADMIN_DB_NAME.equals(vacuumed.dbName()) || Globals.ADMIN_PAGES_DB_NAME.equals(vacuumed.dbName())) {
+            admins.repositionAfterVacuum(vacuumed);
         } else {
-            userCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
-                    compaction.removedPosition(), compaction.removedLength());
+            users.repositionAfterVacuum(vacuumed);
         }
     }
 

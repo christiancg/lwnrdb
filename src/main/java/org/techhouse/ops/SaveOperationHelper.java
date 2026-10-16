@@ -21,13 +21,10 @@ import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.PartialBulkSaveException;
-import org.techhouse.ex.PartialBulkUpdateException;
-import org.techhouse.fs.BulkUpdateResult;
 import org.techhouse.fs.FileSystem;
-import org.techhouse.fs.PkCompaction;
+import org.techhouse.fs.PagePlacement;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
-import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -36,7 +33,6 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 
 public final class SaveOperationHelper {
-    private static final Logger logger = Logger.logFor(SaveOperationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     // Not final so tests can substitute a task manager whose workers are never started.
@@ -98,7 +94,8 @@ public final class SaveOperationHelper {
         final long pendingGeneration;
         if (foundIndexEntry >= 0) {
             final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
-            if (wouldOverflowPage(dbName, collName, idxEntry, entry)) {
+            final var placement = placementFor(dbName, collName, idxEntry, encodedLine.length);
+            if (placement == PagePlacement.RELOCATE) {
                 // The grown document no longer fits its page; relocate as delete + insert so page metadata
                 // and field indexes stay correct through the standard background events.
                 return relocateWithListensHeld(dbName, collName, entry, idxEntry, primaryKeyIndex, encodedLine);
@@ -106,10 +103,9 @@ public final class SaveOperationHelper {
             entry.setPage(idxEntry.getPage());
             final var previousLength = idxEntry.getLength();
             pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
-            final var updateResult = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
-                    pendingGeneration, () -> fs.updateFromCollection(entry, idxEntry, encodedLine, primaryKeyIndex));
-            savedPkIndexEntry = updateResult.indexEntry();
-            cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
+            savedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
+                    pendingGeneration,
+                    () -> fs.updateFromCollection(entry, idxEntry, encodedLine, placement, primaryKeyIndex));
             primaryKeyIndex.remove(idxEntry);
             cache.updatePageSizeForUpdateInMemory(dbName, collName, savedPkIndexEntry.getPage(),
                     savedPkIndexEntry.getLength() - previousLength);
@@ -208,28 +204,17 @@ public final class SaveOperationHelper {
         }
         final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
         if (!indexedDbEntriesToUpdate.isEmpty()) {
-            final BulkUpdateResult bulkResult;
+            final List<IndexedDbEntry> bulkUpdated;
             try {
-                bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate, primaryKeyIndex,
+                bulkUpdated = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate, primaryKeyIndex,
                         updated -> linesById.get(updated.get_id()));
-            } catch (PartialBulkUpdateException e) {
-                final var partial = e.getPartialResult();
-                partial.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
-                applyUpdateSizeDeltas(dbName, collName, partial.updated());
-                final var committedUpdates = toDbEntries(partial.updated());
-                publishCommittedWrites(dbName, collName, committedUpdates, List.of(), pendingGeneration);
-                clearUncommitted(dbName, collName, entries, committedUpdates, pendingGeneration);
-                cache.userCache().evictPkIndex(dbName, collName);
-                throw withCommittedPart(e, List.of(), committedUpdates);
             } catch (Exception e) {
                 clearUncommitted(dbName, collName, entries, List.of(), pendingGeneration);
                 cache.userCache().evictPkIndex(dbName, collName);
                 throw e;
             }
-            updatedIndexEntries.addAll(bulkResult.updated());
-            // Fix the in-memory positions of survivors shifted by the batch before replacing the updated ones.
-            bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
-            applyUpdateSizeDeltas(dbName, collName, bulkResult.updated());
+            updatedIndexEntries.addAll(bulkUpdated);
+            applyUpdateSizeDeltas(dbName, collName, bulkUpdated);
             final var updatedIds = idSetOf(updatedIndexEntries);
             primaryKeyIndex.removeIf(pkIndexEntry -> updatedIds.contains(pkIndexEntry.getValue()));
         }
@@ -337,13 +322,14 @@ public final class SaveOperationHelper {
         }
     }
 
-    public static boolean wouldOverflowPage(String dbName, String collName, PkIndexEntry idxEntry, DbEntry entry) {
+    public static PagePlacement placementFor(String dbName, String collName, PkIndexEntry idxEntry, int lineLength) {
         final var pageEntry = cache.getAdminPageEntry(dbName, collName, idxEntry.getPage());
         if (pageEntry == null) {
-            return false;
+            return null;
         }
-        final var projectedPageSize = pageEntry.getPageSize() - idxEntry.getLength() + entry.byteSize();
-        return projectedPageSize > configuration.getMaxPageSize();
+        final var liveAfter = pageEntry.getPageSize() - idxEntry.getLength() + lineLength;
+        return PagePlacement.forUpdate(liveAfter, fs.pageFileLength(dbName, collName, idxEntry.getPage()), lineLength,
+                configuration.getMaxPageSize());
     }
 
     // The caller must already hold the collection write lock.
@@ -357,34 +343,16 @@ public final class SaveOperationHelper {
         final var oldEntry = cache.getById(dbName, collName, idxEntry);
         oldEntry.setPage(idxEntry.getPage());
         oldEntry.setVersion(idxEntry.getVersion());
-        final var compaction = fs.deleteForRelocation(idxEntry, primaryKeyIndex);
-        try {
-            return insertRelocatedCopy(dbName, collName, entry, idxEntry, oldEntry, compaction, primaryKeyIndex,
-                    encodedLine);
-        } finally {
-            fs.endRelocation(idxEntry);
-        }
-    }
-
-    private static PkIndexEntry insertRelocatedCopy(String dbName, String collName, DbEntry entry,
-            PkIndexEntry idxEntry, DbEntry oldEntry, PkCompaction compaction, List<PkIndexEntry> primaryKeyIndex,
-            byte[] encodedLine) throws Exception {
-        cache.shiftPkPositionsAfterCompaction(compaction);
+        final var line = encodedLine != null ? encodedLine : entry.encodeLine();
+        final var targetPage = cache.selectPageForInsert(dbName, collName, line.length);
+        final var deleteGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
+        final var relocatedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName,
+                List.of(entry.get_id()), deleteGeneration,
+                () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex));
         primaryKeyIndex.remove(idxEntry);
         cache.evictEntry(dbName, collName, entry.get_id());
-        final var deleteGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
                 CollectionIncarnation.current(dbName, collName), deleteGeneration));
-
-        final PkIndexEntry relocatedPkIndexEntry;
-        try {
-            entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
-            relocatedPkIndexEntry = fs.insertRelocated(entry, idxEntry,
-                    encodedLine != null ? encodedLine : entry.encodeLine());
-        } catch (Exception e) {
-            restoreAfterFailedRelocation(dbName, collName, oldEntry, idxEntry, primaryKeyIndex);
-            throw e;
-        }
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
                 relocatedPkIndexEntry.getLength());
         int insertAt = Collections.binarySearch(primaryKeyIndex, relocatedPkIndexEntry.getValue());
@@ -406,28 +374,5 @@ public final class SaveOperationHelper {
         copy.setVersion(entry.getVersion());
         copy.setPreviousByteSize(entry.getPreviousByteSize());
         return copy;
-    }
-
-    private static void restoreAfterFailedRelocation(String dbName, String collName, DbEntry oldEntry,
-            PkIndexEntry source, List<PkIndexEntry> primaryKeyIndex) {
-        try {
-            oldEntry.setPage(cache.selectPageForInsert(dbName, collName, oldEntry.byteSize()));
-            final var restored = fs.insertRelocated(oldEntry, source);
-            cache.updatePageSizeInMemory(dbName, collName, restored.getPage(), restored.getLength());
-            var insertAt = Collections.binarySearch(primaryKeyIndex, restored.getValue());
-            if (insertAt < 0) {
-                insertAt = -(insertAt + 1);
-            }
-            primaryKeyIndex.add(insertAt, restored);
-            cache.addEntryToCache(dbName, collName, oldEntry);
-            final var restoreGeneration = pendingIndexWrites.mark(dbName, collName, oldEntry.get_id());
-            taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, oldEntry,
-                    CollectionIncarnation.current(dbName, collName), restoreGeneration));
-        } catch (Exception restoreFailure) {
-            logger.error(
-                    "Relocation of " + oldEntry.get_id() + " in " + dbName + "|" + collName
-                            + " failed and the original could not be restored; run REINDEX on this collection",
-                    restoreFailure);
-        }
     }
 }

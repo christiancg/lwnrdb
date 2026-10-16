@@ -16,9 +16,15 @@ public final class Globals {
     public static final String INDEX_TYPE_ARRAY = "Array";
     public static final String HASH_INDEX_KEY_PREFIX = "#";
     public static final int BUFFER_SIZE = 32768;
+    public static final int PK_LOG_MIN_DEAD_ROWS = 1024;
+    public static final int PAGE_VACUUM_DEAD_DIVISOR = 4;
+    public static final long FIELD_INDEX_LOG_MIN_BYTES = 64 * 1024;
     public static final String DB_FILE_EXTENSION = ".dat";
+    public static final String VACUUM_FILE_EXTENSION = ".vacuum";
     public static final String JSON_FILE_EXTENSION = ".json";
     public static final String INDEX_FILE_EXTENSION = ".idx";
+    public static final String INDEX_LOG_SUFFIX = "log";
+    public static final String INDEX_LOG_FILE_EXTENSION = INDEX_FILE_EXTENSION + INDEX_LOG_SUFFIX;
     public static final String SCHEMA_FILE_NAME = "schema";
     public static final String SCHEMA_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String PROCEDURES_FOLDER = ".procedures";

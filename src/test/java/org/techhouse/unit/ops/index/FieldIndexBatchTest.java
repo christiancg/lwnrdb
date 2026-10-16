@@ -122,28 +122,28 @@ public class FieldIndexBatchTest {
     }
 
     @Test
-    public void eachDirtyTypeIsRewrittenOncePerBatch() throws Exception {
+    public void eachDirtyTypeIsAppendedOncePerBatch() throws Exception {
         final var spied = spyTheBatchFileSystem();
         final var random = new Random(7);
 
         support.applyBatch(FIELD, idsSettingTheirValues(random, 200));
 
         for (final var label : FieldIndexBatchSupport.typeLabels()) {
-            verify(spied, atMost(1)).rewriteIndexType(anyString(), anyString(), eq(FIELD), eq(label), any());
+            verify(spied, atMost(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq(label), any(), any());
         }
-        verify(spied, times(1)).rewriteIndexType(anyString(), anyString(), eq(FIELD), eq("String"), any());
-        verify(spied, times(1)).rewriteIndexType(anyString(), anyString(), eq(FIELD), eq("Number"), any());
+        verify(spied, times(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq("String"), any(), any());
+        verify(spied, times(1)).appendIndexLog(anyString(), anyString(), eq(FIELD), eq("Number"), any(), any());
     }
 
     @Test
-    public void untouchedTypesAreNotRewritten() throws Exception {
+    public void untouchedTypesAreNotAppended() throws Exception {
         support.put("n1", new JsonString("seed"));
         support.applyBatch(FIELD, List.of("n1"));
         final var spied = spyTheBatchFileSystem();
 
         support.applyBatch(FIELD, List.of("n1", "n1"));
 
-        verify(spied, never()).rewriteIndexType(anyString(), anyString(), anyString(), anyString(), any());
+        verify(spied, never()).appendIndexLog(anyString(), anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -151,7 +151,7 @@ public class FieldIndexBatchTest {
         support.put("b1", JsonBoolean.of(true));
         support.put("b2", JsonBoolean.of(false));
         support.applyBatch(FIELD, List.of("b1", "b2"));
-        assertTrue(FieldIndexBatchSupport.indexFile(FIELD, "Boolean").exists());
+        assertTrue(FieldIndexBatchSupport.typeExists(FIELD, "Boolean"));
         support.admitEveryType(FIELD);
         assertNotNull(support.resident(FIELD, Boolean.class));
         support.put("b1", new JsonString("x"));
@@ -159,8 +159,8 @@ public class FieldIndexBatchTest {
 
         support.applyBatch(FIELD, List.of("b1", "b2"));
 
-        assertFalse(FieldIndexBatchSupport.indexFile(FIELD, "Boolean").exists(),
-                "a type the batch emptied must be deleted, never left as an empty file");
+        assertFalse(FieldIndexBatchSupport.typeExists(FIELD, "Boolean"),
+                "a type the batch emptied must be deleted, never left as an empty file or log");
         assertNull(support.resident(FIELD, Boolean.class), "an emptied resident list must not answer as an index");
         assertEquals(Map.of("x", Set.of("b1")), stringIdsOnDisk());
     }
@@ -186,8 +186,8 @@ public class FieldIndexBatchTest {
         assertNotNull(support.resident(FIELD, String.class));
         doc.getData().addProperty(FIELD, "after");
         final var spied = spyTheBatchFileSystem();
-        doThrow(new IOException("disk full")).when(spied).rewriteIndexType(anyString(), anyString(), anyString(),
-                anyString(), any());
+        doThrow(new IOException("disk full")).when(spied).appendIndexLog(anyString(), anyString(), anyString(),
+                anyString(), any(), any());
 
         assertThrows(IOException.class,
                 () -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("f1")));
@@ -233,8 +233,8 @@ public class FieldIndexBatchTest {
         cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, FIELD);
         doc.getData().addProperty(FIELD, "after");
         final var spied = spyTheBatchFileSystem();
-        doThrow(new IOException("disk full")).when(spied).rewriteIndexType(anyString(), anyString(), anyString(),
-                anyString(), any());
+        doThrow(new IOException("disk full")).when(spied).appendIndexLog(anyString(), anyString(), anyString(),
+                anyString(), any(), any());
 
         assertThrows(IOException.class,
                 () -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("w2")));
@@ -271,7 +271,7 @@ public class FieldIndexBatchTest {
         IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("d1"));
 
         for (final var label : FieldIndexBatchSupport.typeLabels()) {
-            assertFalse(FieldIndexBatchSupport.indexFile(FIELD, label).exists(), label);
+            assertFalse(FieldIndexBatchSupport.typeExists(FIELD, label), label);
         }
     }
 
@@ -288,9 +288,9 @@ public class FieldIndexBatchTest {
     }
 
     @Test
-    public void theFaultPointFiresAfterTheFirstTypeFileAndBeforeTheNext() throws Exception {
-        final var numberFile = FieldIndexBatchSupport.indexFile(FIELD, "Number");
-        final var stringFile = FieldIndexBatchSupport.indexFile(FIELD, "String");
+    public void theFaultPointFiresAfterTheFirstTypeLogAndBeforeTheNext() throws Exception {
+        final var numberFile = FieldIndexBatchSupport.logFile(FIELD, "Number");
+        final var stringFile = FieldIndexBatchSupport.logFile(FIELD, "String");
         support.put("n", new JsonNumber(5));
         support.put("s", new JsonString("five"));
         final var faultInjector = IocContainer.get(FaultInjector.class);
@@ -310,7 +310,7 @@ public class FieldIndexBatchTest {
             TestUtils.setPrivateField(faultInjector, "halt", originalHalt);
         }
 
-        assertEquals(List.of(true), observed, "the point sits after the first type file and before the second");
+        assertEquals(List.of(true), observed, "the point sits after the first type's append and before the second");
         assertTrue(stringFile.exists());
     }
 }

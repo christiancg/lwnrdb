@@ -3,6 +3,7 @@ package org.techhouse.fs;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -36,29 +37,39 @@ final class FieldIndexStore {
         writeEntries(paths.indexFile(dbName, collName, fieldName, kind.label()), entries);
     }
 
-    void rewriteIndexType(String dbName, String collName, String fieldName, String typeLabel,
-            List<? extends FieldIndexEntry<?>> entries) throws IOException {
+    boolean appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors) throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
         if (indexFile == null) {
-            return;
+            return false;
         }
+        final var logFile = FilePaths.logFileOf(indexFile);
         final var lock = FileLocks.lockWrite(indexFile);
         try {
-            if (entries.isEmpty()) {
-                if (indexFile.exists()) {
-                    deleteIndexFile(indexFile);
-                }
-                return;
+            if (survivors.isEmpty() || FieldIndexLog.append(indexFile, logFile, changes)) {
+                replaceType(indexFile, logFile, survivors);
+                return true;
             }
-            FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
-                final var lines = new IndexLineWriter(out);
-                for (final var entry : entries) {
-                    lines.write(entry);
-                }
-            });
+            return false;
         } finally {
             lock.unlock();
         }
+    }
+
+    static void replaceType(File indexFile, File logFile, List<? extends FieldIndexEntry<?>> entries)
+            throws IOException {
+        if (entries.isEmpty()) {
+            deleteIndexFile(indexFile);
+            deleteIndexFile(logFile);
+            return;
+        }
+        FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
+            final var lines = new IndexLineWriter(out);
+            for (final var entry : entries) {
+                lines.write(entry);
+            }
+        });
+        Files.deleteIfExists(logFile.toPath());
     }
 
     boolean dropIndex(String dbName, String collName, String fieldName) {
@@ -80,11 +91,13 @@ final class FieldIndexStore {
     }
 
     private static boolean namesOneTypeOfThisField(String fileName, String prefix) {
-        if (!fileName.endsWith(Globals.INDEX_FILE_EXTENSION) || !fileName.startsWith(prefix)) {
+        final var extension = fileName.endsWith(Globals.INDEX_LOG_FILE_EXTENSION)
+                ? Globals.INDEX_LOG_FILE_EXTENSION
+                : Globals.INDEX_FILE_EXTENSION;
+        if (!fileName.endsWith(extension) || !fileName.startsWith(prefix)) {
             return false;
         }
-        final var typeSegment = fileName.substring(prefix.length(),
-                fileName.length() - Globals.INDEX_FILE_EXTENSION.length());
+        final var typeSegment = fileName.substring(prefix.length(), fileName.length() - extension.length());
         return !typeSegment.isEmpty() && typeSegment.indexOf(Globals.INDEX_FILE_NAME_SEPARATOR) < 0;
     }
 
@@ -102,6 +115,7 @@ final class FieldIndexStore {
         final var lock = FileLocks.lockWrite(indexFile);
         try {
             FileLocks.rewriteFileAtomically(indexFile.toPath(), content.toString().getBytes(StandardCharsets.UTF_8));
+            Files.deleteIfExists(FilePaths.logFileOf(indexFile).toPath());
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
@@ -110,7 +124,7 @@ final class FieldIndexStore {
     }
 
     private static void deleteIndexFile(File indexFile) {
-        if (!indexFile.delete()) {
+        if (indexFile.exists() && !indexFile.delete()) {
             logger.warning("Could not delete the now-empty index file " + indexFile.getName()
                     + "; while it exists CONTAINS and NOT_IN decline this field's index until a REINDEX");
         }

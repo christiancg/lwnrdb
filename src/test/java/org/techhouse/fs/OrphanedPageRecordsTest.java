@@ -28,15 +28,15 @@ public class OrphanedPageRecordsTest {
     @TempDir
     File tmp;
 
-    private CompactionFixture f;
+    private StorageFixture f;
 
     @BeforeEach
     public void setUp() throws IOException {
-        f = new CompactionFixture(tmp, DB, COLL);
+        f = new StorageFixture(tmp, DB, COLL);
     }
 
     private static String record(String id) {
-        return CompactionFixture.record(id, id);
+        return StorageFixture.record(id, id);
     }
 
     private void appendRaw(long page, String text) throws IOException {

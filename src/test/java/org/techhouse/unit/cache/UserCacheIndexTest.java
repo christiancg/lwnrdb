@@ -30,6 +30,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -104,7 +105,7 @@ public class UserCacheIndexTest {
     }
 
     @Test
-    public void test_shift_pk_positions_after_compaction() throws NoSuchFieldException, IllegalAccessException {
+    public void test_reposition_after_vacuum() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -117,18 +118,19 @@ public class UserCacheIndexTest {
         TestUtils.getPrivateField(cache, "pkIndexMap", type).put(Cache.getCollectionIdentifier(dbName, collName),
                 new ArrayList<>(List.of(before, removed, after, otherPage)));
 
-        cache.shiftPkPositionsAfterCompaction(dbName, collName, 0, removed.getPosition(), removed.getLength());
+        cache.repositionAfterVacuum(new VacuumedPage(dbName, collName, 0, Map.of("c", new VacuumedPage.Move(20, 10),
+                "d", new VacuumedPage.Move(20, 10), "b", new VacuumedPage.Move(99, 0))));
 
-        assertEquals(0, before.getPosition(), "entry before the removed position is untouched");
-        assertEquals(10, removed.getPosition(), "the entry at the removed position itself is untouched");
-        assertEquals(10, after.getPosition(), "entry after the removed position shifts left by removed length");
-        assertEquals(20, otherPage.getPosition(), "entry on a different page is untouched");
+        assertEquals(0, before.getPosition(), "a row the vacuum did not move is untouched");
+        assertEquals(10, removed.getPosition(), "a move from another position is not this row's");
+        assertEquals(10, after.getPosition(), "a row the vacuum moved takes its new position");
+        assertEquals(20, otherPage.getPosition(), "a row on a different page is untouched");
     }
 
     @Test
-    public void test_shift_pk_positions_after_compaction_uncached_is_noop() {
+    public void test_reposition_after_vacuum_uncached_is_noop() {
         UserCache cache = new UserCache();
-        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction("noDb", "noColl", 0, 0, 10));
+        assertDoesNotThrow(() -> cache.repositionAfterVacuum(new VacuumedPage("noDb", "noColl", 0, Map.of())));
     }
 
     @Test
@@ -437,8 +439,6 @@ public class UserCacheIndexTest {
         verify(fsMock, never()).getByIndexEntries(anyList());
     }
 
-    // getEntriesByIds must pass a detached PkIndexEntry copy to FileSystem so a concurrent
-    // shiftPkPositionsAfterCompaction cannot move the offset between resolution and the read.
     @Test
     public void test_getEntriesByIds_returns_detached_pk_copy() throws Exception {
         UserCache cache = new UserCache();

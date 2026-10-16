@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -16,7 +15,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
 public final class AdminRecordStore<T> {
-    private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
@@ -73,7 +71,7 @@ public final class AdminRecordStore<T> {
                 }
                 entry.setPage(pk.getPage());
                 entry.setPreviousByteSize(pk.getLength());
-                cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk, AdminResidentRows.of(collName)));
+                fs.deleteFromCollection(pk);
                 pkRemove.accept(recordId);
                 entryCountUpdater.apply(Globals.ADMIN_DB_NAME, collName, EventType.DELETED, List.of(entry));
             }

@@ -38,10 +38,11 @@ public final class DeleteOperationHelper {
             final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
             entryToBeDeleted.setPage(idxEntry.getPage());
             final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
-            final var compaction = pendingIndexWrites.writeWhilePending(dbName, collName,
-                    List.of(entryToBeDeleted.get_id()), pendingGeneration,
-                    () -> fs.deleteFromCollection(idxEntry, primaryKeyIndex));
-            cache.shiftPkPositionsAfterCompaction(compaction);
+            pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entryToBeDeleted.get_id()),
+                    pendingGeneration, () -> {
+                        fs.deleteFromCollection(idxEntry);
+                        return null;
+                    });
             primaryKeyIndex.remove(idxEntry);
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
             cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());

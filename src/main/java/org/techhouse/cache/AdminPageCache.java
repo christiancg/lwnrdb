@@ -7,12 +7,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.LongUnaryOperator;
 import java.util.stream.Collectors;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PagePlacement;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -192,23 +194,34 @@ final class AdminPageCache {
     }
 
     long selectPageForInsert(String dbName, String collName, int entryByteSize) {
-        return selectPageForInsert(pageList(dbName, collName), entryByteSize, Map.of());
+        return selectPageForInsert(pageList(dbName, collName), entryByteSize, Map.of(),
+                page -> fs.pageFileLength(dbName, collName, page));
     }
 
     long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
         final var pageEntries = pageList(dbName, collName);
+        final var fileLengthOf = fileLengthsOf(dbName, collName);
         final var pendingPageBytes = new HashMap<Long, Long>();
         final var targets = new long[entryByteSizes.length];
         for (var index = 0; index < entryByteSizes.length; index++) {
             final var size = entryByteSizes[index];
-            targets[index] = selectPageForInsert(pageEntries, size, pendingPageBytes);
+            targets[index] = selectPageForInsert(pageEntries, size, pendingPageBytes, fileLengthOf);
             pendingPageBytes.merge(targets[index], (long) size, Long::sum);
         }
         return targets;
     }
 
+    private LongUnaryOperator fileLengthsOf(String dbName, String collName) {
+        try {
+            final var lengths = fs.pageFileLengths(dbName, collName);
+            return page -> lengths.getOrDefault(page, 0L);
+        } catch (IOException e) {
+            return page -> fs.pageFileLength(dbName, collName, page);
+        }
+    }
+
     private long selectPageForInsert(List<AdminPageEntry> pageEntries, int entryByteSize,
-            Map<Long, Long> pendingPageBytes) {
+            Map<Long, Long> pendingPageBytes, LongUnaryOperator fileLengthOf) {
         final var maxPageBytes = configuration.getMaxPageSize();
         // Without the pending pages, a bulk insert into a fresh collection scatters one entry per page.
         var bestFit = -1L;
@@ -218,8 +231,13 @@ final class AdminPageCache {
             if (page > maxPage) {
                 maxPage = page;
             }
-            final var effectiveSize = entry.getPageSize() + pendingPageBytes.getOrDefault(page, 0L);
-            if (effectiveSize + entryByteSize <= maxPageBytes && (bestFit < 0 || page < bestFit)) {
+            if (bestFit >= 0 && page >= bestFit) {
+                continue;
+            }
+            final var pending = pendingPageBytes.getOrDefault(page, 0L);
+            final var liveBytes = entry.getPageSize() + pending;
+            if (PagePlacement.acceptsInsert(liveBytes, fileLengthOf.applyAsLong(page) + pending, entryByteSize,
+                    maxPageBytes)) {
                 bestFit = page;
             }
         }

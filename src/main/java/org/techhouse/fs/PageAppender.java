@@ -20,10 +20,12 @@ import org.techhouse.utils.OwnerOnlyPermissions;
 final class PageAppender {
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
+    private final PageVacuum vacuum;
 
-    PageAppender(FilePaths paths, PkIndexStore pkIndexStore) {
+    PageAppender(FilePaths paths, PkIndexStore pkIndexStore, PageVacuum vacuum) {
         this.paths = paths;
         this.pkIndexStore = pkIndexStore;
+        this.vacuum = vacuum;
     }
 
     <T extends DbEntry> List<IndexedDbEntry> bulkInsert(String dbName, String collName, List<T> entries,
@@ -39,31 +41,48 @@ final class PageAppender {
                 final var file = paths.collectionPage(dbName, collName, page);
                 OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
                 final var lock = FileLocks.lockWrite(file);
-                try (var out = new BufferedOutputStream(new FileOutputStream(file, true), Globals.BUFFER_SIZE)) {
-                    var currentOffset = file.length();
-                    lengthsBeforeAppend.putIfAbsent(file, currentOffset);
-                    final var separator = separatorBytes(file);
-                    out.write(separator);
-                    currentOffset += separator.length;
-                    for (var entry : groupedEntry.getValue()) {
-                        final var line = encodedLines.apply(entry);
-                        out.write(line);
-                        final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset,
-                                line.length, page, entry.getVersion());
-                        pkEntriesToIndex.add(pkEntry);
-                        indexEntries.add(indexed(dbName, collName, entry, pkEntry));
-                        currentOffset += line.length;
-                    }
+                try {
+                    vacuum.vacuumIfNeeded(dbName, collName, page, appendedBytes(groupedEntry.getValue()), null, null);
+                    lengthsBeforeAppend.putIfAbsent(file, file.length());
+                    appendGroup(dbName, collName, page, file, groupedEntry.getValue(), encodedLines, pkEntriesToIndex,
+                            indexEntries);
                 } finally {
                     lock.unlock();
                 }
             }
-            pkIndexStore.bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
+            pkIndexStore.appendRows(dbName, collName, pkEntriesToIndex);
         } catch (IOException e) {
             rollBackBulkAppends(lengthsBeforeAppend);
             throw e;
         }
         return indexEntries;
+    }
+
+    private static <T extends DbEntry> void appendGroup(String dbName, String collName, long page, File file,
+            List<T> entries, Function<? super T, byte[]> encodedLines, List<PkIndexEntry> pkEntriesToIndex,
+            List<IndexedDbEntry> indexEntries) throws IOException {
+        try (var out = new BufferedOutputStream(new FileOutputStream(file, true), Globals.BUFFER_SIZE)) {
+            final var separator = separatorBytes(file);
+            var currentOffset = file.length() + separator.length;
+            out.write(separator);
+            for (var entry : entries) {
+                final var line = encodedLines.apply(entry);
+                out.write(line);
+                final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, line.length, page,
+                        entry.getVersion());
+                pkEntriesToIndex.add(pkEntry);
+                indexEntries.add(indexed(dbName, collName, entry, pkEntry));
+                currentOffset += line.length;
+            }
+        }
+    }
+
+    private static long appendedBytes(List<? extends DbEntry> entries) {
+        var bytes = 0L;
+        for (final var entry : entries) {
+            bytes += entry.byteSize();
+        }
+        return bytes;
     }
 
     private static IndexedDbEntry indexed(String dbName, String collName, DbEntry entry, PkIndexEntry pkEntry) {
@@ -95,6 +114,7 @@ final class PageAppender {
         final var file = paths.collectionPage(dbName, collName, page);
         final var lock = FileLocks.lockWrite(file);
         try {
+            vacuum.vacuumIfNeeded(dbName, collName, page, line.length, null, null);
             final var totalFileLength = file.length();
             final var separator = separatorBytes(file);
             try {

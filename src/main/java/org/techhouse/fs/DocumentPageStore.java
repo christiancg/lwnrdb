@@ -76,7 +76,7 @@ final class DocumentPageStore {
         var start = 0;
         while (start < bytes.length) {
             final var end = FileLocks.lineEnd(bytes, start);
-            if (end > start && !isBlank(bytes, start, end)) {
+            if (!PageHoles.isSkippable(bytes, start, end)) {
                 try {
                     final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
                     entry.setPage(page);
@@ -90,15 +90,6 @@ final class DocumentPageStore {
             start = FileLocks.nextLineStart(bytes, end);
         }
         return result;
-    }
-
-    private static boolean isBlank(byte[] bytes, int start, int end) {
-        for (var index = start; index < end; index++) {
-            if (bytes[index] != ' ') {
-                return false;
-            }
-        }
-        return true;
     }
 
     Stream<Map<String, DbEntry>> streamPages(String dbName, String collName) throws IOException {

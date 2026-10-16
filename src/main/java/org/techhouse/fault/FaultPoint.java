@@ -7,6 +7,9 @@ public enum FaultPoint {
     ANTI_ENTROPY_SNAPSHOTTED(false),
     PK_INDEX_REPLACED(false),
     INDEX_BATCH_FLUSHED(false),
+    PAGE_COPY_APPENDED(false),
+    PK_ROW_COMMITTED(false),
+    PAGE_VACUUM_RENAMED(false),
     PEER_REPLY(true);
     // @formatter:on
 

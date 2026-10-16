@@ -16,6 +16,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.TxSession;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -180,10 +181,19 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
         assertFalse(Tx2pcLog.isPrepared(dtxId));
     }
 
-    private void occupySessionsSingleThread(String sessionId, CountDownLatch releaseWork) {
+    private TxSession occupySessionsSingleThread(String sessionId, CountDownLatch releaseWork) {
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var session = clientTracker.registerTxSession(sessionId, "test-user", null);
         session.submit(() -> releaseWork.await(10, TimeUnit.SECONDS));
+        return session;
+    }
+
+    private static void releaseAndDrain(TxSession session, String sessionId, CountDownLatch releaseWork) {
+        releaseWork.countDown();
+        try (var executor = session.executor()) {
+            executor.shutdown();
+        }
+        IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
     }
 
     @Test
@@ -191,7 +201,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_ACK_TIMEOUT_MS);
         final var sessionId = UUID.randomUUID().toString();
         final var releaseWork = new CountDownLatch(1);
-        occupySessionsSingleThread(sessionId, releaseWork);
+        final var session = occupySessionsSingleThread(sessionId, releaseWork);
         try {
             final var message = envelope(ClusterMessageType.FORWARD_TX_REQUEST);
             message.setTxSessionId(sessionId);
@@ -206,8 +216,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
                     "a session whose executor is still busy must not block the handler forever");
             assertTrue(elapsed < SHORT_ACK_TIMEOUT_MS + 3000L, "the handler must give up within its own ack budget");
         } finally {
-            releaseWork.countDown();
-            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+            releaseAndDrain(session, sessionId, releaseWork);
         }
     }
 
@@ -216,7 +225,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_ACK_TIMEOUT_MS);
         final var sessionId = UUID.randomUUID().toString();
         final var releaseWork = new CountDownLatch(1);
-        occupySessionsSingleThread(sessionId, releaseWork);
+        final var session = occupySessionsSingleThread(sessionId, releaseWork);
         try {
             final var message = envelope(ClusterMessageType.PREPARE_TX);
             message.setTxSessionId(sessionId);
@@ -230,8 +239,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
                     "a participant whose session cannot answer in time must vote no rather than block the lane");
             assertTrue(elapsed < SHORT_ACK_TIMEOUT_MS + 3000L, "the handler must give up within its own ack budget");
         } finally {
-            releaseWork.countDown();
-            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+            releaseAndDrain(session, sessionId, releaseWork);
         }
     }
 
@@ -241,7 +249,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_ACK_TIMEOUT_MS);
         final var sessionId = UUID.randomUUID().toString();
         final var releaseWork = new CountDownLatch(1);
-        occupySessionsSingleThread(sessionId, releaseWork);
+        final var session = occupySessionsSingleThread(sessionId, releaseWork);
         try {
             final var message = txResolutionRequest(ClusterMessageType.COMMIT_TX, UUID.randomUUID().toString());
             message.setTxSessionId(sessionId);
@@ -254,8 +262,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
                     "a transaction this node holds no record of is already resolved here, whatever the session does");
             assertTrue(elapsed < SHORT_ACK_TIMEOUT_MS + 3000L, "the handler must give up within its own ack budget");
         } finally {
-            releaseWork.countDown();
-            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+            releaseAndDrain(session, sessionId, releaseWork);
         }
     }
 
@@ -269,7 +276,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", ACK_TIMEOUT_MS);
         final var sessionId = UUID.randomUUID().toString();
         final var releaseWork = new CountDownLatch(1);
-        occupySessionsSingleThread(sessionId, releaseWork);
+        final var session = occupySessionsSingleThread(sessionId, releaseWork);
         final var blockedDone = new CountDownLatch(1);
         final Thread blocked;
         try {
@@ -298,8 +305,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
             assertEquals(1L, blockedDone.getCount(),
                     "the forwarded tx request must still be blocked, or this proved nothing");
         } finally {
-            releaseWork.countDown();
-            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+            releaseAndDrain(session, sessionId, releaseWork);
         }
         assertTrue(blockedDone.await(30, TimeUnit.SECONDS));
         blocked.join();
@@ -310,7 +316,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", ACK_TIMEOUT_MS);
         final var sessionId = UUID.randomUUID().toString();
         final var releaseWork = new CountDownLatch(1);
-        occupySessionsSingleThread(sessionId, releaseWork);
+        final var session = occupySessionsSingleThread(sessionId, releaseWork);
         final var blockedDone = new CountDownLatch(1);
         final Thread blocked;
         try {
@@ -338,8 +344,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
             assertEquals(1L, blockedDone.getCount(),
                     "the forwarded tx request must still be blocked, or this proved nothing");
         } finally {
-            releaseWork.countDown();
-            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+            releaseAndDrain(session, sessionId, releaseWork);
         }
         assertTrue(blockedDone.await(30, TimeUnit.SECONDS));
         blocked.join();

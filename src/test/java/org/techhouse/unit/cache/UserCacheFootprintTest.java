@@ -319,8 +319,8 @@ public class UserCacheFootprintTest {
         TestUtils.createTestDatabaseAndCollection();
         final var userCache = IocContainer.get(UserCache.class);
         final var locks = IocContainer.get(ResourceLocking.class);
-        IocContainer.get(FileSystem.class).rewriteIndexType(TestGlobals.DB, TestGlobals.COLL, FIELD, "String",
-                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "v", new HashSet<>(Set.of("a")))));
+        IocContainer.get(FileSystem.class).writeIndexFile(TestGlobals.DB, TestGlobals.COLL, FIELD, Map.of(String.class,
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "v", new HashSet<>(Set.of("a"))))));
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
         try {
             userCache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);

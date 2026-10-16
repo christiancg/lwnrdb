@@ -25,6 +25,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.AdminStamp;
@@ -157,16 +158,10 @@ public class AdminCache {
         return pageCache.getAdminPagePkIndexes(dbName, collName);
     }
 
-    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
-            long removedLength) {
-        final Collection<PkIndexEntry> entries = Globals.ADMIN_DB_NAME.equals(dbName)
-                ? adminCollectionPkIndex(collName)
-                : pageCache.pkIndexesForPagesCollection(collName);
-        for (final var entry : entries) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
-        }
+    public void repositionAfterVacuum(VacuumedPage vacuumed) {
+        vacuumed.reposition(Globals.ADMIN_DB_NAME.equals(vacuumed.dbName())
+                ? adminCollectionPkIndex(vacuumed.collName())
+                : pageCache.pkIndexesForPagesCollection(vacuumed.collName()));
     }
 
     private Collection<PkIndexEntry> adminCollectionPkIndex(String collName) {

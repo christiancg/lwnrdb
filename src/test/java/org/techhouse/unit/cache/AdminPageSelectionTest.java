@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
@@ -141,5 +142,35 @@ public class AdminPageSelectionTest {
 
         assertNull(failure.get(), "page selection must tolerate a concurrent page being added");
         assertEquals(400, cache.getAdminPageEntries(TestGlobals.DB, COLL).size());
+    }
+
+    private static void firstPageFileOfLength(long length) throws IOException {
+        final var folder = new java.io.File(
+                TestGlobals.PATH + java.io.File.separator + TestGlobals.DB + java.io.File.separator + COLL);
+        assertTrue(folder.isDirectory() || folder.mkdirs());
+        try (var file = new java.io.RandomAccessFile(
+                new java.io.File(folder, COLL + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION), "rw")) {
+            file.setLength(length);
+        }
+    }
+
+    @Test
+    public void test_a_page_whose_file_is_full_is_skipped_unless_a_vacuum_frees_a_quarter() throws IOException {
+        page(0, maxPageSize() * 3 / 4 + 1);
+        firstPageFileOfLength(maxPageSize());
+
+        assertEquals(1L, cache.selectPageForInsert(TestGlobals.DB, COLL, 100),
+                "live room alone is not enough while the file is full and too little of it is dead");
+        assertEquals(1L, cache.selectPagesForInsert(TestGlobals.DB, COLL, new int[]{100})[0]);
+    }
+
+    @Test
+    public void test_a_page_whose_file_is_full_of_dead_bytes_is_still_chosen() throws IOException {
+        page(0, maxPageSize() / 2);
+        firstPageFileOfLength(maxPageSize());
+
+        assertEquals(0L, cache.selectPageForInsert(TestGlobals.DB, COLL, 100),
+                "the appender vacuums a page that is a quarter dead before appending to it");
+        assertEquals(0L, cache.selectPagesForInsert(TestGlobals.DB, COLL, new int[]{100})[0]);
     }
 }

@@ -2,10 +2,7 @@ package org.techhouse.unit.ops.index;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -149,6 +146,15 @@ final class FieldIndexBatchSupport {
                 + fieldName + "-" + typeLabel + Globals.INDEX_FILE_EXTENSION);
     }
 
+    static File logFile(String fieldName, String typeLabel) {
+        return new File(TestGlobals.PATH + File.separator + DB + File.separator + COLL + File.separator + COLL + "-"
+                + fieldName + "-" + typeLabel + Globals.INDEX_LOG_FILE_EXTENSION);
+    }
+
+    static boolean typeExists(String fieldName, String typeLabel) {
+        return indexFile(fieldName, typeLabel).exists() || logFile(fieldName, typeLabel).exists();
+    }
+
     static List<String> typeLabels() {
         final var labels = new ArrayList<String>();
         for (final var type : IndexKind.scalarIndexClasses()) {
@@ -162,21 +168,34 @@ final class FieldIndexBatchSupport {
 
     static Map<String, Set<String>> snapshot(String fieldName) throws IOException {
         final var byType = new TreeMap<String, Set<String>>();
-        for (final var label : typeLabels()) {
-            final var file = indexFile(fieldName, label);
-            if (!file.exists()) {
-                continue;
-            }
+        for (final var type : loadedTypes(fieldName).entrySet()) {
             final var lines = new TreeSet<String>();
-            for (final var line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
-                final var tokens = line.split(Globals.ID_SEPARATOR, -1);
-                final var ids = Arrays.copyOfRange(tokens, 1, tokens.length);
-                Arrays.sort(ids);
-                lines.add(tokens[0] + " => " + String.join(",", ids));
+            for (final var entry : type.getValue()) {
+                final var ids = new ArrayList<>(entry.getIds());
+                ids.sort(null);
+                lines.add(FieldIndexEntry.fileKeyOf(entry.getValue()) + " => " + String.join(",", ids));
             }
-            byType.put(label, lines);
+            byType.put(type.getKey(), lines);
         }
         return byType;
+    }
+
+    private static Map<String, List<? extends FieldIndexEntry<?>>> loadedTypes(String fieldName) throws IOException {
+        final var fs = IocContainer.get(FileSystem.class);
+        final var loaded = new TreeMap<String, List<? extends FieldIndexEntry<?>>>();
+        for (final var type : IndexKind.scalarIndexClasses()) {
+            final var entries = fs.readWholeFieldIndexFiles(DB, COLL, fieldName, type);
+            if (entries != null) {
+                loaded.put(IndexKind.fileLabel(type), entries);
+            }
+        }
+        for (final var kind : IndexKind.HASH_KINDS) {
+            final var entries = fs.readWholeHashIndexFile(DB, COLL, fieldName, kind);
+            if (entries != null) {
+                loaded.put(kind.label(), entries);
+            }
+        }
+        return loaded;
     }
 
     String lookupMismatch(String fieldName, int pool) throws IOException {
@@ -208,16 +227,11 @@ final class FieldIndexBatchSupport {
             identifiers.put(kind.label(), Cache.getHashIndexIdentifier(fieldName, kind.label()));
         }
         final var placements = new TreeMap<String, Set<String>>();
-        for (final var label : identifiers.entrySet()) {
-            final var file = indexFile(fieldName, label.getKey());
-            if (!file.exists()) {
-                continue;
-            }
-            for (final var line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
-                final var tokens = line.split(Globals.ID_SEPARATOR, -1);
-                for (var i = 1; i < tokens.length; i++) {
-                    placements.computeIfAbsent(FieldIndexEntry.unescapeIndexToken(tokens[i]), _ -> new TreeSet<>())
-                            .add(label.getValue() + "=" + tokens[0]);
+        for (final var type : loadedTypes(fieldName).entrySet()) {
+            for (final var entry : type.getValue()) {
+                for (final var id : entry.getIds()) {
+                    placements.computeIfAbsent(id, _ -> new TreeSet<>())
+                            .add(identifiers.get(type.getKey()) + "=" + FieldIndexEntry.fileKeyOf(entry.getValue()));
                 }
             }
         }
