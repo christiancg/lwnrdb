@@ -86,18 +86,17 @@ public final class TriggerDispatcher {
             DefinerAuthority.disableTrigger(event.getDbName(), event.getCollName(), trigger, refusal);
             return;
         }
-        final var permit = admission.acquireSlices(definer, event.getDbName());
-        if (permit == null) {
-            deferForAdmission(event);
-            return;
-        }
-        try (permit) {
-            runOnCurrentEntries(event, trigger, procedure, definer);
+        switch (admission.acquireSlices(definer, event.getDbName())) {
+            case ScriptAdmission.Refusal limited -> deferForAdmission(event, limited.scope());
+            case ScriptAdmission.Permit permit -> {
+                try (permit) {
+                    runOnCurrentEntries(event, trigger, procedure, definer);
+                }
+            }
         }
     }
 
-    private static void deferForAdmission(TriggerEvent event) {
-        final var scope = admission.lastRefusalScope();
+    private static void deferForAdmission(TriggerEvent event, String scope) {
         if (withinClusterRetryWindow(event)) {
             final var delay = Math.max(1L, backoffFor(event.getAttempt()));
             triggerExecutor.submitAfter(event.retry(event.getAttempt()), delay);

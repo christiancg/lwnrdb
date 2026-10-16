@@ -3,7 +3,6 @@ package org.techhouse.listen;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
-import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -84,7 +83,7 @@ public class ListenProcessorThread implements Runnable {
         try {
             results = AggregationOperationHelper.processAggregation(registration.request(),
                     configuration.longValue(ConfigKey.LISTEN_RERUN_TIMEOUT_MS));
-        } catch (AggregateDeadline.Expired | AggregateLimitException refused) {
+        } catch (AggregateLimitException refused) {
             logger.warning("Listen " + listenId + " was not re-run: " + refused.getMessage());
             return null;
         } catch (Exception e) {

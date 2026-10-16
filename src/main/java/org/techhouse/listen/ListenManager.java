@@ -2,7 +2,6 @@ package org.techhouse.listen;
 
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -21,7 +20,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
-public class ListenManager {
+public class ListenManager implements DirtySink {
     public static final String COLLECTION_DROPPED = "a collection it reads was dropped";
     public static final String DATABASE_DROPPED = "the database it reads was dropped";
     public static final String ACCESS_REVOKED = "the listening user can no longer read it";
@@ -37,9 +36,6 @@ public class ListenManager {
     private final Map<String, Set<UUID>> collectionToListens = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
-    private final ThreadLocal<Set<String>> deferred = new ThreadLocal<>();
-    private final ThreadLocal<Integer> deferralDepth = ThreadLocal.withInitial(() -> 0);
-    private final ThreadLocal<Set<String>> applyingKeys = new ThreadLocal<>();
     private final ApplyTracker applyTracker = new ApplyTracker();
     private final Set<UUID> heldBack = ConcurrentHashMap.newKeySet();
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
@@ -186,8 +182,7 @@ public class ListenManager {
     }
 
     public void endAllForCollection(String dbName, String collName, String reason) {
-        final var key = dbName + "|" + collName;
-        final var listenIds = collectionToListens.get(key);
+        final var listenIds = collectionToListens.get(keyOf(dbName, collName));
         if (listenIds == null || listenIds.isEmpty()) {
             return;
         }
@@ -209,45 +204,20 @@ public class ListenManager {
         }
     }
 
-    public void deferNotifications() {
-        deferNotifications(List.of());
+    public NotificationBatch openBatch(Collection<String> collectionKeys) {
+        return NotificationBatch.open(this, collectionKeys);
     }
 
-    public void deferNotifications(Collection<String> collectionKeys) {
-        if (deferralDepth.get() == 0) {
-            deferred.set(new LinkedHashSet<>());
-            applyingKeys.set(new LinkedHashSet<>());
-        }
-        deferralDepth.set(deferralDepth.get() + 1);
-        final var newlyApplying = new LinkedHashSet<>(collectionKeys);
-        newlyApplying.removeAll(applyingKeys.get());
-        applyingKeys.get().addAll(newlyApplying);
-        applyTracker.begin(newlyApplying);
+    public NotificationBatch openBatch(DirtySink outer, Collection<String> collectionKeys) {
+        return outer instanceof NotificationBatch batch ? batch.nest(collectionKeys) : openBatch(collectionKeys);
     }
 
-    public void flushDeferredNotifications() {
-        final var depth = deferralDepth.get();
-        if (depth == 0) {
-            return;
-        }
-        if (depth > 1) {
-            deferralDepth.set(depth - 1);
-            return;
-        }
-        deferralDepth.remove();
-        final var pending = deferred.get();
-        deferred.remove();
-        final var applied = applyingKeys.get();
-        applyingKeys.remove();
-        if (applied != null) {
-            applyTracker.end(applied);
-        }
-        if (pending != null) {
-            for (final var key : pending) {
-                enqueueDirty(key);
-            }
-        }
-        releaseHeldBack();
+    void beginApply(Collection<String> collectionKeys) {
+        applyTracker.begin(collectionKeys);
+    }
+
+    void endApply(Collection<String> collectionKeys) {
+        applyTracker.end(collectionKeys);
     }
 
     ApplyTracker.ApplySnapshot applySnapshot(Set<String> collectionKeys) {
@@ -265,7 +235,7 @@ public class ListenManager {
         }
     }
 
-    private void releaseHeldBack() {
+    void releaseHeldBack() {
         for (final var listenId : List.copyOf(heldBack)) {
             if (heldBack.remove(listenId)) {
                 enqueue(listenId);
@@ -273,17 +243,16 @@ public class ListenManager {
         }
     }
 
+    @Override
     public void markDirty(String dbName, String collName) {
-        final var key = dbName + "|" + collName;
-        final var pending = deferred.get();
-        if (pending != null) {
-            pending.add(key);
-            return;
-        }
-        enqueueDirty(key);
+        enqueueDirty(keyOf(dbName, collName));
     }
 
-    private void enqueueDirty(String key) {
+    static String keyOf(String dbName, String collName) {
+        return dbName + "|" + collName;
+    }
+
+    void enqueueDirty(String key) {
         final var listenIds = collectionToListens.get(key);
         if (listenIds == null || listenIds.isEmpty()) {
             return;

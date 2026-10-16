@@ -45,15 +45,14 @@ public final class PromiseBuiltins {
 
     public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker, Intrinsics intrinsics) {
         final var ctx = new Ctx(eventLoop, invoker, intrinsics);
-        final var promise = new JsNativeFunction("Promise", (thisArg, args) -> {
-            final var newTarget = JsNativeFunction.currentNewTarget();
-            if ((newTarget == null || newTarget instanceof JsUndefined) && !(thisArg instanceof JsObject)) {
+        final var promise = new JsNativeFunction("Promise", (thisArg, args, newTarget) -> {
+            if (!NewTargetSupport.isConstructCall(newTarget) && !(thisArg instanceof JsObject)) {
                 throw new TypeErrorException("Constructor Promise requires 'new'");
             }
             if (!isCallable(arg(args, 0))) {
                 throw new TypeErrorException("Promise resolver is not a function");
             }
-            if (newTarget != null && !(newTarget instanceof JsUndefined)) {
+            if (NewTargetSupport.isConstructCall(newTarget)) {
                 ctx.ops().getMember(newTarget, new JsString("prototype"));
             }
             return construct(ctx, args);

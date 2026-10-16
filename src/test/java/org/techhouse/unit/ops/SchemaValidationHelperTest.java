@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -280,15 +279,27 @@ public class SchemaValidationHelperTest {
     }
 
     @Test
-    public void test_another_thread_validates_the_same_request_in_full() throws Exception {
+    public void aRequestReparsedFromJsonIsValidatedInFull() {
         installSchema();
         final var document = doc("Alice");
         final var request = save(document);
         assertNull(SchemaValidationHelper.check(request));
         document.remove("name");
-        final var other = new AtomicReference<>();
-        final var thread = Thread.ofVirtual().start(() -> other.set(SchemaValidationHelper.check(request)));
-        thread.join();
-        assertNotNull(other.get());
+
+        final var forwarded = eJson.fromJson(eJson.toJson(request), SaveRequest.class);
+
+        assertNull(forwarded.getSchemaCheck());
+        assertNotNull(SchemaValidationHelper.check(forwarded), "the memo is node-local and never crosses a forward");
+    }
+
+    @Test
+    public void aClientSuppliedSchemaCheckIsIgnored() {
+        installSchema();
+        final var parsed = eJson.fromJson("{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"object\":{},"
+                + "\"schemaCheck\":{\"payload\":{},\"schema\":{},\"budget\":null}}", SaveRequest.class);
+
+        assertNull(parsed.getSchemaCheck());
+        assertNotNull(SchemaValidationHelper.check(parsed));
     }
 }

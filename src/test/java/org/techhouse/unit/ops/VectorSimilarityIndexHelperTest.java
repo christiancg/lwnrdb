@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -25,7 +26,7 @@ public class VectorSimilarityIndexHelperTest {
     public void test_non_nearest_operator_is_not_index_accelerable() throws Exception {
         final var op = new CustomOperator("mystery", "embedding", null, new JsonObject());
 
-        assertNull(VectorSimilarityIndexHelper.candidateIds(op, "db", "coll"));
+        assertNull(VectorSimilarityIndexHelper.candidateIds(op, "db", "coll", ReadObserver.NONE));
     }
 
     @Test
@@ -37,7 +38,7 @@ public class VectorSimilarityIndexHelperTest {
         args.add("exact", JsonBoolean.of(true));
         final var op = new CustomOperator("nearest", "embedding", query, args);
 
-        assertNull(VectorSimilarityIndexHelper.candidateIds(op, "db", "coll"));
+        assertNull(VectorSimilarityIndexHelper.candidateIds(op, "db", "coll", ReadObserver.NONE));
     }
 
     private static void seedVectorIndex() throws Exception {
@@ -71,7 +72,8 @@ public class VectorSimilarityIndexHelperTest {
         try {
             final var operator = nearest();
             IndexRaceSupport.readWhileTheIndexerChurns(TestGlobals.DB, TestGlobals.COLL, "embedding", JsonVector.class,
-                    () -> VectorSimilarityIndexHelper.candidateIds(operator, TestGlobals.DB, TestGlobals.COLL));
+                    () -> VectorSimilarityIndexHelper.candidateIds(operator, TestGlobals.DB, TestGlobals.COLL,
+                            ReadObserver.NONE));
         } finally {
             TestUtils.standardTearDown();
         }
@@ -99,7 +101,7 @@ public class VectorSimilarityIndexHelperTest {
         final var query = new JsonVector("#vector(0.5,1.0)");
         final var args = new JsonObject();
         args.add("value", query);
-        args.add("k", new JsonNumber(Integer.MAX_VALUE / 10));
+        args.add("k", new JsonNumber(214_748_364.0));
         args.add("exact", JsonBoolean.of(false));
         return new CustomOperator("nearest", "embedding", query, args);
     }
@@ -110,7 +112,8 @@ public class VectorSimilarityIndexHelperTest {
         try {
             final var operator = nearestAtTheValidatorCeiling();
 
-            final var candidates = VectorSimilarityIndexHelper.candidateIds(operator, TestGlobals.DB, TestGlobals.COLL);
+            final var candidates = VectorSimilarityIndexHelper.candidateIds(operator, TestGlobals.DB, TestGlobals.COLL,
+                    ReadObserver.NONE);
 
             assertNotNull(candidates);
             assertEquals(LARGE_COLLECTION_SIZE, candidates.size(),

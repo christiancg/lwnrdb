@@ -26,6 +26,7 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ProcedureBindingGuard;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
@@ -178,7 +179,8 @@ public class ProcedureBindingGuardTest {
         bindTrigger("audit", BOUND, TriggerDefinition.TIMING_AFTER, "carol");
         final var delete = new DeleteUserRequest();
         delete.setUsername("carol");
-        assertEquals(OperationStatus.OK, UserOperationHelper.processDeleteUser(delete).getStatus());
+        assertEquals(OperationStatus.OK,
+                UserOperationHelper.processDeleteUser(delete, new RestampedRecords()).getStatus());
         assertNull(cache.getAdminUserEntry("carol"));
 
         assertEquals(REFUSAL, refusal(BOUND, INTRUDER).getErrorCode());

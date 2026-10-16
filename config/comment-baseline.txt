@@ -1,6 +1,5 @@
 src/main/java/org/techhouse/Main.java 3
 src/main/java/org/techhouse/ShutdownCoordinator.java 2
-src/main/java/org/techhouse/analyze/AnalyzeContext.java 1
 src/main/java/org/techhouse/bckg_ops/PendingIndexWrites.java 1
 src/main/java/org/techhouse/cache/AdminCache.java 8
 src/main/java/org/techhouse/cache/AdminPageCache.java 1
@@ -276,7 +275,6 @@ src/test/java/org/techhouse/unit/simplejs/internal/AsyncFromSyncIterationTest.ja
 src/test/java/org/techhouse/unit/simplejs/internal/AsyncIterationProgramTest.java 7
 src/test/java/org/techhouse/unit/simplejs/internal/AsyncIteratorHelperTest.java 1
 src/test/java/org/techhouse/unit/simplejs/internal/AwaitYieldContextTest.java 4
-src/test/java/org/techhouse/unit/simplejs/internal/CallStackTest.java 2
 src/test/java/org/techhouse/unit/simplejs/internal/CollectionAndIteratorProgramTest.java 1
 src/test/java/org/techhouse/unit/simplejs/internal/DbTransactionProgramTest.java 4
 src/test/java/org/techhouse/unit/simplejs/internal/EnvironmentTest.java 2

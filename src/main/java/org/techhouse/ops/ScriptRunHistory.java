@@ -95,6 +95,7 @@ public class ScriptRunHistory {
             final var request = new SaveRequest(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME);
             request.setObject(document);
             request.set_id(runRecord.runId());
+            request.setBackgroundFollowOn(true);
             final var response = dispatch(request, runRecord.username());
             if (response.getStatus() != OperationStatus.OK) {
                 dropped.increment();

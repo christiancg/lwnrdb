@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -34,7 +35,7 @@ public class PrimaryKeyIndexResolverTest extends FilterResolutionSupport {
 
     private Set<String> resolve(FieldOperatorType type, JsonBaseElement operand) throws IOException {
         return PrimaryKeyIndexResolver.resolve(new FieldOperator(type, Globals.PK_FIELD, operand), TestGlobals.DB,
-                TestGlobals.COLL);
+                TestGlobals.COLL, ReadObserver.NONE);
     }
 
     private static Stream<Arguments> resolvedOperands() {

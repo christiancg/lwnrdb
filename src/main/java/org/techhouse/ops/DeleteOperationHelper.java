@@ -10,6 +10,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.DirtySink;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.DeleteRequest;
@@ -28,6 +29,10 @@ public final class DeleteOperationHelper {
 
     // The caller must already hold the collection write lock.
     public static OperationResponse executeDelete(DeleteRequest deleteRequest) throws Exception {
+        return executeDelete(deleteRequest, listenManager);
+    }
+
+    public static OperationResponse executeDelete(DeleteRequest deleteRequest, DirtySink sink) throws Exception {
         final var dbName = deleteRequest.getDatabaseName();
         final var collName = deleteRequest.getCollectionName();
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
@@ -48,7 +53,7 @@ public final class DeleteOperationHelper {
             cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,
                     CollectionIncarnation.current(dbName, collName), pendingGeneration));
-            listenManager.markDirty(dbName, collName);
+            sink.markDirty(dbName, collName);
             CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");
         } else {

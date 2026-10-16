@@ -30,6 +30,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
@@ -80,8 +81,8 @@ public class CreateNameRaceTest {
     }
 
     private static OperationResponse dropCollection() {
-        return CollectionOperationHelper
-                .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL));
+        return CollectionOperationHelper.processDropCollectionOperation(
+                new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL), new RestampedRecords());
     }
 
     private static OperationResponse createCollection(String collName) {
@@ -196,8 +197,8 @@ public class CreateNameRaceTest {
 
     @Test
     public void test_a_drop_of_an_unregistered_collection_releases_the_names_lock() throws Exception {
-        final var response = CollectionOperationHelper
-                .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, "neverCreated"));
+        final var response = CollectionOperationHelper.processDropCollectionOperation(
+                new DropCollectionRequest(TestGlobals.DB, "neverCreated"), new RestampedRecords());
 
         assertEquals(ErrorCode.ERROR_DROPPING_COLLECTION.getCode(), response.getErrorCode());
         assertTrue(namesLockFreeElsewhere());

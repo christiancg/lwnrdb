@@ -13,13 +13,13 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.GrantPruner;
+import org.techhouse.ops.admin.GrantRewrite;
 import org.techhouse.ops.admin.LeftoverFolders;
 import org.techhouse.ops.req.validations.NameValidations;
 
@@ -164,13 +164,13 @@ final class CollectionRecordApplier {
             return true;
         }
         if (live) {
-            return CollectionOperationHelper.dropCollection(dbName, collName, true, RewriteVersion.KEEP)
+            return CollectionOperationHelper.dropCollection(dbName, collName, true, GrantRewrite.KEEP)
                     .getStatus() == OperationStatus.OK;
         }
         if (!quarantine.dropCollection(dbName, collName, clusterConfig.replicationAckTimeoutMs())) {
             return false;
         }
-        GrantPruner.forDroppedCollection(dbName, collName, RewriteVersion.KEEP);
+        GrantPruner.forDroppedCollection(dbName, collName, GrantRewrite.KEEP);
         return true;
     }
 

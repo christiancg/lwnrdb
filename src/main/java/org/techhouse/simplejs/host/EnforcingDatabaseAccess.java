@@ -44,8 +44,8 @@ import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
+import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.exceptions.JsThrowException;
-import org.techhouse.simplejs.values.JsObject;
 
 public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
@@ -61,7 +61,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private final UUID clientId;
     private final String scopedDatabase;
     private final int triggerDepth;
-    private JsObject errorPrototype;
+    private Intrinsics intrinsics;
     private UUID sessionClientId;
     private Thread sessionThread;
     private volatile boolean lastCommitFenced;
@@ -404,11 +404,13 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     }
 
     @Override
-    public void useErrorPrototype(JsObject prototype) {
-        this.errorPrototype = prototype;
+    public void useIntrinsics(Intrinsics value) {
+        this.intrinsics = value;
     }
 
     private JsThrowException jsError(String message) {
-        return new JsThrowException(ErrorBuiltins.makeError("Error", message, errorPrototype));
+        return new JsThrowException(intrinsics == null
+                ? ErrorBuiltins.makeError("Error", message)
+                : intrinsics.makeError("Error", message));
     }
 }

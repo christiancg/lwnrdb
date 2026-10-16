@@ -59,9 +59,9 @@ public final class TemporalInstantBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("Instant", (thisArg, args) -> {
-            requireNewTargetOrSubclassInstance("Temporal.Instant", thisArg);
-            return withNewTargetPrototype(construct(args, ops), ops);
+        final var ctor = new JsNativeFunction("Instant", (thisArg, args, newTarget) -> {
+            requireNewTargetOrSubclassInstance("Temporal.Instant", thisArg, newTarget);
+            return withNewTargetPrototype(construct(args, ops), newTarget, ops);
         });
         ctor.setLength(1);
         final var from = new JsNativeFunction("from", (_, args) -> from(arg(args, 0), ops));

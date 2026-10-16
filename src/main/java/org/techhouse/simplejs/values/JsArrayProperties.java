@@ -2,6 +2,7 @@ package org.techhouse.simplejs.values;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 
@@ -65,7 +66,7 @@ final class JsArrayProperties {
                 : null;
     }
 
-    public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor) {
+    public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor, InterpreterOps ops) {
         if (key instanceof JsSymbol) {
             return jsArray.superDefineOwnProperty(key, descriptor);
         }
@@ -74,7 +75,7 @@ final class JsArrayProperties {
             if (descriptor.isAccessorDescriptor()) {
                 throw OrdinaryProperties.redefineError(name);
             }
-            jsArray.lengths.defineLengthFrom(name, descriptor);
+            jsArray.lengths.defineLengthFrom(name, descriptor, ops);
             return true;
         }
         final var wideIndex = InterpreterUtils.canonicalArrayIndexWide(name);
@@ -85,7 +86,7 @@ final class JsArrayProperties {
             throw new TypeErrorException("Cannot define property " + name + ", jsArray.length is not writable");
         }
         if (wideIndex <= Integer.MAX_VALUE) {
-            jsArray.chargeDenseGrowth(JsArray.LENGTH_COERCION_OPS.get(), wideIndex + 1L);
+            jsArray.chargeDenseGrowth(ops, wideIndex + 1L);
             OrdinaryProperties.validateAndApply(indexSlot(wideIndex.intValue()), jsArray.table.isExtensible(), name,
                     descriptor);
         } else {

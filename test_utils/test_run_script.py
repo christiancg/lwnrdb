@@ -79,7 +79,8 @@ admin_conn = Conn.authenticated
 def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled: bool = True,
                  history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE", history_enabled: bool = True,
                  fetch_enabled: bool = False, fetch_allowlist: str = "", fetch_timeout_ms: int = 5000,
-                 fetch_max_response_bytes: str = "1Mb", fetch_max_concurrent: int = 8):
+                 fetch_max_response_bytes: str = "1Mb", fetch_max_concurrent: int = 8,
+                 text_import_enabled: bool = False):
     bu.write_config(work_dir, PORT,
                     scriptsEnabled=scripts_enabled,
                     scriptInstructionBudget=INSTRUCTION_BUDGET,
@@ -93,7 +94,7 @@ def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled
                     scriptMaxArrayLength=MAX_ARRAY_LENGTH,
                     scriptCursorBatchSize=CURSOR_BATCH_SIZE,
                     scriptCursorMaxBatchSize=CURSOR_MAX_BATCH_SIZE,
-                    scriptTextImportEnabled=False,
+                    scriptTextImportEnabled=text_import_enabled,
                     scriptProcedureImportEnabled=procedure_imports_enabled,
                     scriptTimeZone="UTC",
                     scriptLocale="en-US",
@@ -1260,6 +1261,25 @@ def test_capabilities(conn: Conn):
                  conn.run("return (1234.5).toLocaleString();"), "1,234.5")
 
 
+TEXT_IMPORT_CALLS = {
+    "a direct call": "script.importText(TEXT)",
+    ".call": "script.importText.call(script, TEXT)",
+    ".apply": "script.importText.apply(script, [TEXT])",
+    "Reflect.apply": "Reflect.apply(script.importText, script, [TEXT])",
+    "a bound function": "script.importText.bind(script)(TEXT)",
+}
+
+
+def test_text_import_awaits_through_indirect_calls(conn: Conn):
+    section("Module imports — top-level await in imported text, however importText is called")
+    for label, call in TEXT_IMPORT_CALLS.items():
+        script = ("import script from 'script';\n"
+                  "const TEXT = 'export default await Promise.resolve(9);';\n"
+                  f"async function viaAsync() {{ return {call}.default; }}\n"
+                  f"return [{call}.default, await viaAsync()];")
+        check_result(f"through {label}, at top level and inside an async function", conn.run(script), [9, 9])
+
+
 def test_procedure_imports(conn: Conn):
     section("Module imports — procedures/<name>")
 
@@ -1986,6 +2006,15 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_procedure_imports_disabled(conn)
+
+        bu.stop_server(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, text_import_enabled=True)
+        print(f"\n  Restarting server (text import enabled) on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_text_import_awaits_through_indirect_calls(conn)
 
         bu.stop_server(proc)
         proc = None

@@ -19,7 +19,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.FilterOperatorHelper;
-import org.techhouse.ops.PipelineScriptContext;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -39,7 +39,6 @@ public class FilterOperatorHelperScriptTest {
     @AfterEach
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
-        AnalyzeContext.clear();
     }
 
     private static JsonObject document(String id, double price) {
@@ -55,7 +54,7 @@ public class FilterOperatorHelperScriptTest {
 
     @Test
     public void test_filters_by_predicate() throws IOException {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new ScriptOperator("export default (doc) => doc.price > 10;");
             final var results = FilterOperatorHelper
                     .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).toList();
@@ -66,7 +65,7 @@ public class FilterOperatorHelperScriptTest {
 
     @Test
     public void test_truthy_non_boolean_is_accepted() throws IOException {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new ScriptOperator("export default (doc) => doc.price > 10 ? 'yes' : 0;");
             assertEquals(2, FilterOperatorHelper
                     .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count());
@@ -77,7 +76,7 @@ public class FilterOperatorHelperScriptTest {
     public void test_falsy_values_exclude() throws IOException {
         final var falsy = List.of("0", "''", "null", "undefined", "NaN", "false");
         for (final var value : falsy) {
-            try (var context = new PipelineScriptContext()) {
+            try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
                 final var operator = new ScriptOperator("export default (doc) => " + value + ";");
                 assertEquals(0, FilterOperatorHelper
                         .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count(),
@@ -89,14 +88,14 @@ public class FilterOperatorHelperScriptTest {
     @Test
     public void test_a_non_finite_predicate_result_is_decided_by_js_truthiness_not_a_refusal() throws IOException {
         for (final var value : List.of("1/0", "-1/0")) {
-            try (var context = new PipelineScriptContext()) {
+            try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
                 final var operator = new ScriptOperator("export default (doc) => " + value + ";");
                 assertEquals(3, FilterOperatorHelper
                         .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count(),
                         value + " is truthy in JavaScript, and FILTER never stores the value it tests");
             }
         }
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new ScriptOperator("export default (doc) => NaN;");
             assertEquals(0,
                     FilterOperatorHelper
@@ -109,7 +108,7 @@ public class FilterOperatorHelperScriptTest {
     public void test_truthy_values_include() throws IOException {
         final var truthy = List.of("1", "'x'", "true", "({})", "[]");
         for (final var value : truthy) {
-            try (var context = new PipelineScriptContext()) {
+            try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
                 final var operator = new ScriptOperator("export default (doc) => " + value + ";");
                 assertEquals(3, FilterOperatorHelper
                         .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count(),
@@ -121,7 +120,7 @@ public class FilterOperatorHelperScriptTest {
     @Test
     public void test_script_operator_is_not_index_resolvable() throws IOException {
         assertNull(FilterOperatorHelper.resolveIdsViaIndex(new ScriptOperator("export default (doc) => true;"),
-                TestGlobals.DB, TestGlobals.COLL));
+                TestGlobals.DB, TestGlobals.COLL, PipelineContext.withoutScripts()));
     }
 
     // A conjunction containing a script still resolves its other operands via index, so the whole
@@ -132,13 +131,14 @@ public class FilterOperatorHelperScriptTest {
         operators.add(new FieldOperator(FieldOperatorType.EQUALS, "price", new JsonNumber(5)));
         operators.add(new ScriptOperator("export default (doc) => true;"));
         final var conjunction = new ConjunctionOperator(ConjunctionOperatorType.AND, operators);
-        assertNull(FilterOperatorHelper.resolveIdsViaIndex(conjunction, TestGlobals.DB, TestGlobals.COLL));
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(conjunction, TestGlobals.DB, TestGlobals.COLL,
+                PipelineContext.withoutScripts()));
     }
 
     @Test
     public void test_conjunction_combines_a_field_operator_and_a_script() throws IOException {
         seedCollection();
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final List<BaseOperator> operators = new ArrayList<>();
             operators.add(new FieldOperator(FieldOperatorType.GREATER_THAN, "price", new JsonNumber(10)));
             operators.add(new ScriptOperator("export default (doc) => doc.price < 20;"));
@@ -153,7 +153,7 @@ public class FilterOperatorHelperScriptTest {
     @Test
     public void test_script_scans_the_collection_when_there_is_no_upstream_stream() throws IOException {
         seedCollection();
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new ScriptOperator("export default (doc) => doc.price > 10;");
             assertEquals(2, FilterOperatorHelper
                     .processOperator(operator, null, TestGlobals.DB, TestGlobals.COLL, context).count());
@@ -181,8 +181,7 @@ public class FilterOperatorHelperScriptTest {
     @Test
     public void test_analyze_records_script_invocations() throws IOException {
         final var analyze = new AnalyzeContext();
-        AnalyzeContext.set(analyze);
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, analyze)) {
             final var operator = new ScriptOperator("export default (doc) => true;");
             assertEquals(3, FilterOperatorHelper
                     .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count());
@@ -192,7 +191,7 @@ public class FilterOperatorHelperScriptTest {
 
     @Test
     public void test_empty_stream_never_calls_the_script() throws IOException {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new ScriptOperator("export default (doc) => { throw new Error('called'); };");
             assertEquals(0, FilterOperatorHelper
                     .processOperator(operator, Stream.of(), TestGlobals.DB, TestGlobals.COLL, context).count());

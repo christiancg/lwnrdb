@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.CallProcedureRequest;
 import org.techhouse.ops.resp.CallProcedureResponse;
@@ -37,10 +38,17 @@ public final class ProcedureCallHelper {
             return new OperationResponse(OperationType.CALL_PROCEDURE,
                     "Procedure '" + name + "' not found in database '" + dbName + "'", ErrorCode.PROCEDURE_NOT_FOUND);
         }
-        final var permit = ScriptOperationHelper.admit(username, dbName);
-        if (permit == null) {
-            return ScriptOperationHelper.concurrencyRefusal(OperationType.CALL_PROCEDURE);
-        }
+        return switch (ScriptOperationHelper.admit(username, dbName)) {
+            case ScriptAdmission.Refusal refusal ->
+                ScriptOperationHelper.concurrencyRefusal(OperationType.CALL_PROCEDURE, refusal.scope());
+            case ScriptAdmission.Permit permit -> runAdmitted(permit, request, definition, username, clientId);
+        };
+    }
+
+    private static OperationResponse runAdmitted(ScriptAdmission.Permit permit, CallProcedureRequest request,
+            ProcedureDefinition definition, String username, UUID clientId) {
+        final var dbName = request.getDatabaseName();
+        final var name = request.getProcedureName();
         try (permit) {
             final var compiled = compiledProcedures.get(dbName, name, definition.getVersion(), definition.getSource());
             final var outcome = ScriptOperationHelper.runProcedure(compiled, request.getArgs(), dbName, username,

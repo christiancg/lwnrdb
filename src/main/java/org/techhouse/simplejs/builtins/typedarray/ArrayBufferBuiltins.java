@@ -36,9 +36,9 @@ public final class ArrayBufferBuiltins {
     }
 
     public static JsNativeFunction arrayBuffer(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("ArrayBuffer", (thisArg, args) -> {
-            requireNewTarget("ArrayBuffer", thisArg);
-            return constructArrayBuffer(args, ops);
+        final var ctor = new JsNativeFunction("ArrayBuffer", (thisArg, args, newTarget) -> {
+            requireNewTarget("ArrayBuffer", thisArg, newTarget);
+            return constructArrayBuffer(args, newTarget, ops);
         });
         ctor.setProperty("isView", new JsNativeFunction("isView", (_, args) -> JsBoolean.of(isView(arg(args, 0)))));
         return ctor;
@@ -49,7 +49,7 @@ public final class ArrayBufferBuiltins {
         return target instanceof JsTypedArray || target instanceof JsDataView;
     }
 
-    public static JsValue constructArrayBuffer(List<JsValue> args, InterpreterOps ops) {
+    public static JsValue constructArrayBuffer(List<JsValue> args, JsValue newTarget, InterpreterOps ops) {
         final var byteLength = toIndex(arg(args, 0), "ArrayBuffer length", ops);
         final var options = arg(args, 1);
         final var requestedMax = ops != null && InterpreterUtils.isObjectLike(options)
@@ -60,7 +60,7 @@ public final class ArrayBufferBuiltins {
         if (hasMaxByteLength && maxByteLength < byteLength) {
             throw new RangeErrorException("ArrayBuffer maxByteLength must be >= byteLength");
         }
-        final var observedProto = observePrototype(ops);
+        final var observedProto = observePrototype(newTarget, ops);
         JsArrayBuffer.checkAllocation(byteLength);
         InterpreterOps.charge(ops, byteLength);
         final JsValue buffer;

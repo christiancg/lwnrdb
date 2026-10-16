@@ -2,6 +2,7 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.List;
 import org.techhouse.simplejs.exceptions.ScriptArrayLengthException;
+import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.values.JsValue;
 
 public interface InterpreterOps {
@@ -20,6 +21,10 @@ public interface InterpreterOps {
     List<JsValue> ownKeys(JsValue target);
 
     JsValue call(JsValue fn, JsValue thisArg, List<JsValue> args);
+
+    default JsValue callFrom(JsValue fn, JsValue thisArg, List<JsValue> args, Coroutine caller) {
+        return call(fn, thisArg, args);
+    }
 
     JsValue construct(JsValue fn, List<JsValue> args, JsValue newTarget);
 

@@ -44,16 +44,13 @@ public final class ReplicatedTxApplyHelper {
                         + " re-created since the batch was built");
                 return false;
             }
-            listenManager.deferNotifications(collIds);
-            try {
+            try (var batch = listenManager.openBatch(collIds)) {
                 for (final var entry : payload.getEntries()) {
-                    if (!ReplicatedApplyHelper.applyLocked(entry)) {
+                    if (!ReplicatedApplyHelper.applyLocked(entry, batch)) {
                         return false;
                     }
                 }
                 return true;
-            } finally {
-                listenManager.flushDeferredNotifications();
             }
         };
         return locks.withWriteLocks(collIds, timeoutMillis, applyEntries);

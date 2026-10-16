@@ -51,6 +51,7 @@ public final class Environment {
     private JsClass privateOwner;
     private JsValue newTarget;
     private boolean hasNewTarget;
+    private Coroutine coroutine;
     private List<DisposalEntry> disposables;
 
     private Map<String, Binding> bindings() {
@@ -187,6 +188,14 @@ public final class Environment {
             env = env.parent;
         }
         return JsUndefined.getInstance();
+    }
+
+    public void defineCoroutine(Coroutine value) {
+        this.coroutine = value;
+    }
+
+    public Coroutine resolveCoroutine() {
+        return functionScope().coroutine;
     }
 
     public void declareFunction(String name, JsValue value) {

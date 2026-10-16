@@ -628,6 +628,32 @@ def test_transactional_deletes_count_deleted_document_bytes():
         bu.stop_server(proc, port=TRIGGER_SERVER_PORT)
 
 
+def test_an_aggregate_inside_a_transaction_obeys_the_deadline():
+    section("An aggregate over a transaction's overlay stops at aggregateTimeoutMs")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-txn-deadline-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, TRIGGER_SERVER_PORT, aggregateTimeoutMs=1, maxMemory="512mb")
+    proc = bu.start_server(work_dir, log_path, port=TRIGGER_SERVER_PORT)
+    try:
+        with Conn(port=TRIGGER_SERVER_PORT) as c:
+            check_status("authenticate", c.authenticate(), "OK")
+            setup_fixtures(c)
+            for chunk in range(5):
+                docs = [{"_id": f"d{chunk}-{i}", "n": i} for i in range(10_000)]
+                check_status(f"bulk save chunk {chunk}", bulk_save(c, docs), "OK")
+            check_status("start a transaction", start_txn(c), "OK")
+            check_status("buffer one save so the overlay is not empty", save(c, {"_id": "buffered", "n": -1}), "OK")
+            check_code("a FILTER matching nothing is cut at the deadline",
+                       aggregate(c, [{"type": "FILTER", "operator": {
+                           "fieldOperatorType": "EQUALS", "field": "missing", "value": 1}}]),
+                       "ERROR", "408-6")
+            check_status("roll it back", rollback_txn(c), "OK")
+            teardown_fixtures(c)
+    finally:
+        bu.stop_server(proc, port=TRIGGER_SERVER_PORT)
+
+
 def main():
     bu.banner("Transactions test suite", HOST, PORT)
 
@@ -682,6 +708,7 @@ def main():
     test_a_committed_transaction_survives_the_disconnect()
     test_a_client_that_stops_reading_mid_transaction_releases_its_locks()
     test_transactional_deletes_count_deleted_document_bytes()
+    test_an_aggregate_inside_a_transaction_obeys_the_deadline()
 
     with authed_conn() as (c):
         teardown_fixtures(c)

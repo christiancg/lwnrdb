@@ -11,6 +11,7 @@ import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.HybridClock;
@@ -24,6 +25,7 @@ import org.techhouse.ex.PartialBulkSaveException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.PagePlacement;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.DirtySink;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -67,10 +69,11 @@ public final class SaveOperationHelper {
 
     // The caller must already hold the collection write lock.
     public static OperationResponse executeSave(SaveRequest saveRequest) throws Exception {
-        return executeSave(saveRequest, 0L);
+        return executeSave(saveRequest, 0L, listenManager);
     }
 
-    public static OperationResponse executeSave(SaveRequest saveRequest, long version) throws Exception {
+    public static OperationResponse executeSave(SaveRequest saveRequest, long version, DirtySink sink)
+            throws Exception {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         final var idError = reconcileSaveId(saveRequest);
@@ -98,7 +101,8 @@ public final class SaveOperationHelper {
             if (placement == PagePlacement.RELOCATE) {
                 // The grown document no longer fits its page; relocate as delete + insert so page metadata
                 // and field indexes stay correct through the standard background events.
-                return relocateWithListensHeld(dbName, collName, entry, idxEntry, primaryKeyIndex, encodedLine);
+                return relocateWithListensHeld(dbName, collName, entry, idxEntry, primaryKeyIndex, encodedLine,
+                        saveRequest.isBackgroundFollowOn(), sink);
             }
             entry.setPage(idxEntry.getPage());
             final var previousLength = idxEntry.getLength();
@@ -123,9 +127,9 @@ public final class SaveOperationHelper {
         }
         primaryKeyIndex.add(insertAt, savedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
-        taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry,
-                CollectionIncarnation.current(dbName, collName), pendingGeneration));
-        listenManager.markDirty(dbName, collName);
+        submit(new EntityEvent(eventType, dbName, collName, entry, CollectionIncarnation.current(dbName, collName),
+                pendingGeneration), saveRequest.isBackgroundFollowOn());
+        sink.markDirty(dbName, collName);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue(), eventType == EventType.CREATED);
     }
@@ -148,12 +152,12 @@ public final class SaveOperationHelper {
 
     // The caller must already hold the collection write lock.
     public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest) throws Exception {
-        return executeBulkSave(bulkSaveRequest, null);
+        return executeBulkSave(bulkSaveRequest, null, listenManager);
     }
 
     // A non-null versions list supplies the owner's version per object, so replicas do not assign their own.
-    public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest, List<Long> versions)
-            throws Exception {
+    public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest, List<Long> versions,
+            DirtySink sink) throws Exception {
         final var dbName = bulkSaveRequest.getDatabaseName();
         final var collName = bulkSaveRequest.getCollectionName();
         final var entries = new ArrayList<DbEntry>();
@@ -241,7 +245,7 @@ public final class SaveOperationHelper {
         } catch (Exception e) {
             final var committedUpdates = toDbEntries(updatedIndexEntries);
             final var committedInserts = toDbEntries(insertedIndexEntries);
-            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts, pendingGeneration);
+            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts, pendingGeneration, sink);
             final var committed = new ArrayList<>(committedUpdates);
             committed.addAll(committedInserts);
             clearUncommitted(dbName, collName, entries, committed, pendingGeneration);
@@ -251,7 +255,7 @@ public final class SaveOperationHelper {
         }
         final var updatedDbEntries = toDbEntries(updatedIndexEntries);
         final var insertedDbEntries = toDbEntries(insertedIndexEntries);
-        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration);
+        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration, sink);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
     }
@@ -277,12 +281,12 @@ public final class SaveOperationHelper {
     }
 
     private static void publishCommittedWrites(String dbName, String collName, List<DbEntry> updated,
-            List<DbEntry> inserted, long pendingGeneration) {
+            List<DbEntry> inserted, long pendingGeneration, DirtySink sink) {
         cache.addEntriesToCache(dbName, collName, updated);
         cache.addEntriesToCache(dbName, collName, inserted);
         taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, inserted, updated,
                 CollectionIncarnation.current(dbName, collName), pendingGeneration));
-        listenManager.markDirty(dbName, collName);
+        sink.markDirty(dbName, collName);
     }
 
     private static void clearUncommitted(String dbName, String collName, List<DbEntry> entries, List<DbEntry> committed,
@@ -309,16 +313,14 @@ public final class SaveOperationHelper {
     }
 
     private static SaveResponse relocateWithListensHeld(String dbName, String collName, DbEntry entry,
-            PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex, byte[] encodedLine) throws Exception {
-        listenManager.deferNotifications(List.of(Cache.getCollectionIdentifier(dbName, collName)));
-        try {
+            PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex, byte[] encodedLine, boolean followOn,
+            DirtySink sink) throws Exception {
+        try (var batch = listenManager.openBatch(sink, List.of(Cache.getCollectionIdentifier(dbName, collName)))) {
             final var relocatedPkIndexEntry = relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex,
-                    encodedLine);
-            listenManager.markDirty(dbName, collName);
+                    encodedLine, followOn);
+            batch.markDirty(dbName, collName);
             CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
-        } finally {
-            listenManager.flushDeferredNotifications();
         }
     }
 
@@ -335,11 +337,12 @@ public final class SaveOperationHelper {
     // The caller must already hold the collection write lock.
     public static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
             PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex) throws Exception {
-        return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex, null);
+        return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex, null, false);
     }
 
     private static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
-            PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex, byte[] encodedLine) throws Exception {
+            PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex, byte[] encodedLine, boolean followOn)
+            throws Exception {
         final var oldEntry = cache.getById(dbName, collName, idxEntry);
         oldEntry.setPage(idxEntry.getPage());
         oldEntry.setVersion(idxEntry.getVersion());
@@ -351,8 +354,8 @@ public final class SaveOperationHelper {
                 () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex));
         primaryKeyIndex.remove(idxEntry);
         cache.evictEntry(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
-                CollectionIncarnation.current(dbName, collName), deleteGeneration));
+        submit(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
+                CollectionIncarnation.current(dbName, collName), deleteGeneration), followOn);
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
                 relocatedPkIndexEntry.getLength());
         int insertAt = Collections.binarySearch(primaryKeyIndex, relocatedPkIndexEntry.getValue());
@@ -362,9 +365,17 @@ public final class SaveOperationHelper {
         primaryKeyIndex.add(insertAt, relocatedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
         final var createGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry,
-                CollectionIncarnation.current(dbName, collName), createGeneration));
+        submit(new EntityEvent(EventType.CREATED, dbName, collName, entry,
+                CollectionIncarnation.current(dbName, collName), createGeneration), followOn);
         return relocatedPkIndexEntry;
+    }
+
+    private static void submit(Event event, boolean followOn) {
+        if (followOn) {
+            taskManager.submitFollowOn(event);
+        } else {
+            taskManager.submitBackgroundTask(event);
+        }
     }
 
     private static DbEntry detachedCopy(DbEntry entry) {

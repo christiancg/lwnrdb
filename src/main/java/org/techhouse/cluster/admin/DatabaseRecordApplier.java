@@ -10,12 +10,12 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
 import org.techhouse.ops.admin.GrantPruner;
+import org.techhouse.ops.admin.GrantRewrite;
 import org.techhouse.ops.admin.LeftoverFolders;
 
 final class DatabaseRecordApplier {
@@ -91,13 +91,13 @@ final class DatabaseRecordApplier {
             return true;
         }
         if (live) {
-            return DatabaseOperationHelper.dropDatabase(dbName, true, RewriteVersion.KEEP)
+            return DatabaseOperationHelper.dropDatabase(dbName, true, GrantRewrite.KEEP)
                     .getStatus() == OperationStatus.OK;
         }
         if (!quarantine.dropDatabase(dbName, clusterConfig.replicationAckTimeoutMs())) {
             return false;
         }
-        GrantPruner.forDroppedDatabase(dbName, RewriteVersion.KEEP);
+        GrantPruner.forDroppedDatabase(dbName, GrantRewrite.KEEP);
         return true;
     }
 

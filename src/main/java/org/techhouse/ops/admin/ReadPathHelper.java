@@ -1,14 +1,15 @@
 package org.techhouse.ops.admin;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
-import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AggregateLimitException;
@@ -19,6 +20,7 @@ import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.ScriptOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
@@ -84,9 +86,6 @@ public final class ReadPathHelper {
             Transaction activeTransaction) {
         List<String> readLocks = List.of();
         final var analyzeContext = aggregateRequest.isAnalyze() ? new AnalyzeContext() : null;
-        if (analyzeContext != null) {
-            AnalyzeContext.set(analyzeContext);
-        }
         final var dbName = aggregateRequest.getDatabaseName();
         final var collName = aggregateRequest.getCollectionName();
         final var overlay = activeTransaction != null
@@ -113,16 +112,10 @@ public final class ReadPathHelper {
             if (analyzeContext != null) {
                 readLocks.forEach(analyzeContext::addLock);
             }
-            final List<org.techhouse.ejson.elements.JsonObject> results;
-            if (overlay != null && !overlay.isEmpty()) {
-                final var committed = startsWithReduce(aggregateRequest)
-                        ? cache.streamCollectionInScanOrder(dbName, collName).map(DbEntry::getData)
-                        : cache.initializeStreamIfNecessary(null, dbName, collName);
-                final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
-                        Cache.getCollectionIdentifier(dbName, collName), committed);
-                results = AggregationOperationHelper.processAggregation(aggregateRequest, source, activeTransaction);
-            } else {
-                results = AggregationOperationHelper.processAggregation(aggregateRequest, null, activeTransaction);
+            final List<JsonObject> results;
+            try (var context = PipelineContext.fromConfiguration(analyzeContext)) {
+                results = runPipeline(aggregateRequest, activeTransaction, overlay != null && !overlay.isEmpty(),
+                        context);
             }
             CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
                     aggregateRequest.getCollectionName());
@@ -139,17 +132,27 @@ public final class ReadPathHelper {
                     ScriptOperationHelper.errorCodeFor(scriptFailure.getErrorName()));
         } catch (AggregateLimitException limit) {
             return new OperationResponse(OperationType.AGGREGATE, limit.getErrorCode());
-        } catch (AggregateDeadline.Expired expired) {
-            return new OperationResponse(OperationType.AGGREGATE, ErrorCode.AGGREGATE_TIMEOUT);
         } catch (Exception e) {
             logger.error(OperationType.AGGREGATE + " failed with " + ErrorCode.ERROR_AGGREGATING.getCode(), e);
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
             locks.releaseReadLocks(readLocks);
-            if (analyzeContext != null) {
-                AnalyzeContext.clear();
-            }
         }
+    }
+
+    private static List<JsonObject> runPipeline(AggregateRequest aggregateRequest, Transaction activeTransaction,
+            boolean overlaid, PipelineContext context) throws IOException {
+        if (!overlaid) {
+            return AggregationOperationHelper.processAggregation(aggregateRequest, null, activeTransaction, context);
+        }
+        final var dbName = aggregateRequest.getDatabaseName();
+        final var collName = aggregateRequest.getCollectionName();
+        final var committed = startsWithReduce(aggregateRequest)
+                ? context.scan(cache.streamCollectionInScanOrder(dbName, collName)).map(DbEntry::getData)
+                : context.source(null, dbName, collName);
+        final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
+                Cache.getCollectionIdentifier(dbName, collName), committed);
+        return AggregationOperationHelper.processAggregation(aggregateRequest, source, activeTransaction, context);
     }
 
     private static boolean startsWithReduce(AggregateRequest aggregateRequest) {

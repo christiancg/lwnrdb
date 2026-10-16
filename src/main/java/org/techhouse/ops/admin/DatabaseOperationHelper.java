@@ -18,7 +18,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
@@ -152,9 +151,10 @@ public final class DatabaseOperationHelper {
                 ErrorCode.DATABASE_NOT_FOUND);
     }
 
-    public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
+    public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest,
+            RestampedRecords restamped) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
-        final var dropped = dropDatabase(dbName, false, RewriteVersion.RESTAMP);
+        final var dropped = dropDatabase(dbName, false, new GrantRewrite.Restamp(restamped));
         if (dropped.getStatus() == OperationStatus.OK) {
             return OperationResponse.respondOrError(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE,
                     () -> {
@@ -165,7 +165,7 @@ public final class DatabaseOperationHelper {
         return dropped;
     }
 
-    public static OperationResponse dropDatabase(String dbName, boolean bounded, RewriteVersion grantVersion) {
+    public static OperationResponse dropDatabase(String dbName, boolean bounded, GrantRewrite grantRewrite) {
         final var deadline = System.currentTimeMillis() + OperationLocks.lockBudgetMillis(bounded);
         var barrierHeld = false;
         try {
@@ -178,7 +178,7 @@ public final class DatabaseOperationHelper {
                 return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
             }
             return locks.withRetiringCollectionLocks(dbName, dbEntry.getCollections(), remainingUntil(deadline),
-                    () -> deleteDatabaseUnderLocks(dbName, grantVersion));
+                    () -> deleteDatabaseUnderLocks(dbName, grantRewrite));
         } catch (CollectionBusyException busy) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
         } catch (InterruptedException exception) {
@@ -194,7 +194,7 @@ public final class DatabaseOperationHelper {
         }
     }
 
-    private static OperationResponse deleteDatabaseUnderLocks(String dbName, RewriteVersion grantVersion)
+    private static OperationResponse deleteDatabaseUnderLocks(String dbName, GrantRewrite grantRewrite)
             throws Exception {
         if (!fs.deleteDatabase(dbName)) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
@@ -207,7 +207,7 @@ public final class DatabaseOperationHelper {
         listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
         triggerExecutor.discardQueuedFor(dbName, null);
         TriggerRunLog.discardAllFor(dbName, null);
-        GrantPruner.forDroppedDatabase(dbName, grantVersion);
+        GrantPruner.forDroppedDatabase(dbName, grantRewrite);
         return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
     }
 

@@ -164,60 +164,123 @@ public class ListenManagerTest {
     }
 
     @Test
-    public void test_a_single_defer_flushes_once() throws Exception {
+    public void aRootBatchEnqueuesOnlyOnClose() throws Exception {
         registerDbColl();
-        manager.deferNotifications();
-        manager.markDirty("db", "coll");
-        manager.markDirty("db", "coll");
+        final var batch = manager.openBatch(List.of());
+        batch.markDirty("db", "coll");
+        batch.markDirty("db", "coll");
         assertEquals(0, queue().size());
 
-        manager.flushDeferredNotifications();
+        batch.close();
 
         assertEquals(1, queue().size());
     }
 
     @Test
-    public void test_a_nested_defer_does_not_flush_the_outer_scope() throws Exception {
+    public void test_closing_a_nested_batch_does_not_flush_its_root() throws Exception {
         registerDbColl();
-        manager.deferNotifications();
-        manager.markDirty("db", "coll");
-        manager.deferNotifications();
-        manager.markDirty("db", "coll");
+        try (var root = manager.openBatch(List.of())) {
+            root.markDirty("db", "coll");
+            final var nested = root.nest(List.of());
+            nested.markDirty("db", "coll");
 
-        manager.flushDeferredNotifications();
+            nested.close();
 
-        assertEquals(0, queue().size(), "the inner scope must not end deferral the outer scope owns");
-
-        manager.flushDeferredNotifications();
+            assertEquals(0, queue().size(), "the nested batch must not end the deferral its root owns");
+        }
 
         assertEquals(1, queue().size());
     }
 
     @Test
-    public void test_a_nested_defer_preserves_the_outer_scope_pending_keys() throws Exception {
+    public void aNestedBatchMergesIntoItsRoot() throws Exception {
         registerDbColl();
         manager.register(UUID.randomUUID(), dirtyRequest("other", "coll"), "hash");
-        manager.deferNotifications();
-        manager.markDirty("db", "coll");
-        manager.deferNotifications();
-        manager.markDirty("other", "coll");
-        manager.flushDeferredNotifications();
-        manager.flushDeferredNotifications();
+        try (var root = manager.openBatch(List.of())) {
+            root.markDirty("db", "coll");
+            try (var nested = root.nest(List.of())) {
+                nested.markDirty("other", "coll");
+                try (var deeper = nested.nest(List.of())) {
+                    deeper.markDirty("db", "coll");
+                }
+            }
+            assertEquals(0, queue().size());
+        }
 
-        assertEquals(2, queue().size(), "the inner scope must not discard what the outer one had already marked");
+        assertEquals(2, queue().size(), "the nested batch must hand its marks to the root rather than drop them");
     }
 
     @Test
-    public void test_a_flush_with_no_matching_defer_is_a_no_op() {
+    public void test_a_batch_opened_within_another_nests_into_it() throws Exception {
         registerDbColl();
-        assertDoesNotThrow(manager::flushDeferredNotifications);
-    }
+        try (var root = manager.openBatch(List.of())) {
+            try (var within = manager.openBatch(root, List.of())) {
+                within.markDirty("db", "coll");
+            }
+            assertEquals(0, queue().size(), "a batch opened within a batch must merge into it");
+        }
 
-    @Test
-    public void test_a_mark_outside_any_defer_enqueues_immediately() throws Exception {
-        registerDbColl();
-        manager.markDirty("db", "coll");
         assertEquals(1, queue().size());
+    }
+
+    @Test
+    public void test_a_batch_opened_within_the_manager_is_a_root() throws Exception {
+        registerDbColl();
+        try (var batch = manager.openBatch(manager, List.of())) {
+            batch.markDirty("db", "coll");
+            assertEquals(0, queue().size());
+        }
+
+        assertEquals(1, queue().size());
+    }
+
+    @Test
+    public void test_closing_a_batch_twice_enqueues_once() throws Exception {
+        registerDbColl();
+        final var batch = manager.openBatch(List.of());
+        batch.markDirty("db", "coll");
+        batch.close();
+        queue().clear();
+
+        assertDoesNotThrow(batch::close);
+
+        assertEquals(0, queue().size());
+    }
+
+    @Test
+    public void test_a_closed_batch_marks_immediately() throws Exception {
+        registerDbColl();
+        final var batch = manager.openBatch(List.of());
+        final var nested = batch.nest(List.of());
+        batch.close();
+
+        nested.markDirty("db", "coll");
+
+        assertEquals(1, queue().size(), "a mark landing after the root closed has no flush left to wait for");
+    }
+
+    @Test
+    public void test_nesting_into_a_closed_batch_opens_a_fresh_root() throws Exception {
+        registerDbColl();
+        final var batch = manager.openBatch(List.of());
+        batch.close();
+
+        try (var fresh = batch.nest(List.of())) {
+            fresh.markDirty("db", "coll");
+            assertEquals(0, queue().size());
+        }
+
+        assertEquals(1, queue().size(), "the fresh root flushes on its own close");
+    }
+
+    @Test
+    public void anImmediateMarkDirtyEnqueuesAtOnce() throws Exception {
+        registerDbColl();
+        try (var ignored = manager.openBatch(List.of())) {
+            manager.markDirty("db", "coll");
+
+            assertEquals(1, queue().size(), "a mark that does not go through a batch is not deferred by one");
+        }
     }
 
     @Test
@@ -283,30 +346,26 @@ public class ListenManagerTest {
     public void test_a_transactional_commit_notifies_once_with_the_final_state() throws Exception {
         registerDbColl();
 
-        manager.deferNotifications();
-        for (var i = 0; i < 5; i++) {
-            manager.markDirty("db", "coll");
+        try (var batch = manager.openBatch(List.of())) {
+            for (var i = 0; i < 5; i++) {
+                batch.markDirty("db", "coll");
+            }
+            assertEquals(0, queue().size(), "a re-run queued mid-commit would hash a result holding some of the"
+                    + " transaction's ops and not others");
         }
-        assertEquals(0, queue().size(),
-                "a re-run queued mid-commit would hash a result holding some of the transaction's ops and not others");
-
-        manager.flushDeferredNotifications();
 
         assertEquals(1, queue().size(), "the commit notifies once, after every op has been applied");
     }
 
     @Test
-    public void test_deferral_does_not_hold_back_another_thread() throws Exception {
+    public void test_a_batch_does_not_hold_back_another_thread() throws Exception {
         registerDbColl();
-        manager.deferNotifications();
-        try {
+        try (var ignored = manager.openBatch(List.of())) {
             final var writer = new Thread(() -> manager.markDirty("db", "coll"));
             writer.start();
             writer.join(5_000L);
 
             assertEquals(1, queue().size(), "a standalone write on another thread must notify immediately");
-        } finally {
-            manager.flushDeferredNotifications();
         }
     }
 }

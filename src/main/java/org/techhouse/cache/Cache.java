@@ -8,14 +8,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
-import org.techhouse.analyze.AggregateDeadline;
-import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.admin.AdminPageEntry;
-import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
@@ -98,16 +95,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
-        final var entries = userCache.getEntriesByIds(dbName, collName, ids);
-        recordScanned(entries.size());
-        return entries;
-    }
-
-    private void recordScanned(long count) {
-        final var analyzeContext = AnalyzeContext.current();
-        if (analyzeContext != null) {
-            analyzeContext.addScanned(count);
-        }
+        return userCache.getEntriesByIds(dbName, collName, ids);
     }
 
     public void evictDatabase(String dbName) {
@@ -130,16 +118,13 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         // those lag behind committed writes and would accept an incomplete cached map.
         if (wholeCollection != null && !wholeCollection.isEmpty()
                 && wholeCollection.size() == pkIndexSize(dbName, collName)) {
-            recordScanned(wholeCollection.size());
             return wholeCollection;
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
-            final var admitted = locks.holdsCollectionLock(dbName, collName)
+            return locks.holdsCollectionLock(dbName, collName)
                     ? userCache.admitWholeCollection(dbName, collName, loaded)
                     : loaded;
-            recordScanned(admitted.size());
-            return admitted;
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -157,28 +142,20 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
             if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
-                return decorateScan(cached.values().stream());
+                return cached.values().stream();
             }
         }
-        return decorateScan(streamCollectionFromDisk(dbName, collName));
+        return streamCollectionFromDisk(dbName, collName);
     }
 
     public Stream<DbEntry> streamCollectionInScanOrder(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
             if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
-                return decorateScan(cached.values().stream().sorted(BY_PAGE_THEN_ID));
+                return cached.values().stream().sorted(BY_PAGE_THEN_ID);
             }
         }
-        return decorateScan(streamCollectionFromDisk(dbName, collName, true));
-    }
-
-    private Stream<DbEntry> decorateScan(Stream<DbEntry> stream) {
-        final var analyzeContext = AnalyzeContext.current();
-        if (analyzeContext == null) {
-            return stream;
-        }
-        return stream.peek(_ -> analyzeContext.addScanned(1));
+        return streamCollectionFromDisk(dbName, collName, true);
     }
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
@@ -208,14 +185,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     private static Stream<DbEntry> orderedPage(Collection<DbEntry> pageDocuments, boolean inScanOrder) {
         return inScanOrder ? pageDocuments.stream().sorted(BY_ID) : pageDocuments.stream();
-    }
-
-    public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName,
-            String collName) throws IOException {
-        if (resultStream != null) {
-            return resultStream;
-        }
-        return AggregateDeadline.watch(streamCollection(dbName, collName).map(DbEntry::getData));
     }
 
     private Map<String, DbEntry> readWholeCollection(String dbName, String collName) throws IOException {

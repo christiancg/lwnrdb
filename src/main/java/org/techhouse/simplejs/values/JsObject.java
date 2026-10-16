@@ -5,7 +5,6 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.techhouse.simplejs.internal.interpreter.StackCapture;
 
 public final class JsObject extends JsValue {
     public record PropertyFlags(boolean writable, boolean enumerable, boolean configurable) {
@@ -103,9 +102,9 @@ public final class JsObject extends JsValue {
         return errorStack;
     }
 
-    public void markErrorData() {
+    public void markErrorData(List<String> frames) {
         errorData = true;
-        errorStack = StackCapture.current();
+        errorStack = frames;
     }
 
     public JsClass getKlass() {

@@ -14,10 +14,10 @@ import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.GrantPruner;
+import org.techhouse.ops.admin.GrantRewrite;
 
 public final class AdminRecordMerge {
     private static final Logger logger = Logger.logFor(AdminRecordMerge.class);
@@ -193,7 +193,7 @@ public final class AdminRecordMerge {
     private static boolean removeUser(String username) throws IOException, InterruptedException {
         if (cache.getAdminUserEntry(username) != null) {
             AdminOperationHelper.deleteUserEntry(username);
-            GrantPruner.forDeletedUser(username, RewriteVersion.KEEP);
+            GrantPruner.forDeletedUser(username, GrantRewrite.KEEP);
         }
         return true;
     }

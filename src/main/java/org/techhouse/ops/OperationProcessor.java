@@ -12,6 +12,7 @@ import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
 import org.techhouse.ops.admin.ListenOperationHelper;
 import org.techhouse.ops.admin.ReadPathHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.admin.RunDirectoryHelper;
 import org.techhouse.ops.index.IndexOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
@@ -90,6 +91,7 @@ public class OperationProcessor {
         if (adminGuard != null) {
             return adminGuard;
         }
+        final var restamped = new RestampedRecords();
         final var response = switch (operationRequest.getType()) {
             case BULK_SAVE ->
                 processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction, actingUser);
@@ -98,10 +100,10 @@ public class OperationProcessor {
             case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest, activeTransaction);
             case DELETE -> processDeleteOperation((DeleteRequest) operationRequest, activeTransaction, actingUser);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest, clientId);
-            case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
+            case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest, restamped);
             case LIST_DATABASES -> processListDatabasesOperation(actingUser);
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
-            case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest);
+            case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest, restamped);
             case LIST_COLLECTIONS -> processListCollectionsOperation((ListCollectionsRequest) operationRequest);
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
@@ -112,7 +114,7 @@ public class OperationProcessor {
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
             case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
-            case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest);
+            case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest, restamped);
             case CHANGE_PERMISSIONS ->
                 UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
             case SET_DATABASE_OWNERS -> processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest);
@@ -148,7 +150,7 @@ public class OperationProcessor {
             case AWAIT_FAULT -> FaultOperationHelper.await((AwaitFaultRequest) operationRequest);
             case RELEASE_FAULT -> FaultOperationHelper.release((ReleaseFaultRequest) operationRequest);
         };
-        return ClusterAdminHelper.afterAdminOp(operationRequest, response);
+        return ClusterAdminHelper.afterAdminOp(operationRequest, response, restamped);
     }
 
     private OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
@@ -205,8 +207,9 @@ public class OperationProcessor {
         return DatabaseOperationHelper.processSetDatabaseOwners(request);
     }
 
-    private OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
-        return DatabaseOperationHelper.processDropDatabaseOperation(dropDatabaseRequest);
+    private OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest,
+            RestampedRecords restamped) {
+        return DatabaseOperationHelper.processDropDatabaseOperation(dropDatabaseRequest, restamped);
     }
 
     private OperationResponse processListDatabasesOperation(String actingUser) {
@@ -217,8 +220,9 @@ public class OperationProcessor {
         return CollectionOperationHelper.processCreateCollectionOperation(createCollectionRequest);
     }
 
-    private OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
-        return CollectionOperationHelper.processDropCollectionOperation(dropCollectionRequest);
+    private OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest,
+            RestampedRecords restamped) {
+        return CollectionOperationHelper.processDropCollectionOperation(dropCollectionRequest, restamped);
     }
 
     private OperationResponse processListCollectionsOperation(ListCollectionsRequest request) {

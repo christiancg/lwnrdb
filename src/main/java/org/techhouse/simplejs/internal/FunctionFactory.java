@@ -87,7 +87,7 @@ final class FunctionFactory {
         if (call.isOptional() && isNullish(function)) {
             return Interpreter.SHORT_CIRCUIT;
         }
-        return interpreter.functions.callValue(function, thisArg,
-                interpreter.functions.evalArguments(call.getArguments(), env));
+        return interpreter.functions.callAtSite(function, thisArg,
+                interpreter.functions.evalArguments(call.getArguments(), env), env);
     }
 }

@@ -12,7 +12,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
@@ -99,10 +98,11 @@ public final class CollectionOperationHelper {
         return cache.getAdminCollectionEntry(dbName, collName) == null;
     }
 
-    public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
+    public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest,
+            RestampedRecords restamped) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
-        final var dropped = dropCollection(dbName, collName, false, RewriteVersion.RESTAMP);
+        final var dropped = dropCollection(dbName, collName, false, new GrantRewrite.Restamp(restamped));
         if (dropped.getStatus() == OperationStatus.OK) {
             return OperationResponse.respondOrError(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION,
                     () -> {
@@ -114,7 +114,7 @@ public final class CollectionOperationHelper {
     }
 
     public static OperationResponse dropCollection(String dbName, String collName, boolean bounded,
-            RewriteVersion grantVersion) {
+            GrantRewrite grantRewrite) {
         final var lockBudget = OperationLocks.lockBudgetMillis(bounded);
         boolean dropSucceeded = false;
         boolean namesLocked = false;
@@ -138,7 +138,7 @@ public final class CollectionOperationHelper {
                 listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
                 triggerExecutor.discardQueuedFor(dbName, collName);
                 TriggerRunLog.discardAllFor(dbName, collName);
-                GrantPruner.forDroppedCollection(dbName, collName, grantVersion);
+                GrantPruner.forDroppedCollection(dbName, collName, grantRewrite);
                 dropSucceeded = true;
                 return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");
             }

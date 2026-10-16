@@ -15,10 +15,14 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRecord;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -99,5 +103,34 @@ public class DrainFollowOnEventTest {
                 cache.getWholeCollection(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME).get("during-drain"));
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME).isEmpty(),
                 "a rejected index event left the row pending, and the next start reported an unclean stop");
+    }
+
+    private int pendingAfterASaveWhileDraining(boolean followOn) throws Exception {
+        TestUtils.setPrivateField(backgroundTaskManager, "draining", true);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var document = new JsonObject();
+        document.addProperty("name", "row");
+        request.setObject(document);
+        request.setBackgroundFollowOn(followOn);
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            assertEquals(OperationStatus.OK, SaveOperationHelper.executeSave(request).getStatus());
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+            TestUtils.setPrivateField(backgroundTaskManager, "draining", false);
+        }
+        return backgroundTaskManager.pending();
+    }
+
+    @Test
+    public void aFollowOnSaveIsQueuedWhileDraining() throws Exception {
+        final var before = backgroundTaskManager.pending();
+        assertEquals(before + 1, pendingAfterASaveWhileDraining(true));
+    }
+
+    @Test
+    public void aClientSaveIsRefusedWhileDraining() throws Exception {
+        final var before = backgroundTaskManager.pending();
+        assertEquals(before, pendingAfterASaveWhileDraining(false));
     }
 }

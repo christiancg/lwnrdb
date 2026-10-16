@@ -92,6 +92,16 @@ public class BackgroundTaskManagerTest {
     }
 
     @Test
+    void aFollowOnEventIsQueuedWhileDraining() {
+        final var manager = new BackgroundTaskManager();
+        assertTrue(manager.drain(0L));
+
+        manager.submitFollowOn(new EntityEvent(EventType.CREATED, "test", "test", new DbEntry()));
+
+        assertEquals(1, manager.pending());
+    }
+
+    @Test
     void testStopBackgroundWorkersDrainsQueueAndAllowsRestart() throws Exception {
         var manager = new BackgroundTaskManager();
         manager.submitBackgroundTask(new EntityEvent(EventType.CREATED, "test", "test", new DbEntry()));

@@ -9,7 +9,6 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
@@ -19,6 +18,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.OperationResponse;
@@ -114,9 +114,9 @@ public class AggregateLimitsTest {
         assertEquals(ErrorCode.MAP_RESULT_TOO_LARGE.getCode(), limited.getErrorCode());
         final var expired = OperationResponse.respondOrError(OperationType.LIST_USERS, ErrorCode.ERROR_LISTING_USERS,
                 () -> {
-                    try (var _ = AggregateDeadline.open(1L)) {
+                    try (var context = PipelineContext.of(1L, Long.MAX_VALUE, null)) {
                         Thread.sleep(5);
-                        AggregateDeadline.watch(IntStream.range(0, 10_000).boxed()).forEach(_ -> {
+                        context.watch(IntStream.range(0, 10_000).boxed()).forEach(_ -> {
                         });
                     }
                     return null;

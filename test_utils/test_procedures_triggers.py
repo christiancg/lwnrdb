@@ -1234,6 +1234,22 @@ def test_before_hook_no_db(conn: Conn):
     drop_hook(conn, "uses_lib")
 
 
+def test_a_before_hook_does_not_change_the_scripts_suppressed_error(conn: Conn):
+    section("Before hooks - a hook's realm never leaks into the script that triggered it")
+    check_status("install a pass-through before hook",
+                 install_hook(conn, "realm_hook", "realmhook", "export default (doc) => doc;", ["CREATED", "UPDATED"]),
+                 "OK")
+    script = ("import db from 'db';"
+              f" db.save('{DB}', '{COLL}', {{ _id: 'realm1', qty: 1 }});"
+              " try { using a = { [Symbol.dispose]() { throw new Error('a'); } },"
+              " b = { [Symbol.dispose]() { throw new Error('b'); } }; }"
+              " catch (e) { return e instanceof SuppressedError; }"
+              " return 'no error';")
+    check_result("the script's SuppressedError is still its own realm's",
+                 conn.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": script}), True)
+    drop_hook(conn, "realm_hook")
+
+
 def test_before_hook_in_transaction(conn: Conn):
     section("Before hooks - inside a transaction")
     check_status("install a normalizing hook",
@@ -2132,6 +2148,7 @@ def main():
             test_before_hook_chaining(conn)
             test_before_hook_sandbox(conn)
             test_before_hook_no_db(conn)
+            test_a_before_hook_does_not_change_the_scripts_suppressed_error(conn)
             test_before_hook_in_transaction(conn)
             test_before_hook_that_shrinks_an_oversized_document(conn)
             test_before_hook_validation(conn)

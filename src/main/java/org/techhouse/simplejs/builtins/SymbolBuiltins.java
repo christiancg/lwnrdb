@@ -23,8 +23,8 @@ public final class SymbolBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final Map<String, JsSymbol> registry = new ConcurrentHashMap<>();
-        final var symbol = new JsNativeFunction("Symbol", (thisArg, args) -> {
-            if (JsNativeFunction.currentNewTarget() != null || !(thisArg instanceof JsUndefined)) {
+        final var symbol = new JsNativeFunction("Symbol", (thisArg, args, newTarget) -> {
+            if (NewTargetSupport.isConstructCall(newTarget) || !(thisArg instanceof JsUndefined)) {
                 throw new TypeErrorException("Symbol is not a constructor");
             }
             return new JsSymbol(args.isEmpty() || args.getFirst() instanceof JsUndefined

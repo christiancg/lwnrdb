@@ -35,11 +35,11 @@ public final class MapOperatorHelper {
         return processOperator(operator, toMap, null);
     }
 
-    public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineScriptContext context) {
-        return processOperator(operator, toMap, context, new MapResultBudget());
+    public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context) {
+        return processOperator(operator, toMap, context, new MapResultBudget(context));
     }
 
-    static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineScriptContext context,
+    static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context,
             MapResultBudget budget) {
         final var condition = operator.getCondition();
         boolean continueProcessing = true;
@@ -52,7 +52,7 @@ public final class MapOperatorHelper {
         } : toMap;
     }
 
-    private static boolean filterCondition(BaseOperator condition, JsonObject toMap, PipelineScriptContext context) {
+    private static boolean filterCondition(BaseOperator condition, JsonObject toMap, PipelineContext context) {
         return switch (condition.getType()) {
             case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) condition, toMap, context);
             case FIELD -> processFieldOperator((FieldOperator) condition, toMap);
@@ -61,13 +61,11 @@ public final class MapOperatorHelper {
         };
     }
 
-    private static boolean processScriptOperator(ScriptOperator operator, JsonObject toMap,
-            PipelineScriptContext context) {
+    private static boolean processScriptOperator(ScriptOperator operator, JsonObject toMap, PipelineContext context) {
         return FilterOperatorHelper.testScript(operator, toMap, context);
     }
 
-    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap,
-            PipelineScriptContext context) {
+    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap, PipelineContext context) {
         final var tester = context != null
                 ? context.customTesterFor(operator)
                 : FilterOperatorHelper.getCustomTester(operator);
@@ -75,7 +73,7 @@ public final class MapOperatorHelper {
     }
 
     private static boolean processConjunctionOperator(ConjunctionOperator operator, JsonObject toMap,
-            PipelineScriptContext context) {
+            PipelineContext context) {
         final var steps = operator.getOperators();
         var trueCount = 0;
         for (var step : steps) {
@@ -110,7 +108,7 @@ public final class MapOperatorHelper {
         return test.test(toMap, fieldName);
     }
 
-    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineScriptContext context,
+    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineContext context,
             MapResultBudget budget) {
         final var addFieldName = operator.getFieldName();
         final var midOperator = operator.getOperator();
@@ -133,7 +131,7 @@ public final class MapOperatorHelper {
     }
 
     private static JsonObject script(ScriptMidOperator midOperator, String addFieldName, JsonObject toMap,
-            PipelineScriptContext context) {
+            PipelineContext context) {
         final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
         if (value != null) {
             JsonUtils.setPath(toMap, addFieldName, value);

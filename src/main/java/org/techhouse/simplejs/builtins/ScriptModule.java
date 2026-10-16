@@ -10,6 +10,7 @@ import java.util.List;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
@@ -22,13 +23,13 @@ public final class ScriptModule {
 
     public static JsObject create(TextImporter importer, ResourceLimits limits, Intrinsics intrinsics) {
         final var module = new JsObject();
-        module.set("importText",
-                new JsNativeFunction("importText", (_, args) -> importText(importer, limits, intrinsics, args)));
+        module.set("importText", JsNativeFunction.callerAware("importText",
+                (_, args, caller) -> importText(importer, limits, intrinsics, args, caller)));
         return module;
     }
 
     private static JsValue importText(TextImporter importer, ResourceLimits limits, Intrinsics intrinsics,
-            List<JsValue> args) {
+            List<JsValue> args, Coroutine caller) {
         if (limits == null || !limits.textImportEnabled()) {
             throw new JsThrowException(intrinsics.makeError("Error", "Script text import is not available"));
         }
@@ -37,7 +38,7 @@ public final class ScriptModule {
         final var moduleId = explicitId instanceof JsUndefined
                 ? "text:" + sha256(source)
                 : JsCoercion.toStr(explicitId);
-        return importer.importText(moduleId, source);
+        return importer.importText(moduleId, source, caller);
     }
 
     private static String sha256(String source) {

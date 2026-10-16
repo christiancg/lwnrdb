@@ -14,10 +14,11 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.GrantPruner;
+import org.techhouse.ops.admin.GrantRewrite;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.auth.AuthFailureThrottle;
 import org.techhouse.ops.auth.PasswordCheckGate;
 import org.techhouse.ops.req.AuthenticateRequest;
@@ -108,7 +109,7 @@ public class UserOperationHelper {
                 }));
     }
 
-    public static OperationResponse processDeleteUser(DeleteUserRequest request) {
+    public static OperationResponse processDeleteUser(DeleteUserRequest request, RestampedRecords restamped) {
         return OperationResponse.respondOrError(OperationType.DELETE_USER, ErrorCode.ERROR_DELETING_USER,
                 () -> AdminOperationHelper.withUsersLock(() -> {
                     final var username = request.getUsername();
@@ -121,7 +122,7 @@ public class UserOperationHelper {
                     }
                     AdminOperationHelper.deleteUserEntry(username);
                     AdminStamp.tombstone(AdminRecordKey.user(username));
-                    GrantPruner.forDeletedUser(username, RewriteVersion.RESTAMP);
+                    GrantPruner.forDeletedUser(username, new GrantRewrite.Restamp(restamped));
                     return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
                 }));
     }

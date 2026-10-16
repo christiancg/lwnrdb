@@ -96,14 +96,14 @@ public class CacheCompletenessGateTest extends CacheFixtureSupport {
     }
 
     @Test
-    public void test_initializeStreamIfNecessary_skips_cache_when_disabled() throws Exception {
+    public void test_streamCollection_skips_cache_when_disabled() throws Exception {
         final var config = Configuration.getInstance();
         final long original = config.getMaxMemoryBytes();
         TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             TestUtils.createTestDatabaseAndCollection();
-            final var stream = cache.initializeStreamIfNecessary(null, TestGlobals.DB, TestGlobals.COLL);
+            final var stream = cache.streamCollection(TestGlobals.DB, TestGlobals.COLL);
             assertNotNull(stream);
             stream.close();
             final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {

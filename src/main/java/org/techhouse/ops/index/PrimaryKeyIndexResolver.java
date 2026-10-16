@@ -5,7 +5,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import org.techhouse.analyze.AnalyzeContext;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
@@ -21,7 +21,8 @@ public final class PrimaryKeyIndexResolver {
     private PrimaryKeyIndexResolver() {
     }
 
-    public static Set<String> resolve(FieldOperator operator, String dbName, String collName) throws IOException {
+    public static Set<String> resolve(FieldOperator operator, String dbName, String collName, ReadObserver observer)
+            throws IOException {
         final var operand = operator.getValue();
         final var resolved = switch (operator.getFieldOperatorType()) {
             case EQUALS -> idsAmong(Collections.singletonList(operand), dbName, collName);
@@ -34,7 +35,7 @@ public final class PrimaryKeyIndexResolver {
             case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS -> null;
         };
         if (resolved != null) {
-            recordAnalyzeIndexUse(dbName, collName);
+            observer.indexUsed(Globals.PK_FIELD, Cache.getCollectionIdentifier(dbName, collName));
         }
         return resolved;
     }
@@ -87,13 +88,5 @@ public final class PrimaryKeyIndexResolver {
 
     private static boolean isNotPlainString(JsonBaseElement element) {
         return !(element instanceof JsonString) || element.isJsonCustom();
-    }
-
-    private static void recordAnalyzeIndexUse(String dbName, String collName) {
-        final var analyzeContext = AnalyzeContext.current();
-        if (analyzeContext != null) {
-            analyzeContext.addIndexUsed(Globals.PK_FIELD);
-            analyzeContext.addLock(Cache.getCollectionIdentifier(dbName, collName));
-        }
     }
 }

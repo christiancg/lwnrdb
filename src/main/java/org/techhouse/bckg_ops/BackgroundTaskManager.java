@@ -22,10 +22,14 @@ public class BackgroundTaskManager {
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public void submitBackgroundTask(Event op) {
-        if (draining && !BackgroundProcessorThread.onWorkerThread()) {
+        if (draining) {
             logger.warning("Rejecting a background task during shutdown: " + op);
             return;
         }
+        submitFollowOn(op);
+    }
+
+    public void submitFollowOn(Event op) {
         inFlight.incrementAndGet();
         queue.add(op);
     }

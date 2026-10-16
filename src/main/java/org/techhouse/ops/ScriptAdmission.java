@@ -66,7 +66,13 @@ public class ScriptAdmission {
         NONE, SHARED, RESERVED, UNLIMITED
     }
 
-    public final class Permit implements AutoCloseable {
+    public sealed interface Admission permits Permit, Refusal {
+    }
+
+    public record Refusal(String scope) implements Admission {
+    }
+
+    public final class Permit implements Admission, AutoCloseable {
         private final String username;
         private final String database;
         private final boolean nodeWide;
@@ -98,36 +104,36 @@ public class ScriptAdmission {
         }
     }
 
-    public Permit acquire(String username, String database, boolean privileged) {
-        final var slices = acquireSlices(username, database, privileged);
-        if (slices == null) {
-            return null;
-        }
-        if (!tryAcquire()) {
-            slices.close();
-            lastScope.set(SCOPE_NODE);
-            return null;
-        }
-        return new Permit(username, database, permits != null, slices.perUser, slices.databaseSlot);
+    public Admission acquire(String username, String database, boolean privileged) {
+        return switch (acquireSlices(username, database, privileged)) {
+            case Refusal refusal -> refusal;
+            case Permit slices -> withNodePermit(slices);
+        };
     }
 
-    public Permit acquireSlices(String username, String database) {
+    private Admission withNodePermit(Permit slices) {
+        if (!tryAcquire()) {
+            slices.close();
+            return new Refusal(SCOPE_NODE);
+        }
+        return new Permit(slices.username, slices.database, permits != null, slices.perUser, slices.databaseSlot);
+    }
+
+    public Admission acquireSlices(String username, String database) {
         return acquireSlices(username, database, false);
     }
 
-    private Permit acquireSlices(String username, String database, boolean privileged) {
+    private Admission acquireSlices(String username, String database, boolean privileged) {
         final var userTaken = tryAcquireFrom(userPermits, username, perUserCapacity);
         if (!userTaken) {
             rejectedPerUser.incrementAndGet();
-            lastScope.set(SCOPE_USER);
-            return null;
+            return new Refusal(SCOPE_USER);
         }
         final var databaseSlot = takeDatabaseSlot(database, privileged);
         if (databaseSlot == DatabaseSlot.NONE) {
             releaseFrom(userPermits, username);
             rejectedPerDatabase.incrementAndGet();
-            lastScope.set(SCOPE_DATABASE);
-            return null;
+            return new Refusal(SCOPE_DATABASE);
         }
         return new Permit(username, database, false, perUserCapacity > 0 && username != null, databaseSlot);
     }
@@ -148,13 +154,6 @@ public class ScriptAdmission {
         if (slots != null) {
             slots.give(slot);
         }
-    }
-
-    private final ThreadLocal<String> lastScope = new ThreadLocal<>();
-
-    public String lastRefusalScope() {
-        final var scope = lastScope.get();
-        return scope == null ? SCOPE_NODE : scope;
     }
 
     private boolean tryAcquireFrom(ConcurrentHashMap<String, Semaphore> pools, String key, int poolCapacity) {

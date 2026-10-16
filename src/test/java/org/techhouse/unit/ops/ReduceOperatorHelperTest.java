@@ -18,7 +18,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
-import org.techhouse.ops.PipelineScriptContext;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.ReduceOperatorHelper;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
@@ -50,7 +50,7 @@ public class ReduceOperatorHelperTest {
     }
 
     private static JsonObject fold(ReduceAggregationStep step, Stream<JsonObject> source) throws IOException {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var results = ReduceOperatorHelper
                     .processReduceStep(step, source, TestGlobals.DB, TestGlobals.COLL, context).toList();
             assertEquals(1, results.size());
@@ -75,7 +75,7 @@ public class ReduceOperatorHelperTest {
     }
 
     private static String foldOverTheCollection() throws IOException {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var results = ReduceOperatorHelper
                     .processReduceStep(idFold(), null, TestGlobals.DB, TestGlobals.COLL, context).toList();
             assertEquals(1, results.size());

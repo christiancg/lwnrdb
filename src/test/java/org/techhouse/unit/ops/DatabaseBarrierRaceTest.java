@@ -30,6 +30,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.ScheduleOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
@@ -89,8 +90,8 @@ public class DatabaseBarrierRaceTest {
     }
 
     private void dropTestDatabaseWhileHoldingTheBarrier() throws Exception {
-        final var dropped = holder.run(
-                () -> DatabaseOperationHelper.processDropDatabaseOperation(new DropDatabaseRequest(TestGlobals.DB)));
+        final var dropped = holder.run(() -> DatabaseOperationHelper
+                .processDropDatabaseOperation(new DropDatabaseRequest(TestGlobals.DB), new RestampedRecords()));
         assertEquals(OperationStatus.OK, dropped.getStatus());
     }
 

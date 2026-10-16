@@ -3,11 +3,14 @@ package org.techhouse.listen;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.AfterEach;
@@ -90,8 +93,8 @@ public class ListenHoldBackTest {
     }
 
     @Test
-    public void test_a_rerun_overlapping_a_deferred_apply_is_held_back_until_the_flush() throws Exception {
-        manager.deferNotifications(applyingKeys);
+    public void test_a_rerun_overlapping_a_deferred_apply_is_held_back_until_the_root_closes() throws Exception {
+        final var batch = manager.openBatch(applyingKeys);
         saveDocument("half-applied");
 
         runWorkerOnce();
@@ -99,25 +102,25 @@ public class ListenHoldBackTest {
         assertEquals(initialHash, registration.lastHash().get(), "no frame is computed from a half-applied state");
         assertFalse(dirtyQueue().contains(listenId));
 
-        manager.flushDeferredNotifications();
+        batch.close();
 
-        assertTrue(dirtyQueue().contains(listenId), "the flush re-queues the listen it held back");
+        assertTrue(dirtyQueue().contains(listenId), "the root's close re-queues the listen it held back");
         runWorkerOnce();
         assertNotEquals(initialHash, registration.lastHash().get());
     }
 
     @Test
-    public void test_nested_deferrals_release_their_keys_only_at_the_outermost_flush() throws Exception {
-        manager.deferNotifications(applyingKeys);
-        manager.deferNotifications(applyingKeys);
+    public void test_nested_batches_release_their_keys_only_when_the_root_closes() throws Exception {
+        final var root = manager.openBatch(applyingKeys);
+        final var nested = root.nest(applyingKeys);
         saveDocument("nested");
-        manager.flushDeferredNotifications();
+        nested.close();
 
         runWorkerOnce();
 
         assertEquals(initialHash, registration.lastHash().get());
 
-        manager.flushDeferredNotifications();
+        root.close();
         runWorkerOnce();
 
         assertNotEquals(initialHash, registration.lastHash().get());
@@ -131,13 +134,50 @@ public class ListenHoldBackTest {
     }
 
     @Test
-    public void test_a_deferral_without_keys_holds_nothing_back() throws Exception {
-        manager.deferNotifications();
-        saveDocument("unkeyed");
-        manager.flushDeferredNotifications();
+    public void test_a_batch_without_keys_holds_nothing_back() throws Exception {
+        try (var ignored = manager.openBatch(List.of())) {
+            saveDocument("unkeyed");
+        }
 
         runWorkerOnce();
 
         assertNotEquals(initialHash, registration.lastHash().get());
+    }
+
+    @Test
+    public void aHeldBackListenIsReleasedOnRootClose() throws Exception {
+        final var root = manager.openBatch(applyingKeys);
+        final var nested = root.nest(applyingKeys);
+        manager.holdBack(listenId, registration.collectionKeys());
+        assertFalse(dirtyQueue().contains(listenId), "an apply is active, so the listen must wait for it");
+
+        nested.close();
+
+        assertFalse(dirtyQueue().contains(listenId), "only the root's close ends the apply");
+
+        root.close();
+
+        assertTrue(dirtyQueue().contains(listenId));
+        assertNotNull(manager.applySnapshot(registration.collectionKeys()), "the root's close ended the apply");
+    }
+
+    @Test
+    public void closeEndsTheApplyBeforeEnqueuing() {
+        final var activeAtEnqueue = new ArrayList<Boolean>();
+        final var recording = new ListenManager() {
+            @Override
+            void enqueueDirty(String key) {
+                activeAtEnqueue.add(applySnapshot(Set.of(key)) == null);
+                super.enqueueDirty(key);
+            }
+        };
+        final var batch = recording.openBatch(applyingKeys);
+        batch.markDirty(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(List.of(), activeAtEnqueue, "nothing is enqueued while the batch is open");
+
+        batch.close();
+
+        assertEquals(List.of(false), activeAtEnqueue,
+                "a listen woken by the close would refuse its re-run if the apply were still active");
     }
 }

@@ -49,15 +49,17 @@ public final class ScheduleDispatcher {
             DefinerAuthority.disableSchedule(dbName, definition, refusal);
             return;
         }
-        final var permit = admission.acquireSlices(definer, dbName);
-        if (permit == null) {
-            scheduleExecutor.countSkip();
-            recordSkip(entry, definition, "the " + admission.lastRefusalScope()
-                    + " script concurrency limit was reached; this occurrence was skipped");
-            return;
-        }
-        try (permit) {
-            run(entry, definition, procedure.getVersion(), procedure.getSource(), definer);
+        switch (admission.acquireSlices(definer, dbName)) {
+            case ScriptAdmission.Refusal limited -> {
+                scheduleExecutor.countSkip();
+                recordSkip(entry, definition, "the " + limited.scope()
+                        + " script concurrency limit was reached; this occurrence was skipped");
+            }
+            case ScriptAdmission.Permit permit -> {
+                try (permit) {
+                    run(entry, definition, procedure.getVersion(), procedure.getSource(), definer);
+                }
+            }
         }
     }
 

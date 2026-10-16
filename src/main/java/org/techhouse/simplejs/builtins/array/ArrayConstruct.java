@@ -156,7 +156,7 @@ public final class ArrayConstruct {
         }
     }
 
-    public static JsValue construct(JsValue thisArg, List<JsValue> args, InterpreterOps ops) {
+    public static JsValue construct(JsValue thisArg, List<JsValue> args, JsValue newTarget, InterpreterOps ops) {
         final JsValue constructed;
         if (args.size() == 1 && args.getFirst() instanceof JsNumber number) {
             final var length = number.getValue();
@@ -167,7 +167,7 @@ public final class ArrayConstruct {
         } else {
             constructed = new JsArray(new ArrayList<>(args));
         }
-        return thisArg instanceof JsUndefined ? withNewTargetPrototype(constructed, ops) : constructed;
+        return thisArg instanceof JsUndefined ? withNewTargetPrototype(constructed, newTarget, ops) : constructed;
     }
 
     public static JsArray newArray(long length, InterpreterOps ops) {

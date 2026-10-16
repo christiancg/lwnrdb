@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -239,7 +240,7 @@ public class IndexConsistencyPipelineTest {
         addPendingDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(99));
 
         final var matched = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.JOIN_COLL, "refKey",
-                Set.of(new JsonNumber(7)));
+                Set.of(new JsonNumber(7)), ReadObserver.NONE);
         assertNotNull(matched);
         assertFalse(matched.contains("j1"), "a pending doc whose value moved off the join key must not match");
     }

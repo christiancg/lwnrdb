@@ -2,9 +2,11 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.techhouse.unit.ops.AdmissionAssertions.assertAdmitted;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -227,8 +229,7 @@ public class DefinerDispatchAuthorityTest {
         final var entry = registerSchedule("schedule-throttled");
         admission.reconfigure(0, 0L, 1, 0);
         final var skipped = scheduleExecutor.getSkipped();
-        try (var held = admission.acquireSlices(DEFINER, TestGlobals.DB)) {
-            assertNotNull(held);
+        try (var _ = assertInstanceOf(ScriptAdmission.Permit.class, admission.acquireSlices(DEFINER, TestGlobals.DB))) {
             ScheduleDispatcher.dispatch(entry);
         }
         assertNull(outputRow("schedule-throttled"), "the definer's slice was full, so this occurrence is skipped");
@@ -236,7 +237,7 @@ public class DefinerDispatchAuthorityTest {
 
         ScheduleDispatcher.dispatch(entry);
         assertNotNull(outputRow("schedule-throttled"));
-        assertNotNull(admission.acquireSlices(DEFINER, TestGlobals.DB), "the run released its slice");
+        assertAdmitted(admission.acquireSlices(DEFINER, TestGlobals.DB), "the run released its slice");
     }
 
     @Test
@@ -244,8 +245,7 @@ public class DefinerDispatchAuthorityTest {
         installTrigger();
         admission.reconfigure(0, 0L, 1, 0);
         final var runId = recordThrottledRun();
-        try (var held = admission.acquireSlices(DEFINER, TestGlobals.DB)) {
-            assertNotNull(held);
+        try (var _ = assertInstanceOf(ScriptAdmission.Permit.class, admission.acquireSlices(DEFINER, TestGlobals.DB))) {
             TriggerDispatcher.dispatch(event(THROTTLED_ID, runId));
         }
         assertNull(outputRow(THROTTLED_ID));

@@ -1,10 +1,8 @@
 package org.techhouse.unit.ops;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -17,7 +15,6 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.analyze.AggregateResultBudget;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
@@ -25,7 +22,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.listen.ListenProcessorThread;
 import org.techhouse.listen.ListenRegistration;
-import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
@@ -133,35 +129,11 @@ public class AggregateResultBudgetTest {
     }
 
     @Test
-    public void budgetIsPerRequestNotPerThread() throws Exception {
+    public void budgetIsPerRequest() throws Exception {
         capAt("1Mb");
         for (var i = 0; i < 2; i++) {
             final var response = run(aggregate(concatOf(3_000)));
             assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
-        }
-        try (var _ = AggregateResultBudget.open(10)) {
-            AggregateResultBudget.charge(10);
-        }
-        assertDoesNotThrow(() -> AggregateResultBudget.charge(Long.MAX_VALUE / 2));
-    }
-
-    @Test
-    public void aBudgetExactlyAtTheCapIsAcceptedAndOneByteOverIsRefused() {
-        try (var _ = AggregateResultBudget.open(10)) {
-            AggregateResultBudget.charge(10);
-            final var refused = assertThrows(AggregateLimitException.class, () -> AggregateResultBudget.charge(1));
-            assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE, refused.getErrorCode());
-        }
-    }
-
-    @Test
-    public void aNestedBudgetRestoresTheOuterOneOnClose() {
-        try (var _ = AggregateResultBudget.open(100)) {
-            try (var _ = AggregateResultBudget.open(10)) {
-                assertThrows(AggregateLimitException.class, () -> AggregateResultBudget.charge(50));
-            }
-            assertDoesNotThrow(() -> AggregateResultBudget.charge(50));
-            assertThrows(AggregateLimitException.class, () -> AggregateResultBudget.charge(51));
         }
     }
 

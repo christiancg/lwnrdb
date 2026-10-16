@@ -9,7 +9,6 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 
 public final class GrantPruner {
     private static final Logger logger = Logger.logFor(GrantPruner.class);
@@ -17,24 +16,24 @@ public final class GrantPruner {
     private GrantPruner() {
     }
 
-    public static void forDroppedDatabase(String dbName, RewriteVersion version) {
+    public static void forDroppedDatabase(String dbName, GrantRewrite rewrite) {
         final var collectionPrefix = dbName + "|";
-        pruneGrants(dbName, version,
+        pruneGrants(dbName, rewrite,
                 user -> withoutGrants(user, dbName::equals, key -> key.startsWith(collectionPrefix), dbName::equals));
     }
 
-    public static void forDroppedCollection(String dbName, String collName, RewriteVersion version) {
+    public static void forDroppedCollection(String dbName, String collName, GrantRewrite rewrite) {
         final var collectionKey = dbName + "|" + collName;
-        pruneGrants(dbName + "|" + collName, version,
+        pruneGrants(dbName + "|" + collName, rewrite,
                 user -> withoutGrants(user, _ -> false, collectionKey::equals, _ -> false));
     }
 
-    public static void forDeletedUser(String username, RewriteVersion version) {
+    public static void forDeletedUser(String username, GrantRewrite rewrite) {
         try {
             final var rewritten = AdminOperationHelper.rewriteDatabases(database -> withoutOwner(database, username),
-                    version);
-            if (version == RewriteVersion.RESTAMP) {
-                rewritten.forEach(dbName -> RestampedRecords.add(AdminRecordKey.database(dbName)));
+                    rewrite.version());
+            if (rewrite instanceof GrantRewrite.Restamp(var into)) {
+                rewritten.forEach(dbName -> into.add(AdminRecordKey.database(dbName)));
             }
         } catch (Exception failure) {
             logger.error("Could not remove deleted user '" + username + "' from the database owners; a user "
@@ -42,11 +41,11 @@ public final class GrantPruner {
         }
     }
 
-    private static void pruneGrants(String target, RewriteVersion version, UnaryOperator<AdminUserEntry> prune) {
+    private static void pruneGrants(String target, GrantRewrite rewrite, UnaryOperator<AdminUserEntry> prune) {
         try {
-            final var rewritten = AdminOperationHelper.rewriteUsers(prune, version);
-            if (version == RewriteVersion.RESTAMP) {
-                rewritten.forEach(username -> RestampedRecords.add(AdminRecordKey.user(username)));
+            final var rewritten = AdminOperationHelper.rewriteUsers(prune, rewrite.version());
+            if (rewrite instanceof GrantRewrite.Restamp(var into)) {
+                rewritten.forEach(username -> into.add(AdminRecordKey.user(username)));
             }
         } catch (Exception failure) {
             logger.error("Could not remove the permission grants naming '" + target + "'; a database or collection "

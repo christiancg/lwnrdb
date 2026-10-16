@@ -2,30 +2,10 @@ package org.techhouse.unit.analyze;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.analyze.AnalyzeContext;
 
 public class AnalyzeContextTest {
-
-    @AfterEach
-    void tearDown() {
-        AnalyzeContext.clear();
-    }
-
-    @Test
-    public void test_current_is_null_by_default() {
-        assertNull(AnalyzeContext.current());
-    }
-
-    @Test
-    public void test_set_and_clear() {
-        final var context = new AnalyzeContext();
-        AnalyzeContext.set(context);
-        assertSame(context, AnalyzeContext.current());
-        AnalyzeContext.clear();
-        assertNull(AnalyzeContext.current());
-    }
 
     @Test
     public void test_counters_accumulate() {

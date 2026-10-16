@@ -171,7 +171,7 @@ final class LoopEvaluator {
     }
 
     Completion evalForAwaitOf(ForOfStatement statement, Environment env, String label) {
-        final var coroutine = interp.currentCoroutine();
+        final var coroutine = env.resolveCoroutine();
         if (coroutine == null || !coroutine.isAsync()) {
             throw new SyntaxErrorException("for await is only valid inside an async function");
         }

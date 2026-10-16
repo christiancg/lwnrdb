@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -39,18 +40,18 @@ public class IndexHelper {
     private static final Configuration configuration = Configuration.getInstance();
 
     public static List<String> getSortedIdsForField(String dbName, String collName, String fieldName,
-            java.util.Comparator<FieldIndexEntry<?>> order, long maxIds) throws IOException {
-        return IndexEntryReader.sortedIdsForField(dbName, collName, fieldName, order, maxIds);
+            java.util.Comparator<FieldIndexEntry<?>> order, long maxIds, ReadObserver observer) throws IOException {
+        return IndexEntryReader.sortedIdsForField(dbName, collName, fieldName, order, maxIds, observer);
     }
 
-    public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
-            throws IOException {
-        return IndexEntryReader.getIndexEntriesForField(dbName, collName, fieldName);
+    public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName,
+            ReadObserver observer) throws IOException {
+        return IndexEntryReader.getIndexEntriesForField(dbName, collName, fieldName, observer);
     }
 
     public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
-            Set<JsonBaseElement> localValues) throws IOException {
-        return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues);
+            Set<JsonBaseElement> localValues, ReadObserver observer) throws IOException {
+        return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues, observer);
     }
 
     public static List<String> idsInOrder(List<FieldIndexEntry<?>> sortedEntries,

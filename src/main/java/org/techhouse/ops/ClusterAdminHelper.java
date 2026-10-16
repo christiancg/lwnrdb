@@ -46,7 +46,6 @@ public final class ClusterAdminHelper {
         if (!isCoordinatedAdminOp(request.getType())) {
             return null;
         }
-        RestampedRecords.begin();
         if (clusterConfig.isEnabled() && !ownershipManager.isAdminCoordinator()) {
             return new OperationResponse(request.getType(), ErrorCode.NOT_COLLECTION_OWNER);
         }
@@ -66,9 +65,9 @@ public final class ClusterAdminHelper {
         return keys.stream().distinct().toList();
     }
 
-    public static OperationResponse afterAdminOp(OperationRequest request, OperationResponse response) {
+    public static OperationResponse afterAdminOp(OperationRequest request, OperationResponse response,
+            RestampedRecords restamped) {
         final var type = request.getType();
-        final var restamped = RestampedRecords.drain();
         if (!isCoordinatedAdminOp(type) || !clusterConfig.isEnabled() || response.getStatus() != OperationStatus.OK) {
             return response;
         }
@@ -76,7 +75,7 @@ public final class ClusterAdminHelper {
         try {
             outcome = type == OperationType.REINDEX
                     ? coordinator.broadcastReindex((ReindexRequest) request)
-                    : coordinator.replicateAdminRecords(AdminRecords.of(replicatedKeys(request, restamped)));
+                    : coordinator.replicateAdminRecords(AdminRecords.of(replicatedKeys(request, restamped.keys())));
         } catch (IOException unreadable) {
             logger.warning("The " + type + " committed here, but its admin records could not be read to replicate"
                     + " them; the admin anti-entropy sweep carries it: " + unreadable.getMessage());

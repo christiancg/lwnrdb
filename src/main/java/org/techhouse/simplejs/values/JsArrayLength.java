@@ -135,22 +135,8 @@ final class JsArrayLength {
         }
     }
 
-    static void withLengthCoercionOps(InterpreterOps ops, Runnable action) {
-        final var previous = JsArray.LENGTH_COERCION_OPS.get();
-        JsArray.LENGTH_COERCION_OPS.set(ops);
-        try {
-            action.run();
-        } finally {
-            if (previous == null) {
-                JsArray.LENGTH_COERCION_OPS.remove();
-            } else {
-                JsArray.LENGTH_COERCION_OPS.set(previous);
-            }
-        }
-    }
-
-    void defineLengthFrom(String key, PropertyDescriptor descriptor) {
-        final var newLength = descriptor.value() == null ? null : requireArrayLength(descriptor.value());
+    void defineLengthFrom(String key, PropertyDescriptor descriptor, InterpreterOps ops) {
+        final var newLength = descriptor.value() == null ? null : requireArrayLength(descriptor.value(), ops);
         if (!jsArray.lengthFlags.configurable() && Boolean.TRUE.equals(descriptor.configurable())) {
             throw OrdinaryProperties.redefineError(key);
         }
@@ -170,7 +156,7 @@ final class JsArrayLength {
                 && (Boolean.TRUE.equals(descriptor.writable()) || newLength != jsArray.length)) {
             throw OrdinaryProperties.redefineError(key);
         }
-        jsArray.chargeDenseGrowth(JsArray.LENGTH_COERCION_OPS.get(), newLength);
+        jsArray.chargeDenseGrowth(ops, newLength);
         final var truncated = defineLength(newLength);
         setLengthWritable(writable);
         if (!truncated) {
@@ -178,8 +164,7 @@ final class JsArrayLength {
         }
     }
 
-    static long requireArrayLength(JsValue value) {
-        final var ops = JsArray.LENGTH_COERCION_OPS.get();
+    static long requireArrayLength(JsValue value, InterpreterOps ops) {
         final var newLen = NumberFormatter.toUint32(JsCoercion.toNumber(value, ops));
         final var numberLen = JsCoercion.toNumber(value, ops);
         if (newLen != numberLen) {

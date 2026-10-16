@@ -115,7 +115,11 @@ public final class ObjectDescriptors {
             throw new TypeErrorException("Property description must be an object");
         }
         final var descriptor = toPropertyDescriptor(args.get(2), ops);
-        JsArray.withLengthCoercionOps(ops, () -> target.defineOwnProperty(propertyKey, descriptor));
+        if (target instanceof JsArray array) {
+            array.defineOwnProperty(propertyKey, descriptor, ops);
+        } else {
+            target.defineOwnProperty(propertyKey, descriptor);
+        }
         return target;
     }
 

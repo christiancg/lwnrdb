@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
@@ -38,7 +39,7 @@ public class UserOperationHelperLastAdminTest {
     public void test_delete_last_admin_refused() {
         final var req = new DeleteUserRequest();
         req.setUsername("sole_admin");
-        final var resp = UserOperationHelper.processDeleteUser(req);
+        final var resp = UserOperationHelper.processDeleteUser(req, new RestampedRecords());
         assertEquals(OperationStatus.ERROR, resp.getStatus());
         assertTrue(resp.getMessage().contains("last admin"));
     }

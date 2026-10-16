@@ -24,7 +24,7 @@ import org.techhouse.simplejs.values.JsValue;
 public class ScriptModuleTest {
     private final List<String> imported = new ArrayList<>();
 
-    private final TextImporter recorder = (moduleId, source) -> {
+    private final TextImporter recorder = (moduleId, source, _) -> {
         imported.add(moduleId + "|" + source);
         return new JsString(moduleId);
     };

@@ -30,9 +30,9 @@ public final class GeoBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("Geo", (thisArg, args) -> {
-            requireNewTarget("Geo", thisArg);
-            return withNewTargetPrototype(new JsGeo(construct(args, ops)), ops);
+        final var ctor = new JsNativeFunction("Geo", (thisArg, args, newTarget) -> {
+            requireNewTarget("Geo", thisArg, newTarget);
+            return withNewTargetPrototype(new JsGeo(construct(args, ops)), newTarget, ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> new JsGeo(toGeoPoint(arg(args, 0), ops)));
         from.setLength(1);

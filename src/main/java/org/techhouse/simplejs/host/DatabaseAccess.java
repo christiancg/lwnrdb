@@ -3,10 +3,10 @@ package org.techhouse.simplejs.host;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.builtins.Intrinsics;
 
 public interface DatabaseAccess {
-    default void useErrorPrototype(JsObject prototype) {
+    default void useIntrinsics(Intrinsics intrinsics) {
     }
 
     default String scopedDatabase() {

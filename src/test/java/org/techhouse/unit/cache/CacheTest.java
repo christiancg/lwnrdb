@@ -9,7 +9,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.techhouse.cache.Cache;
@@ -160,14 +159,6 @@ public class CacheTest extends CacheFixtureSupport {
     }
 
     @Test
-    public void test_returns_provided_resultStream_if_not_null() throws IOException {
-        Cache cache = new Cache();
-        Stream<JsonObject> mockStream = Stream.of(new JsonObject());
-        Stream<JsonObject> result = cache.initializeStreamIfNecessary(mockStream, "dbName", "collName");
-        assertEquals(mockStream, result);
-    }
-
-    @Test
     public void test_handles_ioexception_when_reading_collection()
             throws NoSuchFieldException, IllegalAccessException, IOException {
         Cache cache = new Cache();
@@ -177,7 +168,7 @@ public class CacheTest extends CacheFixtureSupport {
         fsField.set(cache, fsMock);
 
         when(fsMock.streamEntries(anyString(), anyString())).thenThrow(IOException.class);
-        assertThrows(IOException.class, () -> cache.initializeStreamIfNecessary(null, "dbName", "collName"));
+        assertThrows(IOException.class, () -> cache.streamCollection("dbName", "collName"));
     }
 
     @Test

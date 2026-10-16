@@ -12,16 +12,17 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
@@ -144,10 +145,11 @@ public class AggregateBreadthLimitsTest {
                 .parseRequest(aggregate(filter(conjunction("OR", equalsOperators(2)))))).getAggregationSteps()
                 .getFirst();
         final var conjunction = ((FilterAggregationStep) operator).getOperator();
-        try (var _ = AggregateDeadline.open(1L)) {
+        try (var context = PipelineContext.of(1L, Long.MAX_VALUE, null)) {
             Thread.sleep(5);
-            assertThrows(AggregateDeadline.Expired.class, () -> FilterOperatorHelper
-                    .processOperator(conjunction, rows.stream(), TestGlobals.DB, TestGlobals.COLL).toList());
+            final var refused = assertThrows(AggregateLimitException.class, () -> FilterOperatorHelper
+                    .processOperator(conjunction, rows.stream(), TestGlobals.DB, TestGlobals.COLL, context).toList());
+            assertEquals(ErrorCode.AGGREGATE_TIMEOUT, refused.getErrorCode());
         }
     }
 

@@ -34,8 +34,8 @@ public final class SetBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops, boolean weak) {
         final var name = weak ? "WeakSet" : "Set";
-        return new JsNativeFunction(name, (thisArg, args) -> {
-            requireNewTarget(name, thisArg);
+        return new JsNativeFunction(name, (thisArg, args, newTarget) -> {
+            requireNewTarget(name, thisArg, newTarget);
             return construct(args, ops, weak);
         });
     }

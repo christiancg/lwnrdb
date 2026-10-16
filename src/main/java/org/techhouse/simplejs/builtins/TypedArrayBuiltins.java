@@ -45,9 +45,8 @@ public final class TypedArrayBuiltins {
     private TypedArrayBuiltins() {
     }
 
-    public static JsValue observePrototype(InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+    public static JsValue observePrototype(JsValue newTarget, InterpreterOps ops) {
+        if (ops == null || !NewTargetSupport.isConstructCall(newTarget)) {
             return null;
         }
         return ops.getMember(newTarget, new JsString("prototype"));
@@ -87,9 +86,9 @@ public final class TypedArrayBuiltins {
     }
 
     public static JsNativeFunction create(JsTypedArray.Kind kind, IterableToList iterableToList, InterpreterOps ops) {
-        final var ctor = new JsNativeFunction(kind.ctorName(), (thisArg, args) -> {
-            requireNewTarget(kind.ctorName(), thisArg);
-            return withNewTargetPrototype(constructTyped(kind, args, iterableToList, ops), ops);
+        final var ctor = new JsNativeFunction(kind.ctorName(), (thisArg, args, newTarget) -> {
+            requireNewTarget(kind.ctorName(), thisArg, newTarget);
+            return withNewTargetPrototype(constructTyped(kind, args, iterableToList, ops), newTarget, ops);
         });
         ctor.setLength(3);
         defineBytesPerElement(ctor.ownProperties(), kind);

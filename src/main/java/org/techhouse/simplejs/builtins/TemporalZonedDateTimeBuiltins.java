@@ -71,9 +71,9 @@ public final class TemporalZonedDateTimeBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("ZonedDateTime", (thisArg, args) -> {
-            requireNewTargetOrSubclassInstance("Temporal.ZonedDateTime", thisArg);
-            return withNewTargetPrototype(construct(args, ops), ops);
+        final var ctor = new JsNativeFunction("ZonedDateTime", (thisArg, args, newTarget) -> {
+            requireNewTargetOrSubclassInstance("Temporal.ZonedDateTime", thisArg, newTarget);
+            return withNewTargetPrototype(construct(args, ops), newTarget, ops);
         });
         ctor.setLength(2);
         final var from = new JsNativeFunction("from", (_, args) -> toZonedDateTime(arg(args, 0), arg(args, 1), ops));

@@ -35,8 +35,8 @@ public record ModuleLifecycle(Interpreter interp) {
         final var coroutine = new Coroutine();
         interp.coroutines.add(coroutine);
         coroutine.markAsync();
+        env.defineCoroutine(coroutine);
         coroutine.startAsync(() -> {
-            interp.currentCoroutine.set(coroutine);
             if (interp.moduleBodyWrapper == null) {
                 evaluateModuleBody(program, env, result);
             } else {
@@ -91,7 +91,7 @@ public record ModuleLifecycle(Interpreter interp) {
         interp.statements.disposeScope(env, Completion.empty(), pending);
     }
 
-    public JsValue importModule(String moduleId, String displayName, Supplier<Program> parser) {
+    public JsValue importModule(String moduleId, String displayName, Supplier<Program> parser, Coroutine coroutine) {
         final var state = interp.moduleRegistry.stateOf(moduleId);
         if (state == ModuleRegistry.State.EVALUATED) {
             return interp.moduleRegistry.namespaceOf(moduleId);
@@ -110,7 +110,7 @@ public record ModuleLifecycle(Interpreter interp) {
         interp.moduleDepth++;
         final var previousModule = interp.callStack.enterModule(displayName);
         try {
-            final var namespace = evaluateModule(parser.get());
+            final var namespace = evaluateModule(parser.get(), coroutine);
             interp.moduleRegistry.complete(moduleId, namespace);
             return namespace;
         } catch (RuntimeException error) {
@@ -132,8 +132,9 @@ public record ModuleLifecycle(Interpreter interp) {
         return module;
     }
 
-    public JsValue evaluateModule(Program program) {
+    public JsValue evaluateModule(Program program, Coroutine coroutine) {
         final var env = interp.globalEnv.functionChild();
+        env.defineCoroutine(coroutine);
         final var result = new ModuleResult();
         evaluateModuleBody(program, env, result);
         final var namespace = new JsObject();
@@ -152,7 +153,7 @@ public record ModuleLifecycle(Interpreter interp) {
                 case ExportNamedDeclaration exportNamedDeclaration ->
                     interp.modules.evalExportNamed(exportNamedDeclaration, env, result.namedExports);
                 case ExportAllDeclaration exportAllDeclaration ->
-                    interp.modules.evalExportAll(exportAllDeclaration, result.namedExports);
+                    interp.modules.evalExportAll(exportAllDeclaration, env, result.namedExports);
                 default -> {
                     final var completion = interp.evalStatement(statement, env);
                     if (completion.kind() == Completion.Kind.RETURN) {

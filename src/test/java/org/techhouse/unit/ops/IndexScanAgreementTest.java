@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -318,7 +319,8 @@ public class IndexScanAgreementTest extends FilterResolutionSupport {
 
         assertEquals(Set.of("complete"), cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).getIndexes(),
                 "the field must be registered, or every query above silently proves nothing");
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "complete");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "complete",
+                ReadObserver.NONE);
         assertFalse(entries == null || entries.isEmpty(),
                 "the index must hold entries, or agreement is only scan-against-scan");
     }

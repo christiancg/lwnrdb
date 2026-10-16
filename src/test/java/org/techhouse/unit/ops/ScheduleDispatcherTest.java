@@ -27,6 +27,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.ScheduleDispatcher;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -163,7 +164,7 @@ public class ScheduleDispatcherTest {
         final var entry = register("job", "tempdefiner", true, 0L, idArgs("no-definer"));
         final var request = new DeleteUserRequest();
         request.setUsername("tempdefiner");
-        UserOperationHelper.processDeleteUser(request);
+        UserOperationHelper.processDeleteUser(request, new RestampedRecords());
 
         final var before = scheduleExecutor.getSkipped();
         ScheduleDispatcher.dispatch(entry);

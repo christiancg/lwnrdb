@@ -27,16 +27,7 @@ public final class SchemaValidationHelper {
     private static final Configuration configuration = Configuration.getInstance();
     private static final Map<String, CheckedSchema> checkedSchemas = new ConcurrentHashMap<>();
 
-    private static final ThreadLocal<CheckedWrite> lastChecked = new ThreadLocal<>();
-
     private record CheckedSchema(WeakReference<JsonObject> source, SchemaValidationResult metaResult) {
-    }
-
-    private record CheckedWrite(WeakReference<OperationRequest> request, WeakReference<Object> payload,
-            WeakReference<JsonObject> schema, SchemaBudget budget) {
-        boolean covers(OperationRequest candidate, Object candidatePayload, JsonObject currentSchema) {
-            return request.get() == candidate && payload.get() == candidatePayload && schema.get() == currentSchema;
-        }
     }
 
     private SchemaValidationHelper() {
@@ -112,8 +103,8 @@ public final class SchemaValidationHelper {
     }
 
     public static SchemaBudget budgetFor(OperationRequest request) {
-        final var checked = lastChecked.get();
-        return checked != null && checked.request().get() == request ? checked.budget() : newBudget();
+        final var checked = request.getSchemaCheck();
+        return checked != null ? checked.budget() : newBudget();
     }
 
     private static JsonObject governingSchema(String dbName, String collName) {
@@ -134,14 +125,13 @@ public final class SchemaValidationHelper {
     }
 
     private static boolean alreadyChecked(OperationRequest request, Object payload, JsonObject schema) {
-        final var checked = lastChecked.get();
-        return checked != null && checked.covers(request, payload, schema);
+        final var checked = request.getSchemaCheck();
+        return checked != null && checked.payload() == payload && checked.schema() == schema;
     }
 
     private static void rememberChecked(OperationRequest request, Object payload, JsonObject schema,
             SchemaBudget budget) {
-        lastChecked.set(new CheckedWrite(new WeakReference<>(request), new WeakReference<>(payload),
-                new WeakReference<>(schema), budget));
+        request.setSchemaCheck(new OperationRequest.SchemaCheck(payload, schema, budget));
     }
 
     private static void requireValidSchema(String dbName, String collName, JsonObject schema) {

@@ -501,7 +501,10 @@ throwing import could farm indefinitely. Nesting is capped by `ResourceLimits.ma
 Three built-ins are seeded into the registry: `args` (the request payload), `db` (the
 `DatabaseAccess` surface) and `script` (`importText(source[, moduleId])`, which runs a **string**
 as a module, content-addressing its id by SHA-256; gated off by default behind
-`scriptTextImportEnabled`). A default import of a built-in binds the built-in object itself,
+`scriptTextImportEnabled`). Top-level `await` inside imported text suspends the caller: `importText` is a caller-aware
+native that receives the caller's coroutine from the call site, and `Function.prototype.call`/`apply`, a
+`bind` result and `Reflect.apply` forward the coroutine of their own call site, so an indirect call behaves like a
+direct one. A default import of a built-in binds the built-in object itself,
 while a default import of a real module binds its `default` export — `ModuleEvaluator` tags each
 resolution accordingly. Only `export`ed bindings are importable, which is the one trap worth
 knowing: a procedure written for `CALL_PROCEDURE` with a top-level `return` imports as
@@ -669,10 +672,16 @@ the wrong index family, though, and one `REINDEX` of the collection moves it int
 
   Frames are return addresses kept by `internal/interpreter/CallStack` (pushed and popped beside
   the existing depth counter, so already bounded by `scriptMaxDepth`), with line and column
-  written per statement from positions the parser stamps. The trace is captured **when the error
-  is constructed**, not when it is reported — the JS error object is built at the catch site,
-  after every frame has unwound — through an `InheritableThreadLocal` so a coroutine's virtual
-  thread sees it. Each coroutine swaps in its own stack segment per resumption, so a suspended
+  written per statement from positions the parser stamps. The trace is captured **where the error
+  is raised**, not when it is reported — the JS error object is built at the catch site, after
+  every frame has unwound. A JS `Error` object takes its frames when it is constructed, from the
+  stack supplier its realm's `Intrinsics` holds; an engine exception (`TypeError`, `RangeError`,
+  …) is stamped by `CallStack.stamp` at the first frame boundary it crosses — the statement
+  dispatch, a native or JS call before its frame pops, or a top-level session entry — so the
+  innermost boundary records the frames the throw saw, before any JS `catch` or `finally` in that
+  frame runs. Nothing is thread-scoped: the interpreter's own stack object is reached directly, so
+  a coroutine's virtual thread and a nested interpreter each see their own frames. Each coroutine
+  swaps in its own stack segment per resumption, so a suspended
   generator's frame does not appear in its consumer's trace, and a frame is labelled with the
   module the function was *written* in. Sandbox aborts deliberately capture nothing: a timeout is
   not a program error.

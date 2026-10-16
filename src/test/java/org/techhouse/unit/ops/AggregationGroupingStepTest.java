@@ -10,7 +10,6 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
@@ -22,7 +21,9 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.req.AggregateRequest;
@@ -312,8 +313,9 @@ public class AggregationGroupingStepTest {
         try {
             final var left = categorised("left", "books");
             left.addProperty("k", "v1");
-            assertThrows(AggregateDeadline.Expired.class,
+            final var refused = assertThrows(AggregateLimitException.class,
                     () -> AggregationOperationHelper.processAggregation(request, Stream.of(left)));
+            assertEquals(ErrorCode.AGGREGATE_TIMEOUT, refused.getErrorCode());
         } finally {
             TestUtils.setPrivateField(configuration, "aggregateTimeoutMs",
                     ConfigKey.AGGREGATE_TIMEOUT_MS.defaultValue());

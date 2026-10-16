@@ -42,7 +42,8 @@ public final class RegexBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var self = new JsValue[1];
-        final var regExp = new JsNativeFunction("RegExp", (_, args) -> construct(args, self[0], ops));
+        final var regExp = new JsNativeFunction("RegExp",
+                (_, args, newTarget) -> construct(args, self[0], newTarget, ops));
         self[0] = regExp;
         regExp.setProperty("escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(args))));
         final var speciesGetter = new JsNativeFunction("get [Symbol.species]", (thisArg, _) -> thisArg);
@@ -52,11 +53,11 @@ public final class RegexBuiltins {
         return regExp;
     }
 
-    private static JsValue construct(List<JsValue> args, JsValue self, InterpreterOps ops) {
+    private static JsValue construct(List<JsValue> args, JsValue self, JsValue newTarget, InterpreterOps ops) {
         final var first = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var flagsArg = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         final var explicitFlags = !(flagsArg instanceof JsUndefined);
-        if (!explicitFlags && JsNativeFunction.currentNewTarget() == null && isRegExp(first, ops)
+        if (!explicitFlags && !NewTargetSupport.isConstructCall(newTarget) && isRegExp(first, ops)
                 && SameValueZero.equal(ops.getMember(first, new JsString("constructor")), self)) {
             return first;
         }

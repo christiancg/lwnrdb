@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.simplejs.SimpleJs;
@@ -109,6 +111,20 @@ public class ImportTextProgramTest {
                 return script.importText('export default await Promise.resolve(9);').default;
                 """);
         assertEquals(9, number(result));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"script.importText.call(script, TEXT)", "script.importText.apply(script, [TEXT])",
+            "Reflect.apply(script.importText, script, [TEXT])", "script.importText.bind(script)(TEXT)",
+            "script.importText.call.call(script.importText, script, TEXT)"})
+    public void test_import_text_top_level_await_through_an_indirect_call(String call) {
+        final var result = run("import script from 'script';\n"
+                + "const TEXT = 'export default await Promise.resolve(9);';\n" + "async function viaAsync() { return "
+                + call + ".default; }\n" + "return [" + call + ".default, await viaAsync()];");
+        assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
+        final var values = result.getValue().asJsonArray();
+        assertEquals(9, values.get(0).asJsonNumber().getValue().doubleValue());
+        assertEquals(9, values.get(1).asJsonNumber().getValue().doubleValue());
     }
 
     @Test

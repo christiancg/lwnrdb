@@ -354,10 +354,6 @@ public final class InterpreterUtils {
         return result;
     }
 
-    public static JsValue toErrorValue(RuntimeException error) {
-        return toErrorValue(error, null);
-    }
-
     public static JsValue toErrorValue(RuntimeException error, Intrinsics intrinsics) {
         if (error instanceof JsThrowException thrown) {
             return thrown.getValue();

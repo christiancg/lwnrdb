@@ -58,9 +58,9 @@ public final class TemporalDurationBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("Duration", (thisArg, args) -> {
-            requireNewTargetOrSubclassInstance("Temporal.Duration", thisArg);
-            return construct(args, ops);
+        final var ctor = new JsNativeFunction("Duration", (thisArg, args, newTarget) -> {
+            requireNewTargetOrSubclassInstance("Temporal.Duration", thisArg, newTarget);
+            return construct(args, newTarget, ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> from(arg(args, 0), ops));
         from.setLength(1);
@@ -71,13 +71,13 @@ public final class TemporalDurationBuiltins {
         return ctor;
     }
 
-    private static JsValue construct(List<JsValue> args, InterpreterOps ops) {
+    private static JsValue construct(List<JsValue> args, JsValue newTarget, InterpreterOps ops) {
         final var values = new double[FIELD_ORDER.size()];
         for (var i = 0; i < values.length; i++) {
             values[i] = integerField(args, i, ops);
         }
         final var fields = toFields(values);
-        return withNewTargetPrototype(new JsTemporalDuration(fields), ops);
+        return withNewTargetPrototype(new JsTemporalDuration(fields), newTarget, ops);
     }
 
     private static DurationFields toFields(double[] v) {

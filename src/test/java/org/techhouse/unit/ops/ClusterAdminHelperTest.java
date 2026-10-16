@@ -40,13 +40,14 @@ import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.AdminOperationHelper.RewriteVersion;
 import org.techhouse.ops.ClusterAdminHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.GrantPruner;
+import org.techhouse.ops.admin.GrantRewrite;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
@@ -173,13 +174,13 @@ public class ClusterAdminHelperTest {
     @Test
     public void test_after_admin_op_passes_through_what_it_does_not_replicate() throws Exception {
         final var notAdmin = ok(OperationType.FIND_BY_ID);
-        assertSame(notAdmin,
-                ClusterAdminHelper.afterAdminOp(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL), notAdmin));
+        assertSame(notAdmin, ClusterAdminHelper.afterAdminOp(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL),
+                notAdmin, new RestampedRecords()));
         final var standalone = ok(OperationType.CREATE_COLLECTION);
-        assertSame(standalone, ClusterAdminHelper.afterAdminOp(adminOp(), standalone));
+        assertSame(standalone, ClusterAdminHelper.afterAdminOp(adminOp(), standalone, new RestampedRecords()));
         enable(1, true);
         final var failed = new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ENTRY_NOT_FOUND);
-        assertSame(failed, ClusterAdminHelper.afterAdminOp(adminOp(), failed));
+        assertSame(failed, ClusterAdminHelper.afterAdminOp(adminOp(), failed, new RestampedRecords()));
         verify(replicator, never()).broadcastAdmin(any());
     }
 
@@ -189,7 +190,7 @@ public class ClusterAdminHelperTest {
         when(replicator.broadcastAdmin(any())).thenReturn(ReplicationOutcome.QUORUM_MET);
         final var response = ok(OperationType.CREATE_COLLECTION);
 
-        assertSame(response, ClusterAdminHelper.afterAdminOp(adminOp(), response));
+        assertSame(response, ClusterAdminHelper.afterAdminOp(adminOp(), response, new RestampedRecords()));
         verify(replicator).broadcastAdmin(any());
     }
 
@@ -198,16 +199,16 @@ public class ClusterAdminHelperTest {
         enable(1, true);
         when(replicator.broadcastAdmin(any())).thenReturn(ReplicationOutcome.TIMEOUT);
 
-        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(),
-                ClusterAdminHelper.afterAdminOp(adminOp(), ok(OperationType.CREATE_COLLECTION)).getErrorCode());
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), ClusterAdminHelper
+                .afterAdminOp(adminOp(), ok(OperationType.CREATE_COLLECTION), new RestampedRecords()).getErrorCode());
     }
 
     @Test
     public void test_an_admin_op_whose_coordinator_moved_mid_handler_answers_outcome_unknown() throws Exception {
         becomeNonCoordinator(2);
 
-        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(),
-                ClusterAdminHelper.afterAdminOp(adminOp(), ok(OperationType.CREATE_COLLECTION)).getErrorCode());
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), ClusterAdminHelper
+                .afterAdminOp(adminOp(), ok(OperationType.CREATE_COLLECTION), new RestampedRecords()).getErrorCode());
     }
 
     @Test
@@ -216,8 +217,8 @@ public class ClusterAdminHelperTest {
         when(replicator.broadcastReindex(anyString())).thenReturn(ReplicationOutcome.QUORUM_MET);
         final var response = ok(OperationType.REINDEX);
 
-        assertSame(response,
-                ClusterAdminHelper.afterAdminOp(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null), response));
+        assertSame(response, ClusterAdminHelper.afterAdminOp(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null),
+                response, new RestampedRecords()));
         verify(replicator).broadcastReindex(anyString());
         verify(replicator, never()).broadcastAdmin(any());
     }
@@ -228,14 +229,14 @@ public class ClusterAdminHelperTest {
         assertTrue(new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + Globals.CLUSTER_FOLDER + Globals.FILE_SEPARATOR
                 + Globals.CLUSTER_ADMIN_TOMBSTONES_FILE).mkdirs());
 
-        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(),
-                ClusterAdminHelper.afterAdminOp(adminOp(), ok(OperationType.CREATE_COLLECTION)).getErrorCode());
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), ClusterAdminHelper
+                .afterAdminOp(adminOp(), ok(OperationType.CREATE_COLLECTION), new RestampedRecords()).getErrorCode());
         verify(replicator, never()).broadcastAdmin(any());
     }
 
-    private List<String> shippedKeys(OperationRequest request, OperationType type) {
+    private List<String> shippedKeys(OperationRequest request, OperationType type, RestampedRecords restamped) {
         when(replicator.broadcastAdmin(any())).thenReturn(ReplicationOutcome.QUORUM_MET);
-        ClusterAdminHelper.afterAdminOp(request, ok(type));
+        ClusterAdminHelper.afterAdminOp(request, ok(type), restamped);
         final var shipped = ArgumentCaptor.forClass(AdminSnapshotPayload.class);
         verify(replicator).broadcastAdmin(shipped.capture());
         return shipped.getValue().getRecords().stream().map(AdminRecord::rawKey).toList();
@@ -253,10 +254,10 @@ public class ClusterAdminHelperTest {
         AdminOperationHelper.saveUserEntry(
                 new AdminUserEntry("untouched_user", "hash", false, new HashSet<>(), Map.of(), Map.of(), Map.of()));
         final var request = new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL);
-        ClusterAdminHelper.guard(request);
-        GrantPruner.forDroppedCollection(TestGlobals.DB, TestGlobals.COLL, RewriteVersion.RESTAMP);
+        final var restamped = new RestampedRecords();
+        GrantPruner.forDroppedCollection(TestGlobals.DB, TestGlobals.COLL, new GrantRewrite.Restamp(restamped));
 
-        final var keys = shippedKeys(request, OperationType.DROP_COLLECTION);
+        final var keys = shippedKeys(request, OperationType.DROP_COLLECTION, restamped);
 
         assertTrue(keys.contains(AdminRecordKey.user("pruned_user").id()), keys.toString());
         assertFalse(keys.contains(AdminRecordKey.user("untouched_user").id()), keys.toString());
@@ -267,10 +268,10 @@ public class ClusterAdminHelperTest {
         enable(1, true);
         AdminOperationHelper.saveUserEntry(grantedOnTheTestCollection("kept_user"));
         final var request = new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL);
-        ClusterAdminHelper.guard(request);
-        GrantPruner.forDroppedCollection(TestGlobals.DB, TestGlobals.COLL, RewriteVersion.KEEP);
+        final var restamped = new RestampedRecords();
+        GrantPruner.forDroppedCollection(TestGlobals.DB, TestGlobals.COLL, GrantRewrite.KEEP);
 
-        final var keys = shippedKeys(request, OperationType.DROP_COLLECTION);
+        final var keys = shippedKeys(request, OperationType.DROP_COLLECTION, restamped);
 
         assertEquals(List.of(AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL).id()), keys);
     }
@@ -282,12 +283,24 @@ public class ClusterAdminHelperTest {
         assertTrue(AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of("owner_user")));
         final var request = new DeleteUserRequest();
         request.setUsername("owner_user");
-        ClusterAdminHelper.guard(request);
-        GrantPruner.forDeletedUser("owner_user", RewriteVersion.RESTAMP);
+        final var restamped = new RestampedRecords();
+        GrantPruner.forDeletedUser("owner_user", new GrantRewrite.Restamp(restamped));
 
-        final var keys = shippedKeys(request, OperationType.DELETE_USER);
+        final var keys = shippedKeys(request, OperationType.DELETE_USER, restamped);
 
         assertTrue(keys.contains(AdminRecordKey.database(TestGlobals.DB).id()), keys.toString());
+    }
+
+    @Test
+    public void aRefusedGuardLeavesNothingToReplicate() throws Exception {
+        becomeNonCoordinator(2);
+        assertEquals("421-1", guardCode(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL)));
+        enable(1, true);
+        AdminOperationHelper.saveUserEntry(grantedOnTheTestCollection("later_user"));
+
+        final var keys = shippedKeys(adminOp(), OperationType.CREATE_COLLECTION, new RestampedRecords());
+
+        assertEquals(List.of(AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL).id()), keys);
     }
 
     @Test

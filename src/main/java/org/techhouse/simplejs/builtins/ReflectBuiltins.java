@@ -6,6 +6,7 @@ import static org.techhouse.simplejs.values.JsLimits.MAX_LIST_LENGTH;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
@@ -33,7 +34,8 @@ public final class ReflectBuiltins {
                 (_, args) -> JsBoolean.of(ops.deleteMember(target(args, "deleteProperty"), key(ops, args)))));
         Intrinsics.defineHidden(reflect, "ownKeys", new JsNativeFunction("ownKeys",
                 (_, args) -> new JsArray(new ArrayList<>(ops.ownKeys(target(args, "ownKeys"))))));
-        Intrinsics.defineHidden(reflect, "apply", new JsNativeFunction("apply", (_, args) -> apply(ops, args)));
+        Intrinsics.defineHidden(reflect, "apply",
+                JsNativeFunction.callerAware("apply", (_, args, caller) -> apply(ops, args, caller)));
         Intrinsics.defineHidden(reflect, "construct",
                 new JsNativeFunction("construct", (_, args) -> construct(ops, args)));
         Intrinsics.defineHidden(reflect, "getPrototypeOf", new JsNativeFunction("getPrototypeOf",
@@ -92,14 +94,14 @@ public final class ReflectBuiltins {
         return JsBoolean.of(ops.setPrototypeOf(target, proto));
     }
 
-    private static JsValue apply(InterpreterOps ops, List<JsValue> args) {
+    private static JsValue apply(InterpreterOps ops, List<JsValue> args, Coroutine caller) {
         final var target = arg(args, 0);
         if (!InterpreterUtils.isCallable(target) && !(target instanceof JsProxy proxy && proxy.isCallable())) {
             throw new TypeErrorException("Reflect.apply called on non-callable target");
         }
         final var list = argumentsList(ops, arg(args, 2));
         try {
-            return ops.call(target, arg(args, 1), list);
+            return ops.callFrom(target, arg(args, 1), list, caller);
         } finally {
             InterpreterOps.release(ops, list.size() * InterpreterOps.BYTES_PER_ELEMENT);
         }

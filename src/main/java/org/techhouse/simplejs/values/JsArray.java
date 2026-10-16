@@ -12,7 +12,6 @@ import org.techhouse.simplejs.builtins.InterpreterOps;
 public final class JsArray extends JsValue {
     static final JsValue HOLE = JsUndefined.getHole();
     public static final int MAX_DENSE_LENGTH = 1 << 24;
-    static final ThreadLocal<InterpreterOps> LENGTH_COERCION_OPS = new ThreadLocal<>();
 
     final List<JsValue> elements = new ArrayList<>();
     final PropertyTable table = new PropertyTable();
@@ -375,10 +374,6 @@ public final class JsArray extends JsValue {
             return removed;
         }
     }
-    public static void withLengthCoercionOps(InterpreterOps ops, Runnable action) {
-        JsArrayLength.withLengthCoercionOps(ops, action);
-    }
-
     public long length() {
         return lengths.length();
     }
@@ -407,7 +402,11 @@ public final class JsArray extends JsValue {
 
     @Override
     public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor) {
-        return props.defineOwnProperty(key, descriptor);
+        return defineOwnProperty(key, descriptor, null);
+    }
+
+    public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor, InterpreterOps ops) {
+        return props.defineOwnProperty(key, descriptor, ops);
     }
 
     @Override

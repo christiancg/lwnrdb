@@ -27,9 +27,9 @@ public final class VectorBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("Vector", (thisArg, args) -> {
-            requireNewTarget("Vector", thisArg);
-            return withNewTargetPrototype(new JsVector(construct(args, ops)), ops);
+        final var ctor = new JsNativeFunction("Vector", (thisArg, args, newTarget) -> {
+            requireNewTarget("Vector", thisArg, newTarget);
+            return withNewTargetPrototype(new JsVector(construct(args, ops)), newTarget, ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> new JsVector(toComponents(firstArg(args), ops)));
         from.setLength(1);

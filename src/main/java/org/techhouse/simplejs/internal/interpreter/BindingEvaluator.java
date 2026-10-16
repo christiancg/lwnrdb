@@ -135,7 +135,7 @@ public final class BindingEvaluator {
 
     private void registerUsingResource(Environment env, JsValue value, boolean async) {
         if (async) {
-            final var coroutine = interp.currentCoroutine();
+            final var coroutine = env.resolveCoroutine();
             if (coroutine == null || !coroutine.isAsync()) {
                 throw new SyntaxErrorException("await using is only valid inside an async function");
             }

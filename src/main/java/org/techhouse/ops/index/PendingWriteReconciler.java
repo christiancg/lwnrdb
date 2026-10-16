@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.data.DbEntry;
@@ -37,16 +38,18 @@ public final class PendingWriteReconciler {
         return union;
     }
 
-    public static List<DbEntry> pendingDocuments(String dbName, String collName, Set<String> pendingIds)
-            throws IOException {
-        return cache.getEntriesByIds(dbName, collName, pendingIds);
+    public static List<DbEntry> pendingDocuments(String dbName, String collName, Set<String> pendingIds,
+            ReadObserver observer) throws IOException {
+        final var documents = cache.getEntriesByIds(dbName, collName, pendingIds);
+        observer.scanned(documents.size());
+        return documents;
     }
 
     public static Set<String> correctIds(Set<String> indexed, String dbName, String collName, Set<String> pendingIds,
-            String fieldName, BiPredicate<JsonObject, String> matches) throws IOException {
+            String fieldName, BiPredicate<JsonObject, String> matches, ReadObserver observer) throws IOException {
         final var corrected = new HashSet<>(indexed);
         corrected.removeAll(pendingIds);
-        for (final var dbEntry : pendingDocuments(dbName, collName, pendingIds)) {
+        for (final var dbEntry : pendingDocuments(dbName, collName, pendingIds, observer)) {
             if (matches.test(dbEntry.getData(), fieldName)) {
                 corrected.add(dbEntry.get_id());
             }

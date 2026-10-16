@@ -4,25 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class RestampedRecords {
-    private static final ThreadLocal<List<AdminRecordKey>> COLLECTED = new ThreadLocal<>();
+    private final List<AdminRecordKey> keys = new ArrayList<>();
 
-    private RestampedRecords() {
+    void add(AdminRecordKey key) {
+        keys.add(key);
     }
 
-    public static void begin() {
-        COLLECTED.set(new ArrayList<>());
-    }
-
-    static void add(AdminRecordKey key) {
-        final var collected = COLLECTED.get();
-        if (collected != null) {
-            collected.add(key);
-        }
-    }
-
-    public static List<AdminRecordKey> drain() {
-        final var collected = COLLECTED.get();
-        COLLECTED.remove();
-        return collected == null ? List.of() : collected;
+    public List<AdminRecordKey> keys() {
+        return List.copyOf(keys);
     }
 }

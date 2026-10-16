@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import java.io.IOException;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -97,7 +98,7 @@ public class AggregationSortCustomOrderTest extends FilterResolutionSupport {
         final var orderedIds = IndexHelper.getSortedIdsForField(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 (left, right) -> JsonUtils.compareSortKeysAscending(IndexHelper.indexValueToElement(left.getValue()),
                         IndexHelper.indexValueToElement(right.getValue())),
-                Long.MAX_VALUE);
+                Long.MAX_VALUE, ReadObserver.NONE);
 
         assertNotNull(orderedIds, "a collection of scalar custom values has no hash index, so this path applies");
         assertEquals(List.of("a", "b", "c"), orderedIds,
