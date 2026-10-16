@@ -207,10 +207,13 @@ class Conn:
         return self.send_raw(json.dumps(payload), timeout, strict)
 
     def send_raw(self, line: str, timeout: Optional[float] = None, strict: bool = False) -> dict:
+        return self.send_bytes(line.encode(), timeout, strict)
+
+    def send_bytes(self, line: bytes, timeout: Optional[float] = None, strict: bool = False) -> dict:
         if timeout is not None:
             self.s.settimeout(timeout)
         try:
-            self.s.sendall((line + "\n").encode())
+            self.s.sendall(line + b"\n")
         except (BrokenPipeError, OSError):
             return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
         return self._read_response(strict)

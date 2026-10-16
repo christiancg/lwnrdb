@@ -37,6 +37,11 @@ public enum ErrorCode {
     TOO_MANY_SCHEDULES_FOR_USER("400-33", "The user has the maximum number of schedules", OperationStatus.ERROR),
     TOO_MANY_PROCEDURES("400-34", "The database has the maximum number of procedures", OperationStatus.ERROR),
     SCHEDULE_INTERVAL_TOO_SMALL("400-35", "The schedule interval is below the allowed minimum", OperationStatus.ERROR),
+    AGGREGATE_RESULT_TOO_LARGE("400-36", "The aggregation result exceeds the maximum result size",
+            OperationStatus.ERROR),
+    LISTEN_REQUEST_TOO_LARGE("400-37", "The listen request exceeds the maximum size a listen may retain", OperationStatus.ERROR),
+    TOO_MANY_LISTENS_FOR_USER("400-38", "The user has the maximum number of listen registrations", OperationStatus.ERROR),
+    SCHEMA_TOO_MANY_PATTERNS("400-39", "The schema has more regular expressions than allowed", OperationStatus.ERROR),
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED),
     USER_NO_LONGER_EXISTS("401-2", "User no longer exists", OperationStatus.UNAUTHENTICATED),
     WRONG_CREDENTIALS("401-3", "The user doesn't exist or the wrong credentials have been provided", OperationStatus.ERROR),
@@ -154,6 +159,10 @@ public enum ErrorCode {
     SERVER_SHUTTING_DOWN("503-13", "The server is shutting down, retry against another node or later",
             OperationStatus.ERROR),
     TOO_MANY_UNAUTHENTICATED_CONNECTIONS("503-14", "Too many unauthenticated connections from this address",
+            OperationStatus.ERROR),
+    LISTEN_RETAINED_BYTES_EXHAUSTED("503-15", "The server holds the maximum bytes of listen registrations, retry later",
+            OperationStatus.ERROR),
+    BACKGROUND_BACKLOG("503-16", "The background index queue is full and nothing was written; retry shortly",
             OperationStatus.ERROR);
     // @formatter:on
 

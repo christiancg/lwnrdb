@@ -7,6 +7,7 @@ import java.util.List;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.config.SizeParser;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -22,8 +23,10 @@ public final class StartupWarnings {
             ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS, ConfigKey.MAX_UNAUTHENTICATED_INVALID_REQUESTS,
             ConfigKey.MAX_FAILED_AUTH_ATTEMPTS, ConfigKey.AUTH_FAILURE_DELAY_BASE_MS, ConfigKey.TRANSACTION_MAX_OPS,
             ConfigKey.TRANSACTION_MAX_AGE_MS, ConfigKey.MAX_LISTENS_PER_CONNECTION, ConfigKey.MAX_LISTENS,
-            ConfigKey.MAX_FILTER_OPERANDS, ConfigKey.AGGREGATE_TIMEOUT_MS, ConfigKey.MAX_CONCURRENT_SCRIPTS,
-            ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_USER, ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_DATABASE);
+            ConfigKey.MAX_LISTENS_PER_USER, ConfigKey.MAX_FILTER_OPERANDS, ConfigKey.AGGREGATE_TIMEOUT_MS,
+            ConfigKey.MAX_CONCURRENT_SCRIPTS, ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_USER,
+            ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_DATABASE);
+    private static final List<ConfigKey> SIZE_LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_MEMORY);
 
     private StartupWarnings() {
     }
@@ -62,6 +65,11 @@ public final class StartupWarnings {
         final var off = new ArrayList<String>();
         for (final var key : LIMITS_OFF_AT_ZERO) {
             if (Long.parseLong(config.stringValue(key).trim()) == 0L) {
+                off.add(key.key());
+            }
+        }
+        for (final var key : SIZE_LIMITS_OFF_AT_ZERO) {
+            if (SizeParser.parse(config.stringValue(key)) == 0L) {
                 off.add(key.key());
             }
         }

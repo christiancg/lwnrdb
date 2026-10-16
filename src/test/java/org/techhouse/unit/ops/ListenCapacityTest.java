@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.ErrorCode;
@@ -28,6 +30,8 @@ public class ListenCapacityTest {
     private final Configuration configuration = Configuration.getInstance();
     private final UUID first = UUID.randomUUID();
     private final UUID second = UUID.randomUUID();
+    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final List<UUID> forwarded = new ArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -42,6 +46,11 @@ public class ListenCapacityTest {
         TestUtils.setPrivateField(configuration, "maxListensPerConnection",
                 ConfigKey.MAX_LISTENS_PER_CONNECTION.defaultValue());
         TestUtils.setPrivateField(configuration, "maxListens", ConfigKey.MAX_LISTENS.defaultValue());
+        TestUtils.setPrivateField(configuration, "maxListensPerUser", ConfigKey.MAX_LISTENS_PER_USER.defaultValue());
+        for (final var clientId : forwarded) {
+            listenManager.unregisterAllForClient(clientId);
+            clientTracker.removeById(clientId);
+        }
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -83,5 +92,36 @@ public class ListenCapacityTest {
             assertInstanceOf(ListenResponse.class, listen(first));
         }
         assertTrue(listenManager.hasCapacityFor(first));
+    }
+
+    private UUID connectionOf(String username) {
+        final var clientId = clientTracker.registerForwardedClient(username);
+        forwarded.add(clientId);
+        return clientId;
+    }
+
+    @Test
+    public void test_the_per_user_cap_counts_across_connections() throws Exception {
+        TestUtils.setPrivateField(configuration, "maxListensPerUser", 2);
+        final var firstConnection = connectionOf("per_user_cap_reader");
+        final var secondConnection = connectionOf("per_user_cap_reader");
+        assertInstanceOf(ListenResponse.class, listen(firstConnection));
+        assertInstanceOf(ListenResponse.class, listen(secondConnection));
+        assertEquals(ErrorCode.TOO_MANY_LISTENS_FOR_USER.getCode(), listen(firstConnection).getErrorCode());
+        assertEquals(ErrorCode.TOO_MANY_LISTENS_FOR_USER.getCode(), listen(secondConnection).getErrorCode());
+        assertInstanceOf(ListenResponse.class, listen(connectionOf("per_user_cap_other")));
+        listenManager.unregisterAllForClient(firstConnection);
+        assertInstanceOf(ListenResponse.class, listen(secondConnection));
+    }
+
+    @Test
+    public void test_a_per_user_cap_of_zero_is_off() throws Exception {
+        TestUtils.setPrivateField(configuration, "maxListensPerUser", 0);
+        final var connection = connectionOf("per_user_cap_off_reader");
+        for (var i = 0; i < 5; i++) {
+            assertInstanceOf(ListenResponse.class, listen(connection));
+        }
+        assertEquals(5, listenManager.listensOf("per_user_cap_off_reader"));
+        assertTrue(listenManager.hasUserCapacity("per_user_cap_off_reader"));
     }
 }

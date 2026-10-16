@@ -6,11 +6,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.log.Logger;
 
 public class BackgroundTaskManager {
     private final Logger logger = Logger.logFor(BackgroundTaskManager.class);
+    private final Configuration configuration = Configuration.getInstance();
     private final LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
     private final AtomicInteger inFlight = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
@@ -30,7 +32,7 @@ public class BackgroundTaskManager {
 
     public synchronized void startBackgroundWorkers() {
         draining = false;
-        final var threadCount = Configuration.getInstance().getBackgroundProcessingThreads();
+        final var threadCount = configuration.getBackgroundProcessingThreads();
         workerCount.set(threadCount);
         parked.set(0);
         for (int i = 0; i < threadCount; i++) {
@@ -64,6 +66,11 @@ public class BackgroundTaskManager {
 
     public int pending() {
         return inFlight.get();
+    }
+
+    public boolean awaitCapacity(long waitMs) throws InterruptedException {
+        final var maxEvents = configuration.intValue(ConfigKey.BACKGROUND_QUEUE_MAX_EVENTS);
+        return pending() < maxEvents || idleSignal.awaitIdle(() -> pending() < maxEvents, waitMs);
     }
 
     public synchronized void stopBackgroundWorkers() {

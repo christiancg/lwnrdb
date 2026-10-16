@@ -29,13 +29,32 @@ import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.tls.SelfSignedCertificateGenerator;
 import org.techhouse.conn.tls.TlsContextFactory;
+import org.techhouse.test.TestUtils;
 
 public class SocketServerTest {
+    private static final int BIND_ATTEMPTS = 5;
+    private static final long BIND_WAIT_MS = 5_000L;
 
     private static int freePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         }
+    }
+
+    private static int startServing(ExecutorService executor, SSLServerSocketFactory factory) throws Exception {
+        for (var attempt = 0; attempt < BIND_ATTEMPTS; attempt++) {
+            final int port = freePort();
+            final var server = new SocketServer(port, factory);
+            final var serving = executor.submit(server::serve);
+            final var deadline = System.currentTimeMillis() + BIND_WAIT_MS;
+            while (!serving.isDone() && System.currentTimeMillis() < deadline) {
+                if (TestUtils.getPrivateField(server, "serverSocket", ServerSocket.class) != null) {
+                    return port;
+                }
+                Thread.onSpinWait();
+            }
+        }
+        return fail("no TLS server could bind a free port");
     }
 
     private static SSLServerSocketFactory serverFactory(Path keystorePath) {
@@ -77,13 +96,9 @@ public class SocketServerTest {
 
     @Test
     public void test_tls_server_accepts_tls_client(@TempDir Path tempDir) throws Exception {
-        final int port = freePort();
         final var factory = serverFactory(tempDir.resolve("lwnrdb.p12"));
-        //noinspection resource
         ExecutorService executor = Executors.newSingleThreadExecutor();
-        SocketServer server = new SocketServer(port, factory);
-        executor.submit(server::serve);
-        Thread.sleep(200);
+        final int port = startServing(executor, factory);
         try (SSLSocket socket = (SSLSocket) trustAllClientContext().getSocketFactory().createSocket("localhost",
                 port)) {
             socket.startHandshake();
@@ -97,13 +112,9 @@ public class SocketServerTest {
 
     @Test
     public void test_tls_server_rejects_plaintext_client(@TempDir Path tempDir) throws Exception {
-        final int port = freePort();
         final var factory = serverFactory(tempDir.resolve("lwnrdb.p12"));
-        //noinspection resource
         ExecutorService executor = Executors.newSingleThreadExecutor();
-        SocketServer server = new SocketServer(port, factory);
-        executor.submit(server::serve);
-        Thread.sleep(200);
+        final int port = startServing(executor, factory);
         try {
             String line;
             try (Socket plain = new Socket("localhost", port)) {

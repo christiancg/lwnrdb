@@ -153,8 +153,34 @@ More than `maxListensPerConnection` (64 by default) `LISTEN` registrations on on
 {"type": "LISTEN", "status": "ERROR", "message": "Too many listen registrations", "errorCode": "400-25"}
 ```
 
+More than `maxListensPerUser` (256 by default) `LISTEN` registrations held by one user across all of their
+connections → `400-38`:
+
+```json
+{"type": "LISTEN", "status": "ERROR", "message": "The user has the maximum number of listen registrations", "errorCode": "400-38"}
+```
+
+A `LISTEN` line longer than `listenMaxRequestBytes` (1Mb by default), e.g. a `FILTER` whose `IN` list holds
+120 000 long strings, → `400-37`, refused before the query runs:
+
+```json
+{"type": "LISTEN", "status": "ERROR", "message": "The listen request exceeds the maximum size a listen may retain", "errorCode": "400-37"}
+```
+
+Once the requests every registration keeps (their serialized length) total `listenMaxRetainedBytes` (64Mb by
+default; set it to `2Mb` and register three listens of ~900Kb each) → `503-15` until some registration
+stops, ends or its connection closes:
+
+```json
+{"type": "LISTEN", "status": "ERROR", "message": "The server holds the maximum bytes of listen registrations, retry later", "errorCode": "503-15"}
+```
+
+A background re-run is bounded by `listenRerunTimeoutMs` (10 000 by default) instead of `aggregateTimeoutMs`; a
+re-run past it logs a warning and pushes nothing.
+
 A transaction that would buffer more than `transactionMaxOps` (100 000) operations or `transactionMaxBytes`
-(256Mb) → that write answers `400-26`; the transaction stays usable for commit or rollback:
+(256Mb) → that write answers `400-26`; the transaction stays usable for commit or rollback. A `DELETE` on a
+collection with a `DELETED` trigger counts the whole deleted document, not just its id:
 
 ```json
 {"type": "SAVE", "status": "ERROR", "message": "The transaction would exceed its size limit", "errorCode": "400-26"}
@@ -197,6 +223,19 @@ larger than `maxEntrySize` (a key shared by a few thousand remote documents), in
 {"type": "AGGREGATE", "status": "ERROR", "message": "The aggregation exceeded its time budget", "errorCode": "408-6"}
 ```
 
+A pipeline that builds more than `aggregateMaxResultBytes` (256 MB) in total → `400-36`: the strings its `MAP`s add,
+each `JOIN` row's joined array (once per row, even when rows share one array) and one byte per result row. For
+example 300 documents each given a 1 MB `CONCAT`, or a `JOIN` that attaches the same 1 MB group to every row of a large
+collection:
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "orders", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "big", "operator": {"type": "CONCAT", "operands": ["blob", "blob"]}}]}]}
+```
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The aggregation result exceeds the maximum result size", "errorCode": "400-36"}
+```
+
 A `#vector(...)` literal with more than `maxVectorDimensions` (16 384) components is refused while the request
 is parsed: `The command is not valid`.
 
@@ -235,6 +274,17 @@ is parsed: `The command is not valid`.
 
 ```json
 {"type": "SAVE_SCHEDULE", "status": "ERROR", "message": "The schedule interval is below the allowed minimum (1000 ms)", "errorCode": "400-35"}
+```
+
+A `cron` whose occurrences fall closer together than `scheduleMinIntervalMs` is refused the same way. With
+`scheduleMinIntervalMs=120000`, every minute (or two fires a minute apart) → `400-35`:
+
+```json
+{"type": "SAVE_SCHEDULE", "databaseName": "test", "name": "everyMinute", "procedureName": "recalcTotals", "cron": "* * * * *"}
+```
+
+```json
+{"type": "SAVE_SCHEDULE", "status": "ERROR", "message": "The schedule interval is below the allowed minimum (120000 ms)", "errorCode": "400-35"}
 ```
 
 A trigger or schedule whose definer loses script `RUN` on the database (or, for a trigger, `READ` on its
@@ -1209,6 +1259,21 @@ Once the server starts shutting down, any request on a connection that is still 
 `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION`, which still answer so an open transaction can be released.
 Send a request right after stopping the server (Ctrl+C, or `SIGTERM`) to see it.
 
+A full background index queue holds writes back. Start a server with `backgroundQueueMaxEvents=10` and
+`backgroundBacklogWaitMs=200`, create an index on `testCollection`, then send many single `SAVE`s over several
+connections at once (or a burst of `BULK_SAVE`s). Once 10 events are queued, a `SAVE`, `BULK_SAVE`, `DELETE` or
+`COMMIT_TRANSACTION` waits 200 ms for room and is then refused with nothing written → `503-16`. A `SAVE` inside a
+transaction is buffered and answers `OK`; only its `COMMIT_TRANSACTION` is held back, and the transaction stays
+open. Reads are never held back, and the same write succeeds once the queue drains.
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "held", "aNumber": 1}}
+```
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The background index queue is full and nothing was written; retry shortly", "errorCode": "503-16"}
+```
+
 Users and permissions
 
 Re-authenticate after reconnecting
@@ -1600,6 +1665,30 @@ many times over, or an indented `JSON.stringify` of a deep tree is charged befor
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "const a = []; a.length = 1 << 24; return a.length;"}
 ```
 
+The same holds for the holes a builtin pads past an array's dense end (`fill`, `copyWithin`, `splice`, `map`
+over a sparse array-like), every value `JSON.parse` builds, BigInt results of any operator (`~x`, `x / 3n`,
+`x++`…) and BigInt text (`String(x)`, `x.toString()`), and the output of `encodeURIComponent`/`escape` → `400-12`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "const a = []; a[2 ** 24] = 1; a.fill(1, 2 ** 24 - 1, 2 ** 24); return a.length;"}
+```
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return JSON.parse('[' + '[],'.repeat(3200000) + '[]]').length;"}
+```
+
+A locale argument resolves to the closest locale the JDK ships: private-use subtags and extensions are dropped
+(answers `"1.234,5"`), an unknown language formats as `scriptLocale`, and an ill-formed tag is `400-9`,
+`"message": "RangeError: Incorrect locale information provided"`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return (1234.5).toLocaleString('de-DE-x-anything');"}
+```
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return (1).toLocaleString('en_US@@');"}
+```
+
 A source larger than `scriptMaxSourceBytes` (`256Kb` by default) → `400-10`, before anything is parsed. The
 same cap refuses a `SAVE_PROCEDURE` and a pipeline `SCRIPT` operator. To try it by hand, set
 `scriptMaxSourceBytes=1Kb` in `lwnrdb.cfg` and send any script over a kilobyte.
@@ -1786,7 +1875,9 @@ While it runs, admission is also visible. With `maxConcurrentScripts=1` in `lwnr
 connection B waits `scriptQueueWaitMs` (250 ms by default) for a permit and is then refused → `503-6`. The
 message names the limit that refused it; `maxConcurrentScriptsPerUser` (4 by default) and
 `maxConcurrentScriptsPerDatabase` (8 by default) refuse the same way, without waiting. A fifth concurrent script
-by the same user answers `503-6` with `(user limit)` at once, even while node-wide permits are free.
+by the same user answers `503-6` with `(user limit)` at once, even while node-wide permits are free. The
+last per-database slot is kept for the database's owners and admins: with 7 scripts of ordinary users running
+in `test`, an eighth ordinary one answers `503-6` with `(database limit)` while the owner's still runs.
 
 ```json
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 1;"}
@@ -2150,6 +2241,17 @@ characters) is refused at save → `400-31`, and the schema in force is unchange
 {"type": "SAVE_SCHEMA", "status": "ERROR", "message": "A schema regular expression exceeds the maximum length: a pattern is longer than 4096 characters", "errorCode": "400-31"}
 ```
 
+A schema holding more than `schemaMaxPatterns` (256) regular expressions — `pattern` values plus `patternProperties`
+keys, counted through `$ref`s — is refused at save → `400-39`, before any of them is compiled. Save one with 257
+properties, each with its own `pattern` (build it in a script)
+
+```json
+{"type": "SAVE_SCHEMA", "status": "ERROR", "message": "The schema has more regular expressions than allowed: it has more than 256 patterns", "errorCode": "400-39"}
+```
+
+Comparing a literal or a backreference charges one budget step per 64 characters compared, so `"^(a*)\\1b$"` as a
+`pattern` and a SAVE of 100 000 `a`s answers `400-23` within a second or two instead of spending minutes of CPU.
+
 The budget covers the whole request, so a `BULK_SAVE` shares one `schemaValidationBudget` across its documents:
 documents that each pass alone can together exhaust it → `400-23`, and nothing of the batch is written.
 
@@ -2458,7 +2560,7 @@ Call it — the response carries `result`, `logs` and `logsTruncated`, like `RUN
 {"type": "CALL_PROCEDURE", "databaseName": "test", "procedureName": "recalcTotals", "args": {"id": "findme"}}
 ```
 
-List them — metadata only
+List them — metadata only (`sourceHash` only for callers with script `MANAGE`, ownership or admin)
 
 ```json
 {"type": "LIST_PROCEDURES", "databaseName": "test"}

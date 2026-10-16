@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AggregateDeadline;
+import org.techhouse.analyze.AggregateResultBudget;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -44,15 +45,20 @@ public final class AggregationOperationHelper {
     }
     private static final String GROUP_FIELD_NAME = "group";
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     public static List<JsonObject> processStepsOnStream(List<BaseAggregationStep> steps,
             Stream<JsonObject> initialStream) throws IOException {
-        return applySteps(steps, initialStream, "", "", null);
+        return applySteps(steps, initialStream, "", "", null, aggregateTimeoutMs());
     }
 
     public static List<JsonObject> processAggregation(AggregateRequest request) throws IOException {
+        return processAggregation(request, aggregateTimeoutMs());
+    }
+
+    public static List<JsonObject> processAggregation(AggregateRequest request, long timeoutMs) throws IOException {
         return applySteps(request.getAggregationSteps(), null, request.getDatabaseName(), request.getCollectionName(),
-                null);
+                null, timeoutMs);
     }
 
     public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source)
@@ -63,7 +69,11 @@ public final class AggregationOperationHelper {
     public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source,
             Transaction transaction) throws IOException {
         return applySteps(request.getAggregationSteps(), source, request.getDatabaseName(), request.getCollectionName(),
-                transaction);
+                transaction, aggregateTimeoutMs());
+    }
+
+    private static long aggregateTimeoutMs() {
+        return configuration.longValue(ConfigKey.AGGREGATE_TIMEOUT_MS);
     }
 
     public static List<String> aggregateLockSet(AggregateRequest request) {
@@ -87,9 +97,10 @@ public final class AggregationOperationHelper {
 
     // A Stream is lazy, so a SCRIPT callable runs during toList(): the context must wrap the terminal op too.
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
-            String dbName, String collName, Transaction transaction) throws IOException {
+            String dbName, String collName, Transaction transaction, long timeoutMs) throws IOException {
         try (var context = new PipelineScriptContext();
-                var _ = AggregateDeadline.open(Configuration.getInstance().longValue(ConfigKey.AGGREGATE_TIMEOUT_MS))) {
+                var _ = AggregateDeadline.open(timeoutMs);
+                var _ = AggregateResultBudget.open(configuration.sizeValue(ConfigKey.AGGREGATE_MAX_RESULT_BYTES))) {
             return applySteps(steps, initialStream, dbName, collName, context, transaction);
         }
     }
@@ -134,11 +145,20 @@ public final class AggregationOperationHelper {
                 resultStream = cache.initializeStreamIfNecessary(null, dbName, collName);
             }
             try (var stream = resultStream) {
-                return stream.toList();
+                return materialise(stream);
             }
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         }
+    }
+
+    private static List<JsonObject> materialise(Stream<JsonObject> stream) {
+        final var rows = new ArrayList<JsonObject>();
+        stream.forEachOrdered(row -> {
+            AggregateResultBudget.charge(1);
+            rows.add(row);
+        });
+        return rows;
     }
 
     private static boolean needsFoldOrder(List<BaseAggregationStep> steps, int reduceIndex) {
@@ -228,14 +248,14 @@ public final class AggregationOperationHelper {
                 return groupByViaIndex(indexEntries, dbName, collName, fieldName);
             }
         }
-        final Map<JsonBaseElement, List<JsonObject>> grouped;
+        final Map<SaltedKey, List<JsonObject>> grouped;
         try (var documents = cache.initializeStreamIfNecessary(resultStream, dbName, collName)) {
-            grouped = documents.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName))
-                    .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, fieldName)));
+            grouped = documents.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).collect(
+                    Collectors.groupingBy(jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, fieldName))));
         }
         return grouped.entrySet().stream().map(jsonElementListEntry -> {
             final var groupedEntry = new JsonObject();
-            JsonUtils.setPath(groupedEntry, fieldName, jsonElementListEntry.getKey());
+            JsonUtils.setPath(groupedEntry, fieldName, jsonElementListEntry.getKey().element());
             groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(jsonElementListEntry.getValue()));
             return groupedEntry;
         });
@@ -293,18 +313,19 @@ public final class AggregationOperationHelper {
         final var as = joinStep.getAsField();
         final List<JsonObject> leftEntries;
         try (var documents = cache.initializeStreamIfNecessary(resultStream, dbName, collName)) {
-            leftEntries = documents.toList();
+            leftEntries = AggregateDeadline.watch(documents).toList();
         }
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
                 joinCollectionLocalField, transaction);
-        final var withinEntrySize = new HashMap<JsonBaseElement, Boolean>();
+        final var joinedBytes = new HashMap<SaltedKey, Long>();
         final var asRoot = writtenRoot(as);
         return leftEntries.stream().map(jsonObject -> {
             final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
             if (localValue != null) {
-                final var joined = joinedCollection.get(localValue);
-                if (joined != null && !withinEntrySize.computeIfAbsent(localValue, _ -> fitsAnEntry(joined))) {
-                    throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
+                final var key = new SaltedKey(localValue);
+                final var joined = joinedCollection.get(key);
+                if (joined != null) {
+                    chargeJoinedRow(joinedBytes.computeIfAbsent(key, _ -> serialisedBytes(joined)));
                 }
                 final var copy = jsonObject.copyForWrites(asRoot);
                 JsonUtils.setPath(copy, as, joined);
@@ -314,14 +335,21 @@ public final class AggregationOperationHelper {
         });
     }
 
-    private static boolean fitsAnEntry(JsonArray joined) {
-        return !EntrySizeGuard.exceedsMaxEntrySize(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(joined));
+    private static long serialisedBytes(JsonArray joined) {
+        return EntrySizeGuard.utf8Length(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(joined));
     }
 
-    private static Map<JsonBaseElement, JsonArray> buildJoinLookup(String dbName, String joinCollectionName,
+    private static void chargeJoinedRow(long joinedBytes) {
+        if (EntrySizeGuard.exceedsMaxEntrySize(joinedBytes)) {
+            throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
+        }
+        AggregateResultBudget.charge(joinedBytes);
+    }
+
+    private static Map<SaltedKey, JsonArray> buildJoinLookup(String dbName, String joinCollectionName,
             String remoteField, List<JsonObject> leftEntries, String localField, Transaction transaction)
             throws IOException {
-        final var localValues = new HashSet<JsonBaseElement>();
+        final var localValues = new SaltedElementSet();
         for (var left : leftEntries) {
             final var localValue = JsonUtils.resolvePath(left, localField);
             if (localValue != null) {
@@ -340,25 +368,24 @@ public final class AggregationOperationHelper {
             return groupByRemoteField(joinCollectionMap.values().stream().map(DbEntry::getData), remoteField);
         }
         final var matchedDocs = cache.getEntriesByIds(dbName, joinCollectionName, matchingIds);
-        final var matchedByKey = new HashMap<JsonBaseElement, List<JsonObject>>();
+        final var matchedByKey = new HashMap<SaltedKey, List<JsonObject>>();
         for (var dbEntry : matchedDocs) {
             final var data = dbEntry.getData();
             final var key = JsonUtils.resolvePath(data, remoteField);
             if (key != null) {
-                matchedByKey.computeIfAbsent(key, _ -> new ArrayList<>()).add(data);
+                matchedByKey.computeIfAbsent(new SaltedKey(key), _ -> new ArrayList<>()).add(data);
             }
         }
-        final var lookup = new HashMap<JsonBaseElement, JsonArray>();
+        final var lookup = new HashMap<SaltedKey, JsonArray>();
         matchedByKey.forEach((key, documents) -> lookup.put(key, inIdOrder(documents)));
         return lookup;
     }
 
-    private static Map<JsonBaseElement, JsonArray> groupByRemoteField(Stream<JsonObject> documents,
-            String remoteField) {
-        try (var remoteDocuments = documents) {
+    private static Map<SaltedKey, JsonArray> groupByRemoteField(Stream<JsonObject> documents, String remoteField) {
+        try (var remoteDocuments = AggregateDeadline.watch(documents)) {
             return remoteDocuments.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
-                    .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, remoteField),
-                            HashMap::new,
+                    .collect(Collectors.groupingBy(
+                            jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, remoteField)), HashMap::new,
                             Collectors.collectingAndThen(Collectors.toList(), AggregationOperationHelper::inIdOrder)));
         }
     }
@@ -370,11 +397,11 @@ public final class AggregationOperationHelper {
         if (resultStream == null && fieldName != null && !fieldName.isBlank()) {
             final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName);
             if (indexEntries != null) {
-                return indexEntries.stream().map(indexEntry -> {
+                return distinctRows(indexEntries.stream().map(indexEntry -> {
                     final var json = new JsonObject();
                     JsonUtils.setPath(json, fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
                     return json;
-                }).distinct();
+                }));
             }
         }
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
@@ -383,12 +410,18 @@ public final class AggregationOperationHelper {
             return resultStream.filter(jsonObject -> seen.add(new RowWithoutId(jsonObject)))
                     .map(jsonObject -> jsonObject.copyWithout(Globals.PK_FIELD));
         } else {
-            return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
-                final var json = new JsonObject();
-                JsonUtils.setPath(json, fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
-                return json;
-            }).distinct();
+            return distinctRows(
+                    resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
+                        final var json = new JsonObject();
+                        JsonUtils.setPath(json, fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
+                        return json;
+                    }));
         }
+    }
+
+    private static Stream<JsonObject> distinctRows(Stream<JsonObject> rows) {
+        final var seen = new HashSet<SaltedKey>();
+        return rows.filter(row -> seen.add(new SaltedKey(row)));
     }
 
     private static Stream<JsonObject> processLimitStep(BaseAggregationStep baseLimitStep,
@@ -414,7 +447,7 @@ public final class AggregationOperationHelper {
             var membersHash = 0;
             for (var entry : row.entrySet()) {
                 if (!Globals.PK_FIELD.equals(entry.getKey())) {
-                    membersHash += entry.hashCode();
+                    membersHash += SaltedKey.memberHash(entry.getKey(), entry.getValue());
                 }
             }
             this.hash = membersHash;

@@ -1,5 +1,6 @@
 import os
 import time
+from typing import Callable
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_status, section
@@ -668,6 +669,81 @@ def test_a_connection_cannot_register_past_its_listen_limit():
         check_status("Another connection still registers", listen(fresh, steps), "OK")
 
 
+LISTEN_MAX_REQUEST_BYTES = 1024 * 1024
+LISTENS_PER_CONNECTION = 64
+LISTENS_PER_USER = 256
+
+
+def wait_for_status(attempt: Callable[[], dict], expected: str, timeout: float = 5.0) -> dict:
+    deadline = time.time() + timeout
+    response = attempt()
+    while response.get("status") != expected and time.time() < deadline:
+        time.sleep(0.1)
+        response = attempt()
+    return response
+
+
+def test_oversized_listen_is_400_37(admin: Conn):
+    section("LISTEN: a request line over listenMaxRequestBytes answers 400-37 before it runs")
+
+    operand = "o" * 300
+    values = [f"{i}-{operand}" for i in range(LISTEN_MAX_REQUEST_BYTES // len(operand) + 100)]
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "kind", "value": values}}]
+    check_code("LISTEN with a ~1.1Mb IN list -> 400-37", listen(admin, steps), "ERROR", "400-37")
+    small = [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "kind", "value": values[:100]}}]
+    r = listen(admin, small)
+    check_status("The same connection still registers a small LISTEN", r, "OK")
+    stop_listen(admin, r.get("listenId"))
+
+
+def fill_per_user_cap(connections: list, steps: list) -> list:
+    responses = []
+    for conn in connections:
+        for _ in range(LISTENS_PER_CONNECTION):
+            response = listen(conn, steps)
+            responses.append(response)
+            if response.get("status") != "OK":
+                return responses
+    return responses
+
+
+def test_listens_per_user_cap_across_connections_is_400_38():
+    section("LISTEN: one user is capped at maxListensPerUser registrations across connections")
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "peruser"}}]
+    connections = [Conn() for _ in range(LISTENS_PER_USER // LISTENS_PER_CONNECTION + 1)]
+    try:
+        for conn in connections:
+            conn.authenticate()
+        responses = fill_per_user_cap(connections, steps)
+        accepted = sum(1 for r in responses if r.get("status") == "OK")
+        check(f"At most {LISTENS_PER_USER} registrations are accepted across the connections",
+              LISTENS_PER_USER - 8 <= accepted <= LISTENS_PER_USER, f"accepted={accepted}")
+        check_code("The next one, on a connection under its own limit -> 400-38", responses[-1], "ERROR", "400-38")
+    finally:
+        for conn in connections:
+            conn.close()
+
+
+def test_retained_budget_released_on_disconnect():
+    section("LISTEN: a closed connection gives its registrations back to the user's allowance")
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "released"}}]
+    connections = [Conn() for _ in range(LISTENS_PER_USER // LISTENS_PER_CONNECTION + 1)]
+    try:
+        for conn in connections:
+            conn.authenticate()
+        responses = fill_per_user_cap(connections, steps)
+        check_code("The user is at its cap", responses[-1], "ERROR", "400-38")
+        connections[0].close()
+        survivor = connections[-1]
+        r = wait_for_status(lambda: listen(survivor, steps), "OK")
+        check_status("Once a holding connection closes, the user registers again", r, "OK")
+    finally:
+        for conn in connections:
+            conn.close()
+
+
 def test_a_listen_whose_map_exceeds_the_entry_size_answers_400_28(admin: Conn):
     section("LISTEN: a MAP refused for its result size answers its own code")
 
@@ -818,6 +894,7 @@ def main():
             test_no_push_on_unrelated_write(admin_conn)
             test_aggregate_vector_nearest(admin_conn)
             test_a_listen_whose_map_exceeds_the_entry_size_answers_400_28(admin_conn)
+            test_oversized_listen_is_400_37(admin_conn)
 
             with Conn() as writer_conn, Conn() as listener_conn:
                 writer_conn.authenticate()
@@ -847,6 +924,8 @@ def main():
                 test_a_non_reading_listener_is_disconnected_and_others_still_notified(writer_conn)
 
             test_a_connection_cannot_register_past_its_listen_limit()
+            test_listens_per_user_cap_across_connections_is_400_38()
+            test_retained_budget_released_on_disconnect()
             test_unauthenticated_listen()
 
         finally:

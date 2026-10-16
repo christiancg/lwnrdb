@@ -57,9 +57,12 @@ public class ProcedureDefinition extends StoredDefinition {
         return json;
     }
 
-    public JsonObject toSummaryJson() {
+    public JsonObject toSummaryJson(boolean includeSourceHash) {
         final var json = toJsonObject();
         json.remove(SOURCE_FIELD);
+        if (!includeSourceHash) {
+            json.remove(SOURCE_HASH_FIELD);
+        }
         return json;
     }
 

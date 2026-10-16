@@ -12,7 +12,6 @@ import org.techhouse.simplejs.host.ScriptResult;
 public final class ProcedureCallHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
-    private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     private ProcedureCallHelper() {
@@ -38,7 +37,7 @@ public final class ProcedureCallHelper {
             return new OperationResponse(OperationType.CALL_PROCEDURE,
                     "Procedure '" + name + "' not found in database '" + dbName + "'", ErrorCode.PROCEDURE_NOT_FOUND);
         }
-        final var permit = admission.acquire(username, dbName);
+        final var permit = ScriptOperationHelper.admit(username, dbName);
         if (permit == null) {
             return ScriptOperationHelper.concurrencyRefusal(OperationType.CALL_PROCEDURE);
         }

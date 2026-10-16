@@ -218,7 +218,9 @@ alternation is a loop rather than a Java frame per branch (a `\p{RGI_Emoji}` cla
 thousands of alternatives), and failed `(position, min, max)` repeat attempts are memoized.
 Neither stops a nested quantifier such as `(x+x+)+y` from backtracking exponentially, so the
 matcher also takes a `RegexStepBudget`, a callback charged once per start position, once per
-`match` call and once per candidate count a simple quantifier backtracks through. The 4-argument
+`match` call, once per simple term a sequence consumes, once per candidate count a simple quantifier
+backtracks through, and once per 64 characters a literal or a backreference compares (the compare
+runs in place over the input, with no substring copy). The 4-argument
 `RegexMatcher.exec` is unlimited and is for trusted patterns only; every caller that runs an
 untrusted pattern or input passes a budget. `RegExp` in scripts passes one that calls
 `InterpreterOps.tick()` every 64 steps (see *Sandbox and resource limits*), and the JSON Schema
@@ -321,8 +323,21 @@ allocates, computing the size in `long` so it cannot wrap to zero: growing an ar
 `apply`, `Reflect.apply` and `Reflect.construct` build (credited back when the call returns),
 `Vector.from`, every `Iterator.prototype.windows` copy, `ArrayBuffer.prototype.slice` (including
 `slice(-Infinity)`), the boxed copies typed-array `sort`, `toSorted`, `toReversed` and `set` make,
-`String.raw`, the indentation and per-occurrence string text `JSON.stringify` renders, and the
-worst-case expansion of `normalize` (held only while it runs). An array-like whose `length` is
+`String.raw`, the indentation and per-occurrence string text `JSON.stringify` renders (at its
+escaped width, so a string of control characters is charged six characters per character), the
+worst-case expansion of `normalize` (held only while it runs), every value `JSON.parse` builds
+(32 bytes per node, as for any array element), the holes a builtin pads when it writes past the
+dense end of an array (`fill`, `copyWithin`, `splice` and every other `ArrayLike` write, the
+`CreateDataProperty` writes of `map`, `concat`, `Array.from` and friends, and a `Reflect.set` whose
+receiver is an array), the array-like a Proxy `ownKeys` trap returns (refused past
+`scriptMaxArrayLength`, then charged and paced as it is copied, stopping at the first key that is
+not a string or symbol), the text of `encodeURI`/`encodeURIComponent`/`escape` (counted in a
+first pass, so the output buffer is sized and charged before it is filled), and the decimal,
+radix or grouped digits of a BigInt converted to text (`toString`, `toLocaleString`, `String(x)`,
+a template substitution) once it is wider than 64 bits. A global `replace`/`replaceAll` with a
+replacement string over the built-in `exec` appends each match to the output as it finds it and
+keeps no match list; a replacer function or a custom `exec` keeps the specification's two passes
+(every `exec` call before any result is read) and charges each retained match. An array-like whose `length` is
 above **`scriptMaxArrayLength`** (default 16 777 216) is refused before anything is allocated, as
 an untrappable `ScriptArrayTooLargeError` (`400-30`): `apply`/`Reflect.apply`/`Reflect.construct`
 argument lists, `Vector.from` and `Array.fromAsync`. The event loop also ticks once per microtask,
@@ -360,7 +375,8 @@ weighted tick before or right after the work (`InterpreterOps.paceWork`, one ins
 units): `localeCompare`, `normalize`, case mapping, `trim`, `slice`/`substring`/`substr` on large
 strings, `BigInt.prototype.toString` (by bit length squared), `crypto.hash`, `toHex`/`toBase64`
 and a regex compile. A single such call can still overrun the deadline by its own duration, never
-by more. The regex matcher charges one step for every 64 characters a simple quantifier scans, so
+by more. The regex matcher charges one step for every 64 characters a simple quantifier scans or a literal or
+backreference compares, so
 a pattern that rescans a long input from every start position (`/a{1000000}/` against 999 999
 `a`s) runs into the budget instead of spending minutes between deadline samples. A literal string
 search (`indexOf`, `lastIndexOf`, `includes`, `split`, `replace`, `replaceAll`) whose worst case
@@ -394,11 +410,18 @@ bypasses `ArrayLike` (the typed-array scans, `fill`, `copyWithin`, `join`) calls
 `NativeDepth.MAX = 256` levels, and every native call counts one level, so native-to-native
 recursion through `toString`/`toJSON` is bounded without touching each builtin; past it a
 **catchable** `RangeError: Maximum nesting depth exceeded` is thrown (256 levels fit a
-virtual-thread stack under the deepest `scriptMaxDepth` call stack; a test pins it). BigInt
+virtual-thread stack under the deepest `scriptMaxDepth` call stack; a test pins it). A `db.*`
+call (and each `db.cursor` batch) also needs `NativeDepth.DB_CALL_RESERVE` (32) levels of headroom
+and is refused with that same `RangeError` before it touches a lock, because a stack overflow inside
+a host lock acquire or release would leave the lock held for every other caller. BigInt
 results are sized **before** they are computed (`internal/BigIntLimits`): a result over 2^24 bits
 (2 MiB) throws a catchable `RangeError: Maximum BigInt size exceeded`, a result above 64 bits is
 charged to `scriptMaxMemoryBytes`, and an exponent or shift count beyond `int` is that same
-RangeError rather than an internal error. Finally, an `Error` raised on a coroutine thread (every
+RangeError rather than an internal error. That covers every operator, not only the growing ones:
+`~`, unary `-`, `/`, `%`, `&`, `|`, `^`, `>>`, `++` and `--` keep their operand's size, so each is
+sized as its widest operand plus one bit, the same estimate as `+`. A `JSON.stringify` replacer
+array is de-duplicated through an insertion-ordered set and paces its build loop, so 300 000 keys
+cost one pass instead of a quadratic scan that ignored the deadline. Finally, an `Error` raised on a coroutine thread (every
 script body, generator and async function runs on one) is relayed to the driver and rethrown
 before any generator or promise observer sees it, so a `StackOverflowError` deep inside an async
 function ends the run as `400-12` instead of hanging it with its admission permit held.
@@ -1033,6 +1056,7 @@ procedure/trigger/schedule code.
 | Property escapes do not match the UCD exhaustively | `built-ins/RegExp/property-escapes/generated/` scores 66.31% (311/469) — a genuine per-code-point gap between our resolution of a property name and the exhaustive set the corpus asserts. Property data is the build JDK's (Unicode 17.0 on the pinned JDK 27 floor), so a future JDK will move these escapes with it. |
 | `scriptMaxMemoryBytes` does not bound O(1)-per-instruction allocation | By design — see *Sandbox and resource limits*. Sizing it against `scriptInstructionBudget` is the operator's job. |
 | `localeCompare`/`toLocaleString` honour a locale but only part of `options` | The subset `java.text` can express without `Intl`: `sensitivity` maps onto `Collator`'s three strengths, and `usage`/`numeric`/`caseFirst`/`ignorePunctuation` are validated but not honoured. |
+| A locale argument resolves to the closest locale the JDK ships, keeping only language, script and region | The JDK's locale-provider caches are static and never evicted, so a script naming a fresh tag per call (`'en-x-' + i`) used to grow the server heap for good and starve every tenant's scripts of the heap ceiling. `LocaleResolver` validates the tag (`Locale.Builder`; an ill-formed tag is a `RangeError`, as are `und` and a private-use-only tag), drops extensions and private-use subtags, and looks the language-script-region range up in `Locale.getAvailableLocales()` without ever building a `Locale` from the request. `'en-x-foo'` formats as `en`, `'en-US-u-nu-thai'` as plain `en-US`, and a language the JDK does not know falls back to `scriptLocale`. |
 | `Temporal` fixed offsets beyond ±18:00 are unsupported | `java.time.ZoneOffset` hard-caps there and `ZoneRules` is `final` with no factory past it; supporting it would mean reimplementing every zone computation against a hand-rolled abstraction, for an offset magnitude no real IANA zone uses. Ten test262 cases are excluded by exact path. |
 
 ## Deliberately unimplemented ES2026 features

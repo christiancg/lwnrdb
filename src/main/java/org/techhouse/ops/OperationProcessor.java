@@ -131,7 +131,7 @@ public class OperationProcessor {
             case RUN_SCRIPT -> processRunScriptOperation((RunScriptRequest) operationRequest, actingUser, clientId);
             case SAVE_PROCEDURE -> processSaveProcedure((SaveProcedureRequest) operationRequest, actingUser);
             case DELETE_PROCEDURE -> processDeleteProcedure((DeleteProcedureRequest) operationRequest, actingUser);
-            case LIST_PROCEDURES -> processListProcedures((ListProceduresRequest) operationRequest);
+            case LIST_PROCEDURES -> processListProcedures((ListProceduresRequest) operationRequest, actingUser);
             case CALL_PROCEDURE -> processCallProcedure((CallProcedureRequest) operationRequest, actingUser, clientId);
             case SAVE_TRIGGER -> processSaveTrigger((SaveTriggerRequest) operationRequest, actingUser);
             case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest, actingUser);
@@ -247,8 +247,8 @@ public class OperationProcessor {
                 () -> ProcedureOperationHelper.executeDelete(request, actingUser));
     }
 
-    private OperationResponse processListProcedures(ListProceduresRequest request) {
-        return ProcedureOperationHelper.executeList(request);
+    private OperationResponse processListProcedures(ListProceduresRequest request, String actingUser) {
+        return ProcedureOperationHelper.executeList(request, actingUser);
     }
 
     private OperationResponse processCallProcedure(CallProcedureRequest request, String actingUser, UUID clientId) {

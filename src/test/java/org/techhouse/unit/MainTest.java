@@ -1,11 +1,16 @@
 package org.techhouse.unit;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.ServerSocket;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +31,7 @@ import org.techhouse.test.TestUtils;
 
 public class MainTest {
     private static final long KEYSTORE_WAIT_MS = 10_000L;
+    private static final long BIND_FAILURE_WAIT_MS = 30_000L;
     private final Configuration config = Configuration.getInstance();
     private String origPassword;
 
@@ -150,6 +156,32 @@ public class MainTest {
         Thread.sleep(500);
         thread.interrupt();
         thread.join(2000);
+    }
+
+    @Test
+    public void bindFailureExitsNonZero() throws Exception {
+        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
+        final var exitField = Main.class.getDeclaredField("exit");
+        exitField.setAccessible(true);
+        final var original = exitField.get(null);
+        final var status = new AtomicInteger(-1);
+        exitField.set(null, (IntConsumer) status::set);
+        try (var occupied = new ServerSocket(0)) {
+            final var main = new Thread(() -> {
+                try {
+                    Main.main(new String[]{String.valueOf(occupied.getLocalPort())});
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+            main.start();
+            main.join(BIND_FAILURE_WAIT_MS);
+            assertFalse(main.isAlive(), "main returns once the client port cannot be bound");
+            assertEquals(1, status.get());
+        } finally {
+            exitField.set(null, original);
+        }
     }
 
     @Test

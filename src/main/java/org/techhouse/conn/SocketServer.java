@@ -40,7 +40,7 @@ public class SocketServer {
         this.sslServerSocketFactory = sslServerSocketFactory;
     }
 
-    public void serve() {
+    public boolean serve() {
         try (ServerSocket socketForServing = createServerSocket()) {
             serverSocket = socketForServing;
             logger.info("Server is listening on port " + port + (sslServerSocketFactory != null ? " (TLS)" : ""));
@@ -48,8 +48,10 @@ public class SocketServer {
                 acceptOne(socketForServing);
             }
             logger.info("Stopped accepting new connections on port " + port);
+            return true;
         } catch (IOException ex) {
             logger.fatal("I/O error while starting server on port " + port, ex);
+            return false;
         }
     }
 

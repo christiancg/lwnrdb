@@ -36,6 +36,7 @@ public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     public static List<String> getSortedIdsForField(String dbName, String collName, String fieldName,
             java.util.Comparator<FieldIndexEntry<?>> order, long maxIds) throws IOException {
@@ -165,8 +166,8 @@ public class IndexHelper {
                 .filter(fieldName -> !fs.indexMarkers().isMarked(dbName, collName, fieldName)).toList();
     }
 
-    private static void lockCollectionForMaintenance(String dbName, String collName) throws InterruptedException {
-        final var budget = Configuration.getInstance().getTransactionLockTimeoutMs();
+    private static void lockCollectionForMaintenance(String dbName, String collName, long budget)
+            throws InterruptedException {
         if (!rl.tryLockRead(dbName, collName, budget)) {
             throw new CollectionBusyException(Cache.getCollectionIdentifier(dbName, collName), budget);
         }
@@ -174,10 +175,15 @@ public class IndexHelper {
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
             throws IOException, InterruptedException {
+        bulkUpdateIndexes(dbName, collName, ids, configuration.getTransactionLockTimeoutMs());
+    }
+
+    public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids, long lockBudgetMs)
+            throws IOException, InterruptedException {
         if (ids.isEmpty() || maintainedIndexes(dbName, collName).isEmpty()) {
             return;
         }
-        lockCollectionForMaintenance(dbName, collName);
+        lockCollectionForMaintenance(dbName, collName, lockBudgetMs);
         try {
             final var existingIndexes = maintainedIndexes(dbName, collName);
             if (existingIndexes.isEmpty()) {

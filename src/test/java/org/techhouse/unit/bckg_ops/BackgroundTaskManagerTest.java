@@ -8,11 +8,14 @@ import static org.mockito.Mockito.*;
 import java.lang.reflect.Field;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.test.TestUtils;
@@ -105,5 +108,61 @@ public class BackgroundTaskManagerTest {
 
         final var newPool = TestUtils.getPrivateField(manager, "pool", java.util.concurrent.ExecutorService.class);
         assertTrue(newPool != oldPool && !newPool.isShutdown(), "a fresh, usable pool should replace the old one");
+    }
+
+    private static EntityEvent anyEvent() {
+        return new EntityEvent(EventType.CREATED, "test", "test", new DbEntry());
+    }
+
+    @Test
+    void awaitCapacityTimesOutAtTheBound() throws Exception {
+        final var configuration = Configuration.getInstance();
+        TestUtils.setPrivateField(configuration, "backgroundQueueMaxEvents", 2);
+        try {
+            final var manager = new BackgroundTaskManager();
+            assertTrue(manager.awaitCapacity(0L));
+            manager.submitBackgroundTask(anyEvent());
+            assertTrue(manager.awaitCapacity(0L), "one event below the bound is admitted at once");
+            manager.submitBackgroundTask(anyEvent());
+
+            final var started = System.nanoTime();
+            assertFalse(manager.awaitCapacity(150L));
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) >= 100L, "it waits before refusing");
+            assertFalse(manager.awaitCapacity(0L), "a zero wait refuses at once");
+
+            manager.stopBackgroundWorkers();
+            assertTrue(manager.awaitCapacity(0L));
+        } finally {
+            TestUtils.setPrivateField(configuration, "backgroundQueueMaxEvents",
+                    ConfigKey.BACKGROUND_QUEUE_MAX_EVENTS.defaultValue());
+        }
+    }
+
+    @Test
+    void awaitCapacityReturnsOnceRoomFreesUp() throws Exception {
+        final var configuration = Configuration.getInstance();
+        TestUtils.setPrivateField(configuration, "backgroundQueueMaxEvents", 1);
+        try {
+            final var manager = new BackgroundTaskManager();
+            manager.submitBackgroundTask(anyEvent());
+            final var admitted = new AtomicBoolean();
+            final var waiter = new Thread(() -> {
+                try {
+                    admitted.set(manager.awaitCapacity(10_000L));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            waiter.start();
+
+            manager.stopBackgroundWorkers();
+            waiter.join(10_000L);
+
+            assertFalse(waiter.isAlive());
+            assertTrue(admitted.get(), "a waiting write is served as soon as the queue has room");
+        } finally {
+            TestUtils.setPrivateField(configuration, "backgroundQueueMaxEvents",
+                    ConfigKey.BACKGROUND_QUEUE_MAX_EVENTS.defaultValue());
+        }
     }
 }

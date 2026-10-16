@@ -43,6 +43,7 @@ public final class TransactionOperationHelper {
     @SuppressWarnings("FieldMayBeFinal")
     private static ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
+    private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
     private static final long SHUTDOWN_DEPARTURE_WAIT_MS = 2000L;
 
@@ -175,7 +176,7 @@ public final class TransactionOperationHelper {
             return result == SliceCommit.Result.REPLICATION_TIMEOUT
                     ? new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT)
                     : OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
-        } catch (Exception e) {
+        } catch (Exception | StackOverflowError e) {
             logger.error(OperationType.COMMIT_TRANSACTION + " failed", e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION,
                     fenced ? ErrorCode.TRANSACTION_HALF_APPLIED : ErrorCode.ERROR_TRANSACTION);
@@ -314,8 +315,8 @@ public final class TransactionOperationHelper {
                 continue;
             }
             try {
-                session.submit(() -> rollback(session.clientId()))
-                        .get(Configuration.getInstance().getShutdownTimeoutMs(), TimeUnit.MILLISECONDS);
+                session.submit(() -> rollback(session.clientId())).get(configuration.getShutdownTimeoutMs(),
+                        TimeUnit.MILLISECONDS);
                 rolledBack++;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
@@ -365,7 +366,7 @@ public final class TransactionOperationHelper {
     private static Optional<OperationResponse> rollbackOnSessionThread(TxSession session) {
         try {
             return Optional.of(session.submit(() -> rollback(session.clientId()))
-                    .get(Configuration.getInstance().getShutdownTimeoutMs(), TimeUnit.MILLISECONDS));
+                    .get(configuration.getShutdownTimeoutMs(), TimeUnit.MILLISECONDS));
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         } catch (Exception ex) {

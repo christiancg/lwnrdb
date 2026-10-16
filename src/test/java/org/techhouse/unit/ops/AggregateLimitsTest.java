@@ -27,6 +27,7 @@ import org.techhouse.test.TestUtils;
 
 public class AggregateLimitsTest {
     private static final int SAVED_DOCUMENTS = 300;
+    private static final int REJECTED_DOCUMENTS = 4_000;
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final Configuration configuration = Configuration.getInstance();
 
@@ -176,5 +177,22 @@ public class AggregateLimitsTest {
         assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
         assertFalse(response.getMessage().isEmpty());
         assertNull(response.getErrorCode());
+    }
+
+    @Test
+    public void rejectedRowsAdvanceTheDeadline() throws Exception {
+        final var objects = new StringBuilder(REJECTED_DOCUMENTS * 1_100);
+        for (var i = 0; i < REJECTED_DOCUMENTS; i++) {
+            objects.append(i == 0 ? "" : ",").append("{\"_id\":\"r").append(i).append("\",\"s\":\"").repeat("p", 1_000)
+                    .append("\"}");
+        }
+        assertEquals(OperationStatus.OK, run("{\"type\":\"BULK_SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"objects\":[" + objects + "]}").getStatus());
+        final var rejectEveryRow = aggregate(
+                "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"CONTAINS\",\"field\":\"s\",\"value\":\"zz\"}}");
+        assertEquals(ErrorCode.NO_RESULTS.getCode(), run(rejectEveryRow).getErrorCode());
+        TestUtils.setPrivateField(configuration, "aggregateTimeoutMs", 1L);
+        final var response = run(rejectEveryRow);
+        assertEquals(ErrorCode.AGGREGATE_TIMEOUT.getCode(), response.getErrorCode(), response.getMessage());
     }
 }

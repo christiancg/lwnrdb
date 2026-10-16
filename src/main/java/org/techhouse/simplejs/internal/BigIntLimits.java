@@ -10,6 +10,9 @@ public final class BigIntLimits {
     public static final int MAX_PARSE_DIGITS = 65_536;
 
     private static final long FREE_BITS = Long.SIZE;
+    private static final int SIGN_AND_ROUNDING_CHARS = 2;
+    private static final int DIGITS_PER_GROUP = 3;
+    private static final double LOG_TWO = Math.log(2);
 
     private BigIntLimits() {
     }
@@ -21,6 +24,31 @@ public final class BigIntLimits {
         if (bits > FREE_BITS) {
             InterpreterOps.charge(ops, (bits + Byte.SIZE - 1) / Byte.SIZE);
         }
+    }
+
+    public static void checkWidening(BigInteger a, BigInteger b, InterpreterOps ops) {
+        checkBits(Math.max(a.bitLength(), b.bitLength()) + 1L, ops);
+    }
+
+    public static void checkWidening(BigInteger a, InterpreterOps ops) {
+        checkBits(a.bitLength() + 1L, ops);
+    }
+
+    public static void chargeText(BigInteger value, int radix, InterpreterOps ops) {
+        if (value.bitLength() > FREE_BITS) {
+            InterpreterOps.chargeChars(ops, digits(value, radix));
+        }
+    }
+
+    public static void chargeGroupedText(BigInteger value, InterpreterOps ops) {
+        if (value.bitLength() > FREE_BITS) {
+            final var digits = digits(value, 10);
+            InterpreterOps.chargeChars(ops, digits + digits / DIGITS_PER_GROUP);
+        }
+    }
+
+    private static long digits(BigInteger value, int radix) {
+        return (long) Math.ceil(value.bitLength() * LOG_TWO / Math.log(radix)) + SIGN_AND_ROUNDING_CHARS;
     }
 
     public static BigInteger add(BigInteger a, BigInteger b, InterpreterOps ops) {

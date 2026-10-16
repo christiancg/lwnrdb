@@ -50,6 +50,19 @@ public class ConfigurationValidatorTest {
     }
 
     @Test
+    public void rejectsMalformedBindAddress(@TempDir Path tempDir) {
+        assertHasError(tempDir, "bindAddress", "999.1.1.1", "bindAddress");
+        assertHasError(tempDir, "bindAddress", "not a host", "bindAddress");
+        assertHasError(tempDir, "bindAddress", "fe80::1::2", "bindAddress");
+        assertHasError(tempDir, "bindAddress", "-leading.example", "bindAddress");
+        for (final var valid : new String[]{"", "127.0.0.1", "0.0.0.0", "::1", "localhost", "db-1.example.com"}) {
+            final var config = baseValid(tempDir);
+            config.put("bindAddress", valid);
+            assertTrue(ConfigurationValidator.validate(config).isEmpty(), valid);
+        }
+    }
+
+    @Test
     public void test_invalid_maxConnections(@TempDir Path tempDir) {
         assertHasError(tempDir, "maxConnections", "-1", "maxConnections");
         assertHasError(tempDir, "maxConnections", "abc", "maxConnections");

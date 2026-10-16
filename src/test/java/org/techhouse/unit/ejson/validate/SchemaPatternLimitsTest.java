@@ -27,9 +27,15 @@ public class SchemaPatternLimitsTest {
                 Map.class);
     }
 
-    private static long cachedCharacters() throws Exception {
+    private static long cachedBytes() throws Exception {
         return TestUtils.getPrivateStaticField(Class.forName("org.techhouse.ejson.validate.SchemaPatterns"),
-                "cachedChars", Long.class);
+                "cachedBytes", Long.class);
+    }
+
+    private static long weightOf(Object cached) throws Exception {
+        final var accessor = cached.getClass().getDeclaredMethod("weight");
+        accessor.setAccessible(true);
+        return (long) accessor.invoke(cached);
     }
 
     private boolean matchesPattern(String pattern, String value) {
@@ -74,8 +80,11 @@ public class SchemaPatternLimitsTest {
         final var cache = compiledPatterns();
         assertTrue(cache.size() <= CACHED_PATTERN_CAP, "cached " + cache.size());
         assertTrue(cache.containsKey("^cache-evict-" + (CACHED_PATTERN_CAP + 199) + "$"));
-        final var lengths = cache.keySet().stream().mapToLong(key -> ((String) key).length()).sum();
-        assertEquals(lengths, cachedCharacters());
+        var weights = 0L;
+        for (final var cached : cache.values()) {
+            weights += weightOf(cached);
+        }
+        assertEquals(weights, cachedBytes());
     }
 
     @Test

@@ -22,6 +22,7 @@ public final class BigIntBuiltins {
 
     private static final int MIN_RADIX = 2;
     private static final int MAX_RADIX = 36;
+    private static final int DECIMAL_RADIX = 10;
     private static final long TO_STRING_WORK_DIVISOR = 1L << 20;
 
     private BigIntBuiltins() {
@@ -41,8 +42,8 @@ public final class BigIntBuiltins {
             case "toString" ->
                 new JsNativeFunction("toString", (_, args) -> new JsString(toString(receiver, args, ops)));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> receiver);
-            case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_,
-                    _) -> new JsString(java.text.NumberFormat.getInstance(locale(ops)).format(receiver.getValue())));
+            case "toLocaleString" ->
+                new JsNativeFunction("toLocaleString", (_, _) -> new JsString(toLocaleString(receiver, ops)));
             default -> null;
         };
     }
@@ -90,13 +91,22 @@ public final class BigIntBuiltins {
         final var bits = (long) receiver.getValue().bitLength();
         InterpreterOps.paceWork(ops, bits * bits / TO_STRING_WORK_DIVISOR);
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
+            BigIntLimits.chargeText(receiver.getValue(), DECIMAL_RADIX, ops);
             return receiver.getValue().toString();
         }
         final var radix = (int) toIntegerOrInfinity(JsCoercion.toNumber(args.getFirst(), ops));
         if (radix < MIN_RADIX || radix > MAX_RADIX) {
             throw new RangeErrorException("toString() radix must be between 2 and 36");
         }
+        BigIntLimits.chargeText(receiver.getValue(), radix, ops);
         return receiver.getValue().toString(radix);
+    }
+
+    private static String toLocaleString(JsBigInt receiver, InterpreterOps ops) {
+        final var bits = (long) receiver.getValue().bitLength();
+        InterpreterOps.paceWork(ops, bits * bits / TO_STRING_WORK_DIVISOR);
+        BigIntLimits.chargeGroupedText(receiver.getValue(), ops);
+        return java.text.NumberFormat.getInstance(locale(ops)).format(receiver.getValue());
     }
 
     private static JsValue asIntN(List<JsValue> args, boolean signed, InterpreterOps ops) {

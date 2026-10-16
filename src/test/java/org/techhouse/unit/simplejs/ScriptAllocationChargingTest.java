@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.builtins.InterpreterOps;
@@ -195,5 +197,74 @@ public class ScriptAllocationChargingTest {
         final var result = run("return Reflect.apply(Array.of, null, { length: 5000 }).length;", WALL_CLOCK_MILLIS,
                 ResourceLimits.UNLIMITED_ARRAY_LENGTH);
         assertSucceeds(result);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"~x", "-x", "x / 3n", "x % 7n", "x >> 1n", "x ^ 1n", "x | 1n", "x & x", "++y", "y--"})
+    public void test_bigint_results_that_keep_the_operand_size_are_charged(String operation) {
+        assertFailsWith(ScriptErrorNames.MEMORY, run("const x = 1n << (2n ** 20n); let y = x; const kept = [];"
+                + " for (let i = 0; i < 100; i++) { kept.push(" + operation + "); } return kept.length;"));
+    }
+
+    @Test
+    public void test_small_bigint_arithmetic_is_unaffected() {
+        final var result = run("let y = 12345678901234567890n; y++; y--;"
+                + " return String(~y / 3n % 1000000n ^ 5n | 2n & 7n >> 1n) + ':' + (-y).toString(16);");
+        assertSucceeds(result);
+        assertEquals("-522625:-ab54a98ceb1f0ad2", result.getValue().asJsonString().getValue());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"x.toString()", "x.toString(2)", "String(x)", "`${x}`", "x.toLocaleString()"})
+    public void test_bigint_text_is_charged_before_it_is_built(String conversion) {
+        assertFailsWith(ScriptErrorNames.MEMORY, run("const x = 1n << (2n ** 18n); const kept = [];"
+                + " for (let i = 0; i < 60; i++) { kept.push(" + conversion + "); } return kept.length;"));
+    }
+
+    @Test
+    public void test_filling_into_a_sparse_tail_charges_the_dense_growth() {
+        assertFailsWith(ScriptErrorNames.MEMORY,
+                run("const a = []; a[2 ** 24] = 1; a.fill(1, 2 ** 24 - 1, 2 ** 24); return a.length;"));
+        assertFailsWith(ScriptErrorNames.MEMORY,
+                run("const a = [7]; a[2 ** 24] = 1; a.copyWithin(2 ** 24 - 1, 0, 1); return a.length;"));
+        assertFailsWith(ScriptErrorNames.MEMORY,
+                run("const a = []; a[2 ** 24] = 1; a.splice(2 ** 24 - 1, 0, 'x'); return a.length;"));
+        assertFailsWith(ScriptErrorNames.MEMORY,
+                run("const a = []; Reflect.set({}, String(2 ** 24 - 1), 1, a); return a.length;"));
+        final var filled = run("return [1, 2, 3, 4].fill(0, 1, 3).join(',');");
+        assertSucceeds(filled);
+        assertEquals("1,0,0,4", filled.getValue().asJsonString().getValue());
+    }
+
+    @Test
+    public void test_create_data_property_charges_the_dense_growth() {
+        assertFailsWith(ScriptErrorNames.MEMORY, run("const source = { length: 2 ** 24 + 1, [2 ** 24 - 1]: 1 };"
+                + " return Array.prototype.map.call(source, (v) => v).length;"));
+        final var mapped = run("return Array.from({ length: 3, 0: 1, 2: 3 }, (v) => v ?? 0).join(',');");
+        assertSucceeds(mapped);
+        assertEquals("1,0,3", mapped.getValue().asJsonString().getValue());
+    }
+
+    @Test
+    public void test_json_parse_charges_every_node() {
+        assertFailsWith(ScriptErrorNames.MEMORY, run("return JSON.parse('[' + '[],'.repeat(300000) + '[]]').length;"));
+        final var parsed = run("return JSON.parse('[1, {\"a\": [2, \"b\"]}]')[1].a[1];");
+        assertSucceeds(parsed);
+        assertEquals("b", parsed.getValue().asJsonString().getValue());
+    }
+
+    @Test
+    public void test_a_proxy_own_keys_array_like_is_charged_before_it_is_copied() {
+        final var source = "return Reflect.ownKeys(new Proxy({}, { ownKeys: () => ({ length: 2 ** 31 - 1 }) })).length;";
+        assertFailsWith(ScriptErrorNames.ARRAY_TOO_LARGE, run(source));
+        assertFailsWith(ScriptErrorNames.MEMORY, run(source, WALL_CLOCK_MILLIS, ResourceLimits.UNLIMITED_ARRAY_LENGTH));
+        final var keys = run("return Reflect.ownKeys(new Proxy({}, {"
+                + " ownKeys: () => ({ length: 2, 0: 'a', 1: 'b' }) })).join(',');");
+        assertSucceeds(keys);
+        assertEquals("a,b", keys.getValue().asJsonString().getValue());
+        final var mixed = run("try { Reflect.ownKeys(new Proxy({}, { ownKeys: () => ({ length: 3, 0: 'a', 1: 1 }) }));"
+                + " return 'listed'; } catch (e) { return e.name; }");
+        assertSucceeds(mixed);
+        assertEquals("TypeError", mixed.getValue().asJsonString().getValue());
     }
 }

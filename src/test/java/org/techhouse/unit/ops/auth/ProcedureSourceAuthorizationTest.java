@@ -97,4 +97,14 @@ public class ProcedureSourceAuthorizationTest {
         assertFalse(AuthorizationChecker
                 .mayReadProcedureSource(user("manager", false, null, ScriptPermissionLevel.MANAGE), "otherdb"));
     }
+
+    @Test
+    public void test_owns_or_administers_admits_only_owners_and_admins() {
+        assertFalse(AuthorizationChecker.ownsOrAdministers(null, TestGlobals.DB));
+        assertFalse(AuthorizationChecker.ownsOrAdministers(user("manager", false, null, ScriptPermissionLevel.MANAGE),
+                TestGlobals.DB));
+        assertTrue(AuthorizationChecker.ownsOrAdministers(user(OWNER, false, null, null), TestGlobals.DB));
+        assertTrue(AuthorizationChecker.ownsOrAdministers(user("root", true, null, null), "otherdb"));
+        assertFalse(AuthorizationChecker.ownsOrAdministers(user(OWNER, false, null, null), "otherdb"));
+    }
 }

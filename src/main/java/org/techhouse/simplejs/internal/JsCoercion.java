@@ -50,6 +50,8 @@ import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.simplejs.values.JsVector;
 
 public final class JsCoercion {
+    private static final int DECIMAL_RADIX = 10;
+
     private JsCoercion() {
     }
 
@@ -141,10 +143,11 @@ public final class JsCoercion {
     }
 
     public static String toStr(JsValue value, InterpreterOps ops) {
-        if (ops != null && isObject(value)) {
-            return toStrDataOnly(toPrimitive(value, "string", ops));
+        final var primitive = ops != null && isObject(value) ? toPrimitive(value, "string", ops) : value;
+        if (primitive instanceof JsBigInt big) {
+            BigIntLimits.chargeText(big.getValue(), DECIMAL_RADIX, ops);
         }
-        return toStrDataOnly(value);
+        return toStrDataOnly(primitive);
     }
 
     public static JsValue toNumeric(JsValue value, InterpreterOps ops) {

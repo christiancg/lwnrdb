@@ -2060,6 +2060,69 @@ def test_drop_database_does_not_follow_a_symlink(conn: Conn, work_dir: str, link
           any(name.endswith(".dat") for name in os.listdir(symlink_target(work_dir))))
 
 
+BACKLOG_DB = "backlog_db"
+BACKLOG_PARKED_COLL = "parked_index_docs"
+BACKLOG_COLL = "held_back_docs"
+BACKLOG_MAX_EVENTS = 10
+BACKLOG_WAIT_MS = 200
+
+
+def test_backlog_full_write_is_503_16(conn: Conn):
+    section("A write that finds the background queue full waits, then is refused with nothing written")
+    check_status("create the database", conn.send({"type": "CREATE_DATABASE", "databaseName": BACKLOG_DB}), "OK")
+    for coll in (BACKLOG_PARKED_COLL, BACKLOG_COLL):
+        check_status(f"create {coll}", conn.create_coll(coll, db=BACKLOG_DB), "OK")
+    check_status("index the collection whose batch will park the only worker",
+                 conn.create_index("n", coll=BACKLOG_PARKED_COLL, db=BACKLOG_DB), "OK")
+    check_status("park the background worker inside its next index batch",
+                 conn.send({"type": "ARM_FAULT", "point": "INDEX_BATCH_FLUSHED", "action": "PAUSE",
+                            "match": f"{BACKLOG_DB}|{BACKLOG_PARKED_COLL}"}), "OK")
+    check_status("write the document whose indexing parks the worker",
+                 conn.save({"_id": "parker", "n": 1}, db=BACKLOG_DB, coll=BACKLOG_PARKED_COLL), "OK")
+    check_status("the worker is parked", conn.send({"type": "AWAIT_FAULT", "point": "INDEX_BATCH_FLUSHED",
+                                                    "timeoutMs": 30000}), "OK")
+    refused = None
+    acknowledged = 0
+    for i in range(BACKLOG_MAX_EVENTS * 4):
+        started = time.time()
+        response = conn.save({"_id": f"held{i}", "n": i}, db=BACKLOG_DB, coll=BACKLOG_COLL)
+        if response.get("errorCode") == "503-16":
+            refused = (f"held{i}", (time.time() - started) * 1000)
+            break
+        acknowledged += 1
+    check("once the queue holds backgroundQueueMaxEvents events a SAVE is refused with 503-16",
+          refused is not None, f"{acknowledged} saves were all acknowledged behind a parked worker")
+    if refused is not None:
+        check(f"the refused SAVE waited about backgroundBacklogWaitMs ({BACKLOG_WAIT_MS} ms) first",
+              refused[1] >= BACKLOG_WAIT_MS * 0.8, f"refused after {refused[1]:.0f} ms")
+        check_code("the refused SAVE wrote nothing", conn.find(refused[0], db=BACKLOG_DB, coll=BACKLOG_COLL),
+                   "NOT_FOUND", "404-2")
+    check_status("a read is never held back", conn.find("held0", db=BACKLOG_DB, coll=BACKLOG_COLL), "OK")
+    check_status("release the parked worker", conn.send({"type": "RELEASE_FAULT", "point": "INDEX_BATCH_FLUSHED"}),
+                 "OK")
+    deadline = time.time() + 30.0
+    retried = conn.save({"_id": "after-drain", "n": 0}, db=BACKLOG_DB, coll=BACKLOG_COLL)
+    while retried.get("errorCode") == "503-16" and time.time() < deadline:
+        time.sleep(0.1)
+        retried = conn.save({"_id": "after-drain", "n": 0}, db=BACKLOG_DB, coll=BACKLOG_COLL)
+    check_status("the same write succeeds once the queue drains", retried, "OK")
+
+
+def run_backlog_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-backlog-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, faultInjectionEnabled=True, backgroundProcessingThreads=1,
+                    backgroundQueueMaxEvents=BACKLOG_MAX_EVENTS, backgroundBacklogWaitMs=BACKLOG_WAIT_MS)
+    print(f"\n  Starting server on {HOST}:{PORT} with backgroundQueueMaxEvents={BACKLOG_MAX_EVENTS} ...")
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            test_backlog_full_write_is_503_16(conn)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -2213,6 +2276,10 @@ def main():
         print(f"  Restarting server on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)
         write_intent_kills.test_page_rows_equal_live_bytes_after_a_restart(work_dir, recorded_pages)
+        bu.stop_server(proc)
+        proc = None
+
+        run_backlog_phase()
     finally:
         bu.stop_server(proc)
 

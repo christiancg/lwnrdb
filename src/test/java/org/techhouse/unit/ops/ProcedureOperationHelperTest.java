@@ -185,27 +185,27 @@ public class ProcedureOperationHelperTest {
     public void test_list_omits_source_unless_requested() throws Exception {
         save("return 1;");
         final var withoutSource = (ListProceduresResponse) ProcedureOperationHelper
-                .executeList(new ListProceduresRequest(TestGlobals.DB));
+                .executeList(new ListProceduresRequest(TestGlobals.DB), null);
         assertEquals(1, withoutSource.getProcedures().size());
         assertFalse(withoutSource.getProcedures().getFirst().has("source"));
 
         final var request = new ListProceduresRequest(TestGlobals.DB);
         request.setIncludeSource(true);
-        final var withSource = (ListProceduresResponse) ProcedureOperationHelper.executeList(request);
+        final var withSource = (ListProceduresResponse) ProcedureOperationHelper.executeList(request, null);
         assertEquals("return 1;", withSource.getProcedures().getFirst().get("source").asJsonString().getValue());
     }
 
     @Test
     public void test_list_is_empty_for_a_database_with_no_procedures() {
         final var response = (ListProceduresResponse) ProcedureOperationHelper
-                .executeList(new ListProceduresRequest(TestGlobals.DB));
+                .executeList(new ListProceduresRequest(TestGlobals.DB), null);
         assertTrue(response.getProcedures().isEmpty());
     }
 
     @Test
     public void test_list_rejects_unknown_database() {
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(),
-                ProcedureOperationHelper.executeList(new ListProceduresRequest("missingDb")).getErrorCode());
+                ProcedureOperationHelper.executeList(new ListProceduresRequest("missingDb"), null).getErrorCode());
     }
 
     @Test

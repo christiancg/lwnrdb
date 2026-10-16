@@ -92,6 +92,22 @@ public class JsonStringsTest {
     }
 
     @Test
+    public void escapedLengthMatchesEscape() {
+        final var rng = new Random(7L);
+        for (var sample = 0; sample < 20_000; sample++) {
+            final var value = new StringBuilder();
+            final var length = rng.nextInt(24);
+            for (var index = 0; index < length; index++) {
+                value.append(ESCAPE_ALPHABET.charAt(rng.nextInt(ESCAPE_ALPHABET.length())));
+            }
+            final var text = value.toString();
+            assertEquals(JsonStrings.escape(text).length(), JsonStrings.escapedLength(text), text);
+        }
+        assertEquals(6_000, JsonStrings.escapedLength("\u0001".repeat(1000)));
+        assertEquals(0, JsonStrings.escapedLength(""));
+    }
+
+    @Test
     public void appendEscapedWithoutEscapesAppendsTheSameInstanceContent() {
         final var plain = "plain text with caf\u00e9 and \ud834\udd1e";
         final var out = new StringBuilder();

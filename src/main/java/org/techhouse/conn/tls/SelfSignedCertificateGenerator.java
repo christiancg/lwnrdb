@@ -15,6 +15,7 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
 import org.techhouse.utils.OwnerOnlyPermissions;
@@ -31,6 +32,7 @@ public final class SelfSignedCertificateGenerator {
     private static final int SAN_IP_ADDRESS = 7;
     private static final int VERSION_V3 = 2;
     private static final int SERIAL_BITS = 159;
+    private static final int FIRST_GENERALIZED_TIME_YEAR = 2050;
 
     private SelfSignedCertificateGenerator() {
     }
@@ -56,13 +58,19 @@ public final class SelfSignedCertificateGenerator {
         return generator.generateKeyPair();
     }
 
+    public static byte[] certificateTime(Instant instant) {
+        return instant.atZone(ZoneOffset.UTC).getYear() < FIRST_GENERALIZED_TIME_YEAR
+                ? DerWriter.utcTime(instant)
+                : DerWriter.generalizedTime(instant);
+    }
+
     private static Certificate buildSelfSignedCertificate(KeyPair keyPair) throws GeneralSecurityException {
         final var sigAlgId = DerWriter.sequence(DerWriter.oid(OID_SHA256_WITH_RSA), DerWriter.nullValue());
         final var name = encodeCommonName();
         final var now = Instant.now();
         final var notBefore = now.minus(Duration.ofHours(1));
         final var notAfter = now.plus(Duration.ofDays(Globals.TLS_CERT_VALIDITY_DAYS));
-        final var validity = DerWriter.sequence(DerWriter.utcTime(notBefore), DerWriter.utcTime(notAfter));
+        final var validity = DerWriter.sequence(certificateTime(notBefore), certificateTime(notAfter));
         // publicKey.getEncoded() is already a DER-encoded SubjectPublicKeyInfo, so it is embedded verbatim.
         final var subjectPublicKeyInfo = keyPair.getPublic().getEncoded();
         final var serial = new BigInteger(SERIAL_BITS, new SecureRandom()).add(BigInteger.ONE);

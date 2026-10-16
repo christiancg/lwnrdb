@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.builtins.json.JsonStringify.stringify;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 
 import java.util.List;
+import java.util.Set;
 import org.techhouse.ejson.EJson;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -23,7 +24,7 @@ public final class JsonBuiltins {
     public static final EJson EJSON = new EJson();
     public static final int MAX_INDENT = 10;
 
-    public record Replacer(JsValue function, List<String> allowList) {
+    public record Replacer(JsValue function, Set<String> allowList) {
     }
 
     private JsonBuiltins() {
@@ -141,6 +142,8 @@ public final class JsonBuiltins {
             if (pos >= source.length()) {
                 throw fail("Unexpected end of JSON input");
             }
+            InterpreterOps.tick(ops);
+            InterpreterOps.chargeElements(ops, 1);
             return switch (source.charAt(pos)) {
                 case '{', '[' -> parseNested();
                 case '"' -> new JsString(parseString());

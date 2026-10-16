@@ -5,6 +5,8 @@ import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
 import org.techhouse.analyze.AggregateDeadline;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.elements.JsonObject;
@@ -23,6 +25,7 @@ public class ListenProcessorThread implements Runnable {
     private final ListenManager manager;
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final Configuration configuration = Configuration.getInstance();
 
     public ListenProcessorThread(LinkedBlockingQueue<UUID> dirtyQueue, ListenManager manager) {
         this.dirtyQueue = dirtyQueue;
@@ -79,7 +82,8 @@ public class ListenProcessorThread implements Runnable {
         }
         final List<JsonObject> results;
         try {
-            results = AggregationOperationHelper.processAggregation(registration.request());
+            results = AggregationOperationHelper.processAggregation(registration.request(),
+                    configuration.longValue(ConfigKey.LISTEN_RERUN_TIMEOUT_MS));
         } catch (AggregateDeadline.Expired | AggregateLimitException refused) {
             logger.warning("Listen " + listenId + " was not re-run: " + refused.getMessage());
             return null;

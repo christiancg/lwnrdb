@@ -87,4 +87,10 @@ public class SizeParserTest {
         assertThrows(IllegalArgumentException.class, () -> SizeParser.parse("5Xb"));
     }
 
+    @Test
+    public void overflowRefused() {
+        assertThrows(IllegalArgumentException.class, () -> SizeParser.parse("9000000000tb"));
+        assertThrows(IllegalArgumentException.class, () -> SizeParser.parse("99999999999999999999"));
+        assertEquals(8L * 1024 * 1024 * 1024 * 1024 * 1024, SizeParser.parse("8192tb"));
+    }
 }

@@ -55,10 +55,11 @@ public class ProcedureDefinitionTest {
 
     @Test
     public void test_summary_json_omits_the_source() {
-        final var summary = sample().toSummaryJson();
+        final var summary = sample().toSummaryJson(true);
         assertFalse(summary.has("source"));
         assertTrue(summary.has("sourceHash"));
         assertTrue(summary.has("version"));
+        assertFalse(sample().toSummaryJson(false).has("sourceHash"));
     }
 
     @Test
@@ -69,7 +70,8 @@ public class ProcedureDefinitionTest {
                 sample());
         assertNotEquals(new ProcedureDefinition("recalc", "return 1;", 4L, "a description", true, 100L, 200L, "alice"),
                 sample());
-        assertNotEquals("not a definition", sample());
+        final Object foreign = "not a definition";
+        assertNotEquals(foreign, sample());
         assertTrue(sample().toString().contains("recalc"));
     }
 }

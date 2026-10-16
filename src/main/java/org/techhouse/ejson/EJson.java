@@ -204,4 +204,8 @@ public class EJson {
     public int longestSchemaPattern(JsonObject schema) {
         return SchemaPatternLengths.longestPattern(schema);
     }
+
+    public int schemaPatternCount(JsonObject schema) {
+        return SchemaPatternLengths.count(schema);
+    }
 }

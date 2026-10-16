@@ -12,6 +12,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSocket;
+import org.techhouse.bckg_ops.BackgroundBacklogGate;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterRouter;
@@ -33,11 +34,9 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
-import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.validations.RequestValidator;
-import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -48,6 +47,7 @@ public class MessageProcessor implements Runnable {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final PreAuthSlots preAuthSlots = IocContainer.get(PreAuthSlots.class);
     private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
+    private final BackgroundBacklogGate backlogGate = IocContainer.get(BackgroundBacklogGate.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
@@ -460,7 +460,15 @@ public class MessageProcessor implements Runnable {
         return type == OperationType.ROLLBACK_TRANSACTION && clientTracker.getActiveTransaction(clientId) != null;
     }
 
+    private boolean isOversizedListen(OperationRequest parsedMessage, RequestLine rawMessage) {
+        return parsedMessage.getType() == OperationType.LISTEN
+                && rawMessage.end() - rawMessage.start() > configuration.sizeValue(ConfigKey.LISTEN_MAX_REQUEST_BYTES);
+    }
+
     private Handled handleAuthorized(OperationRequest parsedMessage, RequestLine rawMessage, UUID clientId) {
+        if (isOversizedListen(parsedMessage, rawMessage)) {
+            return refusal(OperationType.LISTEN, ErrorCode.LISTEN_REQUEST_TOO_LARGE);
+        }
         final var wireDepth = parsedMessage.getTriggerDepth();
         // A cascade depth that arrived on the wire is never trusted: only a running trigger may set one.
         parsedMessage.setTriggerDepth(0);
@@ -469,31 +477,19 @@ public class MessageProcessor implements Runnable {
             return new Handled(OutboundQueue.frameOf(schemaError), false, null);
         }
         final var rawJson = clusterConfig.isEnabled() ? withoutTriggerDepth(rawMessage.text(), wireDepth) : null;
-        final var forwarded = clusterRouter.forward(parsedMessage, rawJson,
-                clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
-                clientId);
+        final var inTransaction = clientTracker.getActiveTransaction(clientId) != null;
+        final var forwarded = clusterRouter.forward(parsedMessage, rawJson, inTransaction,
+                clientTracker.getAuthenticatedUsername(clientId), clientId);
         if (forwarded != null) {
             return new Handled(EncodedJson.of(Utf8Encoder.encode(forwarded)), false, null);
         }
-        final var analyze = parsedMessage instanceof AggregateRequest aggReq && aggReq.isAnalyze();
-        final var analyzeStart = analyze ? System.currentTimeMillis() : 0L;
-        final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
-        if (analyze && responseObj instanceof AggregateAnalyzeResponse analyzeResp
-                && analyzeResp.getAnalyzeResult() != null) {
-            final var analyzeEnd = System.currentTimeMillis();
-            final var analyzeResult = analyzeResp.getAnalyzeResult();
-            analyzeResult.setStartTime(analyzeStart);
-            analyzeResult.setEndTime(analyzeEnd);
-            analyzeResult.setDurationMillis(analyzeEnd - analyzeStart);
+        final var backlog = backlogGate.admitClientRequest(parsedMessage.getType(), inTransaction);
+        if (backlog != null) {
+            return refusal(parsedMessage.getType(), backlog);
         }
+        final var responseObj = AnalyzeTiming.timed(parsedMessage,
+                () -> operationProcessor.processMessage(parsedMessage, clientId));
         return new Handled(OutboundQueue.frameOf(responseObj), responseObj.getType() == OperationType.CLOSE_CONNECTION,
-                listenToDeliver(responseObj));
-    }
-
-    private static UUID listenToDeliver(OperationResponse responseObj) {
-        if (responseObj instanceof ListenResponse listen && !listen.isUpdate() && listen.getListenId() != null) {
-            return UUID.fromString(listen.getListenId());
-        }
-        return null;
+                responseObj instanceof ListenResponse listen ? listen.deliveredListenId() : null);
     }
 }

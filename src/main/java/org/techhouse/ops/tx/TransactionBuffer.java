@@ -178,9 +178,6 @@ public final class TransactionBuffer {
             if (deleteHook != null) {
                 return deleteHook;
             }
-            if (exceedsLimits(transaction, 1, id.length())) {
-                return new OperationResponse(OperationType.DELETE, ErrorCode.TRANSACTION_TOO_LARGE);
-            }
             final var payload = new JsonObject();
             payload.addProperty(Globals.PK_FIELD, id);
             final var deletedDocument = TransactionWrites.documentForDeletedTrigger(transaction, collId, dbName,
@@ -188,9 +185,13 @@ public final class TransactionBuffer {
             if (deletedDocument != null) {
                 payload.add(DELETED_DOCUMENT_FIELD, deletedDocument);
             }
+            final var bytes = byteSizeOf(dbName, collName, payload);
+            if (exceedsLimits(transaction, 1, bytes)) {
+                return new OperationResponse(OperationType.DELETE, ErrorCode.TRANSACTION_TOO_LARGE);
+            }
             final var version = hybridClock.next();
             bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload, List.of(),
-                    List.of(version), id.length());
+                    List.of(version), bytes);
             transaction.recordDelete(collId, id, version);
             return new DeleteResponse("Entry with id " + id + " deleted successfully");
         });

@@ -2,6 +2,8 @@ package org.techhouse.ejson.validate;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.regex.RegexMatcher;
@@ -11,10 +13,13 @@ import org.techhouse.simplejs.internal.regex.RegexStepBudget;
 
 final class SchemaPatterns {
     private static final int MAX_CACHED_PATTERNS = 4096;
-    private static final long MAX_CACHED_PATTERN_CHARS = 4L * 1024 * 1024;
     private static final String ECMA_UNICODE_MODE = "u";
-    private static final Map<String, RegexProgram> COMPILED = new LinkedHashMap<>(64, 0.75f, true);
-    private static long cachedChars;
+    private static final Configuration configuration = Configuration.getInstance();
+    private static final Map<String, CachedProgram> COMPILED = new LinkedHashMap<>(64, 0.75f, true);
+    private static long cachedBytes;
+
+    private record CachedProgram(RegexProgram program, long weight) {
+    }
 
     private SchemaPatterns() {
     }
@@ -47,22 +52,24 @@ final class SchemaPatterns {
     }
 
     private static synchronized RegexProgram cachedProgram(String regex) {
-        return COMPILED.get(regex);
+        final var cached = COMPILED.get(regex);
+        return cached == null ? null : cached.program();
     }
 
     private static synchronized RegexProgram admit(String regex, RegexProgram program) {
-        if (regex.length() > MAX_CACHED_PATTERN_CHARS) {
+        final var maxBytes = configuration.sizeValue(ConfigKey.SCHEMA_PATTERN_CACHE_MAX_BYTES);
+        final var weight = (long) Character.BYTES * regex.length() + program.estimatedBytes();
+        if (regex.length() > configuration.intValue(ConfigKey.SCHEMA_MAX_PATTERN_LENGTH) || weight > maxBytes) {
             return program;
         }
-        final var raced = COMPILED.putIfAbsent(regex, program);
+        final var raced = COMPILED.putIfAbsent(regex, new CachedProgram(program, weight));
         if (raced != null) {
-            return raced;
+            return raced.program();
         }
-        cachedChars += regex.length();
-        final var eldest = COMPILED.entrySet().iterator();
-        while (COMPILED.size() > MAX_CACHED_PATTERNS || cachedChars > MAX_CACHED_PATTERN_CHARS) {
-            final var evicted = eldest.next();
-            cachedChars -= evicted.getKey().length();
+        cachedBytes += weight;
+        final var eldest = COMPILED.values().iterator();
+        while (COMPILED.size() > MAX_CACHED_PATTERNS || cachedBytes > maxBytes) {
+            cachedBytes -= eldest.next().weight();
             eldest.remove();
         }
         return program;

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.function.IntConsumer;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.ScheduleExecutor;
@@ -70,6 +71,9 @@ public class Main {
     private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
     private static final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private static final Logger logger = Logger.logFor(Main.class);
+    private static final int BIND_FAILURE_STATUS = 1;
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile IntConsumer exit = System::exit;
 
     private static int getPort(String[] args) {
         if (args.length > 0) {
@@ -131,7 +135,9 @@ public class Main {
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, config.getBindAddress(), sslServerSocketFactory);
         registerShutdownHook(server);
-        server.serve();
+        if (!server.serve()) {
+            exit.accept(BIND_FAILURE_STATUS);
+        }
     }
 
     private static void startTriggerRunSweepIfStandalone() {

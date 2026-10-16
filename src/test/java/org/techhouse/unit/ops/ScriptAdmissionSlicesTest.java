@@ -26,37 +26,37 @@ public class ScriptAdmissionSlicesTest {
     @Test
     public void test_one_user_cannot_hold_every_script_slot() {
         final var admission = admission(10, 0L, 2, 0);
-        final var first = admission.acquire("alice", "db1");
-        final var second = admission.acquire("alice", "db2");
+        final var first = admission.acquire("alice", "db1", false);
+        final var second = admission.acquire("alice", "db2", false);
         assertNotNull(first);
         assertNotNull(second);
 
-        assertNull(admission.acquire("alice", "db3"));
+        assertNull(admission.acquire("alice", "db3", false));
         assertEquals(ScriptAdmission.SCOPE_USER, admission.lastRefusalScope());
-        assertNotNull(admission.acquire("bob", "db1"), "another user still gets a node-wide permit");
+        assertNotNull(admission.acquire("bob", "db1", false), "another user still gets a node-wide permit");
         assertEquals(1, admission.getRejectedPerUser());
     }
 
     @Test
     public void test_per_database_cap_is_enforced() {
-        final var admission = admission(10, 0L, 0, 2);
-        assertNotNull(admission.acquire("alice", "shared"));
-        assertNotNull(admission.acquire("bob", "shared"));
+        final var admission = admission(10, 0L, 0, 3);
+        assertNotNull(admission.acquire("alice", "shared", false));
+        assertNotNull(admission.acquire("bob", "shared", false));
 
-        assertNull(admission.acquire("carol", "shared"));
+        assertNull(admission.acquire("carol", "shared", false));
         assertEquals(ScriptAdmission.SCOPE_DATABASE, admission.lastRefusalScope());
-        assertNotNull(admission.acquire("carol", "other"));
+        assertNotNull(admission.acquire("carol", "other", false));
         assertEquals(1, admission.getRejectedPerDatabase());
     }
 
     @Test
     public void test_a_tenant_at_its_ceiling_is_refused_before_the_node_wide_wait() {
         final var admission = admission(1, 5_000L, 1, 0);
-        final var held = admission.acquire("alice", "db");
+        final var held = admission.acquire("alice", "db", false);
         assertNotNull(held);
 
         final var start = System.nanoTime();
-        assertNull(admission.acquire("alice", "db"));
+        assertNull(admission.acquire("alice", "db", false));
         final var elapsedMs = (System.nanoTime() - start) / 1_000_000L;
 
         assertTrue(elapsedMs < 2_000L, "waited " + elapsedMs + "ms for a node-wide permit it could never use");
@@ -69,11 +69,11 @@ public class ScriptAdmissionSlicesTest {
         final var admission = admission(1, 0L, 1, 1);
         assertTrue(admission.tryAcquire());
 
-        assertNull(admission.acquire("alice", "db"));
+        assertNull(admission.acquire("alice", "db", false));
         assertEquals(ScriptAdmission.SCOPE_NODE, admission.lastRefusalScope());
 
         admission.release();
-        assertNotNull(admission.acquire("alice", "db"), "the refused attempt must not have kept alice's slice");
+        assertNotNull(admission.acquire("alice", "db", false), "the refused attempt must not have kept alice's slice");
     }
 
     @Test

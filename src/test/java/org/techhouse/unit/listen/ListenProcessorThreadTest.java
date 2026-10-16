@@ -264,7 +264,7 @@ public class ListenProcessorThreadTest {
         clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(pushed));
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash(), registration.delivered());
+                registration.collectionKeys(), registration.lastHash(), registration.delivered(), null, 0L);
         final var manager2 = new ListenManager() {
             @Override
             public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {
@@ -321,7 +321,7 @@ public class ListenProcessorThreadTest {
         clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(throwingWriter));
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash(), registration.delivered());
+                registration.collectionKeys(), registration.lastHash(), registration.delivered(), null, 0L);
         final var manager2 = new ListenManager() {
             @Override
             public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {

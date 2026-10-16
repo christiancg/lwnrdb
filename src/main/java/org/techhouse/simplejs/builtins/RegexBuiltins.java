@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 import static org.techhouse.simplejs.builtins.regex.RegexEscape.escape;
+import static org.techhouse.simplejs.builtins.regex.RegexExec.EXEC;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.builtinExec;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.regExpExec;
 import static org.techhouse.simplejs.internal.regex.RegexFlags.ACCESSOR_NAMES;
@@ -145,7 +146,7 @@ public final class RegexBuiltins {
         return switch (name) {
             case "test" -> new JsNativeFunction("test", (thisArg, args) -> JsBoolean
                     .of(!(regExpExec(receiverOf(thisArg, receiver), str(args, ops), ops) instanceof JsNull)));
-            case "exec" -> new JsNativeFunction("exec",
+            case EXEC -> new JsNativeFunction(EXEC,
                     (thisArg, args) -> builtinExec(receiverOf(thisArg, receiver), receiver, str(args, ops), ops));
             case "toString" -> new JsNativeFunction("toString",
                     (thisArg, _) -> new JsString(regExpToString(receiverOf(thisArg, receiver), receiver, ops)));

@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayIndex;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.canonicalArrayIndexWide;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 
 import java.util.List;
@@ -136,10 +137,20 @@ final class MemberWriter {
         if (existing != null && (existing.isAccessorDescriptor() || !existing.writableOr(false))) {
             return false;
         }
+        if (receiver instanceof JsArray array) {
+            chargeIndexGrowth(array, key);
+        }
         return receiver.defineOwnProperty(keyValue,
                 existing == null
                         ? PropertyDescriptor.data(value, JsObject.PropertyFlags.DEFAULT)
                         : new PropertyDescriptor(value, null, null, null, null, null));
+    }
+
+    private void chargeIndexGrowth(JsArray array, String key) {
+        final var index = canonicalArrayIndexWide(key);
+        if (index != null) {
+            array.chargeDenseGrowth(interp.ops(), index + 1L);
+        }
     }
 
     boolean setOnProxyReceiver(JsValue receiver, String key, JsValue value) {

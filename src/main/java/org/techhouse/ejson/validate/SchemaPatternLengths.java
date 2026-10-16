@@ -14,18 +14,27 @@ public final class SchemaPatternLengths {
     private final Set<JsonBaseElement> visited = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Deque<JsonBaseElement> pending = new ArrayDeque<>();
     private int longest;
+    private int count;
 
     private SchemaPatternLengths(JsonBaseElement root) {
         this.schema = new JsonSchema(root);
     }
 
     public static int longestPattern(JsonBaseElement root) {
+        return walk(root).longest;
+    }
+
+    public static int count(JsonBaseElement root) {
+        return walk(root).count;
+    }
+
+    private static SchemaPatternLengths walk(JsonBaseElement root) {
         final var lengths = new SchemaPatternLengths(root);
         lengths.pending.push(root);
         while (!lengths.pending.isEmpty()) {
             lengths.visit(lengths.pending.pop());
         }
-        return lengths.longest;
+        return lengths;
     }
 
     private void visit(JsonBaseElement node) {
@@ -36,8 +45,7 @@ public final class SchemaPatternLengths {
         notePattern(object.get(SchemaKeywords.PATTERN));
         final var patternProperties = object.get(SchemaKeywords.PATTERN_PROPERTIES);
         if (patternProperties != null && patternProperties.isJsonObject()) {
-            patternProperties.asJsonObject().entrySet()
-                    .forEach(entry -> longest = Math.max(longest, entry.getKey().length()));
+            patternProperties.asJsonObject().entrySet().forEach(entry -> noteLength(entry.getKey().length()));
         }
         for (final var entry : object.entrySet()) {
             queueSubschemas(entry.getKey(), entry.getValue());
@@ -47,8 +55,13 @@ public final class SchemaPatternLengths {
 
     private void notePattern(JsonBaseElement pattern) {
         if (pattern != null && pattern.isJsonString()) {
-            longest = Math.max(longest, pattern.asJsonString().getValue().length());
+            noteLength(pattern.asJsonString().getValue().length());
         }
+    }
+
+    private void noteLength(int length) {
+        longest = Math.max(longest, length);
+        count++;
     }
 
     private void queueSubschemas(String keyword, JsonBaseElement value) {

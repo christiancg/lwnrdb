@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import javax.net.ssl.SSLException;
+import org.techhouse.bckg_ops.BackgroundBacklogGate;
 import org.techhouse.cluster.admin.AdminRecordMerge;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
@@ -54,6 +55,7 @@ public class ClusterConnectionHandler implements Runnable {
     private final TriggerRunDirectory triggerRunDirectory = IocContainer.get(TriggerRunDirectory.class);
     private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final BackgroundBacklogGate backlogGate = IocContainer.get(BackgroundBacklogGate.class);
     private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
     private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
@@ -87,7 +89,7 @@ public class ClusterConnectionHandler implements Runnable {
         } catch (SSLException e) {
             ConnectionLog.warn(logger, "Rejected cluster connection: TLS handshake failed");
         } catch (IOException e) {
-            logger.warning("Cluster connection error: " + e.getMessage());
+            ConnectionLog.warn(logger, "Cluster connection error: " + e.getMessage());
         } finally {
             deadline.disarm();
             handshakeDone.run();
@@ -293,6 +295,10 @@ public class ClusterConnectionHandler implements Runnable {
             final var schemaError = SchemaValidationHelper.check(parsed);
             if (schemaError != null) {
                 return schemaError;
+            }
+            final var backlog = backlogGate.admitForwardedRequest(parsed.getType());
+            if (backlog != null) {
+                return new OperationResponse(parsed.getType(), backlog);
             }
             return operationProcessor.processMessage(parsed, clientId);
         } finally {

@@ -25,6 +25,8 @@ CJK_CHARS_PER_DOC = 20_000
 CJK_UNREAD_AGGREGATES = 16
 OUTBOUND_CAP_BYTES = 16 * 1024 * 1024
 OVERFLOW_LOG = "exceeded clientOutboundQueueMaxBytes"
+LISTEN_RETAINED_BYTES = 2 * 1024 * 1024
+LISTEN_PAD_CHARS = 100_000
 
 bu.configure(host=HOST, port=PORT)
 
@@ -35,7 +37,8 @@ def write_config(work_dir: str):
     bu.write_config(work_dir, PORT, maxRequestSize="128Kb", maxEntrySize="64Kb", maxPageSize="256Kb",
                     authTimeoutMs=int(AUTH_TIMEOUT_S * 1000), transactionIdleTimeoutMs=int(IDLE_TIMEOUT_S * 1000),
                     maxConnections=MAX_CONNECTIONS, transactionMaxOps=TRANSACTION_MAX_OPS,
-                    transactionMaxAgeMs=int(TRANSACTION_MAX_AGE_S * 1000))
+                    transactionMaxAgeMs=int(TRANSACTION_MAX_AGE_S * 1000),
+                    listenMaxRetainedBytes=f"{LISTEN_RETAINED_BYTES}")
 
 
 def raw_socket(timeout: float = 10.0) -> socket.socket:
@@ -244,6 +247,36 @@ def test_a_listen_connection_survives_the_idle_timeout():
         check("The listener still receives the notification after 3 s idle",
               pushed is not None and pushed.get("listenId") == registered.get("listenId"), f"pushed={pushed}")
         writer.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "late-1"})
+
+
+def padded_listen(tag: str) -> dict:
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "pad",
+                                             "value": tag + "p" * LISTEN_PAD_CHARS}}]
+    return {"type": "LISTEN", "databaseName": DB, "collectionName": COLL, "aggregationSteps": steps}
+
+
+def test_listen_retained_budget_503_15():
+    section("LISTEN: the node-wide retained-bytes budget answers 503-15 and is given back on disconnect")
+    holder = Conn.authenticated()
+    responses = []
+    for i in range(LISTEN_RETAINED_BYTES // LISTEN_PAD_CHARS + 10):
+        response = holder.send(padded_listen(f"r{i}-"))
+        responses.append(response)
+        if response.get("status") != "OK":
+            break
+    accepted = sum(1 for r in responses if r.get("status") == "OK")
+    expected = LISTEN_RETAINED_BYTES // LISTEN_PAD_CHARS
+    check(f"About {expected} registrations of ~100Kb fit in listenMaxRetainedBytes=2Mb",
+          expected - 3 <= accepted <= expected, f"accepted={accepted}")
+    check_code("The next LISTEN -> 503-15", responses[-1], "ERROR", "503-15")
+    holder.close()
+    with Conn.authenticated() as fresh:
+        deadline = time.time() + 5.0
+        retried = fresh.send(padded_listen("after-"))
+        while retried.get("status") != "OK" and time.time() < deadline:
+            time.sleep(0.1)
+            retried = fresh.send(padded_listen("after-"))
+        check_status("Once the holder disconnects, its bytes are given back", retried, "OK")
 
 
 def open_transaction_with_one_write(doc_id: str) -> Conn:
@@ -503,6 +536,7 @@ def main():
         test_a_failed_authenticate_does_not_extend_the_deadline()
         test_an_authenticated_idle_connection_survives_the_timeout()
         test_a_listen_connection_survives_the_idle_timeout()
+        test_listen_retained_budget_503_15()
         test_an_idle_transaction_is_rolled_back_and_unblocks_the_writer()
         test_any_request_after_a_reap_answers_409_16_once()
         test_a_busy_transaction_is_not_reaped()

@@ -171,7 +171,7 @@ public class MetadataDeleteFailureTest {
     public void test_listing_procedures_answers_an_error_when_a_definition_is_unparseable() throws Exception {
         fs.writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
 
-        final var response = ProcedureOperationHelper.executeList(new ListProceduresRequest(TestGlobals.DB));
+        final var response = ProcedureOperationHelper.executeList(new ListProceduresRequest(TestGlobals.DB), null);
 
         assertEquals(ErrorCode.ERROR_RETRIEVING.getCode(), response.getErrorCode());
     }

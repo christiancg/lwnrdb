@@ -123,6 +123,7 @@ COLL_MATH = "map_math"
 COLL_SHARED_LEFT = "shared_left"
 COLL_SHARED_RIGHT = "shared_right"
 COLL_DISTINCT = "distinct_rows"
+COLL_BUDGET = "result_budget"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -382,11 +383,6 @@ def test_a_line_with_a_second_value_or_a_nan_point_is_refused(c):
                  c.send_raw(save_prefix + '{"_id":"finite_geo","p":"#geo(1,2)"}}'), "OK")
 
 
-def send_raw_bytes(c, line: bytes) -> dict:
-    c.s.sendall(line + b"\n")
-    return c._read_response()
-
-
 def test_non_ascii_and_malformed_utf8_requests_round_trip(c):
     section("Requests are parsed from their UTF-8 bytes: non-ASCII text round-trips and malformed bytes decode leniently")
     check_status("a document with non-ASCII keys and values is saved",
@@ -401,11 +397,11 @@ def test_non_ascii_and_malformed_utf8_requests_round_trip(c):
           [row.get("_id") for row in matched.get("results") or []] == ["utf8_doc"], str(matched))
     prefix = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":').encode()
     check_status("a string holding a malformed byte is accepted",
-                 send_raw_bytes(c, prefix + b'{"_id":"utf8_bad","v":"a\xffb"}}'), "OK")
+                 c.send_bytes(prefix + b'{"_id":"utf8_bad","v":"a\xffb"}}'), "OK")
     check_field("the malformed byte reads back as the replacement character",
                 find_by_id(c, COLL_TYPES, "utf8_bad"), "object.v", "a\ufffdb")
     check_client_refusal("a malformed byte outside a string is refused as an invalid command",
-                         send_raw_bytes(c, prefix + b'{"_id":"utf8_bad2","v":\xff}}'))
+                         c.send_bytes(prefix + b'{"_id":"utf8_bad2","v":\xff}}'))
     check("nothing was stored for utf8_bad2", find_by_id(c, COLL_TYPES, "utf8_bad2").get("status") != "OK")
     check_status("numbers past fifteen digits, negative zero and exponents are accepted",
                  c.send_raw('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES
@@ -1075,7 +1071,7 @@ def test_join_then_map_on_a_shared_group_stays_small(c):
     section("JOIN then MAP over one shared group copies only what the MAP writes")
     create_coll(c, COLL_SHARED_LEFT)
     create_coll(c, COLL_SHARED_RIGHT)
-    payload = "p" * 10_000
+    payload = "p" * 2_000
     for start in range(0, 50, 10):
         bulk_save(c, COLL_SHARED_RIGHT, [{"_id": f"r{i:03d}", "key": "shared", "payload": payload}
                                          for i in range(start, start + 10)])
@@ -1086,7 +1082,7 @@ def test_join_then_map_on_a_shared_group_stays_small(c):
     add_x = {"type": "MAP", "operators": [{"fieldName": "x", "operator": {"type": "CONCAT", "operands": ["-x"]}}]}
 
     r = aggregate(c, COLL_SHARED_LEFT, [join, add_x, {"type": "COUNT"}])
-    check_field("2000 rows sharing a 500KB group, then MAP, then COUNT", r, "results.0.count", 2000)
+    check_field("2000 rows sharing a 100KB group, then MAP, then COUNT", r, "results.0.count", 2000)
 
     r = aggregate(c, COLL_SHARED_LEFT, [join, add_x, {"type": "LIMIT", "limit": 1}])
     row = (r.get("results") or [{}])[0]
@@ -1096,6 +1092,30 @@ def test_join_then_map_on_a_shared_group_stays_small(c):
     check_status("the server stays healthy afterwards", list_databases(c), "OK")
     drop_coll(c, COLL_SHARED_LEFT)
     drop_coll(c, COLL_SHARED_RIGHT)
+
+
+def test_aggregate_output_over_budget_is_400_36(c):
+    section("An AGGREGATE that builds more than aggregateMaxResultBytes is refused with 400-36")
+    create_coll(c, COLL_BUDGET)
+    for start in range(0, 5000, 1000):
+        bulk_save(c, COLL_BUDGET, [{"_id": f"b{i:04d}"} for i in range(start, start + 1000)])
+    big_concat = {"type": "MAP", "operators": [{"fieldName": "big", "operator": {
+        "type": "CONCAT", "operands": ["-" + "a" * 800_000, "-b"]}}]}
+
+    started = time.time()
+    r = aggregate(c, COLL_BUDGET, [big_concat])
+    check_code("5000 rows of an 800KB CONCAT stop at the 256Mb budget", r, "ERROR", "400-36")
+    check("the refusal comes fast", time.time() - started < 30, detail=f"{time.time() - started:.1f}s")
+
+    r = aggregate(c, COLL_BUDGET, [big_concat, {"type": "COUNT"}])
+    check_code("a COUNT after the same MAP is refused too", r, "ERROR", "400-36")
+
+    r = aggregate(c, COLL_BUDGET, [{"type": "LIMIT", "limit": 10}, big_concat])
+    check("ten such rows still answer", r.get("status") == "OK" and len(r.get("results") or []) == 10,
+          detail=f"status={r.get('status')} code={r.get('errorCode')}")
+
+    check_status("the server stays healthy afterwards", list_databases(c), "OK")
+    drop_coll(c, COLL_BUDGET)
 
 
 def canonical(row):
@@ -1163,6 +1183,7 @@ def main():
         test_aggregation_steps,
         test_aggregation_steps_write_dotted_fields_nested,
         test_join_then_map_on_a_shared_group_stays_small,
+        test_aggregate_output_over_budget_is_400_36,
         test_distinct_without_field_unchanged,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,

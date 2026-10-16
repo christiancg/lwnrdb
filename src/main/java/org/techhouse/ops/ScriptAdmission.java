@@ -10,6 +10,7 @@ public class ScriptAdmission {
     public static final String SCOPE_NODE = "node";
     public static final String SCOPE_USER = "user";
     public static final String SCOPE_DATABASE = "database";
+    private static final Configuration configuration = Configuration.getInstance();
 
     private volatile int capacity;
     private volatile long waitMs;
@@ -17,16 +18,16 @@ public class ScriptAdmission {
     private volatile int perUserCapacity;
     private volatile int perDatabaseCapacity;
     private final ConcurrentHashMap<String, Semaphore> userPermits = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Semaphore> databasePermits = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, DatabaseSlots> databasePermits = new ConcurrentHashMap<>();
     private final AtomicLong rejected = new AtomicLong();
     private final AtomicLong rejectedPerUser = new AtomicLong();
     private final AtomicLong rejectedPerDatabase = new AtomicLong();
     private final AtomicLong waited = new AtomicLong();
 
     public ScriptAdmission() {
-        this(Configuration.getInstance().getMaxConcurrentScripts(), Configuration.getInstance().getScriptQueueWaitMs());
-        this.perUserCapacity = Configuration.getInstance().getMaxConcurrentScriptsPerUser();
-        this.perDatabaseCapacity = Configuration.getInstance().getMaxConcurrentScriptsPerDatabase();
+        this(configuration.getMaxConcurrentScripts(), configuration.getScriptQueueWaitMs());
+        this.perUserCapacity = configuration.getMaxConcurrentScriptsPerUser();
+        this.perDatabaseCapacity = configuration.getMaxConcurrentScriptsPerDatabase();
     }
 
     public ScriptAdmission(int capacity, long waitMs) {
@@ -35,20 +36,50 @@ public class ScriptAdmission {
         this.permits = capacity > 0 ? new Semaphore(capacity, true) : null;
     }
 
+    private record DatabaseSlots(Semaphore shared, Semaphore reserved) {
+        static DatabaseSlots of(int limit) {
+            final var reserve = limit >= 2 ? 1 : 0;
+            return new DatabaseSlots(new Semaphore(limit - reserve, true),
+                    reserve > 0 ? new Semaphore(reserve, true) : null);
+        }
+
+        DatabaseSlot take(boolean privileged) {
+            if (shared.tryAcquire()) {
+                return DatabaseSlot.SHARED;
+            }
+            if (privileged && reserved != null && reserved.tryAcquire()) {
+                return DatabaseSlot.RESERVED;
+            }
+            return DatabaseSlot.NONE;
+        }
+
+        void give(DatabaseSlot slot) {
+            if (slot == DatabaseSlot.RESERVED && reserved != null) {
+                reserved.release();
+            } else if (slot == DatabaseSlot.SHARED) {
+                shared.release();
+            }
+        }
+    }
+
+    private enum DatabaseSlot {
+        NONE, SHARED, RESERVED, UNLIMITED
+    }
+
     public final class Permit implements AutoCloseable {
         private final String username;
         private final String database;
         private final boolean nodeWide;
         private final boolean perUser;
-        private final boolean perDatabase;
+        private final DatabaseSlot databaseSlot;
         private boolean closed;
 
-        private Permit(String username, String database, boolean nodeWide, boolean perUser, boolean perDatabase) {
+        private Permit(String username, String database, boolean nodeWide, boolean perUser, DatabaseSlot databaseSlot) {
             this.username = username;
             this.database = database;
             this.nodeWide = nodeWide;
             this.perUser = perUser;
-            this.perDatabase = perDatabase;
+            this.databaseSlot = databaseSlot;
         }
 
         @Override
@@ -57,9 +88,7 @@ public class ScriptAdmission {
                 return;
             }
             closed = true;
-            if (perDatabase) {
-                releaseFrom(databasePermits, database);
-            }
+            releaseDatabaseSlot(database, databaseSlot);
             if (perUser) {
                 releaseFrom(userPermits, username);
             }
@@ -69,8 +98,8 @@ public class ScriptAdmission {
         }
     }
 
-    public Permit acquire(String username, String database) {
-        final var slices = acquireSlices(username, database);
+    public Permit acquire(String username, String database, boolean privileged) {
+        final var slices = acquireSlices(username, database, privileged);
         if (slices == null) {
             return null;
         }
@@ -79,25 +108,46 @@ public class ScriptAdmission {
             lastScope.set(SCOPE_NODE);
             return null;
         }
-        return new Permit(username, database, permits != null, slices.perUser, slices.perDatabase);
+        return new Permit(username, database, permits != null, slices.perUser, slices.databaseSlot);
     }
 
     public Permit acquireSlices(String username, String database) {
+        return acquireSlices(username, database, false);
+    }
+
+    private Permit acquireSlices(String username, String database, boolean privileged) {
         final var userTaken = tryAcquireFrom(userPermits, username, perUserCapacity);
         if (!userTaken) {
             rejectedPerUser.incrementAndGet();
             lastScope.set(SCOPE_USER);
             return null;
         }
-        final var databaseTaken = tryAcquireFrom(databasePermits, database, perDatabaseCapacity);
-        if (!databaseTaken) {
+        final var databaseSlot = takeDatabaseSlot(database, privileged);
+        if (databaseSlot == DatabaseSlot.NONE) {
             releaseFrom(userPermits, username);
             rejectedPerDatabase.incrementAndGet();
             lastScope.set(SCOPE_DATABASE);
             return null;
         }
-        return new Permit(username, database, false, perUserCapacity > 0 && username != null,
-                perDatabaseCapacity > 0 && database != null);
+        return new Permit(username, database, false, perUserCapacity > 0 && username != null, databaseSlot);
+    }
+
+    private DatabaseSlot takeDatabaseSlot(String database, boolean privileged) {
+        final var limit = perDatabaseCapacity;
+        if (limit <= 0 || database == null) {
+            return DatabaseSlot.UNLIMITED;
+        }
+        return databasePermits.computeIfAbsent(database, _ -> DatabaseSlots.of(limit)).take(privileged);
+    }
+
+    private void releaseDatabaseSlot(String database, DatabaseSlot slot) {
+        if (database == null || slot == DatabaseSlot.UNLIMITED) {
+            return;
+        }
+        final var slots = databasePermits.get(database);
+        if (slots != null) {
+            slots.give(slot);
+        }
     }
 
     private final ThreadLocal<String> lastScope = new ThreadLocal<>();

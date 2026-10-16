@@ -125,6 +125,7 @@ public final class JsOperators {
         final var numeric = JsCoercion.toNumeric(operand, ops);
         if (numeric instanceof JsBigInt b) {
             final var one = BigInteger.ONE;
+            BigIntLimits.checkWidening(b.getValue(), ops);
             return new JsBigInt(increment ? b.getValue().add(one) : b.getValue().subtract(one));
         }
         final var current = ((JsNumber) numeric).getValue();
@@ -134,6 +135,7 @@ public final class JsOperators {
     private static JsValue negate(JsValue operand, InterpreterOps ops) {
         final var numeric = JsCoercion.toNumeric(operand, ops);
         if (numeric instanceof JsBigInt b) {
+            BigIntLimits.checkWidening(b.getValue(), ops);
             return new JsBigInt(b.getValue().negate());
         }
         return new JsNumber(-((JsNumber) numeric).getValue());
@@ -142,6 +144,7 @@ public final class JsOperators {
     private static JsValue bitwiseNot(JsValue operand, InterpreterOps ops) {
         final var numeric = JsCoercion.toNumeric(operand, ops);
         if (numeric instanceof JsBigInt b) {
+            BigIntLimits.checkWidening(b.getValue(), ops);
             return new JsBigInt(b.getValue().not());
         }
         return new JsNumber(~NumberFormatter.toInt32(((JsNumber) numeric).getValue()));
@@ -189,11 +192,16 @@ public final class JsOperators {
         return new JsBigInt(switch (operator) {
             case "-" -> BigIntLimits.subtract(a, b, ops);
             case "*" -> BigIntLimits.multiply(a, b, ops);
-            case "/" -> requireNonZero(b) ? a.divide(b) : a;
-            case "%" -> requireNonZero(b) ? a.remainder(b) : a;
+            case "/" -> requireNonZero(b) ? sizeChecked(a, b, ops).divide(b) : a;
+            case "%" -> requireNonZero(b) ? sizeChecked(a, b, ops).remainder(b) : a;
             case "**" -> BigIntLimits.pow(a, b, ops);
             default -> throw new TypeErrorException("Unknown arithmetic operator: " + operator);
         });
+    }
+
+    private static BigInteger sizeChecked(BigInteger a, BigInteger b, InterpreterOps ops) {
+        BigIntLimits.checkWidening(a, b, ops);
+        return a;
     }
 
     private static boolean requireNonZero(BigInteger b) {
@@ -228,11 +236,11 @@ public final class JsOperators {
 
     private static JsValue bigIntBitwise(String operator, BigInteger a, BigInteger b, InterpreterOps ops) {
         return new JsBigInt(switch (operator) {
-            case "&" -> a.and(b);
-            case "|" -> a.or(b);
-            case "^" -> a.xor(b);
+            case "&" -> sizeChecked(a, b, ops).and(b);
+            case "|" -> sizeChecked(a, b, ops).or(b);
+            case "^" -> sizeChecked(a, b, ops).xor(b);
             case "<<" -> BigIntLimits.shiftLeft(a, b, ops);
-            case ">>" -> BigIntLimits.shiftRight(a, b, ops);
+            case ">>" -> BigIntLimits.shiftRight(sizeChecked(a, b, ops), b, ops);
             default -> throw new TypeErrorException("BigInts have no unsigned right shift");
         });
     }

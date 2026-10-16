@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -2580,6 +2581,34 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
 STARTUP_REPLAY_SETTLE_S = 10
 
 
+CLUSTER_RESET_FLOOD = 500
+CLUSTER_RESET_LOG_CEILING = 50
+
+
+def reset_connection(port: int):
+    try:
+        sock = socket.create_connection((HOST, port), timeout=5)
+    except OSError:
+        return
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    sock.close()
+
+
+def test_cluster_port_reset_flood_is_rate_limited():
+    section(f"{CLUSTER_RESET_FLOOD} resets on the cluster port log at most {CLUSTER_RESET_LOG_CEILING} lines")
+    victim = nodes[0]
+    marker = "Cluster connection error"
+    before = bu.read_log(victim.log_path).count(marker)
+    for _ in range(CLUSTER_RESET_FLOOD):
+        reset_connection(victim.cluster_port)
+    time.sleep(2.0)
+    logged = bu.read_log(victim.log_path).count(marker) - before
+    check(f"fewer than {CLUSTER_RESET_LOG_CEILING} connection-error lines were logged",
+          logged < CLUSTER_RESET_LOG_CEILING, f"{logged} lines for {CLUSTER_RESET_FLOOD} resets")
+    with Conn(port=victim.client_port) as conn:
+        check_status("the node still serves clients", conn.authenticate(), "OK")
+
+
 def test_a_trigger_writing_only_to_another_owner_consumes_its_run():
     section("A trigger whose body writes only to another node's collection consumes its run")
 
@@ -3576,6 +3605,7 @@ GROUPS = {
         test_a_participant_killed_mid_commit_finishes_without_its_coordinator,
         test_a_trigger_fires_once_despite_a_replication_timeout,
         test_a_trigger_writing_only_to_another_owner_consumes_its_run,
+        test_cluster_port_reset_flood_is_rate_limited,
     ],
     "recreate": [
         test_formation_and_quorum_writes,

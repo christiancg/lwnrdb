@@ -62,7 +62,7 @@ public class EventProcessorHelperPendingWritesTest {
     public void test_an_interrupted_index_rebuild_leaves_the_write_pending() {
         final var event = markedEvent("interrupted");
         try (var mocked = mockStatic(IndexHelper.class)) {
-            mocked.when(() -> IndexHelper.updateIndexes(anyString(), anyString(), anyString()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new InterruptedException("stopped"));
             Assertions.assertThrows(InterruptedException.class, () -> EventProcessorHelper.processEvent(event));
         }
@@ -76,7 +76,7 @@ public class EventProcessorHelperPendingWritesTest {
     public void test_a_failed_index_rebuild_leaves_the_write_pending() {
         final var event = markedEvent("failed");
         try (var mocked = mockStatic(IndexHelper.class)) {
-            mocked.when(() -> IndexHelper.updateIndexes(anyString(), anyString(), anyString()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new IOException("disk full"));
             Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
         }
@@ -115,7 +115,7 @@ public class EventProcessorHelperPendingWritesTest {
     public void test_a_failed_group_leaves_every_id_in_the_group_pending() {
         final var batch = List.of(markedEvent("group-a"), markedEvent("group-b"));
         try (var mocked = mockStatic(IndexHelper.class)) {
-            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new IOException("disk full"));
             Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
         }
@@ -145,7 +145,7 @@ public class EventProcessorHelperPendingWritesTest {
         final var event = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, List.of(entryWithId("bulk-new")),
                 List.of(entryWithId("bulk-old")));
         try (var mocked = mockStatic(IndexHelper.class)) {
-            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new IOException("disk full"));
             Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
         }
@@ -182,7 +182,7 @@ public class EventProcessorHelperPendingWritesTest {
         final var event = markedEvent("delta-kept");
         try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
-            mocked.when(() -> IndexHelper.updateIndexes(anyString(), anyString(), anyString()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new IOException("disk full"));
 
             Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
@@ -198,7 +198,7 @@ public class EventProcessorHelperPendingWritesTest {
         final var batch = List.of(markedEvent("delta-a"), markedEvent("delta-b"));
         try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
-            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new IOException("disk full"));
 
             Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
@@ -216,7 +216,7 @@ public class EventProcessorHelperPendingWritesTest {
                 List.of(entryWithId("bulk-up")));
         try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
-            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new IOException("disk full"));
 
             Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
@@ -232,7 +232,7 @@ public class EventProcessorHelperPendingWritesTest {
         final var event = markedEvent("busy");
         try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
-            mocked.when(() -> IndexHelper.updateIndexes(anyString(), anyString(), anyString()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new org.techhouse.ex.CollectionBusyException("db|coll", 5L));
 
             final var deferred = EventProcessorHelper.processBatch(List.of(event));
@@ -252,7 +252,7 @@ public class EventProcessorHelperPendingWritesTest {
         final var other = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, List.of(entryWithId("bulk-free")),
                 List.of());
         try (var mocked = mockStatic(IndexHelper.class)) {
-            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
                     .thenThrow(new org.techhouse.ex.CollectionBusyException("db|coll", 5L)).thenCallRealMethod();
 
             final var deferred = EventProcessorHelper.processBatch(List.of(busyA, busyB, other));

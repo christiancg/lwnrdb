@@ -2,6 +2,7 @@ import os
 import socket
 import json
 import sys
+import tempfile
 import time
 
 import base_utils as bu
@@ -9,6 +10,7 @@ from base_utils import Conn, check, check_code, check_field, check_status, secti
 
 HOST = os.environ.get("TXN_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXN_TEST_PORT", "8989"))
+TRIGGER_SERVER_PORT = int(os.environ.get("TXN_TRIGGER_TEST_PORT", "9448"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
@@ -586,6 +588,46 @@ def test_custom_typed_writes_are_readable_inside_the_transaction(c):
         delete(oc, "custom-1")
 
 
+def test_transactional_deletes_count_deleted_document_bytes():
+    section("A transactional DELETE with a delete trigger counts the deleted document's bytes")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-txn-triggers-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, TRIGGER_SERVER_PORT, transactionMaxBytes="64Kb", scriptsEnabled=True,
+                    triggersEnabled=True, maxMemory="512mb")
+    proc = bu.start_server(work_dir, log_path, port=TRIGGER_SERVER_PORT)
+    padding = "x" * 40_000
+    try:
+        with Conn(port=TRIGGER_SERVER_PORT) as c:
+            check_status("authenticate", c.authenticate(), "OK")
+            setup_fixtures(c)
+            for doc_id in ("fat1", "fat2", "fat3", "fat4"):
+                check_status(f"save {doc_id} outside a transaction", save(c, {"_id": doc_id, "p": padding}), "OK")
+
+            check_status("start a transaction without a delete trigger", start_txn(c), "OK")
+            check_status("delete fat1", delete(c, "fat1"), "OK")
+            check_status("delete fat2: only the ids are buffered", delete(c, "fat2"), "OK")
+            check_status("roll it back", rollback_txn(c), "OK")
+
+            check_status("store the audit procedure",
+                         c.send({"type": "SAVE_PROCEDURE", "databaseName": DB, "name": "on_delete",
+                                 "script": "return 1;"}), "OK")
+            check_status("install a delete trigger",
+                         c.send({"type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                                 "name": "audit_deletes", "events": ["DELETED"],
+                                 "procedureName": "on_delete"}), "OK")
+            check_status("start a transaction with the delete trigger", start_txn(c), "OK")
+            check_status("delete fat3: its document rides in the buffered payload", delete(c, "fat3"), "OK")
+            check_code("delete fat4 pushes the transaction past transactionMaxBytes", delete(c, "fat4"),
+                       "ERROR", "400-26")
+            check_status("the transaction still commits what it buffered", commit_txn(c), "OK")
+            check_status("fat3 is gone", find_by_id(c, "fat3"), "NOT_FOUND")
+            check_status("fat4 was never deleted", find_by_id(c, "fat4"), "OK")
+            teardown_fixtures(c)
+    finally:
+        bu.stop_server(proc, port=TRIGGER_SERVER_PORT)
+
+
 def main():
     bu.banner("Transactions test suite", HOST, PORT)
 
@@ -639,6 +681,7 @@ def main():
     test_auto_rollback_on_disconnect()
     test_a_committed_transaction_survives_the_disconnect()
     test_a_client_that_stops_reading_mid_transaction_releases_its_locks()
+    test_transactional_deletes_count_deleted_document_bytes()
 
     with authed_conn() as (c):
         teardown_fixtures(c)

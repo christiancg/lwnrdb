@@ -16,6 +16,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.StoredDefinitions;
+import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
@@ -188,22 +189,27 @@ public final class ProcedureOperationHelper {
         }
     }
 
-    public static OperationResponse executeList(ListProceduresRequest request) {
+    public static OperationResponse executeList(ListProceduresRequest request, String actingUser) {
         return OperationResponse.respondOrError(OperationType.LIST_PROCEDURES, ErrorCode.ERROR_RETRIEVING,
-                () -> listProcedures(request));
+                () -> listProcedures(request, actingUser));
     }
 
-    private static OperationResponse listProcedures(ListProceduresRequest request) throws IOException {
+    private static OperationResponse listProcedures(ListProceduresRequest request, String actingUser)
+            throws IOException {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
             return new OperationResponse(OperationType.LIST_PROCEDURES, "Database '" + dbName + "' not found",
                     ErrorCode.DATABASE_NOT_FOUND);
         }
+        final var showSourceHash = actingUser == null
+                || AuthorizationChecker.mayReadProcedureSource(cache.getAdminUserEntry(actingUser), dbName);
         final var result = new ArrayList<org.techhouse.ejson.elements.JsonObject>();
         for (final var name : fs.listProcedureNames(dbName)) {
             final var definition = cache.getProcedure(dbName, name);
             if (definition != null) {
-                result.add(request.isIncludeSource() ? definition.toJsonObject() : definition.toSummaryJson());
+                result.add(request.isIncludeSource()
+                        ? definition.toJsonObject()
+                        : definition.toSummaryJson(showSourceHash));
             }
         }
         return new ListProceduresResponse("Ok", result);

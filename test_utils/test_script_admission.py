@@ -503,6 +503,57 @@ def test_per_database_cap(conn: Conn):
           (conn.script_stats().get("rejectedPerDatabase") or 0) > rejected_before, f"got {conn.script_stats()}")
 
 
+ORDINARY_RUNNERS = [("runner_a", "password123"), ("runner_b", "password123")]
+DB_OWNER = ("db_owner_c", "password123")
+
+
+def create_ordinary_runners(conn: Conn):
+    for username, password in ORDINARY_RUNNERS + [DB_OWNER]:
+        conn.send({"type": "DELETE_USER", "username": username})
+        check_status(f"create {username}",
+                     conn.send({"type": "CREATE_USER", "username": username, "password": password,
+                                "admin": False, "globalPermissions": [], "databasePermissions": {DB: "READ"},
+                                "collectionPermissions": {}, "scriptPermissions": {DB: "RUN"}}), "OK")
+    check_status("make db_owner_c an owner of the database",
+                 conn.send({"type": "SET_DATABASE_OWNERS", "databaseName": DB, "owners": [DB_OWNER[0]]}), "OK")
+
+
+def test_owner_keeps_a_database_slot_when_users_fill_it(conn: Conn):
+    section(f"The last of {PER_DATABASE_CAPACITY} database slots is kept for owners and admins")
+    create_ordinary_runners(conn)
+    holders = []
+    started = threading.Barrier(len(ORDINARY_RUNNERS) + 1)
+
+    def holder(holder_name: str, holder_password: str):
+        with Conn() as held:
+            held.authenticate(holder_name, holder_password)
+            started.wait()
+            held.run(f"export default new Promise(r => setTimeout(() => r(1), {SLOW_SCRIPT_MS * 5}));")
+
+    for username, password in ORDINARY_RUNNERS:
+        thread = threading.Thread(target=holder, args=(username, password))
+        thread.start()
+        holders.append(thread)
+    started.wait()
+    check("ordinary users hold every shared slot",
+          bu.wait_until(lambda: conn.script_stats().get("running") == len(ORDINARY_RUNNERS), 10.0, 0.05),
+          f"running={conn.script_stats().get('running')}")
+    with Conn() as runner:
+        runner.authenticate(*ORDINARY_RUNNERS[0])
+        refused = runner.run("export default 7;")
+        check_code("a third ordinary run is refused at the database slice", refused, "ERROR", "503-6")
+        check("the refusal names the database scope", "database" in (refused.get("message") or ""),
+              f"got {refused.get('message')!r}")
+    with Conn() as owner:
+        owner.authenticate(*DB_OWNER)
+        check_result("the database owner still runs in the reserved slot", owner.run("export default 7;"), 7)
+    check_result("so does an admin", conn.run("export default 7;"), 7)
+    for thread in holders:
+        thread.join(120)
+    check_status("clear the database owners",
+                 conn.send({"type": "SET_DATABASE_OWNERS", "databaseName": DB, "owners": []}), "OK")
+
+
 def test_cap_disabled(conn: Conn):
     section("The cap disabled (maxConcurrentScripts=0)")
     stats_before = conn.script_stats()
@@ -576,6 +627,7 @@ def main():
             test_a_tenant_refusal_frees_the_node_permit(conn)
             test_triggers_and_schedules_take_their_definers_slice(conn)
             test_per_database_cap(conn)
+            test_owner_keeps_a_database_slot_when_users_fill_it(conn)
 
         bu.stop_server(proc)
         proc = None

@@ -25,6 +25,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.log.Logger;
 import org.techhouse.test.TestUtils;
 
 public class ClusterHandshakeDeadlineTest {
@@ -75,6 +76,33 @@ public class ClusterHandshakeDeadlineTest {
         assertFalse(handler.isAlive(), "a peer that never completes its handshake is cut off");
         assertTrue(handshakeDone.get() >= 1);
         Mockito.verify(socket, Mockito.atLeastOnce()).close();
+    }
+
+    private static InputStream resetting() {
+        return new InputStream() {
+            @Override
+            public int read() throws IOException {
+                throw new IOException("Connection reset");
+            }
+        };
+    }
+
+    @Test
+    public void resetDuringHelloIsRateLimited() throws Exception {
+        final var logger = Mockito.mock(Logger.class);
+        final var warnings = new AtomicInteger();
+        Mockito.doAnswer(_ -> warnings.incrementAndGet()).when(logger).warning(Mockito.anyString());
+        final var resets = Globals.LOG_RATE_LIMIT_PER_SECOND * 5;
+
+        for (var i = 0; i < resets; i++) {
+            final var socket = TestUtils.clientSocket(resetting(), new ByteArrayOutputStream());
+            final var handler = new ClusterConnectionHandler(socket, () -> false, () -> {
+            });
+            TestUtils.setPrivateField(handler, "logger", logger);
+            handler.run();
+        }
+
+        assertTrue(warnings.get() <= Globals.LOG_RATE_LIMIT_PER_SECOND * 2, "warnings logged: " + warnings.get());
     }
 
     @Test

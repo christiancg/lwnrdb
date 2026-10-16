@@ -20,16 +20,16 @@ public class ScriptAdmissionTest {
     public void test_the_cap_holds_when_one_script_finishes_while_others_run() throws Exception {
         final var admission = new ScriptAdmission(10, 0L);
         TestUtils.setPrivateField(admission, "perUserCapacity", 2);
-        final var first = admission.acquire("alice", null);
-        final var second = admission.acquire("alice", null);
+        final var first = admission.acquire("alice", null, false);
+        final var second = admission.acquire("alice", null, false);
         assertNotNull(first);
         assertNotNull(second);
-        assertNull(admission.acquire("alice", null), "the per-user cap is two");
+        assertNull(admission.acquire("alice", null, false), "the per-user cap is two");
 
         first.close();
 
-        assertNotNull(admission.acquire("alice", null), "the freed permit is available again");
-        assertNull(admission.acquire("alice", null),
+        assertNotNull(admission.acquire("alice", null, false), "the freed permit is available again");
+        assertNull(admission.acquire("alice", null, false),
                 "a script finishing must not reset the per-user cap for the ones still running");
     }
 
@@ -37,13 +37,13 @@ public class ScriptAdmissionTest {
     public void test_permits_never_exceed_capacity() throws Exception {
         final var admission = new ScriptAdmission(10, 0L);
         TestUtils.setPrivateField(admission, "perUserCapacity", 2);
-        admission.acquire("alice", null).close();
-        admission.acquire("alice", null).close();
+        admission.acquire("alice", null, false).close();
+        admission.acquire("alice", null, false).close();
 
         final var held = new ArrayList<ScriptAdmission.Permit>();
         try {
             for (var attempt = 0; attempt < 10; attempt++) {
-                final var permit = admission.acquire("alice", null);
+                final var permit = admission.acquire("alice", null, false);
                 if (permit == null) {
                     break;
                 }
@@ -201,20 +201,20 @@ public class ScriptAdmissionTest {
     @Test
     public void test_per_user_cap_refuses_the_same_user_but_not_another() {
         final var admission = tenantAdmission(10, 1, 0);
-        assertNotNull(admission.acquire("alice", "db1"));
-        assertNull(admission.acquire("alice", "db1"), "alice is already at her ceiling");
+        assertNotNull(admission.acquire("alice", "db1", false));
+        assertNull(admission.acquire("alice", "db1", false), "alice is already at her ceiling");
         assertEquals(ScriptAdmission.SCOPE_USER, admission.lastRefusalScope());
-        assertNotNull(admission.acquire("bob", "db1"), "bob has his own slice");
+        assertNotNull(admission.acquire("bob", "db1", false), "bob has his own slice");
         assertEquals(1L, admission.getRejectedPerUser());
     }
 
     @Test
     public void test_per_database_cap_refuses_the_same_database_but_not_another() {
         final var admission = tenantAdmission(10, 0, 1);
-        assertNotNull(admission.acquire("alice", "db1"));
-        assertNull(admission.acquire("bob", "db1"), "db1 is already at its ceiling");
+        assertNotNull(admission.acquire("alice", "db1", false));
+        assertNull(admission.acquire("bob", "db1", false), "db1 is already at its ceiling");
         assertEquals(ScriptAdmission.SCOPE_DATABASE, admission.lastRefusalScope());
-        assertNotNull(admission.acquire("bob", "db2"));
+        assertNotNull(admission.acquire("bob", "db2", false));
         assertEquals(1L, admission.getRejectedPerDatabase());
     }
 
@@ -223,11 +223,11 @@ public class ScriptAdmissionTest {
     @Test
     public void test_an_inner_refusal_returns_the_node_wide_permit() {
         final var admission = tenantAdmission(2, 1, 0);
-        final var held = admission.acquire("alice", "db1");
+        final var held = admission.acquire("alice", "db1", false);
         assertNotNull(held);
         assertEquals(1, admission.available());
 
-        assertNull(admission.acquire("alice", "db1"));
+        assertNull(admission.acquire("alice", "db1", false));
         assertEquals(1, admission.available(), "the refused run must not still hold a node-wide permit");
 
         held.close();
@@ -237,18 +237,18 @@ public class ScriptAdmissionTest {
     @Test
     public void test_closing_a_permit_frees_every_slice_it_took() {
         final var admission = tenantAdmission(1, 1, 1);
-        final var permit = admission.acquire("alice", "db1");
+        final var permit = admission.acquire("alice", "db1", false);
         assertNotNull(permit);
-        assertNull(admission.acquire("alice", "db1"));
+        assertNull(admission.acquire("alice", "db1", false));
 
         permit.close();
-        assertNotNull(admission.acquire("alice", "db1"), "every slice must be released together");
+        assertNotNull(admission.acquire("alice", "db1", false), "every slice must be released together");
     }
 
     @Test
     public void test_closing_twice_is_a_no_op() {
         final var admission = tenantAdmission(1, 1, 1);
-        final var permit = admission.acquire("alice", "db1");
+        final var permit = admission.acquire("alice", "db1", false);
         assertNotNull(permit);
         permit.close();
         permit.close();
@@ -259,7 +259,7 @@ public class ScriptAdmissionTest {
     public void test_zero_means_unlimited_at_both_tenant_levels() {
         final var admission = tenantAdmission(0, 0, 0);
         for (var i = 0; i < 20; i++) {
-            assertNotNull(admission.acquire("alice", "db1"));
+            assertNotNull(admission.acquire("alice", "db1", false));
         }
         assertEquals(0L, admission.getRejectedPerUser());
         assertEquals(0L, admission.getRejectedPerDatabase());
@@ -268,28 +268,69 @@ public class ScriptAdmissionTest {
     @Test
     public void test_a_null_username_or_database_skips_that_slice() {
         final var admission = tenantAdmission(5, 1, 1);
-        final var first = admission.acquire(null, null);
+        final var first = admission.acquire(null, null, false);
         assertNotNull(first);
-        assertNotNull(admission.acquire(null, null), "a run with no principal cannot be sliced by one");
+        assertNotNull(admission.acquire(null, null, false), "a run with no principal cannot be sliced by one");
         first.close();
-        assertNotNull(admission.acquire(null, null));
+        assertNotNull(admission.acquire(null, null, false));
     }
 
     @Test
     public void test_idle_pools_are_released() {
         final var admission = tenantAdmission(5, 1, 1);
-        final var permit = admission.acquire("transient-user", "transient-db");
+        final var permit = admission.acquire("transient-user", "transient-db", false);
         assertNotNull(permit);
         permit.close();
-        assertNotNull(admission.acquire("transient-user", "transient-db"));
+        assertNotNull(admission.acquire("transient-user", "transient-db", false));
     }
 
     @Test
     public void test_node_wide_refusal_reports_the_node_scope() {
         final var admission = tenantAdmission(1, 0, 0);
-        assertNotNull(admission.acquire("alice", "db1"));
-        assertNull(admission.acquire("bob", "db2"));
+        assertNotNull(admission.acquire("alice", "db1", false));
+        assertNull(admission.acquire("bob", "db2", false));
         assertEquals(ScriptAdmission.SCOPE_NODE, admission.lastRefusalScope());
+    }
+
+    @Test
+    public void lastDatabaseSlotIsReservedForOwnerAndAdmin() {
+        final var admission = tenantAdmission(10, 0, 3);
+        assertNotNull(admission.acquire("alice", "db1", false));
+        assertNotNull(admission.acquire("bob", "db1", false));
+        assertNull(admission.acquire("carol", "db1", false), "the last slot is kept for the owner and admins");
+
+        final var owner = admission.acquire("owner", "db1", true);
+        assertNotNull(owner, "the owner takes the reserved slot");
+        assertNull(admission.acquire("admin", "db1", true), "the reserve is one slot");
+        owner.close();
+        assertNull(admission.acquire("carol", "db1", false), "a released reserve stays reserved");
+        assertNotNull(admission.acquire("admin", "db1", true));
+    }
+
+    @Test
+    public void ordinaryUsersStopAtLimitMinusOne() {
+        final var admission = tenantAdmission(10, 0, 2);
+        final var first = admission.acquire("alice", "db1", false);
+        assertNotNull(first);
+        assertNull(admission.acquire("bob", "db1", false));
+        assertEquals(ScriptAdmission.SCOPE_DATABASE, admission.lastRefusalScope());
+        first.close();
+        assertNotNull(admission.acquire("bob", "db1", false), "a released shared slot is shared again");
+    }
+
+    @Test
+    public void limitOfOneStillAdmitsOrdinaryUser() {
+        final var admission = tenantAdmission(10, 0, 1);
+        assertNotNull(admission.acquire("alice", "db1", false), "below two slots there is no reserve");
+        assertNull(admission.acquire("owner", "db1", true));
+    }
+
+    @Test
+    public void privilegedRunsUseSharedSlotsFirst() {
+        final var admission = tenantAdmission(10, 0, 2);
+        assertNotNull(admission.acquire("owner", "db1", true));
+        assertNull(admission.acquire("alice", "db1", false));
+        assertNotNull(admission.acquire("admin", "db1", true), "the reserve was left untouched");
     }
 
     @Test

@@ -297,6 +297,48 @@ def test_an_oversized_pattern_is_refused_at_save(c):
                  save_schema(c, COLL, {"type": "object", "properties": {"p": {"pattern": "a" * 4096}}}), "OK")
 
 
+BACKREFERENCE_DEADLINE_S = 3
+
+
+def test_backreference_pattern_is_cut_by_budget_quickly(c):
+    section("A backreference pattern pays for every character it compares")
+    check_status("save a schema with a backreference pattern",
+                 save_schema(c, COLL, {"type": "object", "properties": {"name": {"pattern": "(a*)\\1b"}}}), "OK")
+    try:
+        resp, elapsed = timed(lambda: save(c, COLL, {"_id": "backref", "name": "a" * 100_000}))
+    except OSError as failure:
+        resp, elapsed = {"status": "ERROR", "message": str(failure)}, float("inf")
+    check_code("a SAVE of 100 000 'a's is refused with 400-23", resp, "ERROR", "400-23")
+    check(f"and refused within {BACKREFERENCE_DEADLINE_S}s", elapsed < BACKREFERENCE_DEADLINE_S,
+          f"elapsed={elapsed:.1f}s")
+    check("the refused document was not persisted", find_by_id(c, COLL, "backref").get("status") == "NOT_FOUND")
+    check_status("a short matching value still saves", save(c, COLL, {"_id": "backref-ok", "name": "aab"}), "OK")
+
+
+MAX_SCHEMA_PATTERNS = 256
+
+
+def many_patterns_schema(count):
+    properties = {f"p{i}": {"pattern": f"^many-{i}$"} for i in range(count - 1)}
+    return {"type": "object", "properties": properties, "patternProperties": {"^extra-[0-9]+$": {}}}
+
+
+def test_too_many_patterns_is_400_39(c):
+    section("SAVE_SCHEMA refuses a schema with more regular expressions than schemaMaxPatterns")
+    resp, elapsed = timed(lambda: save_schema(c, COLL, many_patterns_schema(MAX_SCHEMA_PATTERNS + 1)))
+    check_code(f"{MAX_SCHEMA_PATTERNS + 1} patterns (one a patternProperties key) are refused with 400-39",
+               resp, "ERROR", "400-39")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check_code("an invalid regex among too many is still answered 400-39, before any is compiled",
+               save_schema(c, COLL, {"type": "object", "properties": {
+                   **many_patterns_schema(MAX_SCHEMA_PATTERNS + 1)["properties"], "bad": {"pattern": "(unclosed"}}}),
+               "ERROR", "400-39")
+    check_status("nothing was stored: an unconstrained save passes", save(c, COLL, {"_id": "free-many", "p0": 1}), "OK")
+    check_status(f"exactly {MAX_SCHEMA_PATTERNS} patterns are accepted",
+                 save_schema(c, COLL, many_patterns_schema(MAX_SCHEMA_PATTERNS)), "OK")
+    check_code("and enforced", save(c, COLL, {"_id": "many-bad", "p3": "nope"}), "ERROR", "400-7")
+
+
 def test_bulk_save_shares_one_budget(c):
     section("A BULK_SAVE spends one validation budget across all its documents")
     check_status("save a schema whose pattern costs millions of steps to reject",
@@ -449,6 +491,8 @@ def main():
         test_complex_ref_chain_save_schema_is_refused,
         test_diamond_chain_under_limit_is_accepted_and_bounded,
         test_an_oversized_pattern_is_refused_at_save,
+        test_backreference_pattern_is_cut_by_budget_quickly,
+        test_too_many_patterns_is_400_39,
         test_bulk_save_shares_one_budget,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,

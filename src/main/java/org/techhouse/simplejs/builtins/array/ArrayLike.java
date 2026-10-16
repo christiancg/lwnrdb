@@ -85,6 +85,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
         }
         final var dense = dense();
         if (dense != null && index <= Integer.MAX_VALUE) {
+            dense.chargeDenseGrowth(ops, index + 1L);
             return dense.set((int) index, element);
         }
         if (ops == null) {

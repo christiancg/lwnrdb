@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -31,11 +32,13 @@ public class UserCache {
     private final FieldIndexLookups fieldLookups = new FieldIndexLookups();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
     private final UserCacheSizes sizes = new UserCacheSizes();
+    private final WholeLoads wholeLoads = new WholeLoads(() -> fs,
+            configuration.intValue(ConfigKey.TRANSIENT_LOAD_PERMITS));
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
-            final var fromDisk = fs.readWholePkIndexFile(dbName, collName);
+            final var fromDisk = wholeLoads.pkIndex(dbName, collName, bytes -> loadsAdmitted(dbName, collName, bytes));
             if (!isCachingDisabled(dbName) && rl.holdsCollectionLock(dbName, collName)) {
                 admitPkIndex(dbName, collectionIdentifier, fromDisk);
             }
@@ -64,7 +67,7 @@ public class UserCache {
             Thread.currentThread().interrupt();
         }
         if (!held) {
-            return fs.readWholePkIndexFile(dbName, collName);
+            return wholeLoads.transientPkIndex(dbName, collName);
         }
         try {
             return new ArrayList<>(shared);
@@ -99,6 +102,11 @@ public class UserCache {
         return footprintBytes() + estimatedBytes.getAsLong() <= configuration.getMaxMemoryBytes();
     }
 
+    private boolean loadsAdmitted(String dbName, String collName, long estimatedBytes) {
+        return isReservedDatabase(dbName)
+                || rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName, () -> estimatedBytes);
+    }
+
     private long footprintBytes() {
         var total = 0L;
         for (final var resource : listCacheableResources(Measure.REMEMBERED)) {
@@ -111,14 +119,14 @@ public class UserCache {
     // writer): the returned entries alias the cached id sets and must be copied before releasing it.
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
-        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType));
+        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType), () -> wholeLoads
+                .fieldIndex(dbName, collName, fieldName, indexType, bytes -> loadsAdmitted(dbName, collName, bytes)));
     }
 
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
-        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
+        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()), () -> wholeLoads
+                .hashIndex(dbName, collName, fieldName, kind, bytes -> loadsAdmitted(dbName, collName, bytes)));
     }
 
     public List<FieldIndexEntry<?>> residentFieldIndex(String dbName, String collName, String indexIdentifier) {

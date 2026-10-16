@@ -151,6 +151,17 @@ public final class AuthorizationChecker {
         return !lacksCollectionAccess(user, dbName, collName, PermissionLevel.READ_WRITE);
     }
 
+    public static boolean ownsOrAdministers(AdminUserEntry user, String dbName) {
+        if (user == null) {
+            return false;
+        }
+        if (user.isAdmin()) {
+            return true;
+        }
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        return dbEntry != null && dbEntry.isOwner(user.get_id());
+    }
+
     public static boolean mayRunAsDefiner(AdminUserEntry user, String dbName, String collName) {
         if (user == null) {
             return false;

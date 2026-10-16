@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -95,6 +96,29 @@ public class ScheduleOperationHelperTest {
         assertInstanceOf(SaveScheduleResponse.class,
                 ScheduleOperationHelper.executeSave(cronRequest("leap", "0 0 29 2 *"), ACTOR),
                 "February 29 falls within the search horizon");
+    }
+
+    @Test
+    public void cronFasterThanMinimumRefused() throws Exception {
+        TestUtils.setPrivateField(configuration, "scheduleMinIntervalMs", 120_000L);
+        try {
+            assertEquals(ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getCode(), ScheduleOperationHelper
+                    .executeSave(cronRequest("every_minute", "* * * * *"), ACTOR).getErrorCode());
+            assertEquals(ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getCode(),
+                    ScheduleOperationHelper.executeSave(cronRequest("close_pair", "0,1 9 * * *"), ACTOR).getErrorCode(),
+                    "two fires a minute apart are refused whenever the schedule is saved");
+            assertEquals(
+                    ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getCode(), ScheduleOperationHelper
+                            .executeSave(cronRequest("across_midnight", "0,59 0,23 * * *"), ACTOR).getErrorCode(),
+                    "23:59 and the next day's 00:00 are a minute apart too");
+            assertInstanceOf(SaveScheduleResponse.class,
+                    ScheduleOperationHelper.executeSave(cronRequest("every_five", "*/5 * * * *"), ACTOR));
+            assertInstanceOf(SaveScheduleResponse.class,
+                    ScheduleOperationHelper.executeSave(cronRequest("weekly", "0 9 * * 1"), ACTOR));
+        } finally {
+            TestUtils.setPrivateField(configuration, "scheduleMinIntervalMs",
+                    ConfigKey.SCHEDULE_MIN_INTERVAL_MS.defaultValue());
+        }
     }
 
     private SaveScheduleResponse save(SaveScheduleRequest request) throws Exception {

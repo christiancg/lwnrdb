@@ -28,6 +28,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.SchemaPatternCaps;
 import org.techhouse.ops.admin.AdminStamp;
 
 public class AdminCache {
@@ -61,8 +62,8 @@ public class AdminCache {
     private final BoundedLruCache<ScheduleDefinition> schedules = new BoundedLruCache<>(Integer.MAX_VALUE,
             configuration.getMetadataCacheMaxBytes() / 3,
             definition -> (long) eJson.toJson(definition.toJsonObject()).length() * 2L);
-    private final BoundedLruCache<Boolean> metadataMisses = new BoundedLruCache<>(
-            configuration.getMetadataCacheMaxEntries(), 0L, _ -> 1L);
+    private final PartitionedMissCache metadataMisses = new PartitionedMissCache(
+            configuration.getMetadataCacheMaxEntries());
     private final DefinitionCache<JsonObject> schemaCache = new DefinitionCache<>(() -> collectionSchemas,
             () -> metadataMisses, SCHEMA_MISS_PREFIX, this::loadSchemaUncached);
     private final DefinitionCache<ProcedureDefinition> procedureCache = new DefinitionCache<>(() -> procedures,
@@ -271,7 +272,10 @@ public class AdminCache {
             if (raw == null || raw.isBlank()) {
                 return null;
             }
-            return AdminStamp.unwrappedSchema(eJson.fromJson(raw, JsonObject.class));
+            final var schema = AdminStamp.unwrappedSchema(eJson.fromJson(raw, JsonObject.class));
+            SchemaPatternCaps.warnWhenOver(
+                    "Loaded the stored schema of " + Cache.getCollectionIdentifier(dbName, collName), schema);
+            return schema;
         } catch (Exception e) {
             logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());

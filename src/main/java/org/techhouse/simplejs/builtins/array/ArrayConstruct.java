@@ -140,6 +140,7 @@ public final class ArrayConstruct {
 
     public static void createDataPropertyOrThrow(JsValue target, long index, JsValue value, InterpreterOps ops) {
         if (target instanceof JsArray array) {
+            array.chargeDenseGrowth(ops, index + 1L);
             if (index > Integer.MAX_VALUE || !array.set((int) index, value)) {
                 throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
             }

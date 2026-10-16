@@ -14,6 +14,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.SimpleJs;
+import org.techhouse.simplejs.builtins.NativeDepth;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
@@ -23,6 +24,7 @@ import org.techhouse.test.TestUtils;
 
 public class DbTransactionProgramTest {
     private static final String ADMIN = "txscriptadmin";
+    private static final int NESTING_PER_MAP = 2;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -187,6 +189,48 @@ public class DbTransactionProgramTest {
         assertTrue(second.get().isError());
         assertNull(read("prog-contender"));
         assertCollectionLockFree();
+    }
+
+    @Test
+    public void dbCallsAtTheDepthLimitAreRefusedNotStranded() {
+        seed("deep-1", "a");
+        seed("deep-2", "b");
+        final var result = run(script("""
+                const attempts = [
+                    () => db.save(DB, C, { _id: 'deep-save', value: 'x' }),
+                    () => db.bulkSave(DB, C, [{ _id: 'deep-1', value: 'c' }, { _id: 'deep-2', value: 'd' }]),
+                    () => db.transaction(() => db.save(DB, C, { _id: 'deep-tx', value: 'x' }))
+                ];
+                function nest(n, attempt) {
+                    if (n === 0) {
+                        try { attempt(); return 'ran'; } catch (e) { return e.name + ': ' + e.message; }
+                    }
+                    return [0].map(() => nest(n - 1, attempt))[0];
+                }
+                return attempts.map(attempt => nest(%d, attempt)).join('|');
+                """.formatted((NativeDepth.MAX - NativeDepth.DB_CALL_RESERVE) / NESTING_PER_MAP)));
+        assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
+        final var refusal = "RangeError: " + NativeDepth.EXCEEDED;
+        assertEquals(String.join("|", refusal, refusal, refusal), result.getValue().asJsonString().getValue());
+        assertNull(read("deep-save"));
+        assertNull(read("deep-tx"));
+        assertEquals("a", read("deep-1").get("value").asJsonString().getValue());
+        assertCollectionLockFree();
+        seed("deep-after", "ok");
+        assertEquals("ok", read("deep-after").get("value").asJsonString().getValue());
+    }
+
+    @Test
+    public void dbCallsWithHeadroomLeftStillRun() {
+        final var result = run(script("""
+                function nest(n) {
+                    return n === 0 ? db.save(DB, C, { _id: 'shallow', value: 'x' })._id
+                        : [0].map(() => nest(n - 1))[0];
+                }
+                return nest(%d);
+                """.formatted((NativeDepth.MAX - 2 * NativeDepth.DB_CALL_RESERVE) / NESTING_PER_MAP)));
+        assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
+        assertEquals("shallow", result.getValue().asJsonString().getValue());
     }
 
     // Regression guard: this is what would break if EJsonInterop emitted a plain string instead of a

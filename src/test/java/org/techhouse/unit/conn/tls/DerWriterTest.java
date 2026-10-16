@@ -4,8 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.tls.DerWriter;
+import org.techhouse.conn.tls.SelfSignedCertificateGenerator;
 
 public class DerWriterTest {
 
@@ -35,6 +38,17 @@ public class DerWriterTest {
         assertEquals(0x81, encoded[1] & 0xFF);
         assertEquals(0xC8, encoded[2] & 0xFF);
         assertEquals(200 + 3, encoded.length);
+    }
+
+    @Test
+    public void generalizedTimeFrom2050() {
+        final var lastUtc = Instant.parse("2049-12-31T23:59:59Z");
+        final var firstGeneralized = Instant.parse("2050-01-01T00:00:00Z");
+
+        assertArrayEquals(DerWriter.utcTime(lastUtc), SelfSignedCertificateGenerator.certificateTime(lastUtc));
+        final var encoded = SelfSignedCertificateGenerator.certificateTime(firstGeneralized);
+        assertEquals(0x18, encoded[0] & 0xFF);
+        assertEquals("20500101000000Z", new String(encoded, 2, encoded[1], StandardCharsets.US_ASCII));
     }
 
     @Test

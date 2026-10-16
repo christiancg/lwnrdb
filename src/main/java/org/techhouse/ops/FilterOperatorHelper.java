@@ -224,8 +224,7 @@ public class FilterOperatorHelper {
             return cache.getEntriesByIds(dbName, collName, candidateIds).stream().map(DbEntry::getData)
                     .filter(data -> tester.test(data, fieldName));
         }
-        return cache.streamCollection(dbName, collName).map(DbEntry::getData)
-                .filter(data -> tester.test(data, fieldName));
+        return cache.initializeStreamIfNecessary(null, dbName, collName).filter(data -> tester.test(data, fieldName));
     }
 
     public static BiPredicate<JsonObject, String> getCustomTester(CustomOperator operator) {
@@ -259,7 +258,7 @@ public class FilterOperatorHelper {
         if (candidateIds != null) {
             candidates = cache.getEntriesByIds(dbName, collName, candidateIds).stream().map(DbEntry::getData);
         } else {
-            candidates = cache.streamCollection(dbName, collName).map(DbEntry::getData);
+            candidates = cache.initializeStreamIfNecessary(null, dbName, collName);
         }
         return topK(candidates, operator, fieldName, k);
     }
@@ -333,8 +332,7 @@ public class FilterOperatorHelper {
             return cache.getEntriesByIds(dbName, collName, matchingValues).stream().map(DbEntry::getData)
                     .filter(data -> test.test(data, fieldName));
         }
-        return cache.streamCollection(dbName, collName).map(DbEntry::getData)
-                .filter(data -> test.test(data, fieldName));
+        return cache.initializeStreamIfNecessary(null, dbName, collName).filter(data -> test.test(data, fieldName));
     }
 
     public static Set<String> resolveIdsViaIndex(BaseOperator operator, String dbName, String collName)

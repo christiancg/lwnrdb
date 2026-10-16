@@ -39,6 +39,7 @@ BIG_COLL = "big"
 EMPTY_COLL = "empty"
 BIG_DOCS = 300
 BIG_PAYLOAD_CHARS = 8 * 1024
+SHIPPED_TIMEOUT_MS = 5_000
 
 
 def check_failed_script(label: str, response: dict, expected_code: str, message_contains: str = ""):
@@ -513,6 +514,61 @@ def test_allocations_are_charged_before_they_happen(conn: Conn):
                           "const s = 'x'.repeat(50000);\n"
                           f'for (let i = 0; i < 20; i++) {{ db.save(db.name, "{COLL}", {{ _id: "loop", body: s }}); }}\n'
                           'return "saved";'), "saved")
+    check_result("the server is still serving", conn.run("return [1, 2, 3].length;"), 3)
+
+
+def timed_run(conn: Conn, script: str):
+    started = time.time()
+    response = conn.run(script)
+    return response, time.time() - started
+
+
+def check_refused_in_time(label: str, response: dict, elapsed: float, codes=("400-12", "408-1")):
+    check(label, response.get("status") == "ERROR" and response.get("errorCode") in codes,
+          f"expected one of {codes}, got {response.get('errorCode')} msg={response.get('message')!r}")
+    check(f"… within scriptTimeoutMs + 2s", elapsed < SHIPPED_TIMEOUT_MS / 1000 + 2, f"took {elapsed:.2f}s")
+
+
+def test_private_use_locale_tags_do_not_grow_the_heap(conn: Conn):
+    section("Locale tags resolve to an available locale, so a loop of private-use tags leaks nothing")
+    for _ in range(3):
+        looped, elapsed = timed_run(conn, "for (let i = 0; ; i++) { (1.5).toLocaleString('en-x-' + i.toString(36)); }")
+        check_refused_in_time("a loop of distinct en-x-* tags ends at the run's own budget", looped, elapsed,
+                              ("400-11", "408-1"))
+    check_result("a busy script afterwards is not refused by the heap ceiling",
+                 conn.run("let n = 0; for (let i = 0; i < 100000; i++) { n += i % 7; } return n;"), 299995)
+    check_result("a private-use tag formats as its base locale",
+                 conn.run("return (1234.5).toLocaleString('de-DE-x-abc');"), "1.234,5")
+    check_result("an unknown language falls back to the script locale",
+                 conn.run("return (1234.5).toLocaleString('qqq');"), "1,234.5")
+    check_failed_script("an ill-formed tag is a RangeError",
+                        conn.run("return (1).toLocaleString('en_US@@');"), "400-9", "RangeError")
+
+
+def test_script_charging_gaps_at_shipped_limits(conn: Conn):
+    section("Script memory and deadline bypasses at the shipped limits")
+    big_int, elapsed = timed_run(conn, "const x = 1n << (2n ** 23n); const kept = [];"
+                                       " for (let i = 0; i < 100; i++) { kept.push(~x); } return kept.length;")
+    check_refused_in_time("retaining BigInt ~x is charged", big_int, elapsed, ("400-12",))
+    text, elapsed = timed_run(conn, "const x = 1n << (2n ** 16n); const kept = [];"
+                                    " for (let i = 0; i < 3000; i++) { kept.push(String(x)); } return kept.length;")
+    check_refused_in_time("retaining String(bigint) is charged", text, elapsed, ("400-12",))
+    fill, elapsed = timed_run(conn, "const a = []; a[2 ** 24] = 1; a.fill(1, 2 ** 24 - 1, 2 ** 24); return a.length;")
+    check_refused_in_time("fill into a sparse tail is charged for the holes it pads", fill, elapsed, ("400-12",))
+    parsed, elapsed = timed_run(conn, "return JSON.parse('[' + '[],'.repeat(3200000) + '[]]').length;")
+    check_refused_in_time("JSON.parse is charged per node", parsed, elapsed)
+    own_keys, elapsed = timed_run(conn, "return Reflect.ownKeys(new Proxy({}, {"
+                                        " ownKeys: () => ({ length: 2 ** 31 - 1 }) })).length;")
+    check_refused_in_time("a Proxy ownKeys array-like is refused before it is copied", own_keys, elapsed,
+                          ("400-12", "400-30", "408-1"))
+    replacer, elapsed = timed_run(conn, "const keys = Array.from({ length: 300000 }, (_, i) => 'k' + i);"
+                                        " return JSON.stringify({ k7: 7 }, keys);")
+    check_result("a JSON.stringify replacer of 300000 keys answers", replacer, '{"k7":7}')
+    check("… well inside the deadline", elapsed < SHIPPED_TIMEOUT_MS / 1000, f"took {elapsed:.2f}s")
+    check_result("a global replace does not keep every match alive",
+                 conn.run("return 'a'.repeat(2500000).replace(/a/g, 'b').length;"), 2500000)
+    encoded, elapsed = timed_run(conn, "return encodeURIComponent('é'.repeat(6000000)).length;")
+    check_refused_in_time("encodeURIComponent past the budget is refused", encoded, elapsed)
     check_result("the server is still serving", conn.run("return [1, 2, 3].length;"), 3)
 
 
@@ -1911,6 +1967,16 @@ def main():
             test_admin_is_unrestricted(conn)
             test_allocations_are_charged_before_they_happen(conn)
             test_procedures_per_database_are_capped(conn)
+
+        bu.stop_server(proc)
+        proc = None
+
+        bu.write_config(work_dir, PORT, scriptsEnabled=True, scriptTimeZone="UTC", scriptLocale="en-US")
+        print(f"\n  Restarting server (shipped script limits, -Xmx1g) on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path, xmx="1g")
+        with admin_conn() as conn:
+            test_private_use_locale_tags_do_not_grow_the_heap(conn)
+            test_script_charging_gaps_at_shipped_limits(conn)
 
         bu.stop_server(proc)
         proc = None

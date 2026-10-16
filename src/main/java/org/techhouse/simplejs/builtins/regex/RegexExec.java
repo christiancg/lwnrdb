@@ -12,6 +12,7 @@ import org.techhouse.simplejs.internal.regex.RegexMatch;
 import org.techhouse.simplejs.internal.regex.RegexMatcher;
 import org.techhouse.simplejs.internal.regex.RegexStepBudget;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -21,6 +22,8 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class RegexExec {
+    public static final String EXEC = "exec";
+
     public static JsValue builtinExec(JsValue target, JsRegExp state, String input, InterpreterOps ops) {
         final var global = state.isGlobal();
         final var sticky = state.isSticky();
@@ -155,18 +158,25 @@ public final class RegexExec {
     }
 
     public static JsValue regExpExec(JsValue rx, String s, InterpreterOps ops) {
-        final var execFn = ops.getMember(rx, new JsString("exec"));
+        return execStep(rx, s, ops).result();
+    }
+
+    public static ExecStep execStep(JsValue rx, String s, InterpreterOps ops) {
+        final var execFn = ops.getMember(rx, new JsString(EXEC));
         if (isCallable(execFn)) {
             final var result = ops.call(execFn, rx, List.of(new JsString(s)));
             if (!(result instanceof JsObject) && !(result instanceof JsArray) && !(result instanceof JsNull)) {
                 throw new TypeErrorException("RegExp exec method returned something other than an object or null");
             }
-            return result;
+            return new ExecStep(result, execFn instanceof JsNativeFunction function && EXEC.equals(function.getName()));
         }
         if (rx instanceof JsRegExp regexp) {
-            return builtinExec(rx, regexp, s, ops);
+            return new ExecStep(builtinExec(rx, regexp, s, ops), true);
         }
         throw new TypeErrorException("RegExp.prototype.exec method is not generic");
+    }
+
+    public record ExecStep(JsValue result, boolean builtin) {
     }
 
     private static RegexStepBudget budgetFor(InterpreterOps ops) {

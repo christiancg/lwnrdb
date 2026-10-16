@@ -32,10 +32,12 @@ public class TriggerExecutor {
     private volatile ScheduledExecutorService retryScheduler;
     private volatile ScheduledExecutorService sweepScheduler;
     private final AtomicLong queuedBytes = new AtomicLong();
+    private final AtomicLong scheduledBytes = new AtomicLong();
     private volatile Consumer<TriggerEvent> dispatcher;
+    private final Configuration configuration = Configuration.getInstance();
 
     public TriggerExecutor() {
-        this.queue = new LinkedBlockingQueue<>(Math.max(1, Configuration.getInstance().getTriggerQueueSize()));
+        this.queue = new LinkedBlockingQueue<>(Math.max(1, configuration.getTriggerQueueSize()));
     }
 
     public void submit(TriggerEvent event) {
@@ -59,9 +61,10 @@ public class TriggerExecutor {
     }
 
     private boolean cannotEnqueue(TriggerEvent event, long bytes) {
-        final var total = queuedBytes.addAndGet(bytes);
-        final var overBudget = total > Configuration.getInstance().sizeValue(ConfigKey.TRIGGER_QUEUE_MAX_BYTES)
-                && total != bytes;
+        final var queuedTotal = queuedBytes.addAndGet(bytes);
+        final var total = queuedTotal + scheduledBytes.get();
+        final var overBudget = total > configuration.sizeValue(ConfigKey.TRIGGER_QUEUE_MAX_BYTES)
+                && queuedTotal != bytes;
         if (overBudget || !queue.offer(event)) {
             queuedBytes.addAndGet(-bytes);
             return true;
@@ -90,7 +93,7 @@ public class TriggerExecutor {
     }
 
     public long getQueuedBytes() {
-        return queuedBytes.get();
+        return queuedBytes.get() + scheduledBytes.get();
     }
 
     private TriggerEvent oldestQueuedFor(String dbName) {
@@ -119,18 +122,21 @@ public class TriggerExecutor {
             submit(event);
             return;
         }
+        final var waiting = event.withIdsOnly();
+        final var bytes = waiting.queuedBytes();
         scheduled.incrementAndGet();
+        scheduledBytes.addAndGet(bytes);
         try {
             retryScheduler.schedule(() -> {
                 try {
-                    submit(event);
+                    decrementScheduled(bytes);
                 } finally {
-                    decrementScheduled();
+                    submit(waiting);
                 }
             }, delayMillis, TimeUnit.MILLISECONDS);
         } catch (RuntimeException rejected) {
-            decrementScheduled();
-            submit(event);
+            decrementScheduled(bytes);
+            submit(waiting);
         }
     }
 
@@ -146,7 +152,7 @@ public class TriggerExecutor {
             thread.setDaemon(true);
             return thread;
         });
-        workers.start(pool, Math.max(1, Configuration.getInstance().getTriggerThreads()), queue, this::dispatch);
+        workers.start(pool, Math.max(1, configuration.getTriggerThreads()), queue, this::dispatch);
         logger.info("Started listening for triggers");
     }
 
@@ -178,8 +184,9 @@ public class TriggerExecutor {
         return false;
     }
 
-    private void decrementScheduled() {
+    private void decrementScheduled(long bytes) {
         scheduled.updateAndGet(current -> current > 0 ? current - 1 : 0);
+        scheduledBytes.updateAndGet(current -> Math.max(0L, current - bytes));
     }
 
     public int pending() {
@@ -193,6 +200,7 @@ public class TriggerExecutor {
             scheduler.shutdownNow();
         }
         scheduled.set(0);
+        scheduledBytes.set(0L);
         final var sweep = sweepScheduler;
         sweepScheduler = null;
         if (sweep != null) {

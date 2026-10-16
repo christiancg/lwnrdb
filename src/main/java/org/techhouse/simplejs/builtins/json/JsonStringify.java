@@ -8,14 +8,17 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCal
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonStrings;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Invoker;
 import org.techhouse.simplejs.builtins.JsonBuiltins.Replacer;
@@ -33,6 +36,9 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class JsonStringify {
+    private static final int QUOTE_CHARS = 2;
+    private static final int KEY_DECORATION_CHARS = QUOTE_CHARS + 1;
+
     public static JsValue stringify(List<JsValue> args, InterpreterOps ops, Invoker invoker, JsObject objectProto) {
         if (args.isEmpty()) {
             return JsUndefined.getInstance();
@@ -62,8 +68,9 @@ public final class JsonStringify {
             }
         } else if (element instanceof JsonObject object) {
             for (final var entry : object.entrySet()) {
-                InterpreterOps.chargeChars(ops, entry.getKey().length());
-                total += entry.getKey().length() + chargeRendering(entry.getValue(), indentLength, depth + 1, ops);
+                final var keyChars = JsonStrings.escapedLength(entry.getKey()) + KEY_DECORATION_CHARS;
+                InterpreterOps.chargeChars(ops, keyChars);
+                total += keyChars + chargeRendering(entry.getValue(), indentLength, depth + 1, ops);
             }
         }
         return total;
@@ -71,7 +78,9 @@ public final class JsonStringify {
 
     private static long renderedChars(JsonBaseElement element, int indentLength, int depth) {
         final var indentation = indentLength == 0 ? 0L : 1L + (long) indentLength * depth;
-        return element.isJsonString() ? indentation + element.asJsonString().getValue().length() : indentation;
+        return element.isJsonString()
+                ? indentation + JsonStrings.escapedLength(element.asJsonString().getValue()) + QUOTE_CHARS
+                : indentation;
     }
 
     public static Set<JsValue> newSeen() {
@@ -188,7 +197,7 @@ public final class JsonStringify {
         return result;
     }
 
-    public static List<String> serializableKeys(JsObject object, Replacer replacer) {
+    public static Collection<String> serializableKeys(JsObject object, Replacer replacer) {
         if (replacer.allowList() != null) {
             return replacer.allowList();
         }
@@ -220,12 +229,13 @@ public final class JsonStringify {
             return new Replacer(replacer, null);
         }
         if (isArray(replacer)) {
-            final var keys = new ArrayList<String>();
+            final var keys = new LinkedHashSet<String>();
             final var length = (long) JsCoercion.toNumber(ops.getMember(replacer, new JsString("length")), ops);
             InterpreterOps.chargeElements(ops, length);
             for (var i = 0L; i < length; i++) {
+                InterpreterOps.pace(ops, i);
                 final var item = propertyListItem(ops.getMember(replacer, new JsString(Long.toString(i))), ops);
-                if (item != null && !keys.contains(item)) {
+                if (item != null) {
                     keys.add(item);
                 }
             }

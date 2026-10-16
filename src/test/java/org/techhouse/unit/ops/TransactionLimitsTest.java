@@ -12,6 +12,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -19,14 +21,19 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TriggerOperationHelper;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.req.SaveProcedureRequest;
+import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.tx.CommitAuthorization;
 import org.techhouse.test.TestGlobals;
@@ -37,6 +44,8 @@ public class TransactionLimitsTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Configuration configuration = Configuration.getInstance();
+    private final Cache cache = IocContainer.get(Cache.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private UUID clientId;
 
     @BeforeEach
@@ -135,6 +144,46 @@ public class TransactionLimitsTest {
         assertEquals(ErrorCode.TRANSACTION_TOO_LARGE.getCode(), send(save("big", "y".repeat(2000))).getErrorCode());
         assertEquals(OperationStatus.OK, TransactionOperationHelper.abort(clientId).getStatus());
         assertEquals(ErrorCode.ENTRY_NOT_FOUND.getCode(), findById("small").getErrorCode());
+    }
+
+    @Test
+    public void deleteWithTriggerPayloadCountsDocumentBytes() throws Exception {
+        final var fat = "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"object\":{\"_id\":\"ok1\",\"p\":\"" + "y".repeat(2000) + "\"}}";
+        assertEquals(OperationStatus.OK, processor.processMessage(RequestParser.parseRequest(fat)).getStatus());
+        TestUtils.setPrivateField(configuration, "transactionMaxBytes", "1Kb");
+        assertEquals(OperationStatus.OK, send(DELETE_OK1).getStatus(), "no trigger: the id alone is buffered");
+        TransactionOperationHelper.abort(clientId);
+        TransactionOperationHelper.start(clientId);
+
+        TestUtils.setPrivateField(configuration, "triggersEnabled", true);
+        assertEquals(OperationStatus.OK, ProcedureOperationHelper
+                .executeSave(new SaveProcedureRequest(TestGlobals.DB, "on_delete", "return 1;"), WRITER).getStatus());
+        assertEquals(OperationStatus.OK, TriggerOperationHelper.executeSave(
+                new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "audit", List.of("DELETED"), "on_delete"),
+                WRITER).getStatus());
+        try {
+            assertEquals(ErrorCode.TRANSACTION_TOO_LARGE.getCode(), send(DELETE_OK1).getErrorCode());
+        } finally {
+            TestUtils.setPrivateField(configuration, "triggersEnabled", ConfigKey.TRIGGERS_ENABLED.defaultValue());
+            fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+            cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+            fs.deleteProcedure(TestGlobals.DB, "on_delete");
+            cache.removeProceduresForDatabase(TestGlobals.DB);
+        }
+    }
+
+    @Test
+    public void commitThatOverflowsBeforeTheFenceIsRefusedAndReleases() throws Exception {
+        assertEquals(OperationStatus.OK, send(save("overflowed", "x")).getStatus());
+        try (var authorization = Mockito.mockStatic(CommitAuthorization.class)) {
+            authorization.when(() -> CommitAuthorization.allows(Mockito.any(), Mockito.any()))
+                    .thenThrow(new StackOverflowError());
+            assertEquals(ErrorCode.ERROR_TRANSACTION.getCode(),
+                    TransactionOperationHelper.commit(clientId).getErrorCode());
+        }
+        assertTrue(collectionIsWritable());
+        assertEquals(ErrorCode.ENTRY_NOT_FOUND.getCode(), findById("overflowed").getErrorCode());
     }
 
     @Test

@@ -145,9 +145,7 @@ public final class ScheduleOperationHelper {
         }
         final var minInterval = configuration.longValue(ConfigKey.SCHEDULE_MIN_INTERVAL_MS);
         if (hasInterval && request.getIntervalMs() < minInterval) {
-            return new OperationResponse(OperationType.SAVE_SCHEDULE,
-                    ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getDefaultMessage() + " (" + minInterval + " ms)",
-                    ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL);
+            return intervalTooSmall(minInterval);
         }
         if (request.getTimeoutMs() < 0) {
             return invalid("timeoutMs must not be negative");
@@ -165,11 +163,21 @@ public final class ScheduleOperationHelper {
             } catch (InvalidCronException e) {
                 return invalid(e.getMessage());
             }
-            if (expression.nextAfter(ZonedDateTime.now(ZoneId.of(configuration.getScriptTimeZone()))) == null) {
+            final var now = ZonedDateTime.now(ZoneId.of(configuration.getScriptTimeZone()));
+            if (expression.nextAfter(now) == null) {
                 return invalid("cron '" + request.getCron() + "' has no occurrence within the search horizon");
+            }
+            if (expression.shortestGapMillis(now) < minInterval) {
+                return intervalTooSmall(minInterval);
             }
         }
         return null;
+    }
+
+    private static OperationResponse intervalTooSmall(long minInterval) {
+        return new OperationResponse(OperationType.SAVE_SCHEDULE,
+                ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getDefaultMessage() + " (" + minInterval + " ms)",
+                ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL);
     }
 
     private static OperationResponse invalid(String reason) {

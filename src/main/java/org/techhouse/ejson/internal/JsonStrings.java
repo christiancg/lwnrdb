@@ -6,6 +6,8 @@ public final class JsonStrings {
 
     private static final char[] HEX = "0123456789abcdef".toCharArray();
     private static final char LAST_CONTROL_CHARACTER = 0x20;
+    private static final int SHORT_ESCAPE_WIDTH = 2;
+    private static final int UNICODE_ESCAPE_WIDTH = 6;
 
     public static String escape(final String value) {
         if (value == null || value.isEmpty()) {
@@ -19,6 +21,24 @@ public final class JsonStrings {
         builder.append(value, 0, start);
         escapeFrom(builder, value, start);
         return builder.toString();
+    }
+
+    public static long escapedLength(final String value) {
+        final var length = value.length();
+        long escaped = length;
+        for (var i = 0; i < length; i++) {
+            if (needsEscaping(value, i)) {
+                escaped += escapeWidth(value.charAt(i)) - 1;
+            }
+        }
+        return escaped;
+    }
+
+    private static int escapeWidth(final char c) {
+        return switch (c) {
+            case '"', '\\', '\b', '\f', '\n', '\r', '\t' -> SHORT_ESCAPE_WIDTH;
+            default -> UNICODE_ESCAPE_WIDTH;
+        };
     }
 
     public static void appendEscaped(final StringBuilder out, final String value) {

@@ -61,6 +61,8 @@ public class ConfigReaderTest {
         expectedConfig.put("maxEntrySize", "1Mb");
         expectedConfig.put("schemaValidationBudget", "5000000");
         expectedConfig.put("schemaMaxPatternLength", "4096");
+        expectedConfig.put("schemaMaxPatterns", "256");
+        expectedConfig.put("schemaPatternCacheMaxBytes", "32Mb");
         expectedConfig.put("defaultAdminUsername", "admin");
         expectedConfig.put("defaultAdminPassword", "");
         expectedConfig.put("maxMemory", "512mb");
@@ -270,9 +272,17 @@ public class ConfigReaderTest {
         expectedConfig.put("transactionMaxAgeMs", "600000");
         expectedConfig.put("maxListensPerConnection", "64");
         expectedConfig.put("maxListens", "10000");
+        expectedConfig.put("maxListensPerUser", "256");
+        expectedConfig.put("listenMaxRequestBytes", "1Mb");
+        expectedConfig.put("listenMaxRetainedBytes", "64Mb");
+        expectedConfig.put("listenRerunTimeoutMs", "10000");
         expectedConfig.put("maxFilterOperands", "10000");
         expectedConfig.put("maxVectorDimensions", "16384");
         expectedConfig.put("aggregateTimeoutMs", "300000");
+        expectedConfig.put("aggregateMaxResultBytes", "256Mb");
+        expectedConfig.put("backgroundQueueMaxEvents", "200000");
+        expectedConfig.put("backgroundBacklogWaitMs", "5000");
+        expectedConfig.put("transientLoadPermits", "4");
         expectedConfig.put("scriptHeapCeilingPercent", "75");
         expectedConfig.put("scheduleMaxTimeoutMs", "300000");
     }

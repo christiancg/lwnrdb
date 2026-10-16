@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -140,6 +141,64 @@ public class TriggerQueueBytesTest {
         assertTrue(executor.getQueuedBytes() < before, "a discarded event gives its bytes back");
         assertEquals(1, executor.discardQueuedFor(TestGlobals.DB, null), "a dropped database takes every collection");
         assertEquals(0L, executor.getQueuedBytes());
+    }
+
+    private static TriggerExecutor executorWithRetries() throws Exception {
+        final var executor = executorThatNeverDrains();
+        TestUtils.setPrivateField(executor, "retryScheduler", Executors.newSingleThreadScheduledExecutor());
+        return executor;
+    }
+
+    @Test
+    public void retryScheduledEventsAreCounted() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerQueueMaxBytes", "3Kb");
+        final var executor = executorWithRetries();
+        try {
+            executor.submit(event(EventType.DELETED, TestGlobals.COLL, "queued", 500));
+            executor.submitAfter(event(EventType.DELETED, TestGlobals.COLL, "waiting", 2_000), 60_000L);
+            assertTrue(executor.getQueuedBytes() >= 2_500L, "a waiting retry still holds its document");
+
+            executor.submit(event(EventType.DELETED, "otherColl", "newcomer", 1_000));
+
+            assertEquals(1, executor.getDropped(), "the waiting retry counts against triggerQueueMaxBytes");
+        } finally {
+            executor.stop();
+        }
+        assertEquals(0L, executor.getQueuedBytes(), "cancelled retries give their bytes back");
+    }
+
+    @Test
+    public void aLoneQueuedEventStillQueuesWhileRetriesWait() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerQueueMaxBytes", "3Kb");
+        final var executor = executorWithRetries();
+        try {
+            executor.submitAfter(event(EventType.DELETED, TestGlobals.COLL, "waiting", 2_000), 60_000L);
+
+            executor.submit(event(EventType.DELETED, "otherColl", "huge", 4_000));
+
+            assertEquals(1, executor.getQueued(), "an empty queue never refuses, whatever the retries hold");
+            assertEquals(0, executor.getDropped());
+        } finally {
+            executor.stop();
+        }
+    }
+
+    @Test
+    public void aFiredRetryMovesItsBytesIntoTheQueue() throws Exception {
+        final var executor = executorWithRetries();
+        try {
+            executor.submitAfter(event(EventType.DELETED, TestGlobals.COLL, "soon", 2_000), 1L);
+            final var deadline = System.currentTimeMillis() + 10_000L;
+            while (executor.getQueued() == 0 && System.currentTimeMillis() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(1, executor.getQueued());
+            final var queued = queueOf(executor).peek();
+            assertNotNull(queued);
+            assertEquals(queued.queuedBytes(), executor.getQueuedBytes(), "the bytes are counted once");
+        } finally {
+            executor.stop();
+        }
     }
 
     @Test

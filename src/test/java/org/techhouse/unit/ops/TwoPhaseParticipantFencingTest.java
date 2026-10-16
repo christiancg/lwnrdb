@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -169,7 +168,9 @@ public class TwoPhaseParticipantFencingTest {
         try (var recovery = mockStatic(TransactionRecovery.class)) {
             recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString(), any()))
                     .thenThrow(new StackOverflowError("the apply blew the stack"));
-            assertThrows(StackOverflowError.class, () -> TwoPhaseParticipant.commitPrepared(clientId));
+            final var response = TwoPhaseParticipant.commitPrepared(clientId);
+            assertEquals(ErrorCode.TRANSACTION_HALF_APPLIED.getCode(), response.getErrorCode(),
+                    "a stack overflow past the commit point answers as a half-applied commit");
         }
 
         assertNotNull(clientTracker.getActiveTransaction(clientId),

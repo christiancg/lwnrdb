@@ -77,4 +77,11 @@ public class ConfigKeyTest {
         assertNull(ConfigKey.SCRIPT_FETCH_MAX_CONCURRENT.validate("1"));
         assertEquals("8", ConfigKey.SCRIPT_FETCH_MAX_CONCURRENT.defaultValue());
     }
+
+    @Test
+    public void intAboveIntMaxRefused() {
+        assertNotNull(ConfigKey.MAX_CONNECTIONS.validate("2147483648"));
+        assertNull(ConfigKey.MAX_CONNECTIONS.validate("2147483647"));
+        assertNull(ConfigKey.TRANSACTION_MAX_AGE_MS.validate("2147483648"), "a LONG key is not int-bounded");
+    }
 }

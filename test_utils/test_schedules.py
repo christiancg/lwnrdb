@@ -79,7 +79,8 @@ def await_counter(conn: Conn, doc_id: str, at_least: int, timeout=30.0) -> int:
     return latest[0]
 
 
-def write_config(work_dir: str, scripts_enabled: bool, schedules_enabled: bool):
+def write_config(work_dir: str, scripts_enabled: bool, schedules_enabled: bool,
+                 min_interval_ms: int = MIN_INTERVAL_MS):
     bu.write_config(work_dir, PORT, scriptsEnabled=scripts_enabled, scriptInstructionBudget=2000000,
                     scriptTimeoutMs=5000, scriptMaxDepth=64, scriptMaxSourceBytes=8192,
                     scriptMaxLogLines=50, scriptMaxLogLineChars=500, scriptMaxMemoryBytes=4194304,
@@ -88,7 +89,7 @@ def write_config(work_dir: str, scripts_enabled: bool, schedules_enabled: bool):
                     schedulesEnabled=schedules_enabled, scheduleThreads=2, scheduleQueueSize=100,
                     scheduleTickMs=TICK_MS, scheduleRefreshMs=1000, scheduleTimeoutMs=SCHEDULE_TIMEOUT_MS,
                     scheduleMaxPerDatabase=MAX_PER_DATABASE, scheduleCacheMaxBytes="8Mb",
-                    scheduleMinIntervalMs=MIN_INTERVAL_MS, scheduleMaxTotalPerUser=MAX_TOTAL_PER_USER,
+                    scheduleMinIntervalMs=min_interval_ms, scheduleMaxTotalPerUser=MAX_TOTAL_PER_USER,
                     scriptRunHistoryEnabled=True, scriptRunHistoryKinds="CALL_PROCEDURE,TRIGGER,SCHEDULE",
                     scriptRunHistoryRetentionMs=604800000, scriptRunHistoryIncludeLogs=False,
                     scriptRunHistoryMaxErrorChars=2000)
@@ -594,6 +595,25 @@ def test_switch_off(conn: Conn):
           f"got {response.get('stats', {}).get('schedules')}")
 
 
+SLOW_MIN_INTERVAL_MS = 120_000
+
+
+def test_cron_faster_than_minimum_is_400_35(conn: Conn):
+    section(f"A cron firing faster than scheduleMinIntervalMs={SLOW_MIN_INTERVAL_MS} is refused")
+    conn.send({"type": "DROP_DATABASE", "databaseName": DB})
+    check_status("create database", conn.send({"type": "CREATE_DATABASE", "databaseName": DB}), "OK")
+    check_status("store the counter procedure", conn.save_procedure("counter", COUNTER_SOURCE), "OK")
+    check_code("every minute -> 400-35", conn.save_schedule("everyMinute", "counter", cron="* * * * *"),
+               "ERROR", "400-35")
+    check_code("two fires a minute apart -> 400-35",
+               conn.save_schedule("closePair", "counter", cron="0,1 9 * * *"), "ERROR", "400-35")
+    check_status("every five minutes is accepted",
+                 conn.save_schedule("everyFive", "counter", cron="*/5 * * * *", enabled=False), "OK")
+    check_status("a weekly cron is accepted",
+                 conn.save_schedule("weekly", "counter", cron="0 9 * * 1", enabled=False), "OK")
+    check_status("drop the database", conn.send({"type": "DROP_DATABASE", "databaseName": DB}), "OK")
+
+
 def main():
     bu.banner("Scheduled procedures test suite")
 
@@ -641,6 +661,13 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_switch_off(conn)
+
+        bu.stop_server(proc)
+        proc = None
+        write_config(work_dir, scripts_enabled=True, schedules_enabled=True, min_interval_ms=SLOW_MIN_INTERVAL_MS)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_cron_faster_than_minimum_is_400_35(conn)
     except Exception as exc:  # noqa: BLE001 - the suite reports rather than propagates
         print(f"\nunexpected failure: {exc}", file=sys.stderr)
         bu.dump_log(log_path)

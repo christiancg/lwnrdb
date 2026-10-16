@@ -217,6 +217,15 @@ public class FileSystem {
         return pkIndexStore.readWholePkIndexFile(dbName, collectionName);
     }
 
+    public long pkIndexFileBytes(String dbName, String collectionName) {
+        return paths.pkIndexFile(dbName, collectionName).length();
+    }
+
+    public long indexFileBytes(String dbName, String collName, String fieldName, String indexTypeLabel) {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, indexTypeLabel);
+        return indexFile == null ? 0L : indexFile.length() + FilePaths.logFileOf(indexFile).length();
+    }
+
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
         return documentPageStore.getById(pkIndexEntry);
     }

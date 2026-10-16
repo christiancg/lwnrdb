@@ -23,6 +23,7 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.PartitionedMissCache;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
@@ -84,7 +85,7 @@ public class TestUtils {
         clearBoundedCache(adminCache, "procedures");
         clearBoundedCache(adminCache, "triggers");
         clearBoundedCache(adminCache, "schedules");
-        clearBoundedCache(adminCache, "metadataMisses");
+        TestUtils.getPrivateField(adminCache, "metadataMisses", PartitionedMissCache.class).clear();
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pendingIndexWrites, "generations", new ConcurrentHashMap<>());

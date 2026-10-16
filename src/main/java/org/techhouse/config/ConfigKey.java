@@ -6,7 +6,7 @@ import java.util.List;
 public enum ConfigKey {
     // @formatter:off
     PORT("port", ValueType.INT, "8989", Rule.range(1, 65535)),
-    BIND_ADDRESS("bindAddress", ValueType.STRING, "", Rule.none()),
+    BIND_ADDRESS("bindAddress", ValueType.STRING, "", Rule.bindAddress()),
     MAX_CONNECTIONS("maxConnections", ValueType.INT, "100", Rule.atLeast(0)),
     MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS("maxUnauthenticatedConnectionsPerAddress", ValueType.INT, "16", Rule.atLeast(0)),
     MAX_UNAUTHENTICATED_INVALID_REQUESTS("maxUnauthenticatedInvalidRequests", ValueType.INT, "5", Rule.atLeast(0)),
@@ -15,13 +15,18 @@ public enum ConfigKey {
     AUTH_FAILURE_DELAY_MAX_MS("authFailureDelayMaxMs", ValueType.LONG, "30000", Rule.atLeast(0)),
     MAX_CONCURRENT_PASSWORD_CHECKS("maxConcurrentPasswordChecks", ValueType.INT, "0", Rule.atLeast(0)),
     BACKGROUND_PROCESSING_THREADS("backgroundProcessingThreads", ValueType.INT, "10", Rule.atLeast(1)),
+    BACKGROUND_QUEUE_MAX_EVENTS("backgroundQueueMaxEvents", ValueType.INT, "200000", Rule.atLeast(1)),
+    BACKGROUND_BACKLOG_WAIT_MS("backgroundBacklogWaitMs", ValueType.LONG, "5000", Rule.atLeast(0)),
     MAX_LOG_FILES("maxLogFiles", ValueType.INT, "7", Rule.atLeast(1)),
     MAX_LOG_FILE_SIZE("maxLogFileSize", ValueType.SIZE, "100Mb", Rule.positiveSize()),
     MAX_PAGE_SIZE("maxPageSize", ValueType.SIZE, "2Mb", Rule.positiveSize()),
     MAX_ENTRY_SIZE("maxEntrySize", ValueType.SIZE, "1Mb", Rule.positiveSize()),
     MAX_MEMORY("maxMemory", ValueType.SIZE, "512mb", Rule.memory()),
+    TRANSIENT_LOAD_PERMITS("transientLoadPermits", ValueType.INT, "4", Rule.atLeast(1)),
     SCHEMA_VALIDATION_BUDGET("schemaValidationBudget", ValueType.INT, "5000000", Rule.atLeast(1000)),
     SCHEMA_MAX_PATTERN_LENGTH("schemaMaxPatternLength", ValueType.INT, "4096", Rule.atLeast(1)),
+    SCHEMA_MAX_PATTERNS("schemaMaxPatterns", ValueType.INT, "256", Rule.atLeast(1)),
+    SCHEMA_PATTERN_CACHE_MAX_BYTES("schemaPatternCacheMaxBytes", ValueType.SIZE, "32Mb", Rule.positiveSize()),
     TRANSACTION_LOCK_TIMEOUT_MS("transactionLockTimeoutMs", ValueType.LONG, "5000", Rule.atLeast(1)),
     SHUTDOWN_TIMEOUT_MS("shutdownTimeoutMs", ValueType.LONG, "15000", Rule.atLeast(1)),
     MAX_REQUEST_SIZE("maxRequestSize", ValueType.SIZE, "64Mb", Rule.positiveSize()),
@@ -33,9 +38,14 @@ public enum ConfigKey {
     TRANSACTION_MAX_AGE_MS("transactionMaxAgeMs", ValueType.LONG, "600000", Rule.atLeast(0)),
     MAX_LISTENS_PER_CONNECTION("maxListensPerConnection", ValueType.INT, "64", Rule.atLeast(0)),
     MAX_LISTENS("maxListens", ValueType.INT, "10000", Rule.atLeast(0)),
+    MAX_LISTENS_PER_USER("maxListensPerUser", ValueType.INT, "256", Rule.atLeast(0)),
+    LISTEN_MAX_REQUEST_BYTES("listenMaxRequestBytes", ValueType.SIZE, "1Mb", Rule.positiveSize()),
+    LISTEN_MAX_RETAINED_BYTES("listenMaxRetainedBytes", ValueType.SIZE, "64Mb", Rule.positiveSize()),
+    LISTEN_RERUN_TIMEOUT_MS("listenRerunTimeoutMs", ValueType.LONG, "10000", Rule.atLeast(1)),
     MAX_FILTER_OPERANDS("maxFilterOperands", ValueType.INT, "10000", Rule.atLeast(0)),
     MAX_VECTOR_DIMENSIONS("maxVectorDimensions", ValueType.INT, "16384", Rule.atLeast(1)),
     AGGREGATE_TIMEOUT_MS("aggregateTimeoutMs", ValueType.LONG, "300000", Rule.atLeast(0)),
+    AGGREGATE_MAX_RESULT_BYTES("aggregateMaxResultBytes", ValueType.SIZE, "256Mb", Rule.positiveSize()),
     TLS_ENABLED("tlsEnabled", ValueType.BOOLEAN, "false", Rule.bool()),
     CLUSTER_ENABLED("clusterEnabled", ValueType.BOOLEAN, "false", Rule.bool()),
     CLUSTER_PORT("clusterPort", ValueType.INT, "9990", Rule.range(1, 65535)),
@@ -160,7 +170,8 @@ public enum ConfigKey {
     }
 
     public String validate(String value) {
-        return rule.check().apply(value);
+        final var problem = rule.check().apply(value);
+        return problem != null || type != ValueType.INT ? problem : Rule.fitsInInt(value);
     }
 
     public static List<ConfigKey> all() {
