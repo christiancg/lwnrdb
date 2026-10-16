@@ -23,7 +23,6 @@ import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class RecordReplacer {
     private static final Logger logger = Logger.logFor(RecordReplacer.class);
@@ -187,7 +186,7 @@ final class RecordReplacer {
                 final var file = files.get(group.getKey());
                 final var separator = separatorBytes(file);
                 var offset = lengthsBefore.get(group.getKey()) + separator.length;
-                OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
+                OwnerOnly.ensureOwnerOnlyFile(file.toPath());
                 try (var out = new BufferedOutputStream(new FileOutputStream(file, true), Globals.BUFFER_SIZE)) {
                     out.write(separator);
                     for (final var index : group.getValue()) {
@@ -272,7 +271,7 @@ final class RecordReplacer {
     }
 
     private static void appendToPage(File file, byte[] separator, byte[] line) throws IOException {
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
+        OwnerOnly.ensureOwnerOnlyFile(file.toPath());
         try (var out = new FileOutputStream(file, true)) {
             if (separator.length > 0) {
                 out.write(separator);

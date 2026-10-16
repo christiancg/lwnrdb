@@ -13,7 +13,6 @@ import java.util.function.Function;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.log.Logger;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class FieldIndexLog {
     private static final Logger logger = Logger.logFor(FieldIndexLog.class);
@@ -37,7 +36,7 @@ final class FieldIndexLog {
             final var lengthBeforeAppend = log.exists() ? log.length() : 0L;
             var appended = false;
             try {
-                OwnerOnlyPermissions.ensureOwnerOnlyFile(log.toPath());
+                OwnerOnly.ensureOwnerOnlyFile(log.toPath());
                 try (var out = new FileOutputStream(log, true)) {
                     content.writeTo(out);
                 }

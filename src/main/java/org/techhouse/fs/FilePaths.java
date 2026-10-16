@@ -65,6 +65,11 @@ final class FilePaths {
                 + Globals.CLUSTER_ADMIN_TOMBSTONES_FILE);
     }
 
+    File nodeIdFile() {
+        return new File(dbPath + Globals.FILE_SEPARATOR + Globals.CLUSTER_FOLDER + Globals.FILE_SEPARATOR
+                + Globals.CLUSTER_NODE_ID_FILE);
+    }
+
     File tombstoneFile(String dbName, String collectionName) {
         return new File(collectionPrefix(dbName, collectionName) + Globals.INDEX_FILE_NAME_SEPARATOR
                 + Globals.TOMBSTONE_FILE_NAME + Globals.INDEX_FILE_EXTENSION);

@@ -1,6 +1,7 @@
 package org.techhouse.conn.tls;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -18,7 +19,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
-import org.techhouse.utils.OwnerOnlyPermissions;
+import org.techhouse.fs.io.KeystoreFiles;
+import org.techhouse.fs.io.OwnerOnlyFiles.Creation;
+import org.techhouse.log.Logger;
 
 /**
  * The X.509 structure is hand-encoded because the JDK exposes no public {@code X509Certificate} builder.
@@ -33,6 +36,7 @@ public final class SelfSignedCertificateGenerator {
     private static final int VERSION_V3 = 2;
     private static final int SERIAL_BITS = 159;
     private static final int FIRST_GENERALIZED_TIME_YEAR = 2050;
+    private static final Logger logger = Logger.logFor(SelfSignedCertificateGenerator.class);
 
     private SelfSignedCertificateGenerator() {
     }
@@ -115,12 +119,10 @@ public final class SelfSignedCertificateGenerator {
 
     private static void persist(KeyStore keyStore, Path keystorePath, char[] password)
             throws GeneralSecurityException, IOException {
-        final var parent = keystorePath.toAbsolutePath().getParent();
-        if (parent != null) {
-            OwnerOnlyPermissions.createDirectories(parent);
-        }
-        try (var out = OwnerOnlyPermissions.newOwnerOnlyOutputStream(keystorePath)) {
-            keyStore.store(out, password);
+        final var content = new ByteArrayOutputStream();
+        keyStore.store(content, password);
+        if (KeystoreFiles.writeOwnerOnly(keystorePath, content.toByteArray()) == Creation.DEFAULT_PERMISSIONS) {
+            logger.warning("Could not create " + keystorePath + " as owner-only; creating it with default permissions");
         }
     }
 }

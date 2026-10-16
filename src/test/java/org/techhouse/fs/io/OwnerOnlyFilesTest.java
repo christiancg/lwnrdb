@@ -1,4 +1,4 @@
-package org.techhouse.utils;
+package org.techhouse.fs.io;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -15,8 +15,9 @@ import java.nio.file.attribute.PosixFilePermissions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.fs.io.OwnerOnlyFiles.Creation;
 
-public class OwnerOnlyPermissionsTest {
+public class OwnerOnlyFilesTest {
     private static final String OWNER_DIRECTORY = "rwx------";
     private static final String OWNER_FILE = "rw-------";
 
@@ -25,7 +26,7 @@ public class OwnerOnlyPermissionsTest {
 
     @BeforeEach
     public void requirePosix() {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
     }
 
     private static String modeOf(Path path) throws IOException {
@@ -41,7 +42,7 @@ public class OwnerOnlyPermissionsTest {
     public void test_created_directories_are_owner_only() throws IOException {
         final var deepest = tmp.resolve("a").resolve("b").resolve("c");
 
-        OwnerOnlyPermissions.createDirectories(deepest);
+        assertEquals(Creation.OWNER_ONLY, OwnerOnlyFiles.createDirectories(deepest));
 
         assertEquals(OWNER_DIRECTORY, modeOf(tmp.resolve("a")));
         assertEquals(OWNER_DIRECTORY, modeOf(tmp.resolve("a").resolve("b")));
@@ -51,11 +52,11 @@ public class OwnerOnlyPermissionsTest {
     @Test
     public void test_create_directory_makes_one_owner_only_level_like_mkdir() throws IOException {
         final var level = tmp.resolve("single");
-        assertTrue(OwnerOnlyPermissions.createDirectory(level));
+        assertTrue(OwnerOnlyFiles.createDirectory(level));
         assertEquals(OWNER_DIRECTORY, modeOf(level));
-        assertFalse(OwnerOnlyPermissions.createDirectory(level));
-        assertFalse(OwnerOnlyPermissions.createDirectory(tmp.resolve("missing").resolve("child")));
-        assertTrue(OwnerOnlyPermissions.createDirectory(tmp.resolve("plain"), false));
+        assertFalse(OwnerOnlyFiles.createDirectory(level));
+        assertFalse(OwnerOnlyFiles.createDirectory(tmp.resolve("missing").resolve("child")));
+        assertTrue(OwnerOnlyFiles.createDirectory(tmp.resolve("plain"), false));
         assertTrue(Files.isDirectory(tmp.resolve("plain")));
     }
 
@@ -63,7 +64,7 @@ public class OwnerOnlyPermissionsTest {
     public void test_existing_directories_keep_their_mode() throws IOException {
         final var parent = withMode(Files.createDirectory(tmp.resolve("shared")), "rwxr-xr-x");
 
-        OwnerOnlyPermissions.createDirectories(parent.resolve("child"));
+        OwnerOnlyFiles.createDirectories(parent.resolve("child"));
 
         assertEquals("rwxr-xr-x", modeOf(parent));
         assertEquals(OWNER_DIRECTORY, modeOf(parent.resolve("child")));
@@ -73,7 +74,7 @@ public class OwnerOnlyPermissionsTest {
     public void test_an_existing_directory_is_left_alone() throws IOException {
         final var existing = withMode(Files.createDirectory(tmp.resolve("there")), "rwxrwxr-x");
 
-        OwnerOnlyPermissions.createDirectories(existing);
+        OwnerOnlyFiles.createDirectories(existing);
 
         assertEquals("rwxrwxr-x", modeOf(existing));
     }
@@ -82,21 +83,21 @@ public class OwnerOnlyPermissionsTest {
     public void test_a_level_that_is_a_file_fails_like_the_jdk_call() throws IOException {
         final var file = Files.writeString(tmp.resolve("plain"), "x");
 
-        assertThrows(IOException.class, () -> OwnerOnlyPermissions.createDirectories(file.resolve("child")));
+        assertThrows(IOException.class, () -> OwnerOnlyFiles.createDirectories(file.resolve("child")));
     }
 
     @Test
     public void test_a_dangling_symlink_in_the_way_fails_like_the_jdk_call() throws IOException {
         final var link = Files.createSymbolicLink(tmp.resolve("dangling"), tmp.resolve("nowhere"));
 
-        assertThrows(IOException.class, () -> OwnerOnlyPermissions.createDirectories(link));
+        assertThrows(IOException.class, () -> OwnerOnlyFiles.createDirectories(link));
     }
 
     @Test
     public void test_created_file_is_owner_only_and_writable() throws IOException {
         final var file = tmp.resolve("lwnrdb.p12");
 
-        try (var out = OwnerOnlyPermissions.newOwnerOnlyOutputStream(file)) {
+        try (var out = OwnerOnlyFiles.newOwnerOnlyOutputStream(file)) {
             out.write("secret".getBytes(StandardCharsets.UTF_8));
         }
 
@@ -108,7 +109,7 @@ public class OwnerOnlyPermissionsTest {
     public void test_existing_file_keeps_its_mode() throws IOException {
         final var file = withMode(Files.writeString(tmp.resolve("existing.p12"), "old content"), "rw-r--r--");
 
-        try (var out = OwnerOnlyPermissions.newOwnerOnlyOutputStream(file)) {
+        try (var out = OwnerOnlyFiles.newOwnerOnlyOutputStream(file)) {
             out.write(new byte[]{1});
         }
 
@@ -120,72 +121,74 @@ public class OwnerOnlyPermissionsTest {
     public void test_a_file_in_a_missing_folder_fails_like_the_jdk_call() {
         final var file = tmp.resolve("missing").resolve("lwnrdb.p12");
 
-        assertThrows(IOException.class, () -> OwnerOnlyPermissions.newOwnerOnlyOutputStream(file).close());
+        assertThrows(IOException.class, () -> OwnerOnlyFiles.newOwnerOnlyOutputStream(file).close());
     }
 
     @Test
     public void test_isAccessibleByOthers_detects_group_read() throws IOException {
-        assertTrue(
-                OwnerOnlyPermissions.isAccessibleByOthers(withMode(Files.createFile(tmp.resolve("g")), "rw-r-----")));
+        assertTrue(OwnerOnlyFiles.isAccessibleByOthers(withMode(Files.createFile(tmp.resolve("g")), "rw-r-----")));
     }
 
     @Test
     public void test_isAccessibleByOthers_detects_world_write() throws IOException {
-        assertTrue(
-                OwnerOnlyPermissions.isAccessibleByOthers(withMode(Files.createFile(tmp.resolve("w")), "rw-----w-")));
+        assertTrue(OwnerOnlyFiles.isAccessibleByOthers(withMode(Files.createFile(tmp.resolve("w")), "rw-----w-")));
     }
 
     @Test
     public void test_isAccessibleByOthers_false_for_owner_only() throws IOException {
-        assertFalse(
-                OwnerOnlyPermissions.isAccessibleByOthers(withMode(Files.createFile(tmp.resolve("o")), OWNER_FILE)));
+        assertFalse(OwnerOnlyFiles.isAccessibleByOthers(withMode(Files.createFile(tmp.resolve("o")), OWNER_FILE)));
     }
 
     @Test
     public void test_isAccessibleByOthers_false_for_missing_path() {
-        assertFalse(OwnerOnlyPermissions.isAccessibleByOthers(tmp.resolve("absent")));
+        assertFalse(OwnerOnlyFiles.isAccessibleByOthers(tmp.resolve("absent")));
     }
 
     @Test
     public void test_unsupported_filesystem_falls_back() throws IOException {
         final var deepest = tmp.resolve("x").resolve("y");
-        OwnerOnlyPermissions.createDirectories(deepest, false);
+        assertEquals(Creation.NOT_SUPPORTED, OwnerOnlyFiles.createDirectories(deepest, false));
         assertTrue(Files.isDirectory(deepest));
+        assertEquals(Creation.NOT_SUPPORTED, OwnerOnlyFiles.ensureOwnerOnlyFile(deepest.resolve("never"), false));
+        assertFalse(Files.exists(deepest.resolve("never")));
 
         final var file = deepest.resolve("plain.p12");
-        try (var out = OwnerOnlyPermissions.newOwnerOnlyOutputStream(file, false)) {
+        try (var out = OwnerOnlyFiles.newOwnerOnlyOutputStream(file, false)) {
             out.write(new byte[]{2});
         }
         assertTrue(Files.exists(file));
 
-        assertFalse(OwnerOnlyPermissions.isAccessibleByOthers(withMode(file, "rwxrwxrwx"), false));
+        assertFalse(OwnerOnlyFiles.isAccessibleByOthers(withMode(file, "rwxrwxrwx"), false));
     }
 
     @Test
     public void ensure_owner_only_file_creates_a_missing_file_as_0600_and_leaves_an_existing_one() throws IOException {
         final var file = tmp.resolve("ensured.dat");
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(file);
-        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+        assertEquals(Creation.OWNER_ONLY, OwnerOnlyFiles.ensureOwnerOnlyFile(file));
+        assertEquals(OWNER_FILE, modeOf(file));
         Files.writeString(file, "kept");
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(file);
+        assertEquals(Creation.ALREADY_EXISTED, OwnerOnlyFiles.ensureOwnerOnlyFile(file));
         assertEquals("kept", Files.readString(file));
     }
 
     @Test
     public void create_new_owner_only_file_reports_whether_it_created_the_file() throws IOException {
         final var file = tmp.resolve("created.dat");
-        assertTrue(OwnerOnlyPermissions.createNewOwnerOnlyFile(file));
-        assertFalse(OwnerOnlyPermissions.createNewOwnerOnlyFile(file));
-        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+        assertEquals(Creation.OWNER_ONLY, OwnerOnlyFiles.createNewOwnerOnlyFile(file));
+        assertEquals(Creation.ALREADY_EXISTED, OwnerOnlyFiles.createNewOwnerOnlyFile(file));
+        assertEquals(OWNER_FILE, modeOf(file));
     }
 
     @Test
-    public void the_quiet_variant_creates_0600_and_swallows_a_failure() throws IOException {
-        final var file = tmp.resolve("quiet.log");
-        OwnerOnlyPermissions.ensureOwnerOnlyFileQuietly(file);
-        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+    public void a_file_that_cannot_be_created_owner_only_reports_default_permissions() {
         final var unreachable = tmp.resolve("missing-parent").resolve("quiet.log");
-        OwnerOnlyPermissions.ensureOwnerOnlyFileQuietly(unreachable);
+        assertEquals(Creation.DEFAULT_PERMISSIONS, OwnerOnlyFiles.ensureOwnerOnlyFile(unreachable));
         assertFalse(Files.exists(unreachable));
+    }
+
+    @Test
+    public void create_new_owner_only_file_in_a_missing_folder_fails_like_the_jdk_call() {
+        assertThrows(IOException.class,
+                () -> OwnerOnlyFiles.createNewOwnerOnlyFile(tmp.resolve("missing").resolve("x.dat")));
     }
 }

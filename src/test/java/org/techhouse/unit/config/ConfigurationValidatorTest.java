@@ -11,8 +11,8 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.ConfigurationValidator;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.test.ConfigFixture;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class ConfigurationValidatorTest {
     private static Map<String, String> baseValid(Path writablePath) {
@@ -115,7 +115,7 @@ public class ConfigurationValidatorTest {
 
     @Test
     public void test_validator_creates_missing_data_folder_owner_only(@TempDir Path tempDir) throws IOException {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         final var config = baseValid(tempDir);
         final var dataFolder = tempDir.resolve("fresh").resolve("data");
         config.put("filePath", dataFolder.toString());

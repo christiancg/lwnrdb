@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -18,7 +19,6 @@ import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class FileSystem {
     private final Configuration configuration = Configuration.getInstance();
@@ -37,6 +37,7 @@ public class FileSystem {
     private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore, pageVacuum);
     private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
             writeIntentJournal);
+    private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
 
     public void onVacuum(Consumer<VacuumedPage> listener) {
         pageVacuum.onVacuum(listener);
@@ -47,7 +48,7 @@ public class FileSystem {
         final var directory = new File(paths.dbPath());
         if (!directory.exists()) {
             try {
-                OwnerOnlyPermissions.createDirectories(directory.toPath());
+                OwnerOnly.createDirectories(directory.toPath());
             } catch (IOException e) {
                 throw new DirectoryNotFoundException(directory.getAbsolutePath());
             }
@@ -89,7 +90,7 @@ public class FileSystem {
             return;
         }
         try {
-            OwnerOnlyPermissions.createDirectories(pagesFolder.toPath());
+            OwnerOnly.createDirectories(pagesFolder.toPath());
         } catch (IOException e) {
             throw new DirectoryNotFoundException(pagesFolder.getAbsolutePath());
         }
@@ -98,7 +99,7 @@ public class FileSystem {
     public boolean createDatabaseFolder(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
         if (!dbFolder.exists()) {
-            return OwnerOnlyPermissions.createDirectory(dbFolder.toPath());
+            return OwnerOnly.createDirectory(dbFolder.toPath());
         }
         return true;
     }
@@ -114,14 +115,14 @@ public class FileSystem {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
-            if (OwnerOnlyPermissions.createDirectory(collectionFolder.toPath())) {
-                return OwnerOnlyPermissions.createNewOwnerOnlyFile(collectionFile.toPath());
+            if (OwnerOnly.createDirectory(collectionFolder.toPath())) {
+                return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             } else {
                 return false;
             }
         } else {
             if (!collectionFile.exists()) {
-                return OwnerOnlyPermissions.createNewOwnerOnlyFile(collectionFile.toPath());
+                return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             }
             return true;
         }
@@ -207,6 +208,18 @@ public class FileSystem {
 
     public FolderQuarantine folderQuarantine() {
         return folderQuarantine;
+    }
+
+    public Path nodeIdFile() {
+        return nodeIdStore.file();
+    }
+
+    public String readNodeId() throws IOException {
+        return nodeIdStore.read();
+    }
+
+    public void writeNodeId(String nodeId) throws IOException {
+        nodeIdStore.write(nodeId);
     }
 
     public TombstoneStore tombstones() {

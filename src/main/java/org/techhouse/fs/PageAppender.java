@@ -15,7 +15,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class PageAppender {
     private final FilePaths paths;
@@ -39,7 +38,7 @@ final class PageAppender {
             for (var groupedEntry : entrySet) {
                 final var page = groupedEntry.getKey();
                 final var file = paths.collectionPage(dbName, collName, page);
-                OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
+                OwnerOnly.ensureOwnerOnlyFile(file.toPath());
                 final var lock = FileLocks.lockWrite(file);
                 try {
                     vacuum.vacuumIfNeeded(dbName, collName, page, appendedBytes(groupedEntry.getValue()), null, null);
@@ -135,7 +134,7 @@ final class PageAppender {
     }
 
     private static void appendToPage(File file, byte[] separator, byte[] line) throws IOException {
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
+        OwnerOnly.ensureOwnerOnlyFile(file.toPath());
         try (var out = new FileOutputStream(file, true)) {
             if (separator.length > 0) {
                 out.write(separator);

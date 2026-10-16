@@ -15,8 +15,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Configuration;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class FileSystemCreateBasePathTest {
     private final Configuration config = Configuration.getInstance();
@@ -34,7 +34,7 @@ public class FileSystemCreateBasePathTest {
 
     @Test
     public void test_base_path_is_created_owner_only(@TempDir Path tmp) throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         final var base = tmp.resolve("nested").resolve("db");
         TestUtils.setPrivateField(config, "filePath", base.toString());
 
@@ -46,7 +46,7 @@ public class FileSystemCreateBasePathTest {
 
     @Test
     public void test_database_and_collection_directories_are_owner_only(@TempDir Path tmp) throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         final var base = tmp.resolve("db");
         TestUtils.setPrivateField(config, "filePath", base.toString());
         final var fs = new FileSystem();

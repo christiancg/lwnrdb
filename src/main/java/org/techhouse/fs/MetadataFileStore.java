@@ -7,7 +7,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class MetadataFileStore {
     private MetadataFileStore() {
@@ -57,7 +56,7 @@ final class MetadataFileStore {
             return;
         }
         try {
-            OwnerOnlyPermissions.createDirectories(folder.toPath());
+            OwnerOnly.createDirectories(folder.toPath());
         } catch (IOException e) {
             throw new IOException("Could not create the " + label + " folder for database " + dbName, e);
         }

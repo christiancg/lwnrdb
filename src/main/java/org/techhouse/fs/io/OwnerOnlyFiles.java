@@ -1,4 +1,4 @@
-package org.techhouse.utils;
+package org.techhouse.fs.io;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -10,37 +10,40 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayDeque;
 import java.util.Set;
-import org.techhouse.log.Logger;
 
-public final class OwnerOnlyPermissions {
+public final class OwnerOnlyFiles {
     private static final Set<PosixFilePermission> DIRECTORY = PosixFilePermissions.fromString("rwx------");
     private static final Set<PosixFilePermission> FILE = PosixFilePermissions.fromString("rw-------");
     private static final Set<PosixFilePermission> OTHERS = PosixFilePermissions.fromString("---rwxrwx");
     private static final boolean POSIX = FileSystems.getDefault().supportedFileAttributeViews().contains("posix");
-    private static final Logger logger = Logger.logFor(OwnerOnlyPermissions.class);
 
-    private OwnerOnlyPermissions() {
+    public enum Creation {
+        OWNER_ONLY, DEFAULT_PERMISSIONS, NOT_SUPPORTED, ALREADY_EXISTED
+    }
+
+    private OwnerOnlyFiles() {
     }
 
     public static boolean supported() {
         return POSIX;
     }
 
-    public static void createDirectories(Path directory) throws IOException {
-        createDirectories(directory, POSIX);
+    public static Creation createDirectories(Path directory) throws IOException {
+        return createDirectories(directory, POSIX);
     }
 
-    static void createDirectories(Path directory, boolean posix) throws IOException {
+    static Creation createDirectories(Path directory, boolean posix) throws IOException {
         if (posix) {
             try {
                 createMissingLevelsOwnerOnly(directory.toAbsolutePath());
-                return;
+                return Creation.OWNER_ONLY;
             } catch (IOException | UnsupportedOperationException e) {
-                logger.warning("Could not create " + directory + " as owner-only; creating it with default permissions",
-                        e);
+                Files.createDirectories(directory);
+                return Creation.DEFAULT_PERMISSIONS;
             }
         }
         Files.createDirectories(directory);
+        return Creation.NOT_SUPPORTED;
     }
 
     public static boolean createDirectory(Path directory) {
@@ -82,42 +85,38 @@ public final class OwnerOnlyPermissions {
     }
 
     static OutputStream newOwnerOnlyOutputStream(Path file, boolean posix) throws IOException {
-        if (posix && !Files.exists(file)) {
-            createOwnerOnlyFile(file);
-        }
+        ensureOwnerOnlyFile(file, posix);
         return Files.newOutputStream(file);
     }
 
-    public static void ensureOwnerOnlyFile(Path file) {
-        if (POSIX && !Files.exists(file)) {
-            createOwnerOnlyFile(file);
-        }
+    public static Creation ensureOwnerOnlyFile(Path file) {
+        return ensureOwnerOnlyFile(file, POSIX);
     }
 
-    public static void ensureOwnerOnlyFileQuietly(Path file) {
-        if (POSIX && !Files.exists(file)) {
-            try {
-                Files.createFile(file, PosixFilePermissions.asFileAttribute(FILE));
-            } catch (IOException | UnsupportedOperationException ignored) {
-            }
+    static Creation ensureOwnerOnlyFile(Path file, boolean posix) {
+        if (!posix) {
+            return Creation.NOT_SUPPORTED;
         }
-    }
-
-    public static boolean createNewOwnerOnlyFile(Path file) throws IOException {
         if (Files.exists(file)) {
-            return false;
+            return Creation.ALREADY_EXISTED;
         }
-        ensureOwnerOnlyFile(file);
-        return Files.exists(file) || file.toFile().createNewFile();
+        return createOwnerOnlyFile(file);
     }
 
-    private static void createOwnerOnlyFile(Path file) {
+    public static Creation createNewOwnerOnlyFile(Path file) throws IOException {
+        if (Files.exists(file)) {
+            return Creation.ALREADY_EXISTED;
+        }
+        final var creation = POSIX ? createOwnerOnlyFile(file) : Creation.NOT_SUPPORTED;
+        return Files.exists(file) || file.toFile().createNewFile() ? creation : Creation.ALREADY_EXISTED;
+    }
+
+    private static Creation createOwnerOnlyFile(Path file) {
         try {
             Files.createFile(file, PosixFilePermissions.asFileAttribute(FILE));
+            return Creation.OWNER_ONLY;
         } catch (IOException | UnsupportedOperationException e) {
-            if (!Files.exists(file)) {
-                logger.warning("Could not create " + file + " as owner-only; creating it with default permissions", e);
-            }
+            return Files.exists(file) ? Creation.ALREADY_EXISTED : Creation.DEFAULT_PERMISSIONS;
         }
     }
 

@@ -17,7 +17,6 @@ import java.util.function.UnaryOperator;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.log.Logger;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class PkIndexStore {
     private static final Logger logger = Logger.logFor(PkIndexStore.class);
@@ -98,7 +97,7 @@ final class PkIndexStore {
             final var lengthBeforeAppend = indexFile.length();
             var appended = false;
             try {
-                OwnerOnlyPermissions.ensureOwnerOnlyFile(indexFile.toPath());
+                OwnerOnly.ensureOwnerOnlyFile(indexFile.toPath());
                 try (var out = new FileOutputStream(indexFile, true)) {
                     content.writeTo(out);
                 }

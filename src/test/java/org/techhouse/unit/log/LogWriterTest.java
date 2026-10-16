@@ -19,10 +19,10 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.log.LogWriter;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class LogWriterTest {
     private int origMaxLogFiles;
@@ -112,7 +112,7 @@ public class LogWriterTest {
             fail("Failed creating old log file");
         }
 
-        LogWriter.deleteOldLogFiles(tempDir);
+        LogWriter.deleteOldLogFiles(tempDir.toPath());
 
         assertTrue(currentFile.exists());
         assertTrue(recentFile.exists());
@@ -141,7 +141,7 @@ public class LogWriterTest {
             fail("Failed creating recent log file");
         }
 
-        LogWriter.deleteOldLogFiles(tempDir);
+        LogWriter.deleteOldLogFiles(tempDir.toPath());
 
         assertTrue(currentFile.exists());
         assertTrue(recentFile1.exists());
@@ -163,7 +163,7 @@ public class LogWriterTest {
         final var expired = new File(tempDir, "2000-01-01.log");
         assertTrue(expired.createNewFile());
 
-        LogWriter.deleteOldLogFiles(tempDir);
+        LogWriter.deleteOldLogFiles(tempDir.toPath());
 
         for (final var survivor : survivors) {
             assertTrue(survivor.exists(), survivor.getName() + " is not a dated log and must survive");
@@ -200,14 +200,14 @@ public class LogWriterTest {
         final var folder = new File(tempDir, "2000-01-01.log");
         assertTrue(folder.mkdir());
 
-        LogWriter.deleteOldLogFiles(tempDir);
+        LogWriter.deleteOldLogFiles(tempDir.toPath());
 
         assertTrue(folder.isDirectory());
     }
 
     @Test
     public void test_a_created_log_folder_is_owner_only() throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         final var logDir = new File(TestGlobals.LOG_PATH);
         TestUtils.deleteFolder(logDir);
 
@@ -267,7 +267,7 @@ public class LogWriterTest {
         assertTrue(keptRolled.createNewFile() || keptRolled.exists());
         assertTrue(expiredRolled.createNewFile() || expiredRolled.exists());
         try {
-            LogWriter.deleteOldLogFiles(dir);
+            LogWriter.deleteOldLogFiles(dir.toPath());
             assertTrue(keptRolled.exists());
             assertFalse(expiredRolled.exists());
         } finally {

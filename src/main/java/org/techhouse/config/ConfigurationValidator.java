@@ -1,9 +1,6 @@
 package org.techhouse.config;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -11,8 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntPredicate;
+import org.techhouse.fs.io.Folders;
 import org.techhouse.ops.req.validations.NameValidations;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public final class ConfigurationValidator {
 
@@ -225,16 +222,14 @@ public final class ConfigurationValidator {
         if (keystorePath == null || keystorePath.isBlank()) {
             errors.add("tlsKeystorePath must be a non-blank path when tlsEnabled or clusterTlsEnabled is true");
         } else {
-            final Path parent = Paths.get(keystorePath.trim()).toAbsolutePath().getParent();
+            final Path parent = Path.of(keystorePath.trim()).toAbsolutePath().getParent();
             if (parent != null) {
-                try {
-                    OwnerOnlyPermissions.createDirectories(parent);
-                    if (!Files.isWritable(parent)) {
-                        errors.add("tlsKeystorePath (" + keystorePath + ") parent directory is not writable");
-                    }
-                } catch (IOException | RuntimeException e) {
+                final var check = Folders.ensureWritable(parent);
+                if (check.failure() != null) {
                     errors.add("tlsKeystorePath (" + keystorePath + ") parent directory could not be created: "
-                            + e.getMessage());
+                            + check.failure());
+                } else if (!check.writable()) {
+                    errors.add("tlsKeystorePath (" + keystorePath + ") parent directory is not writable");
                 }
             }
         }
@@ -255,14 +250,10 @@ public final class ConfigurationValidator {
             errors.add(key + " must be a non-blank path");
             return;
         }
-        final Path path = Paths.get(value.trim());
-        try {
-            OwnerOnlyPermissions.createDirectories(path);
-        } catch (IOException | RuntimeException e) {
-            errors.add(key + " (" + value + ") could not be created: " + e.getMessage());
-            return;
-        }
-        if (!Files.isWritable(path)) {
+        final var check = Folders.ensureWritable(Path.of(value.trim()));
+        if (check.failure() != null) {
+            errors.add(key + " (" + value + ") could not be created: " + check.failure());
+        } else if (!check.writable()) {
             errors.add(key + " (" + value + ") is not writable by the application");
         }
     }

@@ -14,9 +14,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.StartupWarnings;
 import org.techhouse.config.Configuration;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.log.LogWriter;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class StartupWarningsClusterTest {
     private final Configuration config = Configuration.getInstance();
@@ -53,7 +53,7 @@ public class StartupWarningsClusterTest {
 
     @Test
     public void warnsAboutAReadableKeystoreUsedOnlyForClusterTls(@TempDir Path dir) throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         readableKeystore(dir);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "clusterTlsEnabled", true);
@@ -65,7 +65,7 @@ public class StartupWarningsClusterTest {
 
     @Test
     public void ignoresTheKeystoreWhenNoTlsUsesIt(@TempDir Path dir) throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         readableKeystore(dir);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "clusterTlsEnabled", false);

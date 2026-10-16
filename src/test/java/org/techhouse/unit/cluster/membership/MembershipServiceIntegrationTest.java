@@ -19,6 +19,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Configuration;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestUtils;
@@ -38,6 +39,7 @@ public class MembershipServiceIntegrationTest {
     private int origClusterPort;
     private long origGossip;
     private String origFilePath;
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -78,6 +80,7 @@ public class MembershipServiceIntegrationTest {
         TestUtils.setPrivateField(config, "clusterPort", origClusterPort);
         TestUtils.setPrivateField(config, "gossipIntervalMs", origGossip);
         TestUtils.setPrivateField(config, "filePath", origFilePath);
+        fs.createBaseDbPath();
     }
 
     @Test
@@ -130,6 +133,7 @@ public class MembershipServiceIntegrationTest {
         TestUtils.setPrivateField(config, "clusterSeeds", "");
         TestUtils.setPrivateField(config, "nodeId", "");
         TestUtils.setPrivateField(config, "filePath", tempDir.toString());
+        fs.createBaseDbPath();
         client = new MembershipService();
         client.start();
         final var generatedId = client.getSelf().getNodeId();

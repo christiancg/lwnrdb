@@ -1,7 +1,7 @@
 package org.techhouse.conn.tls;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
@@ -15,6 +15,7 @@ import javax.net.ssl.TrustManagerFactory;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
+import org.techhouse.fs.io.KeystoreFiles;
 import org.techhouse.log.Logger;
 
 public final class TlsContextFactory {
@@ -70,7 +71,7 @@ public final class TlsContextFactory {
     }
 
     private static KeyStore loadOrGenerateKeyStore(Path keystorePath, char[] password) {
-        if (Files.exists(keystorePath)) {
+        if (KeystoreFiles.exists(keystorePath)) {
             final var keyStore = loadKeyStore(keystorePath, password);
             CertificateExpiry.warnIfExpiringSoon(keyStore, keystorePath);
             return keyStore;
@@ -82,7 +83,7 @@ public final class TlsContextFactory {
     }
 
     private static KeyStore loadKeyStore(Path keystorePath, char[] password) {
-        try (var in = Files.newInputStream(keystorePath)) {
+        try (var in = new ByteArrayInputStream(KeystoreFiles.read(keystorePath))) {
             final var keyStore = KeyStore.getInstance(Globals.TLS_KEYSTORE_TYPE);
             keyStore.load(in, password);
             return keyStore;

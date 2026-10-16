@@ -9,12 +9,12 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.config.SizeParser;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.simplejs.host.HostAllowlist;
 import org.techhouse.simplejs.host.PublicAddressPolicy;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public final class StartupWarnings {
     private static final Configuration config = Configuration.getInstance();
@@ -98,7 +98,7 @@ public final class StartupWarnings {
     }
 
     private static void warnIfAccessibleByOthers(Path path, String what, String fix) {
-        if (OwnerOnlyPermissions.isAccessibleByOthers(path)) {
+        if (OwnerOnlyFiles.isAccessibleByOthers(path)) {
             logger.warning("SECURITY WARNING: the " + what + " at " + path.toAbsolutePath()
                     + " is accessible by group or other users, and it holds data, credentials or secrets. Run '" + fix
                     + " " + path.toAbsolutePath() + "' to restrict it to the server's own user.");

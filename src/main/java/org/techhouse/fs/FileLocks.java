@@ -21,7 +21,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 // The finer tier below ResourceLocking's collection locks, and what makes dirty reads safe: a
 // dirty read skips the collection lock but still serializes against each file's physical write.
@@ -75,7 +74,7 @@ final class FileLocks {
             final var lengthBeforeAppend = file.length();
             var appended = false;
             try {
-                OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
+                OwnerOnly.ensureOwnerOnlyFile(file.toPath());
                 try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
                         Globals.BUFFER_SIZE)) {
                     if (endsMidLine(file)) {
@@ -230,7 +229,7 @@ final class FileLocks {
 
     static void rewriteFileAtomically(Path path, LineWriter content) throws IOException {
         final var tmp = path.resolveSibling(path.getFileName() + ".repair");
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(tmp);
+        OwnerOnly.ensureOwnerOnlyFile(tmp);
         try (var out = new BufferedOutputStream(Files.newOutputStream(tmp, StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), Globals.BUFFER_SIZE)) {
             content.writeTo(out);
@@ -240,7 +239,7 @@ final class FileLocks {
 
     static void rewriteFileAtomically(Path path, byte[] content) throws IOException {
         final var tmp = path.resolveSibling(path.getFileName() + ".repair");
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(tmp);
+        OwnerOnly.ensureOwnerOnlyFile(tmp);
         Files.write(tmp, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         moveIntoPlace(tmp, path);
     }

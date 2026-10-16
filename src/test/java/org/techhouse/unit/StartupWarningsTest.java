@@ -17,9 +17,9 @@ import org.mockito.MockedStatic;
 import org.techhouse.StartupWarnings;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.log.LogWriter;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 public class StartupWarningsTest {
     private final Configuration config = Configuration.getInstance();
@@ -198,7 +198,7 @@ public class StartupWarningsTest {
 
     @Test
     public void test_group_readable_data_root_is_warned_about(@TempDir Path tmp) throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         final var dataRoot = folderWithMode(tmp, "data", "rwxr-xr-x");
         final var logs = folderWithMode(tmp, "logs", "rwx------");
         final var keystore = Files.createFile(tmp.resolve("lwnrdb.p12"));
@@ -218,7 +218,7 @@ public class StartupWarningsTest {
 
     @Test
     public void test_owner_only_data_root_is_not_warned_about(@TempDir Path tmp) throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         final var dataRoot = folderWithMode(tmp, "data", "rwx------");
         TestUtils.setPrivateField(config, "filePath", dataRoot.toString());
         TestUtils.setPrivateField(config, "logPath", dataRoot.toString());

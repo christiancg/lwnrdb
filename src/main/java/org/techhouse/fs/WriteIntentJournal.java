@@ -14,7 +14,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.log.Logger;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class WriteIntentJournal {
     static final String MARKER_EXTENSION = ".intent";
@@ -51,7 +50,7 @@ final class WriteIntentJournal {
                         + MARKER_EXTENSION);
         final var intent = new Intent(file, dbName, collName, List.copyOf(items));
         final var path = file.toPath();
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(path);
+        OwnerOnly.ensureOwnerOnlyFile(path);
         Files.write(path, encode(intent), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
                 StandardOpenOption.WRITE);
         return intent;
@@ -70,7 +69,7 @@ final class WriteIntentJournal {
     }
 
     private static void emptyInPlace(File file, IOException deleteFailure) {
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(file.toPath());
+        OwnerOnly.ensureOwnerOnlyFile(file.toPath());
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             writer.setLength(0);
             logger.warning("Could not remove the write intent " + file.getName()

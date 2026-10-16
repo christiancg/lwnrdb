@@ -17,7 +17,6 @@ import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
-import org.techhouse.utils.OwnerOnlyPermissions;
 
 final class PageVacuum {
     private static final Logger logger = Logger.logFor(PageVacuum.class);
@@ -113,7 +112,7 @@ final class PageVacuum {
 
     private static void writeLiveRecords(File temp, byte[] bytes, List<PageLines.Line> lines,
             LinkedHashMap<String, VacuumedPage.Move> moves) throws IOException {
-        OwnerOnlyPermissions.ensureOwnerOnlyFile(temp.toPath());
+        OwnerOnly.ensureOwnerOnlyFile(temp.toPath());
         try (var out = new BufferedOutputStream(Files.newOutputStream(temp.toPath(), StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), Globals.BUFFER_SIZE)) {
             var next = 0L;

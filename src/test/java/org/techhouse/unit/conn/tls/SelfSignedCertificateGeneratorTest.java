@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.conn.tls.SelfSignedCertificateGenerator;
 import org.techhouse.ex.TlsConfigurationException;
-import org.techhouse.utils.OwnerOnlyPermissions;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 
 public class SelfSignedCertificateGeneratorTest {
 
@@ -81,7 +81,7 @@ public class SelfSignedCertificateGeneratorTest {
 
     @Test
     public void test_generated_keystore_and_its_folder_are_owner_only(@TempDir Path tempDir) throws Exception {
-        assumeTrue(OwnerOnlyPermissions.supported());
+        assumeTrue(OwnerOnlyFiles.supported());
         final var certsFolder = tempDir.resolve("certs");
         final var keystorePath = certsFolder.resolve("lwnrdb.p12");
         SelfSignedCertificateGenerator.generate(keystorePath, PASSWORD, ALIAS);
