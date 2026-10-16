@@ -501,10 +501,13 @@ throwing import could farm indefinitely. Nesting is capped by `ResourceLimits.ma
 Three built-ins are seeded into the registry: `args` (the request payload), `db` (the
 `DatabaseAccess` surface) and `script` (`importText(source[, moduleId])`, which runs a **string**
 as a module, content-addressing its id by SHA-256; gated off by default behind
-`scriptTextImportEnabled`). Top-level `await` inside imported text suspends the caller: `importText` is a caller-aware
-native that receives the caller's coroutine from the call site, and `Function.prototype.call`/`apply`, a
-`bind` result and `Reflect.apply` forward the coroutine of their own call site, so an indirect call behaves like a
-direct one. A default import of a built-in binds the built-in object itself,
+`scriptTextImportEnabled`). Top-level `await` inside imported text works wherever `importText` is called. Called from
+an async function or module code — directly, through `.call`/`.apply`/`bind`/`Reflect.apply`, or as a callback a
+builtin invokes synchronously (`map`, `Array.from`, a getter, a `Proxy`) — it suspends that caller, the coroutine the
+interpreter is running. With no async caller (a plain function, a generator, a `.then` handler, a timer callback)
+the text is evaluated in a coroutine of its own and the event loop is driven until it finishes, so other queued
+jobs can run before `importText` returns; text that awaits something that never settles throws `Error: Module '…'
+awaited something that never settled` instead of hanging. A default import of a built-in binds the built-in object itself,
 while a default import of a real module binds its `default` export — `ModuleEvaluator` tags each
 resolution accordingly. Only `export`ed bindings are importable, which is the one trap worth
 knowing: a procedure written for `CALL_PROCEDURE` with a top-level `return` imports as

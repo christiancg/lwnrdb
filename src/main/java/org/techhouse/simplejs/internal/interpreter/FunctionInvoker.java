@@ -59,30 +59,11 @@ public record FunctionInvoker(Interpreter interp) {
         };
     }
 
-    public JsValue callAtSite(JsValue callee, JsValue thisArg, List<JsValue> args, Environment env) {
-        return callee instanceof JsNativeFunction nativeFunction && nativeFunction.isCallerAware()
-                ? callFrom(callee, thisArg, args, env.resolveCoroutine())
-                : callValue(callee, thisArg, args);
-    }
-
-    public JsValue callFrom(JsValue callee, JsValue thisArg, List<JsValue> args, Coroutine caller) {
-        if (caller != null && callee instanceof JsNativeFunction nativeFunction && nativeFunction.isCallerAware()) {
-            interp.tick();
-            return invokeNative(nativeFunction, thisArg, args, caller);
-        }
-        return callValue(callee, thisArg, args);
-    }
-
     public JsValue invokeNative(JsNativeFunction nativeFunction, JsValue thisArg, List<JsValue> args) {
-        return invokeNative(nativeFunction, thisArg, args, null);
-    }
-
-    public JsValue invokeNative(JsNativeFunction nativeFunction, JsValue thisArg, List<JsValue> args,
-            Coroutine caller) {
         interp.ops.enterNested();
         interp.callStack.push(nativeFunction.getName(), CallStack.NATIVE_MODULE);
         try {
-            return nativeFunction.invokeFromCaller(thisArg, args, caller);
+            return nativeFunction.invokeFromCaller(thisArg, args, interp.runningCoroutine());
         } catch (SimpleJsRuntimeException error) {
             throw interp.callStack.stamp(error);
         } finally {
@@ -125,7 +106,7 @@ public record FunctionInvoker(Interpreter interp) {
             if (function.isGenerator()) {
                 return makeGenerator(function, activation);
             }
-            final var result = runFunctionBody(function, activation);
+            final var result = runPlainFunction(function, activation);
             if (function.isDerivedConstructor()) {
                 if (!isObjectLike(result) && !(result instanceof JsUndefined)) {
                     throw new TypeErrorException("Derived constructors may only return object or undefined");
@@ -142,6 +123,15 @@ public record FunctionInvoker(Interpreter interp) {
         } finally {
             interp.callStack.pop();
             interp.depth--;
+        }
+    }
+
+    private JsValue runPlainFunction(JsFunction function, Environment activation) {
+        final var outer = interp.swapRunningCoroutine(null);
+        try {
+            return runFunctionBody(function, activation);
+        } finally {
+            interp.swapRunningCoroutine(outer);
         }
     }
 
@@ -236,13 +226,20 @@ public record FunctionInvoker(Interpreter interp) {
     }
 
     public void ownStackSegment(Coroutine coroutine, JsFunction function) {
-        final var segment = interp.callStack.segmentFor(function.getName(), function.getModuleName());
+        runsAs(coroutine, interp.callStack.segmentFor(function.getName(), function.getModuleName()));
+    }
+
+    public void runsAs(Coroutine coroutine, CallStack.Segment segment) {
         coroutine.setAroundResume(resume -> {
-            final var saved = interp.callStack.swap(segment);
+            final var saved = segment == null ? null : interp.callStack.swap(segment);
+            final var resumer = interp.swapRunningCoroutine(coroutine);
             try {
                 resume.run();
             } finally {
-                interp.callStack.swap(saved);
+                interp.swapRunningCoroutine(resumer);
+                if (segment != null) {
+                    interp.callStack.swap(saved);
+                }
             }
         });
     }

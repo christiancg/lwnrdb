@@ -440,6 +440,18 @@ public final class Interpreter {
         lifecycle.noteAllocation(bytes);
     }
 
+    private Coroutine runningCoroutine;
+
+    public Coroutine runningCoroutine() {
+        return runningCoroutine;
+    }
+
+    public Coroutine swapRunningCoroutine(Coroutine next) {
+        final var previous = runningCoroutine;
+        runningCoroutine = next;
+        return previous;
+    }
+
     public void registerCoroutine(Coroutine coroutine) {
         lifecycle.charge(COROUTINE_BYTES);
         coroutines.add(coroutine);

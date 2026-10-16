@@ -7,7 +7,6 @@ import org.techhouse.simplejs.builtins.NativeDepth;
 import org.techhouse.simplejs.builtins.object.ObjectDescriptors;
 import org.techhouse.simplejs.builtins.object.ObjectOwnKeys;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
-import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
@@ -64,11 +63,6 @@ public final class InterpreterOpsBridge implements org.techhouse.simplejs.builti
     @Override
     public JsValue call(JsValue fn, JsValue thisArg, List<JsValue> args) {
         return interp.functions.callValue(fn, thisArg, args);
-    }
-
-    @Override
-    public JsValue callFrom(JsValue fn, JsValue thisArg, List<JsValue> args, Coroutine caller) {
-        return interp.functions.callFrom(fn, thisArg, args, caller);
     }
 
     @Override

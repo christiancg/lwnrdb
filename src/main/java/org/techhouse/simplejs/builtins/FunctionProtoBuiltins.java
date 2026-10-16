@@ -3,7 +3,6 @@ package org.techhouse.simplejs.builtins;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
-import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.nodes.AssignmentPattern;
@@ -28,10 +27,8 @@ public final class FunctionProtoBuiltins {
 
     public static JsNativeFunction getMethod(JsValue target, String name, Invoker invoker, InterpreterOps ops) {
         return switch (name) {
-            case "call" ->
-                JsNativeFunction.callerAware("call", (_, args, caller) -> call(target, args, invoker, ops, caller));
-            case "apply" ->
-                JsNativeFunction.callerAware("apply", (_, args, caller) -> apply(target, args, invoker, ops, caller));
+            case "call" -> new JsNativeFunction("call", (_, args) -> call(target, args, invoker));
+            case "apply" -> new JsNativeFunction("apply", (_, args) -> apply(target, args, invoker, ops));
             case "bind" -> new JsNativeFunction("bind", (_, args) -> bind(target, args, invoker, ops));
             case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(sourceText(target)));
             default -> null;
@@ -103,25 +100,18 @@ public final class FunctionProtoBuiltins {
         return count;
     }
 
-    private static JsValue forward(JsValue target, JsValue thisArg, List<JsValue> args, Invoker invoker,
-            InterpreterOps ops, Coroutine caller) {
-        return ops == null ? invoker.call(target, thisArg, args) : ops.callFrom(target, thisArg, args, caller);
-    }
-
-    private static JsValue call(JsValue target, List<JsValue> args, Invoker invoker, InterpreterOps ops,
-            Coroutine caller) {
+    private static JsValue call(JsValue target, List<JsValue> args, Invoker invoker) {
         final var thisArg = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var rest = args.isEmpty() ? List.<JsValue>of() : args.subList(1, args.size());
-        return forward(target, thisArg, new ArrayList<>(rest), invoker, ops, caller);
+        return invoker.call(target, thisArg, new ArrayList<>(rest));
     }
 
-    private static JsValue apply(JsValue target, List<JsValue> args, Invoker invoker, InterpreterOps ops,
-            Coroutine caller) {
+    private static JsValue apply(JsValue target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
         final var thisArg = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var argArray = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         final var list = createListFromArrayLike(argArray, ops);
         try {
-            return forward(target, thisArg, list, invoker, ops, caller);
+            return invoker.call(target, thisArg, list);
         } finally {
             InterpreterOps.release(ops, list.size() * InterpreterOps.BYTES_PER_ELEMENT);
         }
@@ -156,10 +146,10 @@ public final class FunctionProtoBuiltins {
         }
         final var boundThis = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var boundArgs = new ArrayList<>(args.isEmpty() ? List.of() : args.subList(1, args.size()));
-        final var bound = JsNativeFunction.callerAware("bound " + targetName(target, ops), (_, callArgs, caller) -> {
+        final var bound = new JsNativeFunction("bound " + targetName(target, ops), (_, callArgs) -> {
             final var combined = new ArrayList<>(boundArgs);
             combined.addAll(callArgs);
-            return forward(target, boundThis, combined, invoker, ops, caller);
+            return invoker.call(target, boundThis, combined);
         });
         bound.setLength(boundLength(target, boundArgs.size(), ops));
         bound.setBound(target, boundArgs);

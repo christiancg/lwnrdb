@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.BooleanSupplier;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.exceptions.JsThrowException;
@@ -126,21 +127,24 @@ public final class EventLoop {
     }
 
     public void drain(long deadlineNanos) {
+        drainUntil(() -> false, deadlineNanos);
+    }
+
+    public void drainUntil(BooleanSupplier done, long deadlineNanos) {
+        final var outer = drainThread;
         drainThread = Thread.currentThread();
         try {
-            drainLoop(deadlineNanos);
+            drainLoop(done, deadlineNanos);
         } finally {
-            drainThread = null;
+            drainThread = outer;
         }
     }
 
-    private void drainLoop(long deadlineNanos) {
-        while (true) {
-            while (!microtasks.isEmpty()) {
-                final var task = microtasks.poll();
-                InterpreterOps.release(ops, MICROTASK_BYTES);
-                InterpreterOps.tick(ops);
-                task.run();
+    private void drainLoop(BooleanSupplier done, long deadlineNanos) {
+        while (!done.getAsBoolean()) {
+            runMicrotasks(done);
+            if (done.getAsBoolean()) {
+                return;
             }
             final var completion = asyncCompletions.poll();
             if (completion != null) {
@@ -172,6 +176,18 @@ public final class EventLoop {
                 timer.callback.run();
             } catch (JsThrowException ignored) {
             }
+        }
+    }
+
+    private void runMicrotasks(BooleanSupplier done) {
+        while (!done.getAsBoolean()) {
+            final var task = microtasks.poll();
+            if (task == null) {
+                return;
+            }
+            InterpreterOps.release(ops, MICROTASK_BYTES);
+            InterpreterOps.tick(ops);
+            task.run();
         }
     }
 

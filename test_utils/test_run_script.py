@@ -1267,6 +1267,10 @@ TEXT_IMPORT_CALLS = {
     ".apply": "script.importText.apply(script, [TEXT])",
     "Reflect.apply": "Reflect.apply(script.importText, script, [TEXT])",
     "a bound function": "script.importText.bind(script)(TEXT)",
+    "Array.prototype.map": "[TEXT].map(script.importText)[0]",
+    "a plain function": "(function () { return script.importText(TEXT); })()",
+    "a .then handler": "(await Promise.resolve(TEXT).then(script.importText))",
+    "a timer callback": "(await new Promise(done => setTimeout(t => done(script.importText(t)), 0, TEXT)))",
 }
 
 
@@ -1275,8 +1279,8 @@ def test_text_import_awaits_through_indirect_calls(conn: Conn):
     for label, call in TEXT_IMPORT_CALLS.items():
         script = ("import script from 'script';\n"
                   "const TEXT = 'export default await Promise.resolve(9);';\n"
-                  f"async function viaAsync() {{ return {call}.default; }}\n"
-                  f"return [{call}.default, await viaAsync()];")
+                  f"async function viaAsync() {{ return ({call}).default; }}\n"
+                  f"return [({call}).default, await viaAsync()];")
         check_result(f"through {label}, at top level and inside an async function", conn.run(script), [9, 9])
 
 

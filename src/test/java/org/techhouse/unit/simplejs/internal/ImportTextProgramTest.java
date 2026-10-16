@@ -116,7 +116,11 @@ public class ImportTextProgramTest {
     @ParameterizedTest
     @ValueSource(strings = {"script.importText.call(script, TEXT)", "script.importText.apply(script, [TEXT])",
             "Reflect.apply(script.importText, script, [TEXT])", "script.importText.bind(script)(TEXT)",
-            "script.importText.call.call(script.importText, script, TEXT)"})
+            "script.importText.call.call(script.importText, script, TEXT)", "[TEXT].map(script.importText)[0]",
+            "Array.from([TEXT], script.importText)[0]", "new Proxy(script.importText, {})(TEXT)",
+            "[TEXT].map(t => script.importText(t))[0]", "(function () { return script.importText(TEXT); })()",
+            "(await Promise.resolve(TEXT).then(script.importText))",
+            "(await new Promise(done => setTimeout(t => done(script.importText(t)), 0, TEXT)))"})
     public void test_import_text_top_level_await_through_an_indirect_call(String call) {
         final var result = run("import script from 'script';\n"
                 + "const TEXT = 'export default await Promise.resolve(9);';\n" + "async function viaAsync() { return "
@@ -125,6 +129,33 @@ public class ImportTextProgramTest {
         final var values = result.getValue().asJsonArray();
         assertEquals(9, values.get(0).asJsonNumber().getValue().doubleValue());
         assertEquals(9, values.get(1).asJsonNumber().getValue().doubleValue());
+    }
+
+    @Test
+    public void test_import_text_whose_await_never_settles_is_an_error_without_a_caller() {
+        final var result = run("""
+                import script from 'script';
+                function load() {
+                    try {
+                        script.importText('await new Promise(() => {}); export default 1;');
+                        return 'loaded';
+                    } catch (e) {
+                        return e.message;
+                    }
+                }
+                return load();
+                """);
+        assertTrue(text(result).endsWith("awaited something that never settled"), text(result));
+    }
+
+    @Test
+    public void test_import_text_from_a_generator_still_awaits() {
+        final var result = run("""
+                import script from 'script';
+                function* g() { yield script.importText('export default await Promise.resolve(3);').default; }
+                return g().next().value;
+                """);
+        assertEquals(3, number(result));
     }
 
     @Test

@@ -36,6 +36,7 @@ public record ModuleLifecycle(Interpreter interp) {
         interp.coroutines.add(coroutine);
         coroutine.markAsync();
         env.defineCoroutine(coroutine);
+        interp.functions.runsAs(coroutine, null);
         coroutine.startAsync(() -> {
             if (interp.moduleBodyWrapper == null) {
                 evaluateModuleBody(program, env, result);
@@ -110,7 +111,9 @@ public record ModuleLifecycle(Interpreter interp) {
         interp.moduleDepth++;
         final var previousModule = interp.callStack.enterModule(displayName);
         try {
-            final var namespace = evaluateModule(parser.get(), coroutine);
+            final var namespace = coroutine == null || !coroutine.isAsync()
+                    ? evaluateDetached(parser.get(), displayName)
+                    : evaluateModule(parser.get(), coroutine);
             interp.moduleRegistry.complete(moduleId, namespace);
             return namespace;
         } catch (RuntimeException error) {
@@ -130,6 +133,36 @@ public record ModuleLifecycle(Interpreter interp) {
         final var module = factory.get();
         interp.moduleRegistry.complete(moduleId, module);
         return module;
+    }
+
+    private JsValue evaluateDetached(Program program, String displayName) {
+        final var coroutine = new Coroutine();
+        interp.registerCoroutine(coroutine);
+        coroutine.markAsync();
+        interp.functions.runsAs(coroutine, interp.callStack.segmentFor(null, displayName));
+        final var evaluation = new DetachedEvaluation();
+        coroutine.startAsync(() -> {
+            try {
+                evaluation.namespace = evaluateModule(program, coroutine);
+            } catch (RuntimeException failure) {
+                evaluation.failure = failure;
+            }
+            return JsUndefined.getInstance();
+        });
+        interp.eventLoop.drainUntil(coroutine::isDone, interp.deadlineNanos);
+        if (evaluation.failure != null) {
+            throw evaluation.failure;
+        }
+        if (!coroutine.isDone()) {
+            throw new JsThrowException(interp.intrinsics.makeError("Error",
+                    "Module '" + displayName + "' awaited something that never settled"));
+        }
+        return evaluation.namespace;
+    }
+
+    private static final class DetachedEvaluation {
+        private JsValue namespace;
+        private RuntimeException failure;
     }
 
     public JsValue evaluateModule(Program program, Coroutine coroutine) {

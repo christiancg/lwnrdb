@@ -69,8 +69,9 @@ public class CoroutineScopeTest {
                 number("import script from 'script'; async function f() {"
                         + " return script.importText('export default await Promise.resolve(4);').default; }"
                         + " return await f();"));
-        assertSyntaxError("import script from 'script'; function p() {"
-                + " return script.importText('export default await Promise.resolve(5);', 'm5').default; }"
-                + " async function f() { return p(); } return await f();");
+        assertEquals(5,
+                number("import script from 'script'; function p() {"
+                        + " return script.importText('export default await Promise.resolve(5);', 'm5').default; }"
+                        + " async function f() { return p(); } return await f();"));
     }
 }

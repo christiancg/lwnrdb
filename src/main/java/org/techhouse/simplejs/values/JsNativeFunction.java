@@ -37,10 +37,6 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
         return new JsNativeFunction(name, null, null, implementation);
     }
 
-    public boolean isCallerAware() {
-        return callerAwareImplementation != null;
-    }
-
     public boolean isConstructor() {
         return constructor;
     }
