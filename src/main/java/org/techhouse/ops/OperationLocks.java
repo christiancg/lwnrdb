@@ -12,6 +12,7 @@ import org.techhouse.ops.resp.OperationResponse;
 public final class OperationLocks {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private OperationLocks() {
     }
@@ -45,9 +46,7 @@ public final class OperationLocks {
     }
 
     public static long lockBudgetMillis(boolean bounded) {
-        return bounded
-                ? clusterConfig.replicationAckTimeoutMs()
-                : Configuration.getInstance().getTransactionLockTimeoutMs();
+        return bounded ? clusterConfig.replicationAckTimeoutMs() : configuration.getTransactionLockTimeoutMs();
     }
 
     public static OperationResponse withDatabaseShared(String dbName, OperationType type, ErrorCode errorCode,
@@ -79,7 +78,7 @@ public final class OperationLocks {
         try {
             return OperationResponse.respondOrError(type, errorCode, () -> {
                 final var acquired = locks.acquireReadLocks(dirtyRead, collectionIds,
-                        bounded ? Configuration.getInstance().getTransactionLockTimeoutMs() : 0L);
+                        bounded ? configuration.getTransactionLockTimeoutMs() : 0L);
                 if (acquired == null) {
                     return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
                 }

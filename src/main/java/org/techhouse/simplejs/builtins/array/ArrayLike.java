@@ -32,7 +32,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
     }
 
     public JsValue getKey(JsValue key) {
-        return ops == null ? JsUndefined.getInstance() : ops.getMember(value, key);
+        return ops() == null ? JsUndefined.getInstance() : ops.getMember(value, key);
     }
 
     public JsValue get(long index) {
@@ -53,7 +53,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
                 && !dense.isHole((int) index)) {
             return true;
         }
-        if (ops == null) {
+        if (ops() == null) {
             return false;
         }
         final var key = key(index);
@@ -88,7 +88,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
             dense.chargeDenseGrowth(ops, index + 1L);
             return dense.set((int) index, element);
         }
-        if (ops == null) {
+        if (ops() == null) {
             return true;
         }
         if (wrappedString() instanceof JsString string) {
@@ -98,14 +98,12 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
     }
 
     public JsObject inheritedIndexAccessor(long index) {
-        if (ops == null || !(value instanceof JsArray array)) {
+        if (ops() == null || !(value() instanceof JsArray array)) {
             return null;
         }
         final var propertyKey = key(index);
-        if (!ops.has(value, propertyKey) || array.getOwnProperty(propertyKey) != null) {
-            return null;
-        }
-        return inheritedAccessor(propertyKey);
+        final var inherited = ops.has(value, propertyKey) && array.getOwnProperty(propertyKey) == null;
+        return inherited ? inheritedAccessor(propertyKey) : null;
     }
 
     public JsObject inheritedAccessor(JsString propertyKey) {
@@ -124,7 +122,9 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
     }
 
     public void setLength(long length) {
-        if (wrappedString() != null || (ops != null && !ops.setMember(value, LENGTH, new JsNumber(length)))) {
+        final var refused = wrappedString() != null
+                || (ops != null && !ops.setMember(value, LENGTH, new JsNumber(length)));
+        if (refused) {
             throw new TypeErrorException("Cannot assign to read only property 'length' of the receiver");
         }
     }
@@ -140,7 +140,7 @@ public record ArrayLike(JsValue value, InterpreterOps ops) {
 
     public void delete(long index) {
         InterpreterOps.pace(ops, index);
-        if (ops == null) {
+        if (ops() == null) {
             final var dense = dense();
             if (dense != null && index >= 0 && index <= Integer.MAX_VALUE && index < dense.length()) {
                 dense.clearIndexToHole((int) index);

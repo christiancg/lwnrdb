@@ -22,6 +22,7 @@ public final class DatabaseStatsHelper {
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
     private static final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
+    private static final Configuration configuration = Configuration.getInstance();
     private static final CompiledScriptCache compiledScripts = IocContainer.get(CompiledScriptCache.class);
     private static final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
     private static final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
@@ -54,14 +55,14 @@ public final class DatabaseStatsHelper {
 
     private static JsonObject buildTriggerStats() {
         final var triggers = new JsonObject();
-        triggers.addProperty("enabled", Configuration.getInstance().isTriggersEnabled());
+        triggers.addProperty("enabled", configuration.isTriggersEnabled());
         triggers.addProperty("fired", triggerExecutor.getFired());
         triggers.addProperty("failed", triggerExecutor.getFailed());
         triggers.addProperty("dropped", triggerExecutor.getDropped());
         triggers.addProperty("queued", (long) triggerExecutor.getQueued());
         triggers.addProperty("retried", triggerExecutor.getRetried());
         triggers.addProperty("deadLettered", triggerExecutor.getDeadLettered());
-        triggers.addProperty("runLogEnabled", Configuration.getInstance().isTriggerRunLogEnabled());
+        triggers.addProperty("runLogEnabled", configuration.isTriggerRunLogEnabled());
         triggers.addProperty("beforeApplied", BeforeHookContext.getApplied());
         triggers.addProperty("beforeReplaced", BeforeHookContext.getReplaced());
         triggers.addProperty("beforeRejected", BeforeHookContext.getRejected());
@@ -72,7 +73,7 @@ public final class DatabaseStatsHelper {
 
     private static JsonObject buildScheduleStats() {
         final var schedules = new JsonObject();
-        schedules.addProperty("enabled", Configuration.getInstance().isSchedulesEnabled());
+        schedules.addProperty("enabled", configuration.isSchedulesEnabled());
         schedules.addProperty("registered", (long) scheduleRegistry.size());
         schedules.addProperty("fired", scheduleExecutor.getFired());
         schedules.addProperty("failed", scheduleExecutor.getFailed());
@@ -84,7 +85,7 @@ public final class DatabaseStatsHelper {
 
     private static JsonObject buildScriptStats() {
         final var scripts = new JsonObject();
-        scripts.addProperty("routingEnabled", Configuration.getInstance().isScriptRoutingEnabled());
+        scripts.addProperty("routingEnabled", configuration.isScriptRoutingEnabled());
         scripts.addProperty("running", (long) scriptLoad.current());
         scripts.addProperty("capacity", (long) scriptAdmission.capacity());
         scripts.addProperty("available", (long) scriptAdmission.available());
@@ -97,7 +98,7 @@ public final class DatabaseStatsHelper {
         scripts.addProperty("forwarded", scriptPlacement.getForwarded());
         scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
         scripts.addProperty("outcomeUnknown", scriptPlacement.getOutcomeUnknown());
-        scripts.addProperty("localityWeight", (long) Configuration.getInstance().getScriptLocalityWeight());
+        scripts.addProperty("localityWeight", (long) configuration.getScriptLocalityWeight());
         scripts.addProperty("localityPreferred", scriptPlacement.getLocalityPreferred());
         scripts.addProperty("cancelled", scriptRunRegistry.getCancelled());
         scripts.addProperty("compiledCacheEntries", (long) compiledScripts.size());
@@ -126,7 +127,6 @@ public final class DatabaseStatsHelper {
     }
 
     private static JsonObject buildMemoryStats() {
-        final var config = Configuration.getInstance();
         final var memory = new JsonObject();
         final var heapUsage = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
         memory.addProperty("heapUsedBytes", heapUsage.getUsed());
@@ -137,9 +137,9 @@ public final class DatabaseStatsHelper {
             userCacheBytes += r.estimatedSizeBytes();
         }
         memory.addProperty("userCacheBytes", userCacheBytes);
-        memory.addProperty("maxMemoryBytes", config.getMaxMemoryBytes());
-        memory.addProperty("cachingDisabled", config.isCachingDisabled());
-        memory.addProperty("cacheUnlimited", config.isCacheUnlimited());
+        memory.addProperty("maxMemoryBytes", configuration.getMaxMemoryBytes());
+        memory.addProperty("cachingDisabled", configuration.isCachingDisabled());
+        memory.addProperty("cacheUnlimited", configuration.isCacheUnlimited());
         memory.add("adminMetadataCache", buildAdminMetadataCacheStats());
         return memory;
     }

@@ -9,9 +9,10 @@ import org.techhouse.config.Configuration;
 public class PreAuthSlots {
     private final Map<String, Integer> heldByAddress = new ConcurrentHashMap<>();
     private final IntSupplier limitPerAddress;
+    private static final Configuration configuration = Configuration.getInstance();
 
     public PreAuthSlots() {
-        this(() -> Configuration.getInstance().intValue(ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS));
+        this(() -> configuration.intValue(ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS));
     }
 
     public PreAuthSlots(IntSupplier limitPerAddress) {

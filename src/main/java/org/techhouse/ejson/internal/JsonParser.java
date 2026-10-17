@@ -31,6 +31,7 @@ public final class JsonParser {
     private static final int MAX_EXACT_DIGITS = 15;
     private static final int BYTE_MASK = 0xFF;
     private static final int INITIAL_MEMBER_STACK = 16;
+    private static final Configuration configuration = Configuration.getInstance();
 
     private final String input;
     private final byte[] bytes;
@@ -460,7 +461,7 @@ public final class JsonParser {
 
     private void chargeCustom(String literal) {
         final var components = literal.chars().filter(c -> c == ',').count() + 1;
-        if (components > Configuration.getInstance().intValue(ConfigKey.MAX_VECTOR_DIMENSIONS)) {
+        if (components > configuration.intValue(ConfigKey.MAX_VECTOR_DIMENSIONS)) {
             throw new MalformedJsonException("A custom value has more components than the allowed limit");
         }
         customComponents += components;

@@ -11,10 +11,10 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
         ResourceLimits limits, ZoneId timeZone, Locale locale, CancellationToken cancellation,
         NetworkAccess network) implements HostBindings {
     private static final JdkNetworkAccess SHARED_NETWORK = new JdkNetworkAccess();
+    private static final Configuration configuration = Configuration.getInstance();
 
     public static DatabaseHostBindings of(JsonObject args, DatabaseAccess database, Consumer<String> console,
             ResourceLimits limits, CancellationToken cancellation) {
-        final var configuration = Configuration.getInstance();
         return new DatabaseHostBindings(args, database, console, limits, ZoneId.of(configuration.getScriptTimeZone()),
                 Locale.forLanguageTag(configuration.getScriptLocale()), cancellation,
                 configuration.isScriptFetchEnabled() ? SHARED_NETWORK : null);
@@ -22,7 +22,7 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
 
     @Override
     public ModuleResolver moduleResolver() {
-        if (!Configuration.getInstance().isScriptProcedureImportEnabled() || database == null
+        if (!configuration.isScriptProcedureImportEnabled() || database() == null
                 || database.scopedDatabase() == null) {
             return null;
         }
@@ -30,7 +30,6 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
     }
 
     public static ResourceLimits limitsFromConfiguration() {
-        final var configuration = Configuration.getInstance();
         return new ResourceLimits(configuration.getScriptInstructionBudget(), configuration.getScriptTimeoutMs(),
                 configuration.getScriptMaxDepth(), true, configuration.isScriptFetchEnabled(),
                 configuration.getScriptFetchAllowlist(), configuration.getScriptFetchMaxResponseBytes(),

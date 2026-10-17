@@ -8,8 +8,9 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
 
 public record PipelineHostBindings(ResourceLimits limits, ZoneId timeZone, Locale locale) implements HostBindings {
+    private static final Configuration configuration = Configuration.getInstance();
+
     public static PipelineHostBindings of(ResourceLimits limits) {
-        final var configuration = Configuration.getInstance();
         return new PipelineHostBindings(limits, ZoneId.of(configuration.getScriptTimeZone()),
                 Locale.forLanguageTag(configuration.getScriptLocale()));
     }
@@ -31,7 +32,6 @@ public record PipelineHostBindings(ResourceLimits limits, ZoneId timeZone, Local
     }
 
     public static ResourceLimits limitsFromConfiguration() {
-        final var configuration = Configuration.getInstance();
         return new ResourceLimits(configuration.getAggregationScriptInstructionBudget(),
                 configuration.getAggregationScriptTimeoutMs(), configuration.getScriptMaxDepth(), true, false,
                 java.util.List.of(), -1, -1, false, false, ResourceLimits.DEFAULT_MAX_MODULE_DEPTH,
