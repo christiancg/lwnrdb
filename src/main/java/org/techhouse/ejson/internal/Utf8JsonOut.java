@@ -95,7 +95,7 @@ public final class Utf8JsonOut implements JsonOut {
     }
 
     @Override
-    public JsonOut appendLong(long value) {
+    public void appendLong(long value) {
         ensure(MAX_LONG_DIGITS);
         var remaining = value;
         if (remaining < 0) {
@@ -113,7 +113,6 @@ public final class Utf8JsonOut implements JsonOut {
             buffer[left] = buffer[right];
             buffer[right] = digit;
         }
-        return this;
     }
 
     @Override

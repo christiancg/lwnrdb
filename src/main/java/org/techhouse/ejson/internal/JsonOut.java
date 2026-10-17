@@ -5,7 +5,7 @@ public sealed interface JsonOut permits Utf8JsonOut, CharJsonOut {
 
     JsonOut append(String text, int start, int end);
 
-    JsonOut appendLong(long value);
+    void appendLong(long value);
 
     int mark();
 

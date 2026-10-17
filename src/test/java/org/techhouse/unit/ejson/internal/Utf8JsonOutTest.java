@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.internal.Utf8Encoder;
@@ -133,6 +134,7 @@ public class Utf8JsonOutTest {
 
     @Test
     public void aBufferWithLittleSlackIsHandedOverWithoutACopy() throws Exception {
+        TestUtils.getPrivateStaticField(Utf8JsonOut.class, "POOL", ArrayBlockingQueue.class).clear();
         final var out = Utf8JsonOut.acquire(400);
         out.append("x".repeat(380));
         final var buffer = TestUtils.getPrivateField(out, "buffer", byte[].class);

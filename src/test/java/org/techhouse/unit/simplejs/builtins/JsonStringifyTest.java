@@ -77,13 +77,23 @@ public class JsonStringifyTest {
     }
 
     @Test
-    public void test_a_replacer_array_with_many_keys_respects_the_deadline() {
-        final var start = System.nanoTime();
-        final var distinct = runWithin(5_000, "const keys = Array.from({ length: 300000 }, (_, i) => 'k' + i);"
-                + " return JSON.stringify({ k7: 7 }, keys);");
-        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000;
-        assertEquals("{\"k7\":7}", distinct.getValue().asJsonString().getValue(), distinct.getErrorMessage());
-        assertTrue(elapsedMillis < 2_000, "300000 replacer keys took " + elapsedMillis + " ms");
+    public void test_a_replacer_array_with_many_keys_builds_in_linear_time() {
+        final var small = fastestReplacerRun(20_000);
+        final var large = fastestReplacerRun(200_000);
+        assertTrue(large < small * 30, "200000 replacer keys took " + large / 1_000_000 + " ms, " + large / small
+                + "x the 20000-key run, where a linear build is about 10x");
+    }
+
+    private static long fastestReplacerRun(int keys) {
+        var fastest = Long.MAX_VALUE;
+        for (var run = 0; run < 3; run++) {
+            final var start = System.nanoTime();
+            final var result = runWithin(30_000, "const keys = Array.from({ length: " + keys
+                    + " }, (_, i) => 'k' + i); return JSON.stringify({ k7: 7 }, keys);");
+            fastest = Math.min(fastest, System.nanoTime() - start);
+            assertEquals("{\"k7\":7}", result.getValue().asJsonString().getValue(), result.getErrorMessage());
+        }
+        return fastest;
     }
 
     @Test

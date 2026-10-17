@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.EntityEvent;
@@ -22,6 +23,11 @@ import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
 public class BackgroundTaskManagerTest {
+    @AfterEach
+    void restoreThreads() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "backgroundProcessingThreads",
+                ConfigKey.BACKGROUND_PROCESSING_THREADS.defaultValue());
+    }
 
     @Test
     void testSubmitBackgroundTask() throws NoSuchFieldException, IllegalAccessException {

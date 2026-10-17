@@ -1440,6 +1440,9 @@ def test_script_run_history_still_reaches_the_collection_owner():
           f"statuses={sorted({c.get('status') for c in calls})}")
     check("every call left a history row", wait_until(lambda: len(history_rows()) >= len(calls), timeout_s=60.0),
           f"rows={len(history_rows())} calls={len(calls)}")
+    lost_marker = f"Could not record the run of CALL_PROCEDURE 'histproc' in {hist_db}"
+    lost = {node.index: bu.read_log(node.log_path).count(lost_marker) for node in nodes}
+    check("no node dropped a history row", not any(lost.values()), f"dropped per node={lost}")
     check("rows were recorded by more than one node, so at least one came from a non-owner",
           len(runners()) >= 2, f"runners={runners()}")
     op_with_retry(lambda: drop_db(port, hist_db))

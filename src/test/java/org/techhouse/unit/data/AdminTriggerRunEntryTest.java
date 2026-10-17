@@ -17,6 +17,7 @@ import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.KeyTable;
 import org.techhouse.ioc.IocContainer;
 
 public class AdminTriggerRunEntryTest {
@@ -163,6 +164,19 @@ public class AdminTriggerRunEntryTest {
         assertEquals(TriggerRunStatus.STAGED, read.getStatus());
         assertEquals(hybridClockValue, read.getPriorVersions().get("a"));
         assertEquals(AdminTriggerRunEntry.ABSENT_VERSION, read.getPriorVersions().get("b"));
+    }
+
+    @Test
+    public void test_rereading_staged_versions_never_pins_their_document_ids() {
+        final var id = "staged-doc-" + System.nanoTime();
+        final var record = entry("run", 0L, EventType.UPDATED, List.of(id), List.of());
+        record.stage(Map.of(id, 7L));
+
+        for (var read = 0; read <= Globals.KEY_TABLE_PIN_HITS; read++) {
+            assertEquals(7L, reread(record).getPriorVersions().get(id));
+        }
+
+        assertFalse(KeyTable.isPinned(KeyTable.canonical(id)), "a document id stored as a value is never pinned");
     }
 
     @Test

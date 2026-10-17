@@ -168,7 +168,7 @@ public class OperationProcessorVectorTest {
         final var q = new JsonVector("#vector(10.0,0.0)");
         final var args = new JsonObject();
         args.add("value", q);
-        args.add("k", new JsonNumber((double) k));
+        args.add("k", new JsonNumber(k));
         if (exact) {
             args.add("exact", JsonBoolean.of(true));
         }

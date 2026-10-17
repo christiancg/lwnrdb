@@ -25,9 +25,8 @@ public final class CharJsonOut implements JsonOut {
     }
 
     @Override
-    public JsonOut appendLong(long value) {
+    public void appendLong(long value) {
         builder.append(value);
-        return this;
     }
 
     @Override
