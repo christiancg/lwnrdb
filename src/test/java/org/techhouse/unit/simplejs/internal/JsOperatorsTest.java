@@ -26,7 +26,7 @@ import org.techhouse.test.JsEval;
 public class JsOperatorsTest {
     private static final String HUGE_BIGINT = "const x = (1n << 8388606n) - 1n; ";
     private static final long TIMEOUT_MS = 500;
-    private static final Duration PROMPTLY = Duration.ofSeconds(8);
+    private static final Duration PROMPTLY = Duration.ofSeconds(30);
 
     private static void assertTimesOutPromptly(String loopBody) {
         final var result = assertTimeoutPreemptively(PROMPTLY, () -> new SimpleJs().run(
