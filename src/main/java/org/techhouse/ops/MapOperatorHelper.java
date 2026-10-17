@@ -25,6 +25,7 @@ import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
+import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.utils.JsonUtils;
 
 public final class MapOperatorHelper {
@@ -134,6 +135,7 @@ public final class MapOperatorHelper {
             PipelineContext context, MapResultBudget budget) {
         final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
         if (value != null) {
+            context.guardResultValue(EJsonInterop.estimatedBytes(value));
             budget.charge(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value));
             JsonUtils.setPath(toMap, addFieldName, value);
         }

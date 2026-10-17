@@ -9,6 +9,8 @@ import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -42,6 +44,7 @@ public final class DatabaseOperationHelper {
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private DatabaseOperationHelper() {
     }
@@ -81,6 +84,12 @@ public final class DatabaseOperationHelper {
             final var colliding = OnDiskNameRegistry.collidingDatabase(createDatabaseRequest.getDatabaseName());
             if (colliding != null) {
                 return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
+            }
+            final var maxDatabases = configuration.intValue(ConfigKey.MAX_DATABASES);
+            if (cache.getUserDatabaseNames().size() >= maxDatabases) {
+                return new OperationResponse(OperationType.CREATE_DATABASE,
+                        ErrorCode.TOO_MANY_DATABASES.getDefaultMessage() + " (" + maxDatabases + ")",
+                        ErrorCode.TOO_MANY_DATABASES);
             }
             return register(createDatabaseRequest, clientId);
         } finally {

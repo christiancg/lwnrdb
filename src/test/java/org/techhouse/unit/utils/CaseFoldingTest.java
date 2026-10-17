@@ -85,4 +85,16 @@ public class CaseFoldingTest {
         assertEquals(0, CaseFolding.compare("MiXeD", "mIxEd"));
         assertNotEquals(0, CaseFolding.compare("MiXeD", "mIxEe"));
     }
+
+    @Test
+    public void test_fold_key_is_equal_exactly_when_compare_is_equal() {
+        for (final var a : FIRST_SET) {
+            for (final var b : SECOND_SET) {
+                assertEquals(CaseFolding.compare(a, b) == 0, CaseFolding.foldKey(a).equals(CaseFolding.foldKey(b)),
+                        a + " vs " + b);
+            }
+        }
+        assertEquals(CaseFolding.foldKey("MiXeD"), CaseFolding.foldKey("mIxEd"));
+        assertEquals("", CaseFolding.foldKey(""));
+    }
 }

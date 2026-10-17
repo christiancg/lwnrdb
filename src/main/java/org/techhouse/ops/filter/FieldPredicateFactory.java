@@ -123,13 +123,52 @@ public final class FieldPredicateFactory {
         return switch (operation) {
             case EQUALS -> stringsAreEqual(operand, stored, exactStrings);
             case NOT_EQUALS -> !stringsAreEqual(operand, stored, exactStrings);
-            case CONTAINS -> stored.contains(operand);
+            case CONTAINS -> containsLinear(stored, operand);
             case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN -> false;
         };
     }
 
     private static boolean stringsAreEqual(String operand, String stored, boolean exactStrings) {
         return exactStrings ? operand.equals(stored) : CaseFolding.equal(operand, stored);
+    }
+
+    private static boolean containsLinear(String haystack, String needle) {
+        final var needleLength = needle.length();
+        if (needleLength == 0) {
+            return true;
+        }
+        if (needleLength > haystack.length()) {
+            return false;
+        }
+        final var prefix = failureFunction(needle);
+        var matched = 0;
+        for (var i = 0; i < haystack.length(); i++) {
+            while (matched > 0 && haystack.charAt(i) != needle.charAt(matched)) {
+                matched = prefix[matched - 1];
+            }
+            if (haystack.charAt(i) == needle.charAt(matched)) {
+                matched++;
+            }
+            if (matched == needleLength) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int[] failureFunction(String needle) {
+        final var prefix = new int[needle.length()];
+        var length = 0;
+        for (var i = 1; i < needle.length(); i++) {
+            while (length > 0 && needle.charAt(i) != needle.charAt(length)) {
+                length = prefix[length - 1];
+            }
+            if (needle.charAt(i) == needle.charAt(length)) {
+                length++;
+            }
+            prefix[i] = length;
+        }
+        return prefix;
     }
 
     private static boolean containerOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,

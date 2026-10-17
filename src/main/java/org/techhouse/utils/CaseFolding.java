@@ -24,6 +24,17 @@ public final class CaseFolding {
         return compare(left, right) == 0;
     }
 
+    public static String foldKey(String value) {
+        final var builder = new StringBuilder(value.length());
+        var i = 0;
+        while (i < value.length()) {
+            final var codePoint = value.codePointAt(i);
+            builder.appendCodePoint(fold(codePoint));
+            i += Character.charCount(codePoint);
+        }
+        return builder.toString();
+    }
+
     private static int fold(int codePoint) {
         return Character.toLowerCase(Character.toUpperCase(codePoint));
     }

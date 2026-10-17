@@ -252,6 +252,7 @@ public final class TypedArrayMutation {
             throw new RangeErrorException("Source is too large");
         }
         for (var i = 0; i < sourceLength; i++) {
+            InterpreterOps.pace(ops, i);
             final var value = ops == null
                     ? JsUndefined.getInstance()
                     : ops.getMember(source, new JsString(Integer.toString(i)));

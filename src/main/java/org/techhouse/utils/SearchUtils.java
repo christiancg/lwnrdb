@@ -157,8 +157,12 @@ public final class SearchUtils {
 
     private static <T> Set<String> findingMembership(List<FieldIndexEntry<T>> entries, List<T> value, boolean present) {
         final var matched = new HashSet<String>();
+        final var mergedRunStarts = new HashSet<Integer>();
         for (final var operand : value) {
-            matched.addAll(findingEquals(entries, operand));
+            final var run = equalRun(entries, operand);
+            if (run != null && mergedRunStarts.add(run[0])) {
+                matched.addAll(toIdSet(entries, run[0], run[1]));
+            }
         }
         if (present) {
             return matched;

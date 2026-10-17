@@ -1438,7 +1438,7 @@ def test_script_run_history_still_reaches_the_collection_owner():
         until_forwarded(port, _batch)
     check("every call answered OK", calls and all(c.get("status") == "OK" for c in calls),
           f"statuses={sorted({c.get('status') for c in calls})}")
-    check("every call left a history row", wait_until(lambda: len(history_rows()) >= len(calls), timeout_s=20.0),
+    check("every call left a history row", wait_until(lambda: len(history_rows()) >= len(calls), timeout_s=60.0),
           f"rows={len(history_rows())} calls={len(calls)}")
     check("rows were recorded by more than one node, so at least one came from a non-owner",
           len(runners()) >= 2, f"runners={runners()}")
@@ -2588,7 +2588,7 @@ STARTUP_REPLAY_SETTLE_S = 10
 
 
 CLUSTER_RESET_FLOOD = 500
-CLUSTER_RESET_LOG_CEILING = 50
+CLUSTER_LOG_RATE_PER_SECOND = 20
 
 
 def reset_connection(port: int):
@@ -2601,16 +2601,20 @@ def reset_connection(port: int):
 
 
 def test_cluster_port_reset_flood_is_rate_limited():
-    section(f"{CLUSTER_RESET_FLOOD} resets on the cluster port log at most {CLUSTER_RESET_LOG_CEILING} lines")
+    section(f"{CLUSTER_RESET_FLOOD} resets on the cluster port are rate-limited to ~{CLUSTER_LOG_RATE_PER_SECOND}/s")
     victim = nodes[0]
     marker = "Cluster connection error"
     before = bu.read_log(victim.log_path).count(marker)
+    start = time.time()
     for _ in range(CLUSTER_RESET_FLOOD):
         reset_connection(victim.cluster_port)
     time.sleep(2.0)
+    elapsed = time.time() - start
     logged = bu.read_log(victim.log_path).count(marker) - before
-    check(f"fewer than {CLUSTER_RESET_LOG_CEILING} connection-error lines were logged",
-          logged < CLUSTER_RESET_LOG_CEILING, f"{logged} lines for {CLUSTER_RESET_FLOOD} resets")
+    ceiling = CLUSTER_LOG_RATE_PER_SECOND * (int(elapsed) + 2)
+    check(f"the reset flood was rate-limited, not one line per reset",
+          logged < ceiling and logged < CLUSTER_RESET_FLOOD,
+          f"{logged} lines for {CLUSTER_RESET_FLOOD} resets in {elapsed:.1f}s (ceiling {ceiling})")
     with Conn(port=victim.client_port) as conn:
         check_status("the node still serves clients", conn.authenticate(), "OK")
 

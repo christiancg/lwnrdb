@@ -137,6 +137,9 @@ public class ConfigReaderTest {
         expectedConfig.put("procedureCacheSize", "128");
         expectedConfig.put("procedureCacheMaxBytes", "16Mb");
         expectedConfig.put("maxProceduresPerDatabase", "500");
+        expectedConfig.put("maxCollectionsPerDatabase", "1000");
+        expectedConfig.put("maxDatabases", "1000");
+        expectedConfig.put("maxIndexesPerCollection", "64");
         expectedConfig.put("triggersEnabled", "false");
         expectedConfig.put("triggerThreads", "2");
         expectedConfig.put("triggerQueueSize", "10000");

@@ -238,6 +238,7 @@ public final class InterpreterUtils {
         InterpreterOps.chargeElements(ops, length);
         final var elements = new ArrayList<JsValue>(length);
         for (var i = 0; i < length; i++) {
+            InterpreterOps.pace(ops, i);
             final var index = fromEnd ? length - 1 - i : i;
             final var key = new JsString(Integer.toString(index));
             final var element = ops.getMember(value, key);

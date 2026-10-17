@@ -2251,6 +2251,26 @@ properties, each with its own `pattern` (build it in a script)
 {"type": "SAVE_SCHEMA", "status": "ERROR", "message": "The schema has more regular expressions than allowed: it has more than 256 patterns", "errorCode": "400-39"}
 ```
 
+`CREATE_COLLECTION` in a database that already holds `maxCollectionsPerDatabase` (default 1 000) collections →
+`400-40`. Re-creating a collection that already exists is always allowed:
+
+```json
+{"type": "CREATE_COLLECTION", "status": "ERROR", "message": "The database has the maximum number of collections (1000)", "errorCode": "400-40"}
+```
+
+`CREATE_DATABASE` when the server already holds `maxDatabases` (default 1 000) user databases → `400-41`:
+
+```json
+{"type": "CREATE_DATABASE", "status": "ERROR", "message": "The server has the maximum number of databases (1000)", "errorCode": "400-41"}
+```
+
+`CREATE_INDEX` on a collection that already holds `maxIndexesPerCollection` (default 64) field indexes → `400-42`.
+Re-creating an index that already exists is always allowed:
+
+```json
+{"type": "CREATE_INDEX", "status": "ERROR", "message": "The collection has the maximum number of indexes (64)", "errorCode": "400-42"}
+```
+
 Comparing a literal or a backreference charges one budget step per 64 characters compared, so `"^(a*)\\1b$"` as a
 `pattern` and a SAVE of 100 000 `a`s answers `400-23` within a second or two instead of spending minutes of CPU.
 

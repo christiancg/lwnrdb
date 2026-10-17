@@ -5,6 +5,8 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.fs.FileSystem;
@@ -32,6 +34,7 @@ public final class CollectionOperationHelper {
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final Configuration configuration = Configuration.getInstance();
     private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
             .get(org.techhouse.cluster.HybridClock.class);
 
@@ -69,6 +72,13 @@ public final class CollectionOperationHelper {
             if (colliding != null) {
                 return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.NAME_COLLIDES_ON_DISK,
                         colliding);
+            }
+            final var maxCollections = configuration.intValue(ConfigKey.MAX_COLLECTIONS_PER_DATABASE);
+            if (isNotRegistered(dbName, createCollectionRequest.getCollectionName())
+                    && cache.getCollectionNamesForDatabase(dbName).size() >= maxCollections) {
+                return new OperationResponse(OperationType.CREATE_COLLECTION,
+                        ErrorCode.TOO_MANY_COLLECTIONS_FOR_DATABASE.getDefaultMessage() + " (" + maxCollections + ")",
+                        ErrorCode.TOO_MANY_COLLECTIONS_FOR_DATABASE);
             }
             return register(createCollectionRequest);
         } finally {
