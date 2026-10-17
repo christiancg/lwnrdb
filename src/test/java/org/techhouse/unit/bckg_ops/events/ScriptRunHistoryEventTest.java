@@ -37,6 +37,15 @@ public class ScriptRunHistoryEventTest {
     }
 
     @Test
+    public void test_a_retry_carries_its_count_and_is_a_different_event() {
+        final var retry = new ScriptRunHistoryEvent(record("r1"), 2);
+        assertEquals(2, retry.getRetries());
+        assertEquals(0, new ScriptRunHistoryEvent(record("r1")).getRetries());
+        assertNotEquals(new ScriptRunHistoryEvent(record("r1")), retry);
+        assertTrue(retry.toString().contains("retries=2"));
+    }
+
+    @Test
     public void test_to_string_names_the_run() {
         assertTrue(new ScriptRunHistoryEvent(record("r1")).toString().contains("r1"));
         assertTrue(new ScriptRunHistoryEvent(null).toString().contains("null"));

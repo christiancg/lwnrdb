@@ -85,7 +85,7 @@ public class ScriptRunHistory {
         write(runRecord, 0);
     }
 
-    private static void write(ScriptRunRecord runRecord, int retries) {
+    public static void write(ScriptRunRecord runRecord, int retries) {
         if (runRecord == null || !isEnabled()) {
             return;
         }
@@ -144,8 +144,9 @@ public class ScriptRunHistory {
             return false;
         }
         try {
-            scheduler.schedule(() -> write(runRecord, retries + 1), FIRST_RETRY_DELAY_MILLIS << retries,
-                    TimeUnit.MILLISECONDS);
+            scheduler.schedule(
+                    () -> taskManager.submitBackgroundTask(new ScriptRunHistoryEvent(runRecord, retries + 1)),
+                    FIRST_RETRY_DELAY_MILLIS << retries, TimeUnit.MILLISECONDS);
             return true;
         } catch (RejectedExecutionException stopping) {
             return false;
@@ -206,8 +207,8 @@ public class ScriptRunHistory {
     public static void sweepQuietly() {
         try {
             sweepOnce();
-        } catch (Exception e) {
-            logger.warning("The script run history sweep failed: " + e.getMessage());
+        } catch (Throwable failure) {
+            logger.warning("The script run history sweep failed: " + failure.getMessage());
         }
     }
 

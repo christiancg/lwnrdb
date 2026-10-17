@@ -14,6 +14,7 @@ import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
@@ -39,6 +40,7 @@ public class ScriptRunHistoryRetryTest {
     private final Configuration configuration = Configuration.getInstance();
     private final ClusterRouter router = IocContainer.get(ClusterRouter.class);
     private final ScriptRunHistory history = IocContainer.get(ScriptRunHistory.class);
+    private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ClusterTestHarness cluster = new ClusterTestHarness();
     private final EJson eJson = IocContainer.get(EJson.class);
     private final AtomicInteger forwards = new AtomicInteger();
@@ -59,12 +61,15 @@ public class ScriptRunHistoryRetryTest {
         when(ownership.isOwner(anyString(), anyString())).thenReturn(false);
         when(ownership.ownerAddress(anyString(), anyString())).thenReturn(OWNER);
         TestUtils.setPrivateField(router, "ownershipManager", ownership);
+        taskManager.stopBackgroundWorkers();
+        taskManager.startBackgroundWorkers();
         history.startSweep();
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         history.stopSweep();
+        taskManager.stopBackgroundWorkers();
         TestUtils.setPrivateField(router, "pool", routerPool);
         TestUtils.setPrivateField(router, "ownershipManager", routerOwnership);
         cluster.disable();
