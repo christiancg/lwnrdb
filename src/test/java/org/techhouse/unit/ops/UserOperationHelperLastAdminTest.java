@@ -52,7 +52,7 @@ public class UserOperationHelperLastAdminTest {
         req.setGlobalPermissions(new HashSet<>());
         req.setDatabasePermissions(new HashMap<>());
         req.setCollectionPermissions(new HashMap<>());
-        final var resp = UserOperationHelper.processChangePermissions(req);
+        final var resp = UserOperationHelper.processChangePermissions(req, new RestampedRecords());
         assertEquals(OperationStatus.ERROR, resp.getStatus());
         assertTrue(resp.getMessage().contains("last admin"));
     }

@@ -38,6 +38,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.DefinerAuthority;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ProcedureOperationHelper;
@@ -106,7 +107,10 @@ public class DefinerDispatchAuthorityTest {
     }
 
     @AfterEach
-    void restoreAdmission() {
+    void restoreAdmission() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", ConfigKey.CLUSTER_ENABLED.defaultValue());
+        TestUtils.setPrivateField(configuration, "triggerRunRetentionMs",
+                ConfigKey.TRIGGER_RUN_RETENTION_MS.defaultValue());
         admission.reconfigure(configuration.getMaxConcurrentScripts(), configuration.getScriptQueueWaitMs(),
                 Integer.parseInt(ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_USER.defaultValue()),
                 Integer.parseInt(ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_DATABASE.defaultValue()));
@@ -254,5 +258,64 @@ public class DefinerDispatchAuthorityTest {
         final var pending = TriggerTestSupport.pendingRun(runId);
         assertNotNull(pending);
         assertEquals(0, pending.getAttempts(), "deferral consumes no attempt");
+    }
+
+    private String recordRunFor(String id) {
+        return TriggerRunLog.record(new TriggerRunLog.TriggerRunDescriptor(TestGlobals.DB, TestGlobals.COLL, "audit",
+                "job", EventType.CREATED, false, OWNER, 0, System.currentTimeMillis(),
+                List.of(TriggerTestSupport.entry(id))));
+    }
+
+    private static void asNonDecidingNode() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        assertFalse(DefinerAuthority.decidesDefinitions(), "a cluster node outside the ring decides no definitions");
+    }
+
+    @Test
+    public void test_a_non_deciding_node_defers_a_refused_trigger_without_consuming_it() throws Exception {
+        installTrigger();
+        grant(null, ScriptPermissionLevel.RUN);
+        final var runId = recordRunFor("deferred");
+        asNonDecidingNode();
+
+        TriggerDispatcher.dispatch(event("deferred", runId));
+
+        assertNull(outputRow("deferred"));
+        assertTrue(storedTrigger().isEnabled(), "only the deciding node writes the disable");
+        assertEquals(TriggerRunStatus.PENDING, TriggerTestSupport.statusOf(runId));
+        final var pending = TriggerTestSupport.pendingRun(runId);
+        assertNotNull(pending);
+        assertEquals(0, pending.getAttempts(), "deferral consumes no attempt");
+    }
+
+    @Test
+    public void test_a_refused_trigger_is_dead_lettered_once_the_retry_window_closes() throws Exception {
+        installTrigger();
+        grant(null, ScriptPermissionLevel.RUN);
+        final var runId = recordRunFor("window-closed");
+        TestUtils.setPrivateField(configuration, "triggerRunRetentionMs", "0");
+        asNonDecidingNode();
+
+        TriggerDispatcher.dispatch(event("window-closed", runId));
+
+        assertNull(outputRow("window-closed"));
+        assertEquals(TriggerRunStatus.DEAD, TriggerTestSupport.statusOf(runId));
+        assertTrue(storedTrigger().isEnabled());
+    }
+
+    @Test
+    public void test_a_deferred_run_is_consumed_once_the_disabled_definition_arrives() throws Exception {
+        installTrigger();
+        grant(null, ScriptPermissionLevel.RUN);
+        final var runId = recordRunFor("arrives-disabled");
+        asNonDecidingNode();
+        TriggerDispatcher.dispatch(event("arrives-disabled", runId));
+
+        cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
+                List.of(storedTrigger().disabledCopy("definer revoked", System.currentTimeMillis())));
+        TriggerDispatcher.dispatch(event("arrives-disabled", runId));
+
+        assertNull(outputRow("arrives-disabled"));
+        assertNull(TriggerTestSupport.pendingRun(runId), "a disabled trigger consumes its run");
     }
 }

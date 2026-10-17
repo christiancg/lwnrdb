@@ -66,7 +66,7 @@ public final class DefinerAuthority {
             if (!disabling.run()) {
                 return;
             }
-            logger.warning(what + " was disabled because its " + reason + "; its owner can re-enable it");
+            logger.warning(disabledMessage(what, reason));
             if (clusterConfig.isEnabled()) {
                 coordinator.replicateAdminRecords(AdminRecords.of(List.of(key)));
             }
@@ -77,7 +77,11 @@ public final class DefinerAuthority {
         }
     }
 
-    private static boolean decidesDefinitions() {
+    static String disabledMessage(String what, String reason) {
+        return what + " was disabled because its " + reason + "; its owner can re-enable it";
+    }
+
+    public static boolean decidesDefinitions() {
         if (!clusterConfig.isEnabled()) {
             return true;
         }

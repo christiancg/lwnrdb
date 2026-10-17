@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -79,7 +80,7 @@ public class TriggerDispatcherTest {
         change.setGlobalPermissions(new HashSet<>());
         change.setDatabasePermissions(new HashMap<>());
         change.setCollectionPermissions(collPerms);
-        UserOperationHelper.processChangePermissions(change);
+        UserOperationHelper.processChangePermissions(change, new RestampedRecords());
     }
 
     private static void createUser(String username, HashMap<String, PermissionLevel> dbPerms) {
@@ -196,10 +197,11 @@ public class TriggerDispatcherTest {
         final var deleteRequest = new DeleteUserRequest();
         deleteRequest.setUsername("temporary");
         UserOperationHelper.processDeleteUser(deleteRequest, new RestampedRecords());
-        final var failedBefore = triggerExecutor.getFailed();
+        final var disabled = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertFalse(disabled.isEnabled(), "deleting the definer disables its trigger");
+        assertTrue(disabled.getDisabledReason().contains("no longer exists"), disabled.getDisabledReason());
         TriggerDispatcher.dispatch(event("orphaned", OWNER, 0));
         assertNull(auditRow("orphaned"), "a trigger whose definer is gone must not run");
-        assertEquals(failedBefore + 1, triggerExecutor.getFailed());
     }
 
     @Test

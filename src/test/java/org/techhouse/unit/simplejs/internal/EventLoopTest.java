@@ -4,11 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.util.ArrayList;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
 import org.techhouse.simplejs.internal.EventLoop;
+import org.techhouse.test.TestUtils;
 
 public class EventLoopTest {
     @Test
@@ -138,5 +144,72 @@ public class EventLoopTest {
         final var deadline = System.nanoTime() + 5_000_000_000L;
         assertDoesNotThrow(() -> loop.drain(deadline));
         assertEquals(java.util.List.of(1), order);
+    }
+
+    private static Map<?, ?> liveTimers(EventLoop loop) throws Exception {
+        return TestUtils.getPrivateField(loop, "live", Map.class);
+    }
+
+    @Test
+    public void test_clearing_an_id_not_yet_issued_does_not_cancel_a_later_timer() {
+        final var loop = new EventLoop();
+        final var order = new ArrayList<Integer>();
+        loop.clearTimer(1);
+        final var id = loop.setTimer(() -> order.add(1), 0, false);
+        loop.drain();
+        assertEquals(1L, id);
+        assertEquals(java.util.List.of(1), order);
+    }
+
+    @Test
+    public void test_clearing_unknown_ids_retains_nothing() throws Exception {
+        final var loop = new EventLoop();
+        for (var id = 1L; id <= 100_000L; id++) {
+            loop.clearTimer(-id);
+        }
+        assertTrue(liveTimers(loop).isEmpty());
+    }
+
+    @Test
+    public void test_clearing_a_fired_timer_is_a_no_op() throws Exception {
+        final var loop = new EventLoop();
+        final var order = new ArrayList<Integer>();
+        final var fired = loop.setTimer(() -> order.add(1), 0, false);
+        loop.drain();
+        loop.clearTimer(fired);
+        loop.setTimer(() -> order.add(2), 0, false);
+        loop.drain();
+        assertEquals(java.util.List.of(1, 2), order);
+        assertTrue(liveTimers(loop).isEmpty());
+    }
+
+    @Test
+    public void test_an_interval_cleared_inside_its_own_callback_stops() throws Exception {
+        final var loop = new EventLoop();
+        final var ticks = new ArrayList<Integer>();
+        final var id = new long[1];
+        id[0] = loop.setTimer(() -> {
+            ticks.add(ticks.size());
+            if (ticks.size() == 3) {
+                loop.clearTimer(id[0]);
+            }
+        }, 0, true);
+        loop.drain();
+        assertEquals(java.util.List.of(0, 1, 2), ticks);
+        assertTrue(liveTimers(loop).isEmpty());
+    }
+
+    @Test
+    public void test_a_cleared_timer_releases_its_charge() {
+        final var loop = new EventLoop();
+        final var ops = mock(InterpreterOps.class);
+        loop.wireInterpreter(ops, null);
+        for (var i = 0; i < 1_000; i++) {
+            loop.clearTimer(loop.setTimer(() -> {
+            }, 0, false));
+        }
+        loop.drain();
+        verify(ops, times(1_000)).charge(160L);
+        verify(ops, times(1_000)).release(160L);
     }
 }

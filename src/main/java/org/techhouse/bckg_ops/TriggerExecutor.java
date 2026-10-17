@@ -201,6 +201,10 @@ public class TriggerExecutor {
         }
         scheduled.set(0);
         scheduledBytes.set(0L);
+        stopSweep();
+    }
+
+    public synchronized void stopSweep() {
         final var sweep = sweepScheduler;
         sweepScheduler = null;
         if (sweep != null) {

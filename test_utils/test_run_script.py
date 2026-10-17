@@ -1645,6 +1645,11 @@ def test_language_surface(conn: Conn):
          "const order = [];\nsetTimeout(() => order.push('timeout'), 0);\n"
          "await Promise.resolve().then(() => order.push('micro'));\n"
          "await new Promise(r => setTimeout(r, 5));\nreturn order;", ["micro", "timeout"]),
+        ("clearing an id before it is issued does not cancel that timer",
+         "clearTimeout(1);\nreturn await new Promise(resolve => setTimeout(() => resolve('fired'), 0));", "fired"),
+        ("clearing ids that name no timer retains nothing and cancels nothing",
+         "for (let i = 1; i <= 200000; i++) clearTimeout(-i);\n"
+         "return await new Promise(resolve => setTimeout(() => resolve('fired'), 0));", "fired"),
     ]
     for label, script, expected in cases:
         check_result(label, conn.run(script), expected)

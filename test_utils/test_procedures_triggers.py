@@ -27,6 +27,8 @@ TWIN_AUDITED_COLL = "twin_audited"
 CAP_COLL = "trigger_cap"
 REVOKE_COLL = "revoke_source"
 DROPPED_RUNS_COLL = "dropped_runs"
+FIRST_RUN_COLL = "first_run"
+FIRST_RUN_BLOCK_COLL = "first_run_block"
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -1487,13 +1489,13 @@ def test_run_history_failures(conn: Conn):
                      ghost.save_trigger("ghost_trigger", ["CREATED", "UPDATED"], "auditor"), "OK")
     check_status("delete the definer",
                  conn.send({"type": "DELETE_USER", "username": "ghostdefiner"}), "OK")
+    ghost = trigger_entry(conn, COLL, "ghost_trigger")
+    check("deleting the definer disables its trigger", ghost.get("enabled") is False, f"got {ghost}")
+    check("with the reason", "no longer exists" in str(ghost.get("disabledReason")), f"got {ghost}")
     check_status("write a document", conn.save_doc({"_id": "ghostdoc", "n": 1}), "OK")
-
-    skipped = await_history(conn, kind="TRIGGER", name="ghost_trigger")
-    check("the trigger that never ran is still recorded", len(skipped) >= 1, f"rows={skipped!r}")
-    if skipped:
-        check("it is recorded as skipped", skipped[0].get("outcome") == "skipped", f"row={skipped[0]!r}")
-        check("with the reason", "definer" in (skipped[0].get("errorMessage") or ""), f"row={skipped[0]!r}")
+    check("the disabled trigger records no run",
+          not await_latest(lambda: history_rows(conn, kind="TRIGGER", name="ghost_trigger"), bool, 2.0, 0.2),
+          f"rows={history_rows(conn, kind='TRIGGER', name='ghost_trigger')!r}")
     check_status("remove the ghost trigger",
                  conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
                             "name": "ghost_trigger"}), "OK")
@@ -2009,6 +2011,9 @@ def test_a_trigger_whose_definer_lost_collection_read_is_disabled():
               "the audit row never appeared")
         check_status("narrow the definer to the audit collection only", set_revoked_definer_grants(admin, False),
                      "OK")
+        check("the grant change itself disables the trigger, before any write fires it",
+              trigger_entry(admin, REVOKE_COLL, "revocable").get("enabled") is False,
+              f"got {trigger_entry(admin, REVOKE_COLL, 'revocable')}")
         check_status("another write", admin.save_doc({"_id": "r2"}, coll=REVOKE_COLL), "OK")
         disabled = bu.wait_until(lambda: trigger_entry(admin, REVOKE_COLL, "revocable").get("enabled") is False,
                                  10.0, 0.2)
@@ -2032,6 +2037,53 @@ def test_a_trigger_whose_definer_lost_collection_read_is_disabled():
         check("fires again", await_doc(admin, "revocable-r4").get("status") == "OK", "the audit row never appeared")
         admin.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": REVOKE_COLL})
         admin.send({"type": "DELETE_USER", "username": REVOKED_DEFINER})
+
+
+def occupy_both_trigger_workers(conn: Conn, tag: str):
+    for n in (1, 2):
+        check_status(f"occupy trigger worker {n}", conn.save_doc({"_id": f"{tag}-{n}"}, coll=FIRST_RUN_BLOCK_COLL),
+                     "OK")
+    time.sleep(0.3)
+
+
+def test_a_first_run_delivers_the_document_as_it_is_when_it_runs(conn: Conn):
+    section("A trigger's first run reads the document when it runs, not when it fired")
+    for coll in (FIRST_RUN_COLL, FIRST_RUN_BLOCK_COLL):
+        check_status(f"create {coll}",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("a procedure that holds its trigger worker", conn.save_procedure(
+        "first_run_blocker", "return new Promise(done => setTimeout(() => done(1), 2500));"), "OK")
+    check_status("a procedure that records the value it was handed", conn.save_procedure(
+        "first_run_audit", "import db from 'db'; import args from 'args';"
+        " db.save(db.name, '" + AUDIT + "', { _id: 'first-' + args.id + '-' + args.document.v }); return 1;"), "OK")
+    check_status("the blocking trigger",
+                 conn.save_trigger("first_run_blocker", ["CREATED"], "first_run_blocker", coll=FIRST_RUN_BLOCK_COLL),
+                 "OK")
+    check_status("the recording trigger", conn.save_trigger(
+        "first_run_audit", ["CREATED", "UPDATED"], "first_run_audit", coll=FIRST_RUN_COLL), "OK")
+
+    occupy_both_trigger_workers(conn, "coalesce")
+    check_status("save v1", conn.save_doc({"_id": "q", "v": 1}, coll=FIRST_RUN_COLL), "OK")
+    check_status("save v2 while v1's run still waits", conn.save_doc({"_id": "q", "v": 2}, coll=FIRST_RUN_COLL),
+                 "OK")
+    check("the runs deliver the latest version", await_doc(conn, "first-q-2").get("status") == "OK",
+          "no run saw v2")
+    runs = await_history_rows(conn, "first_run_audit", 2)
+    check("both writes still get their own run", len(runs) >= 2, f"rows={runs!r}")
+    check("no run saw the superseded version", conn.find("first-q-1", coll=AUDIT).get("status") == "NOT_FOUND",
+          "a queued run delivered the value it fired with")
+
+    occupy_both_trigger_workers(conn, "gone")
+    check_status("save a document", conn.save_doc({"_id": "gone", "v": 1}, coll=FIRST_RUN_COLL), "OK")
+    check_status("delete it before its run starts",
+                 conn.send({"type": "DELETE", "databaseName": DB, "collectionName": FIRST_RUN_COLL, "_id": "gone"}),
+                 "OK")
+    skipped = await_latest(lambda: [row for row in history_rows(conn, kind="TRIGGER", name="first_run_audit")
+                                    if row.get("outcome") == "skipped"], bool, 15.0, 0.2)
+    check("the run for a document that no longer exists is skipped",
+          any("no longer exist" in str(row.get("errorMessage")) for row in skipped), f"rows={skipped!r}")
+    check("and nothing was delivered", await_absent(conn, "first-gone-1").get("status") == "NOT_FOUND",
+          "the deleted document reached the trigger")
 
 
 def test_dropping_a_collection_discards_its_dead_letters(conn: Conn):
@@ -2171,6 +2223,7 @@ def main():
             test_batch_deleted_trigger_fires_once_per_transaction(conn)
             test_cascade(conn)
             test_triggers_per_collection_are_capped(conn)
+            test_a_first_run_delivers_the_document_as_it_is_when_it_runs(conn)
             test_stats(conn)
             test_storage_placement(work_dir)
             test_cascade_deletes(conn, work_dir)

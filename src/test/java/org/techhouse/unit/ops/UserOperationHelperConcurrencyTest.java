@@ -87,9 +87,11 @@ public class UserOperationHelperConcurrencyTest {
         final var first = new AtomicReference<OperationResponse>();
         final var second = new AtomicReference<OperationResponse>();
         final var demoteAlpha = startParked(
-                () -> UserOperationHelper.processChangePermissions(permissionsRequest("alpha")), first);
+                () -> UserOperationHelper.processChangePermissions(permissionsRequest("alpha"), new RestampedRecords()),
+                first);
         final var demoteBeta = startParked(
-                () -> UserOperationHelper.processChangePermissions(permissionsRequest("beta")), second);
+                () -> UserOperationHelper.processChangePermissions(permissionsRequest("beta"), new RestampedRecords()),
+                second);
 
         holder.release();
         demoteAlpha.join(BUDGET_MS);
@@ -127,7 +129,8 @@ public class UserOperationHelperConcurrencyTest {
     public void test_a_permission_change_waiting_on_a_delete_does_not_resurrect_the_user() throws Exception {
         holdUsersLock();
         final var result = new AtomicReference<OperationResponse>();
-        final var change = startParked(() -> UserOperationHelper.processChangePermissions(permissionsRequest("gamma")),
+        final var change = startParked(
+                () -> UserOperationHelper.processChangePermissions(permissionsRequest("gamma"), new RestampedRecords()),
                 result);
 
         deleteUserOnHolder("gamma");
