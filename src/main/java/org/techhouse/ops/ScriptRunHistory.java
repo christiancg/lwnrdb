@@ -5,8 +5,10 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
@@ -35,6 +37,8 @@ import org.techhouse.ops.resp.ResponseParser;
 public class ScriptRunHistory {
     private static final long SWEEP_INTERVAL_SECONDS = 3600L;
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
+    private static final int MAX_NOT_READY_RETRIES = 5;
+    private static final long FIRST_RETRY_DELAY_MILLIS = 100L;
 
     private static final Logger logger = Logger.logFor(ScriptRunHistory.class);
     private static final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
@@ -51,8 +55,7 @@ public class ScriptRunHistory {
     private static final Set<String> knownDatabases = ConcurrentHashMap.newKeySet();
     private static final LongAdder recorded = new LongAdder();
     private static final LongAdder dropped = new LongAdder();
-
-    private ScheduledExecutorService sweeper;
+    private static final AtomicReference<ScheduledExecutorService> sweeper = new AtomicReference<>();
 
     public static void record(ScriptRunRecord runRecord) {
         if (runRecord == null || !isEnabled() || !recordsKind(runRecord.kind())) {
@@ -79,6 +82,10 @@ public class ScriptRunHistory {
     }
 
     public static void write(ScriptRunRecord runRecord) {
+        write(runRecord, 0);
+    }
+
+    public static void write(ScriptRunRecord runRecord, int retries) {
         if (runRecord == null || !isEnabled()) {
             return;
         }
@@ -98,6 +105,10 @@ public class ScriptRunHistory {
             request.setBackgroundFollowOn(true);
             final var response = dispatch(request, runRecord.username());
             if (response.getStatus() != OperationStatus.OK) {
+                if (ErrorCode.COLLECTION_NOT_READY.getCode().equals(response.getErrorCode())
+                        && retryLater(runRecord, retries)) {
+                    return;
+                }
                 dropped.increment();
                 logger.warning("Could not record the run of " + runRecord.kind() + " '" + runRecord.name() + "' in "
                         + dbName + ": " + response.getMessage());
@@ -127,26 +138,44 @@ public class ScriptRunHistory {
         }
     }
 
+    private static boolean retryLater(ScriptRunRecord runRecord, int retries) {
+        final var scheduler = sweeper.get();
+        if (scheduler == null || retries >= MAX_NOT_READY_RETRIES) {
+            return false;
+        }
+        try {
+            scheduler.schedule(
+                    () -> taskManager.submitBackgroundTask(new ScriptRunHistoryEvent(runRecord, retries + 1)),
+                    FIRST_RETRY_DELAY_MILLIS << retries, TimeUnit.MILLISECONDS);
+            return true;
+        } catch (RejectedExecutionException stopping) {
+            return false;
+        }
+    }
+
     private static boolean ownsHistoryOf(String dbName) {
         return !clusterConfig.isEnabled() || ownershipManager.isOwner(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME);
     }
 
     public void startSweep() {
-        if (!isEnabled() || sweeper != null) {
+        if (!isEnabled() || sweeper.get() != null) {
             return;
         }
-        sweeper = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        final var scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             final var thread = new Thread(runnable, "script-run-history-sweeper");
             thread.setDaemon(true);
             return thread;
         });
-        sweeper.scheduleAtFixedRate(ScriptRunHistory::sweepQuietly, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
+        if (!sweeper.compareAndSet(null, scheduler)) {
+            scheduler.shutdownNow();
+            return;
+        }
+        scheduler.scheduleAtFixedRate(ScriptRunHistory::sweepQuietly, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
                 TimeUnit.SECONDS);
     }
 
     public void stopSweep() {
-        final var running = sweeper;
-        sweeper = null;
+        final var running = sweeper.getAndSet(null);
         if (running == null) {
             return;
         }
@@ -178,8 +207,8 @@ public class ScriptRunHistory {
     public static void sweepQuietly() {
         try {
             sweepOnce();
-        } catch (Exception e) {
-            logger.warning("The script run history sweep failed: " + e.getMessage());
+        } catch (Throwable failure) {
+            logger.warning("The script run history sweep failed: " + failure.getMessage());
         }
     }
 

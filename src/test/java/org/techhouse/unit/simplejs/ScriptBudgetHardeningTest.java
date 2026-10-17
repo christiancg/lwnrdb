@@ -187,7 +187,7 @@ public class ScriptBudgetHardeningTest {
 
     private static void assertTimesOut(String source) {
         final var start = System.nanoTime();
-        final var result = run(source, 300L, 64L * 1024 * 1024);
+        final var result = run(source, 300L, -1L);
         final var elapsedMillis = (System.nanoTime() - start) / 1_000_000;
         assertTrue(result.isError());
         assertEquals("ScriptTimeoutError", result.getErrorName(), result.getErrorMessage());

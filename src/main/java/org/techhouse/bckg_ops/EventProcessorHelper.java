@@ -237,7 +237,8 @@ public class EventProcessorHelper {
             case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
             case UsageProfileCleanupEvent ignored ->
                 AdminOperationHelper.cleanupCollectionUsage(memoryManagement.usageRetentionMillis());
-            case ScriptRunHistoryEvent historyEvent -> ScriptRunHistory.write(historyEvent.getRecord());
+            case ScriptRunHistoryEvent historyEvent ->
+                ScriptRunHistory.write(historyEvent.getRecord(), historyEvent.getRetries());
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }

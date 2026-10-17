@@ -3,6 +3,7 @@ package org.techhouse.unit.ejson.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.BeforeAll;
@@ -40,6 +41,8 @@ public class JsonParserBytesTest {
     @Test
     public void keysAreTheSameCanonicalInstancesAsTheStringPath() {
         for (final var key : new String[]{"ascii-key", "clé", "日本", "😀k"}) {
+            KeyTable.canonical(key);
+            assertTrue(KeyTable.isCanonical(KeyTable.canonical(key)), key + " entered the key table");
             final var json = "{\"" + key + "\":1}";
             assertSame(onlyKey(fromText(json)), onlyKey(fromBytes(json)), key);
         }

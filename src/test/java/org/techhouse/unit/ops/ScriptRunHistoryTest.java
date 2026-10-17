@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +58,10 @@ public class ScriptRunHistoryTest {
 
     private static <T> void setConfig(String field, T value) throws Exception {
         TestUtils.setPrivateField(configuration, field, value);
+    }
+
+    private static Object runningSweeper() throws Exception {
+        return TestUtils.getPrivateStaticField(ScriptRunHistory.class, "sweeper", AtomicReference.class).get();
     }
 
     private static ScriptRunRecord row(String runId, ScriptRunKind kind, long startedAt, String outcome) {
@@ -318,12 +323,11 @@ public class ScriptRunHistoryTest {
     public void test_the_sweep_thread_starts_and_stops() throws Exception {
         final var history = IocContainer.get(ScriptRunHistory.class);
         history.startSweep();
-        assertNotNull(
-                TestUtils.getPrivateField(history, "sweeper", java.util.concurrent.ScheduledExecutorService.class));
+        assertNotNull(runningSweeper());
 
         history.startSweep();
         history.stopSweep();
-        assertNull(TestUtils.getPrivateField(history, "sweeper", java.util.concurrent.ScheduledExecutorService.class));
+        assertNull(runningSweeper());
 
         history.stopSweep();
     }
@@ -334,7 +338,7 @@ public class ScriptRunHistoryTest {
         final var history = IocContainer.get(ScriptRunHistory.class);
         history.stopSweep();
         history.startSweep();
-        assertNull(TestUtils.getPrivateField(history, "sweeper", java.util.concurrent.ScheduledExecutorService.class));
+        assertNull(runningSweeper());
     }
 
     @Test

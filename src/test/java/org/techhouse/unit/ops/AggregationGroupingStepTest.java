@@ -12,8 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
-import org.techhouse.config.ConfigKey;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -26,6 +24,7 @@ import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
@@ -297,7 +296,6 @@ public class AggregationGroupingStepTest {
 
     @Test
     public void joinLookupBuildIsWatched() throws Exception {
-        final var configuration = Configuration.getInstance();
         final var remote = new StringBuilder(3_000 * 64);
         for (var i = 0; i < 3_000; i++) {
             remote.append(i == 0 ? "" : ",").append("{\"_id\":\"r").append(i).append("\",\"k\":\"v").append(i)
@@ -309,16 +307,14 @@ public class AggregationGroupingStepTest {
                         + "\",\"collectionName\":\"" + TestGlobals.JOIN_COLL + "\",\"objects\":[" + remote + "]}"));
         final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "k", "k", "joined")));
-        TestUtils.setPrivateField(configuration, "aggregateTimeoutMs", 1L);
-        try {
-            final var left = categorised("left", "books");
-            left.addProperty("k", "v1");
+        final var left = categorised("left", "books");
+        left.addProperty("k", "v1");
+        try (var expired = PipelineContext.of(1L, Long.MAX_VALUE, null)) {
+            Thread.sleep(5);
             final var refused = assertThrows(AggregateLimitException.class,
-                    () -> AggregationOperationHelper.processAggregation(request, Stream.of(left)));
+                    () -> AggregationOperationHelper.processAggregation(request, Stream.of(left), null, expired));
             assertEquals(ErrorCode.AGGREGATE_TIMEOUT, refused.getErrorCode());
         } finally {
-            TestUtils.setPrivateField(configuration, "aggregateTimeoutMs",
-                    ConfigKey.AGGREGATE_TIMEOUT_MS.defaultValue());
             TestUtils.releaseAllLocks();
         }
     }

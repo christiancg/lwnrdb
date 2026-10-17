@@ -514,7 +514,7 @@ def worker_command():
     return ["java", "-XX:+UseSerialGC", "-Xss8m", "-cp", CLASSPATH, WORKER_CLASS]
 
 
-def run_batch(jobs, timeout, command, max_consecutive_crashes=MAX_CONSECUTIVE_CRASHES):
+def run_batch(jobs, timeout: float, command, max_consecutive_crashes=MAX_CONSECUTIVE_CRASHES):
     """Run one batch on a reused worker, respawning it whenever a test hangs or crashes it.
 
     Only a dead worker counts toward the crash-loop abort: a timeout is a result about the engine,
@@ -669,7 +669,7 @@ def area_of(test_id):
     return "/".join(parts[:2]) if len(parts) > 2 else parts[0]
 
 
-def build_report(results, collected, commit, elapsed, gate_messages, shard=None):
+def build_report(results, collected, commit, elapsed: float, gate_messages, shard=None):
     counts = {}
     for test_id, outcome in results.items():
         area = counts.setdefault(area_of(test_id), {"PASS": 0, "FAIL": 0, "HANG": 0})
