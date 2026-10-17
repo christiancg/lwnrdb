@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins.regex;
 
 import static org.techhouse.simplejs.builtins.RegexBuiltins.ITERATOR_STATE;
+import static org.techhouse.simplejs.builtins.regex.RegexExec.execStep;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.readLastIndex;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.regExpExec;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.setOrThrow;
@@ -38,7 +39,7 @@ public final class RegexSymbolMethods {
         final var flags = JsCoercion.toStr(ops.getMember(rx, new JsString("flags")), ops);
         final var species = speciesConstructor(rx, regexpProto, ops);
         final var matcher = species == null
-                ? RegexTranslator.compile(sourceOf(rx, ops), flags)
+                ? RegexTranslator.compile(sourceOf(rx, ops), flags, ops)
                 : ops.construct(species, List.of(rx, new JsString(flags)));
         writeLastIndex(matcher, (int) toLength(readLastIndex(rx, ops), ops), ops);
         return createStringIterator(matcher, s, flags.indexOf('g') >= 0,
@@ -192,14 +193,20 @@ public final class RegexSymbolMethods {
         if (global) {
             writeLastIndex(rx, 0, ops);
         }
-        final var results = new ArrayList<JsValue>();
+        final var output = new ReplaceOutput(s, replaceValue, replacementTemplate, ops, invoker);
+        final var deferred = new ArrayList<JsValue>();
         while (true) {
-            final var result = regExpExec(rx, s, ops);
+            final var step = execStep(rx, s, ops);
+            final var result = step.result();
             if (result instanceof JsNull) {
                 break;
             }
-            InterpreterOps.chargeElements(ops, 1);
-            results.add(result);
+            if (functionalReplace || !step.builtin() || !deferred.isEmpty()) {
+                InterpreterOps.chargeElements(ops, 1);
+                deferred.add(result);
+            } else {
+                output.append(result);
+            }
             if (!global) {
                 break;
             }
@@ -209,10 +216,33 @@ public final class RegexSymbolMethods {
                 setOrThrow(rx, new JsNumber(advanceStringIndex(s, lastIndex, fullUnicode)), ops);
             }
         }
-        final var accumulated = new StringBuilder();
-        var chargedChars = 0;
-        var nextSourcePosition = 0;
-        for (final var result : results) {
+        for (final var result : deferred) {
+            output.append(result);
+        }
+        return new JsString(output.finish());
+    }
+
+    private static final class ReplaceOutput {
+        private final String s;
+        private final JsValue replaceValue;
+        private final String replacementTemplate;
+        private final InterpreterOps ops;
+        private final Invoker invoker;
+        @SuppressWarnings("PMD.AvoidStringBufferField")
+        private final StringBuilder accumulated = new StringBuilder();
+        private int chargedChars;
+        private int nextSourcePosition;
+
+        private ReplaceOutput(String s, JsValue replaceValue, String replacementTemplate, InterpreterOps ops,
+                Invoker invoker) {
+            this.s = s;
+            this.replaceValue = replaceValue;
+            this.replacementTemplate = replacementTemplate;
+            this.ops = ops;
+            this.invoker = invoker;
+        }
+
+        private void append(JsValue result) {
             final var length = (int) JsCoercion.toNumber(ops.getMember(result, new JsString("length")), ops);
             final var nCaptures = Math.max(length - 1, 0);
             final var matched = JsCoercion.toStr(ops.getMember(result, new JsString("0")), ops);
@@ -224,24 +254,9 @@ public final class RegexSymbolMethods {
                 captures.add(capture instanceof JsUndefined ? capture : new JsString(JsCoercion.toStr(capture, ops)));
             }
             final var namedCaptures = ops.getMember(result, new JsString("groups"));
-            final String replacement;
-            if (functionalReplace) {
-                final var replacerArgs = new ArrayList<JsValue>();
-                replacerArgs.add(new JsString(matched));
-                replacerArgs.addAll(captures);
-                replacerArgs.add(new JsNumber(position));
-                replacerArgs.add(new JsString(s));
-                if (!(namedCaptures instanceof JsUndefined)) {
-                    replacerArgs.add(namedCaptures);
-                }
-                replacement = JsCoercion.toStr(invoker.call(replaceValue, JsUndefined.getInstance(), replacerArgs),
-                        ops);
-            } else {
-                if (namedCaptures instanceof JsNull) {
-                    throw new TypeErrorException("Cannot convert the named-capture groups to an object");
-                }
-                replacement = getSubstitution(matched, s, position, captures, namedCaptures, replacementTemplate, ops);
-            }
+            final var replacement = replacementTemplate == null
+                    ? functionalReplacement(matched, captures, position, namedCaptures)
+                    : templateReplacement(matched, captures, position, namedCaptures);
             if (position >= nextSourcePosition) {
                 accumulated.append(s, nextSourcePosition, position).append(replacement);
                 InterpreterOps.chargeChars(ops, accumulated.length() - chargedChars);
@@ -249,10 +264,34 @@ public final class RegexSymbolMethods {
                 nextSourcePosition = position + matched.length();
             }
         }
-        if (nextSourcePosition < s.length()) {
-            accumulated.append(s, nextSourcePosition, s.length());
+
+        private String functionalReplacement(String matched, List<JsValue> captures, int position,
+                JsValue namedCaptures) {
+            final var replacerArgs = new ArrayList<JsValue>();
+            replacerArgs.add(new JsString(matched));
+            replacerArgs.addAll(captures);
+            replacerArgs.add(new JsNumber(position));
+            replacerArgs.add(new JsString(s));
+            if (!(namedCaptures instanceof JsUndefined)) {
+                replacerArgs.add(namedCaptures);
+            }
+            return JsCoercion.toStr(invoker.call(replaceValue, JsUndefined.getInstance(), replacerArgs), ops);
         }
-        return new JsString(accumulated.toString());
+
+        private String templateReplacement(String matched, List<JsValue> captures, int position,
+                JsValue namedCaptures) {
+            if (namedCaptures instanceof JsNull) {
+                throw new TypeErrorException("Cannot convert the named-capture groups to an object");
+            }
+            return getSubstitution(matched, s, position, captures, namedCaptures, replacementTemplate, ops);
+        }
+
+        private String finish() {
+            if (nextSourcePosition < s.length()) {
+                accumulated.append(s, nextSourcePosition, s.length());
+            }
+            return accumulated.toString();
+        }
     }
 
     public static String getSubstitution(String matched, String s, int position, List<JsValue> captures,
@@ -333,7 +372,7 @@ public final class RegexSymbolMethods {
         final var unicodeMatching = flags.indexOf('u') >= 0 || flags.indexOf('v') >= 0;
         final var newFlags = flags.indexOf('y') >= 0 ? flags : flags + "y";
         final var splitter = species == null
-                ? RegexTranslator.compile(sourceOf(rx, ops), newFlags)
+                ? RegexTranslator.compile(sourceOf(rx, ops), newFlags, ops)
                 : ops.construct(species, List.of(rx, new JsString(newFlags)));
         final var result = new JsArray();
         final var limit = limitValue instanceof JsUndefined

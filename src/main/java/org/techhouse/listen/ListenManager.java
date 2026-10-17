@@ -2,7 +2,6 @@ package org.techhouse.listen;
 
 import java.util.Collection;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -14,11 +13,14 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.techhouse.bckg_ops.RestartablePool;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
-public class ListenManager {
+public class ListenManager implements DirtySink {
     public static final String COLLECTION_DROPPED = "a collection it reads was dropped";
     public static final String DATABASE_DROPPED = "the database it reads was dropped";
     public static final String ACCESS_REVOKED = "the listening user can no longer read it";
@@ -27,23 +29,58 @@ public class ListenManager {
     }
 
     private final Logger logger = Logger.logFor(ListenManager.class);
+    private final Configuration configuration = Configuration.getInstance();
+    private final ListenRetention retention = new ListenRetention();
     private final Map<UUID, ListenRegistration> registrations = new ConcurrentHashMap<>();
     private final Map<UUID, EndedListen> ended = new ConcurrentHashMap<>();
     private final Map<String, Set<UUID>> collectionToListens = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
-    private final ThreadLocal<Set<String>> deferred = new ThreadLocal<>();
-    private final ThreadLocal<Integer> deferralDepth = ThreadLocal.withInitial(() -> 0);
-    private final ThreadLocal<Set<String>> applyingKeys = new ThreadLocal<>();
     private final ApplyTracker applyTracker = new ApplyTracker();
     private final Set<UUID> heldBack = ConcurrentHashMap.newKeySet();
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
+    public boolean hasCapacityFor(UUID clientId) {
+        final var globalLimit = configuration.intValue(ConfigKey.MAX_LISTENS);
+        if (globalLimit != 0 && registrations.size() >= globalLimit) {
+            return false;
+        }
+        final var perConnection = configuration.intValue(ConfigKey.MAX_LISTENS_PER_CONNECTION);
+        return perConnection == 0
+                || registrations.values().stream().filter(registration -> registration.clientId().equals(clientId))
+                        .limit(perConnection).count() < perConnection;
+    }
+
+    public boolean hasUserCapacity(String username) {
+        return retention.hasUserCapacity(username);
+    }
+
+    public ErrorCode reserve(String username, long retainedBytes) {
+        return retention.reserve(username, retainedBytes);
+    }
+
+    public void release(String username, long retainedBytes) {
+        retention.release(username, retainedBytes);
+    }
+
+    public long retainedBytes() {
+        return retention.retainedBytes();
+    }
+
+    public int listensOf(String username) {
+        return retention.listensOf(username);
+    }
+
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
+        return register(clientId, null, dirtyRequest, initialHash, 0L);
+    }
+
+    public UUID register(UUID clientId, String username, AggregateRequest dirtyRequest, String initialHash,
+            long retainedBytes) {
         final var listenId = UUID.randomUUID();
         final var keys = collectKeys(dirtyRequest);
         final var registration = new ListenRegistration(listenId, clientId, dirtyRequest, keys,
-                new AtomicReference<>(initialHash), new AtomicBoolean(false));
+                new AtomicReference<>(initialHash), new AtomicBoolean(false), username, retainedBytes);
         registrations.put(listenId, registration);
         for (var key : keys) {
             collectionToListens.computeIfAbsent(key, _ -> ConcurrentHashMap.newKeySet()).add(listenId);
@@ -78,6 +115,7 @@ public class ListenManager {
             return false;
         }
         detachKeys(registration);
+        releaseRetention(registration);
         return true;
     }
 
@@ -102,7 +140,19 @@ public class ListenManager {
     }
 
     boolean consumeEnded(UUID listenId, EndedListen endedListen) {
-        return ended.remove(listenId, endedListen);
+        return removeEnded(listenId, endedListen);
+    }
+
+    private boolean removeEnded(UUID listenId, EndedListen endedListen) {
+        if (!ended.remove(listenId, endedListen)) {
+            return false;
+        }
+        releaseRetention(endedListen.registration());
+        return true;
+    }
+
+    private void releaseRetention(ListenRegistration registration) {
+        retention.release(registration.username(), registration.retainedBytes());
     }
 
     private void detachKeys(ListenRegistration registration) {
@@ -124,12 +174,15 @@ public class ListenManager {
         for (var listenId : toRemove) {
             unregister(listenId);
         }
-        ended.values().removeIf(endedListen -> endedListen.registration().clientId().equals(clientId));
+        for (var entry : List.copyOf(ended.entrySet())) {
+            if (entry.getValue().registration().clientId().equals(clientId)) {
+                removeEnded(entry.getKey(), entry.getValue());
+            }
+        }
     }
 
     public void endAllForCollection(String dbName, String collName, String reason) {
-        final var key = dbName + "|" + collName;
-        final var listenIds = collectionToListens.get(key);
+        final var listenIds = collectionToListens.get(keyOf(dbName, collName));
         if (listenIds == null || listenIds.isEmpty()) {
             return;
         }
@@ -151,45 +204,20 @@ public class ListenManager {
         }
     }
 
-    public void deferNotifications() {
-        deferNotifications(List.of());
+    public NotificationBatch openBatch(Collection<String> collectionKeys) {
+        return NotificationBatch.open(this, collectionKeys);
     }
 
-    public void deferNotifications(Collection<String> collectionKeys) {
-        if (deferralDepth.get() == 0) {
-            deferred.set(new LinkedHashSet<>());
-            applyingKeys.set(new LinkedHashSet<>());
-        }
-        deferralDepth.set(deferralDepth.get() + 1);
-        final var newlyApplying = new LinkedHashSet<>(collectionKeys);
-        newlyApplying.removeAll(applyingKeys.get());
-        applyingKeys.get().addAll(newlyApplying);
-        applyTracker.begin(newlyApplying);
+    public NotificationBatch openBatch(DirtySink outer, Collection<String> collectionKeys) {
+        return outer instanceof NotificationBatch batch ? batch.nest(collectionKeys) : openBatch(collectionKeys);
     }
 
-    public void flushDeferredNotifications() {
-        final var depth = deferralDepth.get();
-        if (depth == 0) {
-            return;
-        }
-        if (depth > 1) {
-            deferralDepth.set(depth - 1);
-            return;
-        }
-        deferralDepth.remove();
-        final var pending = deferred.get();
-        deferred.remove();
-        final var applied = applyingKeys.get();
-        applyingKeys.remove();
-        if (applied != null) {
-            applyTracker.end(applied);
-        }
-        if (pending != null) {
-            for (final var key : pending) {
-                enqueueDirty(key);
-            }
-        }
-        releaseHeldBack();
+    void beginApply(Collection<String> collectionKeys) {
+        applyTracker.begin(collectionKeys);
+    }
+
+    void endApply(Collection<String> collectionKeys) {
+        applyTracker.end(collectionKeys);
     }
 
     ApplyTracker.ApplySnapshot applySnapshot(Set<String> collectionKeys) {
@@ -207,7 +235,7 @@ public class ListenManager {
         }
     }
 
-    private void releaseHeldBack() {
+    void releaseHeldBack() {
         for (final var listenId : List.copyOf(heldBack)) {
             if (heldBack.remove(listenId)) {
                 enqueue(listenId);
@@ -215,17 +243,16 @@ public class ListenManager {
         }
     }
 
+    @Override
     public void markDirty(String dbName, String collName) {
-        final var key = dbName + "|" + collName;
-        final var pending = deferred.get();
-        if (pending != null) {
-            pending.add(key);
-            return;
-        }
-        enqueueDirty(key);
+        enqueueDirty(keyOf(dbName, collName));
     }
 
-    private void enqueueDirty(String key) {
+    static String keyOf(String dbName, String collName) {
+        return dbName + "|" + collName;
+    }
+
+    void enqueueDirty(String key) {
         final var listenIds = collectionToListens.get(key);
         if (listenIds == null || listenIds.isEmpty()) {
             return;
@@ -260,8 +287,12 @@ public class ListenManager {
         queued.clear();
         heldBack.clear();
         applyTracker.clear();
-        registrations.clear();
-        ended.clear();
+        for (var listenId : List.copyOf(registrations.keySet())) {
+            unregister(listenId);
+        }
+        for (var entry : List.copyOf(ended.entrySet())) {
+            removeEnded(entry.getKey(), entry.getValue());
+        }
         collectionToListens.clear();
         logger.info("Stopped listen processor worker");
     }

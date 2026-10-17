@@ -77,6 +77,7 @@ public class TransactionCrashAtomicityTest {
     public void test_an_unfinishable_commit_fences_its_collections() throws Exception {
         final var clientTracker = IocContainer.get(org.techhouse.conn.ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient("fencer");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var transaction = clientTracker.getActiveTransaction(clientId);
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);

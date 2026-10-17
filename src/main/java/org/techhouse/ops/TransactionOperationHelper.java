@@ -27,6 +27,7 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
+import org.techhouse.ops.tx.CommitAuthorization;
 import org.techhouse.ops.tx.SliceCommit;
 import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.ops.tx.TransactionBuffer;
@@ -42,6 +43,7 @@ public final class TransactionOperationHelper {
     @SuppressWarnings("FieldMayBeFinal")
     private static ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
+    private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
     private static final long SHUTDOWN_DEPARTURE_WAIT_MS = 2000L;
 
@@ -151,7 +153,7 @@ public final class TransactionOperationHelper {
         final var decided = decidedElsewhere || isDecided(transaction.getTransactionId().toString());
         var fenced = decided;
         try {
-            final var refusal = decided ? null : preApplyRefusal(transaction);
+            final var refusal = decided ? null : commitRefusal(transaction, clientId);
             if (refusal != null) {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, refusal);
@@ -174,7 +176,7 @@ public final class TransactionOperationHelper {
             return result == SliceCommit.Result.REPLICATION_TIMEOUT
                     ? new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT)
                     : OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
-        } catch (Exception e) {
+        } catch (Exception | StackOverflowError e) {
             logger.error(OperationType.COMMIT_TRANSACTION + " failed", e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION,
                     fenced ? ErrorCode.TRANSACTION_HALF_APPLIED : ErrorCode.ERROR_TRANSACTION);
@@ -183,6 +185,16 @@ public final class TransactionOperationHelper {
                 releaseAndDeregister(transaction, clientId);
             }
         }
+    }
+
+    private static ErrorCode commitRefusal(Transaction transaction, UUID clientId) {
+        final var refusal = preApplyRefusal(transaction);
+        if (refusal != null) {
+            return refusal;
+        }
+        return CommitAuthorization.allows(transaction, clientTracker.getAuthenticatedUsername(clientId))
+                ? null
+                : ErrorCode.NO_PERMISSIONS;
     }
 
     public static void abortInPlace(UUID clientId) {
@@ -234,10 +246,19 @@ public final class TransactionOperationHelper {
         } catch (Exception e) {
             logger.warning("Failed to clean up transaction on disconnect: " + e.getMessage());
         } finally {
-            releaseHeldLocks(transaction);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
+            releaseAndDeregister(transaction, clientId);
         }
+    }
+
+    public static boolean reapIdleTransaction(UUID clientId) {
+        cleanupOnDisconnect(clientId);
+        return clientTracker.getActiveTransaction(clientId) == null;
+    }
+
+    public static boolean isReapable(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        return transaction != null && !transaction.isAborted() && !isFenced(transaction)
+                && !clientTracker.hasFencedRemoteSlice(clientId);
     }
 
     private static int awaitDepartures(List<CountDownLatch> departures) {
@@ -294,8 +315,8 @@ public final class TransactionOperationHelper {
                 continue;
             }
             try {
-                session.submit(() -> rollback(session.clientId()))
-                        .get(Configuration.getInstance().getShutdownTimeoutMs(), TimeUnit.MILLISECONDS);
+                session.submit(() -> rollback(session.clientId())).get(configuration.getShutdownTimeoutMs(),
+                        TimeUnit.MILLISECONDS);
                 rolledBack++;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
@@ -345,7 +366,7 @@ public final class TransactionOperationHelper {
     private static Optional<OperationResponse> rollbackOnSessionThread(TxSession session) {
         try {
             return Optional.of(session.submit(() -> rollback(session.clientId()))
-                    .get(Configuration.getInstance().getShutdownTimeoutMs(), TimeUnit.MILLISECONDS));
+                    .get(configuration.getShutdownTimeoutMs(), TimeUnit.MILLISECONDS));
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         } catch (Exception ex) {

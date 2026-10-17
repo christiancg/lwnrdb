@@ -5,11 +5,14 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import org.techhouse.simplejs.elements.SourcePosition;
+import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 
 public final class CallStack {
     public static final String TOP_LEVEL_MODULE = "main";
     public static final String ANONYMOUS = "<anonymous>";
     public static final String NATIVE_MODULE = "native";
+    public static final int MAX_FRAMES = 32;
 
     public static final class Segment {
         private final Deque<CallFrame> frames = new ArrayDeque<>();
@@ -94,6 +97,13 @@ public final class CallStack {
             return List.copyOf(truncated);
         }
         return List.copyOf(rendered);
+    }
+
+    public SimpleJsRuntimeException stamp(SimpleJsRuntimeException error) {
+        if (!(error instanceof JsThrowException) && !error.hasCapturedStack()) {
+            error.stampIfAbsent(capture(MAX_FRAMES));
+        }
+        return error;
     }
 
     private static String render(String functionName, String moduleName, int line, int column) {

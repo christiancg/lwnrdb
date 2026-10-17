@@ -11,7 +11,7 @@ MAX_PAGE_SIZE = "8kb"
 MAX_ENTRY_SIZE = "4kb"
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 ACCEPTED = ("OK", "CREATED", "UPDATED", "DELETED")
 
@@ -108,12 +108,12 @@ class Executor:
             self.restart()
             return
         if op.kind == op_kinds.TRANSACTION:
-            self._apply_transaction(op, outcome)
+            self._apply_transaction(op)
             return
         response = self.request(self._payload(op))
         self._record(op, response, outcome)
 
-    def _apply_transaction(self, op, outcome: Outcome) -> None:
+    def _apply_transaction(self, op) -> None:
         conn = self.conn()
         if not accepted(conn.send({"type": "START_TRANSACTION"})):
             return

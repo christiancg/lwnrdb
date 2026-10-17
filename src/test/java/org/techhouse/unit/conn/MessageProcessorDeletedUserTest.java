@@ -3,8 +3,6 @@ package org.techhouse.unit.conn;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +13,7 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.test.ResponseLines;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -23,8 +22,7 @@ public class MessageProcessorDeletedUserTest {
     private static final String PASSWORD = "password123";
 
     private final PipedOutputStream toServer = new PipedOutputStream();
-    private final PipedInputStream fromServer = new PipedInputStream(1 << 16);
-    private BufferedReader responses;
+    private final ResponseLines responses = new ResponseLines();
     private Thread connection;
 
     @BeforeEach
@@ -34,9 +32,7 @@ public class MessageProcessorDeletedUserTest {
         TestUtils.createAdmin(USERNAME);
 
         final var serverIn = new PipedInputStream(toServer, 1 << 16);
-        final var serverOut = new PipedOutputStream(fromServer);
-        final var socket = TestUtils.clientSocket(serverIn, serverOut);
-        responses = new BufferedReader(new InputStreamReader(fromServer, StandardCharsets.UTF_8));
+        final var socket = TestUtils.clientSocket(serverIn, responses);
         connection = new Thread(new MessageProcessor(socket));
         connection.start();
     }
@@ -52,7 +48,7 @@ public class MessageProcessorDeletedUserTest {
     private String send(String message) throws Exception {
         toServer.write((message + "\n").getBytes(StandardCharsets.UTF_8));
         toServer.flush();
-        return responses.readLine();
+        return responses.next();
     }
 
     private void openTransactionThenLoseTheUser() throws Exception {

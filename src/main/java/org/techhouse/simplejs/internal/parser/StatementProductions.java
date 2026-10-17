@@ -35,7 +35,15 @@ abstract class StatementProductions extends LoopProductions {
 
     @Override
     protected Statement parseStatement() {
-        final var position = positionAt(pos);
+        enterNesting();
+        try {
+            return positioned(positionAt(pos));
+        } finally {
+            leaveNesting();
+        }
+    }
+
+    private Statement positioned(SourcePosition position) {
         final var statement = parseStatementBody();
         if (statement.getPosition() == null) {
             statement.setPosition(position);

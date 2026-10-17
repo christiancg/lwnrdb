@@ -19,6 +19,8 @@ import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.exceptions.SchemaBudgetExceededException;
+import org.techhouse.ejson.validate.SchemaBudget;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.validations.DataRequestValidator;
 import org.techhouse.ops.resp.OperationResponse;
@@ -50,11 +52,13 @@ public final class BeforeHookContext implements AutoCloseable {
     private final long deadline;
     private final List<String> logs;
     private final ScriptRun scriptRun;
+    private final SchemaBudget schemaBudget;
     private List<String> lastStack;
 
     private BeforeHookContext(String dbName, String collName, EventType event, String actingUser,
-            List<TriggerDefinition> hooks, boolean capturing) {
+            List<TriggerDefinition> hooks, boolean capturing, SchemaBudget schemaBudget) {
         this.dbName = dbName;
+        this.schemaBudget = schemaBudget;
         this.collName = collName;
         this.event = event;
         this.actingUser = actingUser;
@@ -71,12 +75,19 @@ public final class BeforeHookContext implements AutoCloseable {
     }
 
     public static BeforeHookContext open(String dbName, String collName, EventType event, String actingUser) {
-        return new BeforeHookContext(dbName, collName, event, actingUser, hooksFor(dbName, collName, event), false);
+        return open(dbName, collName, event, actingUser, SchemaValidationHelper.newBudget());
+    }
+
+    public static BeforeHookContext open(String dbName, String collName, EventType event, String actingUser,
+            SchemaBudget schemaBudget) {
+        return new BeforeHookContext(dbName, collName, event, actingUser, hooksFor(dbName, collName, event), false,
+                schemaBudget);
     }
 
     public static BeforeHookContext openForTest(String dbName, String collName, EventType event, String actingUser,
             TriggerDefinition hook) {
-        return new BeforeHookContext(dbName, collName, event, actingUser, List.of(hook), true);
+        return new BeforeHookContext(dbName, collName, event, actingUser, List.of(hook), true,
+                SchemaValidationHelper.newBudget());
     }
 
     public List<String> logs() {
@@ -165,7 +176,13 @@ public final class BeforeHookContext implements AutoCloseable {
             rejected.incrementAndGet();
             return reject(type, hook, "the document it returned is too deep: " + DataRequestValidator.NESTING_MESSAGE);
         }
-        final var schemaErrors = SchemaValidationHelper.schemaErrors(dbName, collName, replacement);
+        final String schemaErrors;
+        try {
+            schemaErrors = SchemaValidationHelper.schemaErrors(dbName, collName, replacement, schemaBudget);
+        } catch (SchemaBudgetExceededException e) {
+            rejected.incrementAndGet();
+            return reject(type, hook, "the document it returned exceeds the schema validation budget");
+        }
         if (schemaErrors != null) {
             rejected.incrementAndGet();
             return reject(type, hook, "the document it returned does not match the collection schema: " + schemaErrors);
@@ -211,7 +228,8 @@ public final class BeforeHookContext implements AutoCloseable {
                 base.reportUnhandledRejections(), base.fetchEnabled(), base.fetchHostAllowlist(),
                 base.maxResponseBytes(), base.fetchTimeoutMillis(), base.strictScriptGoal(), base.textImportEnabled(),
                 base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget(),
-                base.maxResultBytes(), base.cursorBatchSize(), base.cursorMaxBatchSize());
+                base.maxResultBytes(), base.cursorBatchSize(), base.cursorMaxBatchSize(), base.fetchMaxConcurrent(),
+                base.maxArrayLength());
     }
 
     private JsonObject contextFor(TriggerDefinition hook, String id) {

@@ -22,4 +22,9 @@ public final class Parser {
                 strictScriptGoal).parseProgram();
     }
 
+    public static Program parseWithoutSourceText(Lexer.LexResult lexed, boolean strictScriptGoal) {
+        return new ParserProductions(null, lexed.tokens(), lexed.positions(), lexed.newlineBefore(), strictScriptGoal)
+                .parseProgram();
+    }
+
 }

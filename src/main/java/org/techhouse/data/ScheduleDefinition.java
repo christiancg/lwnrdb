@@ -72,7 +72,7 @@ public class ScheduleDefinition extends StoredDefinition {
         json.add(INTERVAL_MS_FIELD, new JsonNumber(intervalMs));
         json.add(ARGS_FIELD, args == null ? new JsonObject() : args);
         json.add(TIMEOUT_MS_FIELD, new JsonNumber(timeoutMs));
-        json.add(ENABLED_FIELD, new JsonBoolean(enabled));
+        json.add(ENABLED_FIELD, JsonBoolean.of(enabled));
         if (definer != null) {
             json.add(DEFINER_FIELD, new JsonString(definer));
         }
@@ -112,6 +112,12 @@ public class ScheduleDefinition extends StoredDefinition {
 
     public String getDefiner() {
         return definer;
+    }
+
+    public ScheduleDefinition disabledCopy(String reason, long at) {
+        final var copy = fromJsonObject(toJsonObject());
+        copy.markDisabled(reason, at);
+        return copy;
     }
 
     public String getDescription() {

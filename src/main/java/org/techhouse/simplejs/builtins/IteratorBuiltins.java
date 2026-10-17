@@ -31,11 +31,8 @@ import static org.techhouse.simplejs.builtins.iterator.IteratorZip.zipKeyed;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER;
 
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.WeakHashMap;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.iterator.IteratorPrototypes.WrapState;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -61,11 +58,14 @@ public final class IteratorBuiltins {
     public static final Set<String> CALLBACK_HELPERS = Set.of("map", "filter", "flatMap", "reduce", "forEach", "some",
             "every", "find");
 
-    public static final Map<JsObject, JsObject[]> REALM_PROTOS = Collections.synchronizedMap(new WeakHashMap<>());
-    public static final Map<JsObject, HelperState> HELPER_STATE = Collections.synchronizedMap(new WeakHashMap<>());
-    public static final Map<JsObject, WrapState> WRAP_STATE = Collections.synchronizedMap(new WeakHashMap<>());
-
     private IteratorBuiltins() {
+    }
+
+    private record RealmProtos(JsObject helper, JsObject wrap) {
+    }
+
+    private static RealmProtos realmProtos(JsObject objectProto) {
+        return (RealmProtos) objectProto.getInternalSlot();
     }
 
     public static boolean isHelperName(String name) {
@@ -81,8 +81,8 @@ public final class IteratorBuiltins {
         });
         final var prototype = new JsObject();
         prototype.setProto(objectProto);
-        REALM_PROTOS.put(objectProto,
-                new JsObject[]{helperPrototype(prototype, objectProto), wrapPrototype(ops, prototype, objectProto)});
+        objectProto.setInternalSlot(
+                new RealmProtos(helperPrototype(prototype, objectProto), wrapPrototype(ops, prototype, objectProto)));
         for (final var name : HELPERS) {
             Intrinsics.defineHidden(prototype, name, helper(ops, name, objectProto));
         }
@@ -203,8 +203,8 @@ public final class IteratorBuiltins {
             return iterator;
         }
         final var wrapper = new JsObject();
-        wrapper.setProto(REALM_PROTOS.get(objectProto)[1]);
-        WRAP_STATE.put(wrapper, new WrapState(iterator, ops.getMember(iterator, new JsString("next"))));
+        wrapper.setProto(realmProtos(objectProto).wrap());
+        wrapper.setInternalSlot(new WrapState(iterator, ops.getMember(iterator, new JsString("next"))));
         return wrapper;
     }
 
@@ -216,7 +216,7 @@ public final class IteratorBuiltins {
     }
 
     public static boolean isIteratorInstance(InterpreterOps ops, JsValue iterator, JsObject objectProto) {
-        final var target = REALM_PROTOS.get(objectProto)[0].getProto();
+        final var target = realmProtos(objectProto).helper().getProto();
         var proto = ops.getPrototypeOf(iterator);
         while (proto != null && !(proto instanceof JsUndefined) && !InterpreterUtils.isNullish(proto)) {
             if (proto == target) {
@@ -229,11 +229,10 @@ public final class IteratorBuiltins {
 
     public static JsObject lazyIterator(Supplier<JsValue> nextValue, Runnable onClose, JsObject objectProto) {
         final var iterator = new JsObject();
-        final var protos = REALM_PROTOS.get(objectProto);
-        if (protos != null) {
-            iterator.setProto(protos[0]);
+        if (objectProto != null && objectProto.getInternalSlot() instanceof RealmProtos protos) {
+            iterator.setProto(protos.helper());
         }
-        HELPER_STATE.put(iterator, new HelperState(nextValue, onClose));
+        iterator.setInternalSlot(new HelperState(nextValue, onClose));
         return iterator;
     }
 

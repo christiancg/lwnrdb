@@ -1,32 +1,18 @@
 package org.techhouse.ejson.elements;
 
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import java.util.Objects;
 
-public class JsonPrimitive<T> extends JsonBaseElement {
-    protected T value;
-
-    protected T get() {
-        return this.value;
-    }
+public abstract class JsonPrimitive<T> extends JsonBaseElement {
+    protected abstract T get();
 
     public T getValue() {
-        return this.value;
-    }
-
-    public void setValue(T value) {
-        this.value = value;
+        return get();
     }
 
     @Override
     public int hashCode() {
-        if (value == null) {
-            return 31;
-        }
-        if (value instanceof Number number) {
-            final var asDouble = number.doubleValue();
-            return Double.hashCode(asDouble == 0.0 ? 0.0 : asDouble);
-        }
-        return value.hashCode();
+        final var value = get();
+        return value == null ? 31 : value.hashCode();
     }
 
     @Override
@@ -37,26 +23,13 @@ public class JsonPrimitive<T> extends JsonBaseElement {
         if (obj == null || getClass() != obj.getClass()) {
             return false;
         }
-        JsonPrimitive<?> other = (JsonPrimitive<?>) obj;
-        if (value == null) {
-            return other.value == null;
-        }
-        if (value instanceof Number numA && other.value instanceof Number numB) {
-            double a = numA.doubleValue();
-            double b = numB.doubleValue();
-            return a == b || (Double.isNaN(a) && Double.isNaN(b));
-        }
-        return value.equals(other.value);
+        final var value = get();
+        final var other = ((JsonPrimitive<?>) obj).get();
+        return Objects.equals(value, other);
     }
 
     @Override
     public JsonBaseElement deepCopy() {
-        return switch (this) {
-            case JsonCustom<?> custom -> CustomTypeFactory.getCustomTypeInstance(custom.getValue());
-            case JsonNumber ignored -> new JsonNumber((Number) getValue());
-            case JsonBoolean ignored -> new JsonBoolean((Boolean) getValue());
-            case JsonString ignored -> new JsonString((String) getValue());
-            default -> null;
-        };
+        return this;
     }
 }

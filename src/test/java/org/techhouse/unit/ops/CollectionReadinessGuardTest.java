@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -209,7 +208,6 @@ public class CollectionReadinessGuardTest {
         request.setAnalyze(true);
 
         assertEquals("404-11", processor.processMessage(request).getErrorCode());
-        assertNull(AnalyzeContext.current(), "a refused analyze must clear its context");
     }
 
     @Test

@@ -6,6 +6,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCal
 import static org.techhouse.simplejs.values.JsLimits.MAX_ARRAY_LENGTH_DOUBLE;
 import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -119,7 +120,7 @@ public final class IteratorZip {
                 if (keys.get(i) instanceof JsSymbol symbol) {
                     obj.setSymbol(symbol, values.get(i));
                 } else {
-                    obj.set(JsCoercion.toStr(keys.get(i)), values.get(i));
+                    obj.set(JsCoercion.toStr(keys.get(i), ops), values.get(i));
                 }
             }
             return obj;
@@ -305,7 +306,7 @@ public final class IteratorZip {
     }
 
     public static JsValue windows(Driver source, int size, boolean allowPartial, JsObject objectProto) {
-        final var buffer = new ArrayList<JsValue>();
+        final var buffer = new ArrayDeque<JsValue>();
         final var partialYielded = new boolean[]{false};
         return lazyIterator(() -> {
             for (var value = source.next(); value != null; value = source.next()) {
@@ -314,15 +315,21 @@ public final class IteratorZip {
                 }
                 buffer.add(value);
                 if (buffer.size() == size) {
-                    return new JsArray(new ArrayList<>(buffer));
+                    return windowCopy(buffer, source.ops);
                 }
             }
             if (!allowPartial || partialYielded[0] || buffer.isEmpty() || buffer.size() >= size) {
                 return null;
             }
             partialYielded[0] = true;
-            return new JsArray(new ArrayList<>(buffer));
+            return windowCopy(buffer, source.ops);
         }, source::close, objectProto);
+    }
+
+    private static JsArray windowCopy(ArrayDeque<JsValue> buffer, InterpreterOps ops) {
+        InterpreterOps.chargeElements(ops, buffer.size());
+        InterpreterOps.paceWork(ops, buffer.size());
+        return new JsArray(new ArrayList<>(buffer));
     }
 
     public static boolean includes(Driver source, JsValue searched, long skip) {

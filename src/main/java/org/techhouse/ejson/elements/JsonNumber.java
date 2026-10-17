@@ -3,40 +3,68 @@ package org.techhouse.ejson.elements;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class JsonNumber extends JsonPrimitive<Number> {
-    private int strLength;
+    private final double number;
+
     public JsonNumber() {
-        this.value = 0;
+        this(0.0);
+    }
+
+    public JsonNumber(double value) {
+        this.number = value;
     }
 
     public JsonNumber(Number value) {
-        if (value != null) {
-            this.value = value;
-        }
+        this(value == null ? 0.0 : value.doubleValue());
     }
 
     public JsonNumber(String value) {
-        if (value != null) {
-            final var doubleNumber = Double.parseDouble(value);
-            if (!Double.isFinite(doubleNumber)) {
-                throw new MalformedJsonException(
-                        "The number " + value + " is outside the range a JSON number can represent");
-            }
-            if (doubleNumber % 1.0 == 0 && Math.abs(doubleNumber) <= Integer.MAX_VALUE) {
-                // Integer.valueOf would throw on "2.0"; values past the int range stay doubles because
-                // an (int) cast clamps them silently.
-                this.value = (int) doubleNumber;
-            } else {
-                this.value = doubleNumber;
-            }
-            this.strLength = value.length();
-        }
+        this(parseFinite(value));
     }
 
-    public int getStrLength() {
-        return strLength;
+    private static double parseFinite(String value) {
+        if (value == null) {
+            return 0.0;
+        }
+        final var parsed = Double.parseDouble(value);
+        if (!Double.isFinite(parsed)) {
+            throw new MalformedJsonException(
+                    "The number " + value + " is outside the range a JSON number can represent");
+        }
+        return parsed == 0.0 ? 0.0 : parsed;
+    }
+
+    public double doubleValue() {
+        return number;
+    }
+
+    @Override
+    protected Number get() {
+        return number;
+    }
+
+    @Override
+    public Number getValue() {
+        return number;
     }
 
     public Integer asInteger() {
-        return value != null ? value.intValue() : null;
+        return (int) number;
+    }
+
+    @Override
+    public int hashCode() {
+        return Double.hashCode(number == 0.0 ? 0.0 : number);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null || getClass() != obj.getClass()) {
+            return false;
+        }
+        final var other = ((JsonNumber) obj).number;
+        return number == other || (Double.isNaN(number) && Double.isNaN(other));
     }
 }

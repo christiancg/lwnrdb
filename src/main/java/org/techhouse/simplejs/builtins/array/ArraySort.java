@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Invoker;
+import org.techhouse.simplejs.builtins.NativeDepth;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -159,12 +160,19 @@ public final class ArraySort {
                 element = invoker.call(mapper, self, List.of(element, new JsNumber(i), source.value()));
             }
             if (depth > 0 && isArray(element)) {
+                InterpreterOps.tick(ops);
                 final var nested = new ArrayLike(element, ops);
-                written = flattenInto(result, nested, nested.length(), written, depth - 1, null, null, null, ops);
+                NativeDepth.enter(ops);
+                try {
+                    written = flattenInto(result, nested, nested.length(), written, depth - 1, null, null, null, ops);
+                } finally {
+                    NativeDepth.leave(ops);
+                }
             } else {
                 if (written >= MAX_SAFE_INTEGER_LONG) {
                     throw new TypeErrorException("Invalid array length");
                 }
+                InterpreterOps.chargeElements(ops, 1);
                 createDataPropertyOrThrow(result, written, element, ops);
                 written++;
             }

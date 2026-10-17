@@ -16,7 +16,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.MapOperatorHelper;
-import org.techhouse.ops.PipelineScriptContext;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -388,7 +388,7 @@ public class MapOperatorHelperTest {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("existingField", 5);
 
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             ScriptOperator condition = new ScriptOperator("export default (doc) => 1 / 0;");
             RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
 
@@ -404,7 +404,7 @@ public class MapOperatorHelperTest {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("existingField", 5);
 
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             ScriptOperator condition = new ScriptOperator("export default (doc) => 0 / 0;");
             RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
 

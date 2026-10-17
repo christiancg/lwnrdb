@@ -94,8 +94,8 @@ public class TriggerDefinition extends StoredDefinition {
         json.add(PROCEDURE_NAME_FIELD, new JsonString(procedureName));
         json.add(MODE_FIELD, new JsonString(mode));
         json.add(TIMING_FIELD, new JsonString(timing));
-        json.add(ALLOW_CASCADE_FIELD, new JsonBoolean(allowCascade));
-        json.add(ENABLED_FIELD, new JsonBoolean(enabled));
+        json.add(ALLOW_CASCADE_FIELD, JsonBoolean.of(allowCascade));
+        json.add(ENABLED_FIELD, JsonBoolean.of(enabled));
         if (definer != null) {
             json.add(DEFINER_FIELD, new JsonString(definer));
         }
@@ -120,20 +120,6 @@ public class TriggerDefinition extends StoredDefinition {
             }
         }
         return result;
-    }
-
-    public static List<TriggerDefinition> fromJsonArray(JsonArray array) {
-        final var result = new ArrayList<TriggerDefinition>();
-        for (final var element : array.asList()) {
-            result.add(fromJsonObject(element.asJsonObject()));
-        }
-        return result;
-    }
-
-    public static JsonArray toJsonArray(List<TriggerDefinition> definitions) {
-        final var array = new JsonArray();
-        definitions.forEach(definition -> array.add(definition.toJsonObject()));
-        return array;
     }
 
     public Set<EventType> getEvents() {
@@ -166,6 +152,12 @@ public class TriggerDefinition extends StoredDefinition {
 
     public String getDefiner() {
         return definer;
+    }
+
+    public TriggerDefinition disabledCopy(String reason, long at) {
+        final var copy = fromJsonObject(toJsonObject());
+        copy.markDisabled(reason, at);
+        return copy;
     }
 
     @Override

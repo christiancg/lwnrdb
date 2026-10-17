@@ -35,7 +35,7 @@ final class SuperAccess {
         }
         final var args = interp.evalArguments(call.getArguments(), env);
         if (!InterpreterUtils.isConstructor(home.getProto())) {
-            throw new TypeErrorException("Super constructor " + JsCoercion.toStr(home.getProto()) + " of "
+            throw new TypeErrorException("Super constructor " + JsCoercion.describe(home.getProto()) + " of "
                     + home.getName() + " is not a constructor");
         }
         final JsValue self = home.getSuperClass() == null

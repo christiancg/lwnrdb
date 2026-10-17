@@ -16,30 +16,37 @@ public final class GrantPruner {
     private GrantPruner() {
     }
 
-    public static void forDroppedDatabase(String dbName) {
+    public static void forDroppedDatabase(String dbName, GrantRewrite rewrite) {
         final var collectionPrefix = dbName + "|";
-        pruneGrants(dbName,
+        pruneGrants(dbName, rewrite,
                 user -> withoutGrants(user, dbName::equals, key -> key.startsWith(collectionPrefix), dbName::equals));
     }
 
-    public static void forDroppedCollection(String dbName, String collName) {
+    public static void forDroppedCollection(String dbName, String collName, GrantRewrite rewrite) {
         final var collectionKey = dbName + "|" + collName;
-        pruneGrants(dbName + "|" + collName,
+        pruneGrants(dbName + "|" + collName, rewrite,
                 user -> withoutGrants(user, _ -> false, collectionKey::equals, _ -> false));
     }
 
-    public static void forDeletedUser(String username) {
+    public static void forDeletedUser(String username, GrantRewrite rewrite) {
         try {
-            AdminOperationHelper.rewriteDatabases(database -> withoutOwner(database, username));
+            final var rewritten = AdminOperationHelper.rewriteDatabases(database -> withoutOwner(database, username),
+                    rewrite.version());
+            if (rewrite instanceof GrantRewrite.Restamp(var into)) {
+                rewritten.forEach(dbName -> into.add(AdminRecordKey.database(dbName)));
+            }
         } catch (Exception failure) {
             logger.error("Could not remove deleted user '" + username + "' from the database owners; a user "
                     + "created later under that name would inherit them", failure);
         }
     }
 
-    private static void pruneGrants(String target, UnaryOperator<AdminUserEntry> prune) {
+    private static void pruneGrants(String target, GrantRewrite rewrite, UnaryOperator<AdminUserEntry> prune) {
         try {
-            AdminOperationHelper.rewriteUsers(prune);
+            final var rewritten = AdminOperationHelper.rewriteUsers(prune, rewrite.version());
+            if (rewrite instanceof GrantRewrite.Restamp(var into)) {
+                rewritten.forEach(username -> into.add(AdminRecordKey.user(username)));
+            }
         } catch (Exception failure) {
             logger.error("Could not remove the permission grants naming '" + target + "'; a database or collection "
                     + "created later under that name would inherit them", failure);

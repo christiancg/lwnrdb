@@ -75,9 +75,9 @@ public class FilterIndexTypeFallbackTest extends FilterResolutionSupport {
     @Test
     public void test_contains_on_a_boolean_field_falls_back_to_scan() throws IOException, InterruptedException {
         final var cache = mixedTypeFixture();
-        addTyped(cache, "a", "flags", new JsonBoolean(true));
-        addTyped(cache, "b", "flags", arrayOf(new JsonBoolean(true)));
-        final var operator = new FieldOperator(FieldOperatorType.CONTAINS, "flags", new JsonBoolean(true));
+        addTyped(cache, "a", "flags", JsonBoolean.of(true));
+        addTyped(cache, "b", "flags", arrayOf(JsonBoolean.of(true)));
+        final var operator = new FieldOperator(FieldOperatorType.CONTAINS, "flags", JsonBoolean.of(true));
         final var scanned = matched(operator);
         indexField(cache, "flags");
 

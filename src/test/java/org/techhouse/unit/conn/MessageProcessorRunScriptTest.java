@@ -49,7 +49,7 @@ public class MessageProcessorRunScriptTest {
 
     @AfterEach
     void tearDown() throws Exception {
-        TestUtils.setPrivateField(Configuration.getInstance(), "scriptsEnabled", false);
+        TestUtils.setPrivateField(Configuration.getInstance(), "scriptsEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

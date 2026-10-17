@@ -70,10 +70,11 @@ public final class DateBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var date = new JsNativeFunction("Date",
-                (thisArg,
-                        args) -> JsNativeFunction.currentNewTarget() == null && !InterpreterUtils.isObjectLike(thisArg)
-                                ? new JsString(toDateString(System.currentTimeMillis(), ops))
-                                : withNewTargetPrototype(new JsDate(construct(args, ops)), ops));
+                (thisArg, args,
+                        newTarget) -> !NewTargetSupport.isConstructCall(newTarget)
+                                && !InterpreterUtils.isObjectLike(thisArg)
+                                        ? new JsString(toDateString(System.currentTimeMillis(), ops))
+                                        : withNewTargetPrototype(new JsDate(construct(args, ops)), newTarget, ops));
         date.setProperty("now", new JsNativeFunction("now", (_, _) -> new JsNumber(System.currentTimeMillis())));
         date.setProperty("parse", new JsNativeFunction("parse", (_, args) -> new JsNumber(parse(str(args, ops), ops))));
         date.setProperty("UTC",

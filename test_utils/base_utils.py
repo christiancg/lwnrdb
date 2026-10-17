@@ -26,7 +26,7 @@ WARN = f"{YELLOW}WARN{RESET}"
 HOST = "127.0.0.1"
 PORT = 8989
 USERNAME = "admin"
-PASSWORD = "administrator"
+PASSWORD = "Tst-Admin-9xQ2mV"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
 
@@ -140,7 +140,7 @@ def section(title: str) -> None:
     print(f"{'─' * WIDTH}")
 
 
-def summary(on_failure: Optional[Callable[[], None]] = None, suffix: str = "") -> None:
+def summary(on_failure: Optional[Callable] = None, suffix: str = "") -> None:
     print("\n" + "═" * WIDTH)
     if _failures == 0:
         print(f"  {GREEN}All checks passed.{RESET}{suffix}")
@@ -151,6 +151,38 @@ def summary(on_failure: Optional[Callable[[], None]] = None, suffix: str = "") -
     print("═" * WIDTH + "\n")
 
     sys.exit(0 if _failures == 0 else 1)
+
+
+def non_reading_conn(receive_buffer: int = 8192) -> "Conn":
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, receive_buffer)
+    sock.settimeout(60.0)
+    sock.connect((HOST, PORT))
+    conn = Conn(sock=sock)
+    conn.authenticate()
+    return conn
+
+
+def send_without_reading(conn: "Conn", payload: dict) -> bool:
+    try:
+        conn.s.sendall((json.dumps(payload) + "\n").encode())
+        return True
+    except OSError:
+        return False
+
+
+def read_until_closed(conn: "Conn", timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        ready, _, _ = select.select([conn.s], [], [], max(deadline - time.time(), 0))
+        if not ready:
+            return False
+        try:
+            if not conn.s.recv(1 << 20):
+                return True
+        except OSError:
+            return True
+    return False
 
 
 UNPARSED = "unparsed"
@@ -175,10 +207,13 @@ class Conn:
         return self.send_raw(json.dumps(payload), timeout, strict)
 
     def send_raw(self, line: str, timeout: Optional[float] = None, strict: bool = False) -> dict:
+        return self.send_bytes(line.encode(), timeout, strict)
+
+    def send_bytes(self, line: bytes, timeout: Optional[float] = None, strict: bool = False) -> dict:
         if timeout is not None:
             self.s.settimeout(timeout)
         try:
-            self.s.sendall((line + "\n").encode())
+            self.s.sendall(line + b"\n")
         except (BrokenPipeError, OSError):
             return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
         return self._read_response(strict)
@@ -201,7 +236,7 @@ class Conn:
             return unparsed
 
     def recv(self, timeout: float = 2.0) -> Optional[dict]:
-        ready, _, _ = select.select([self.f.raw._sock], [], [], timeout)
+        ready, _, _ = select.select([self.s], [], [], timeout)
         if not ready:
             return None
         try:
@@ -300,9 +335,10 @@ def _config_value(value) -> str:
     return str(value)
 
 
-def write_config(work_dir: str, port: int, **settings) -> None:
+def write_config(work_dir: str, port: int, *, admin_password: Optional[str] = None, **settings) -> None:
+    password = PASSWORD if admin_password is None else admin_password
     lines = [f"port={port}", "filePath=db", "logPath=logs",
-             f"defaultAdminUsername={USERNAME}", f"defaultAdminPassword={PASSWORD}"]
+             f"defaultAdminUsername={USERNAME}", f"defaultAdminPassword={password}"]
     lines += [f"{key}={_config_value(value)}" for key, value in settings.items()]
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write("\n".join(lines) + "\n")
@@ -339,25 +375,26 @@ def local_commit_markers(work_dir: str) -> int:
     return total
 
 
+def read_pk_log(pk_path: str) -> list:
+    with open(pk_path, "rb") as fp:
+        lines = fp.read().decode("utf-8", errors="replace").split("\n")
+    return [line.rstrip("\r").split(PK_FIELD_SEPARATOR) for line in lines[:-1]]
+
+
 def read_pk_rows(pk_path: str) -> list:
-    with open(pk_path, "r", encoding="utf-8") as fp:
-        return [[fields[0]] + [int(value) for value in fields[1:]]
-                for fields in (line.rstrip("\r\n").split(PK_FIELD_SEPARATOR) for line in fp) if len(fields) == 5]
+    folded = {}
+    for fields in read_pk_log(pk_path):
+        if len(fields) == 2 and fields[1] == "-":
+            folded.pop(fields[0], None)
+        elif len(fields) == 5:
+            folded[fields[0]] = [fields[0]] + [int(value) for value in fields[1:]]
+    return [folded[doc_id] for doc_id in sorted(folded)]
 
 
 def write_pk_rows(pk_path: str, rows: list) -> None:
     with open(pk_path, "w", encoding="utf-8", newline="") as fp:
         for row in sorted(rows, key=lambda r: r[0]):
             fp.write(PK_FIELD_SEPARATOR.join(str(value) for value in row) + "\n")
-
-
-def write_compaction_marker(collection_folder: str, kind: str, db: str, coll: str, row: list, page_bytes: bytes,
-                            target_page: int = -1, target_length_before: int = 0) -> None:
-    doc_id, position, length, page, version = row
-    header = PK_FIELD_SEPARATOR.join(str(value) for value in (
-        kind, db, coll, page, position, len(page_bytes), length, doc_id, version, target_page, target_length_before))
-    with open(os.path.join(collection_folder, f"{coll}-{page}.compacting"), "wb") as fp:
-        fp.write(header.encode("utf-8") + b"\n" + page_bytes[position:])
 
 
 def read_log(log_path: str) -> str:
@@ -395,6 +432,19 @@ def start_server(work_dir: str, log_path: str, jar: Optional[str] = None,
     dump_log(log_path)
     proc.kill()
     raise RuntimeError("server did not come up in time")
+
+
+def run_until_exit(work_dir: str, log_path: str, jar: Optional[str] = None, xmx: str = "512m",
+                   timeout_s: float = 30.0) -> Optional[int]:
+    jar = jar or JAR_PATH
+    with open(log_path, "ab") as log:
+        proc = subprocess.Popen(["java", f"-Xmx{xmx}", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
+    try:
+        return proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return None
 
 
 def stop_server(proc, host: Optional[str] = None, port: Optional[int] = None,

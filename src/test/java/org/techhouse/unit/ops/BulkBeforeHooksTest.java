@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -10,16 +11,24 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 
+import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.BeforeHookContext;
+import org.techhouse.ops.BeforeHookHelper;
 import org.techhouse.ops.BulkBeforeHooks;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
+import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 
 public class BulkBeforeHooksTest {
@@ -43,7 +52,8 @@ public class BulkBeforeHooksTest {
     @Test
     public void test_no_hooks_accepts_the_document_unchanged() {
         final var document = BeforeHookTestSupport.document("h1");
-        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR)) {
+        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR,
+                SchemaValidationHelper.newBudget())) {
             final var created = hooks.apply(false, document, "h1", OperationType.BULK_SAVE);
             final var updated = hooks.apply(true, document, "h1", OperationType.BULK_SAVE);
             assertFalse(created.isRejected());
@@ -58,7 +68,8 @@ public class BulkBeforeHooksTest {
                 EventType.CREATED);
         BeforeHookTestSupport.installHook("onUpdate", "onupdate", "export default (d) => ({ ...d, via: 'update' });",
                 EventType.UPDATED);
-        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR)) {
+        try (var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR,
+                SchemaValidationHelper.newBudget())) {
             final var created = hooks.apply(false, BeforeHookTestSupport.document("h2"), "h2", OperationType.BULK_SAVE);
             final var updated = hooks.apply(true, BeforeHookTestSupport.document("h3"), "h3", OperationType.BULK_SAVE);
             assertEquals("create", created.document().get("via").asJsonString().getValue());
@@ -67,11 +78,37 @@ public class BulkBeforeHooksTest {
     }
 
     @Test
+    public void test_bulk_save_routes_stored_ids_to_update_hooks_and_new_ids_to_create_hooks() throws Exception {
+        final var seed = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        seed.set_id("stored");
+        seed.setObject(BeforeHookTestSupport.document("stored"));
+        assertEquals(OperationStatus.OK, IocContainer.get(OperationProcessor.class).processMessage(seed).getStatus());
+        BeforeHookTestSupport.installHook("onCreate", "oncreate", "export default (d) => ({ ...d, via: 'create' });",
+                EventType.CREATED);
+        BeforeHookTestSupport.installHook("onUpdate", "onupdate", "export default (d) => ({ ...d, via: 'update' });",
+                EventType.UPDATED);
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(BeforeHookTestSupport.document("fresh-a"), BeforeHookTestSupport.document("stored"),
+                BeforeHookTestSupport.document("fresh-z")));
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            assertNull(BeforeHookHelper.beforeBulkSave(bulk, BeforeHookTestSupport.ACTOR));
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertEquals(List.of("create", "update", "create"),
+                bulk.getObjects().stream().map(object -> object.get("via").asJsonString().getValue()).toList());
+    }
+
+    @Test
     public void test_close_unregisters_both_runs() throws Exception {
         BeforeHookTestSupport.installHook("both", "both", "export default (d) => d;", EventType.CREATED,
                 EventType.UPDATED);
         final var before = runRegistry.size();
-        final var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR);
+        final var hooks = BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR,
+                SchemaValidationHelper.newBudget());
         assertEquals(before + 2, runRegistry.size());
 
         hooks.close();
@@ -86,11 +123,11 @@ public class BulkBeforeHooksTest {
                 EventType.UPDATED);
         final var before = runRegistry.size();
         try (var contexts = mockStatic(BeforeHookContext.class, CALLS_REAL_METHODS)) {
-            contexts.when(() -> BeforeHookContext.open(anyString(), anyString(), eq(EventType.UPDATED), any()))
+            contexts.when(() -> BeforeHookContext.open(anyString(), anyString(), eq(EventType.UPDATED), any(), any()))
                     .thenThrow(new IllegalStateException("unreadable triggers"));
 
-            assertThrows(IllegalStateException.class,
-                    () -> BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL, BeforeHookTestSupport.ACTOR));
+            assertThrows(IllegalStateException.class, () -> BulkBeforeHooks.open(TestGlobals.DB, TestGlobals.COLL,
+                    BeforeHookTestSupport.ACTOR, SchemaValidationHelper.newBudget()));
         }
         assertEquals(before, runRegistry.size());
     }

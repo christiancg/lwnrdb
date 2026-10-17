@@ -20,6 +20,7 @@ public class SingleDefinitionTest {
             OPS + "tx/CommittedOpTriggers.java");
     private static final Pattern MAX_ENTRY_SIZE_READ = Pattern.compile("\\bgetMaxEntrySize\\(");
     private static final Pattern TRIGGER_STAGING = Pattern.compile("\\bTriggerHelper\\.(stage\\w*|runStaged)\\(");
+    private static final Pattern DIRECT_LISTEN_MARK = Pattern.compile("\\blistenManager\\.markDirty\\(");
 
     static Set<String> filesOpeningInASyncedMode(List<JavaSourceFile> files) {
         final var found = new TreeSet<String>();
@@ -59,6 +60,22 @@ public class SingleDefinitionTest {
         assertEquals(TRIGGER_STAGERS, filesWhoseCodeMatches(JavaSources.under(JavaSources.MAIN), TRIGGER_STAGING),
                 "Write side effects fire from OperationProcessor's write handlers and the transaction commit, never "
                         + "from a write helper that replicated applies also reach");
+    }
+
+    @Test
+    public void test_listens_are_marked_dirty_only_through_a_sink() {
+        assertEquals(Set.of(), filesWhoseCodeMatches(JavaSources.under(JavaSources.MAIN), DIRECT_LISTEN_MARK),
+                "A write helper marks listens through the DirtySink its caller handed it, so a transaction or a "
+                        + "replicated batch defers them; calling listenManager.markDirty notifies mid-batch");
+    }
+
+    @Test
+    public void test_a_synthetic_direct_listen_mark_is_caught_but_not_a_sink_mark() {
+        final var direct = JavaSources.parse("Direct.java",
+                "class Direct { void f() { listenManager.markDirty(db, coll); } }");
+        final var throughSink = JavaSources.parse("Sink.java",
+                "class Sink { void f() { sink.markDirty(db, coll); } }\n// listenManager.markDirty(db, coll)\n");
+        assertEquals(Set.of("Direct.java"), filesWhoseCodeMatches(List.of(direct, throughSink), DIRECT_LISTEN_MARK));
     }
 
     @Test

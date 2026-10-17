@@ -19,7 +19,7 @@ public final class BuiltinArgs {
     public static JsValue callback(List<JsValue> args) {
         final var fn = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         if (!InterpreterUtils.isCallable(fn)) {
-            throw new TypeErrorException(JsCoercion.toStr(fn) + " is not a function");
+            throw new TypeErrorException(JsCoercion.describe(fn) + " is not a function");
         }
         return fn;
     }

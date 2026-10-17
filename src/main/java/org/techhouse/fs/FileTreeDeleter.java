@@ -1,6 +1,8 @@
 package org.techhouse.fs;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 
 final class FileTreeDeleter {
     private static final int SWEEPS = 2;
@@ -18,12 +20,14 @@ final class FileTreeDeleter {
     }
 
     private static boolean sweep(File file) {
-        final var children = file.listFiles();
-        if (children != null) {
-            for (final var child : children) {
-                sweep(child);
+        if (!Files.isSymbolicLink(file.toPath())) {
+            final var children = file.listFiles();
+            if (children != null) {
+                for (final var child : children) {
+                    sweep(child);
+                }
             }
         }
-        return file.delete() || !file.exists();
+        return file.delete() || !Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS);
     }
 }

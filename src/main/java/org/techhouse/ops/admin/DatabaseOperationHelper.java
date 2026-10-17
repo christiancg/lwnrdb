@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -23,6 +24,7 @@ import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
@@ -39,6 +41,7 @@ public final class DatabaseOperationHelper {
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
 
     private DatabaseOperationHelper() {
     }
@@ -148,9 +151,10 @@ public final class DatabaseOperationHelper {
                 ErrorCode.DATABASE_NOT_FOUND);
     }
 
-    public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
+    public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest,
+            RestampedRecords restamped) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
-        final var dropped = dropDatabase(dbName, false);
+        final var dropped = dropDatabase(dbName, false, new GrantRewrite.Restamp(restamped));
         if (dropped.getStatus() == OperationStatus.OK) {
             return OperationResponse.respondOrError(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE,
                     () -> {
@@ -161,7 +165,7 @@ public final class DatabaseOperationHelper {
         return dropped;
     }
 
-    public static OperationResponse dropDatabase(String dbName, boolean bounded) {
+    public static OperationResponse dropDatabase(String dbName, boolean bounded, GrantRewrite grantRewrite) {
         final var deadline = System.currentTimeMillis() + OperationLocks.lockBudgetMillis(bounded);
         var barrierHeld = false;
         try {
@@ -174,7 +178,7 @@ public final class DatabaseOperationHelper {
                 return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
             }
             return locks.withRetiringCollectionLocks(dbName, dbEntry.getCollections(), remainingUntil(deadline),
-                    () -> deleteDatabaseUnderLocks(dbName));
+                    () -> deleteDatabaseUnderLocks(dbName, grantRewrite));
         } catch (CollectionBusyException busy) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
         } catch (InterruptedException exception) {
@@ -190,7 +194,8 @@ public final class DatabaseOperationHelper {
         }
     }
 
-    private static OperationResponse deleteDatabaseUnderLocks(String dbName) throws Exception {
+    private static OperationResponse deleteDatabaseUnderLocks(String dbName, GrantRewrite grantRewrite)
+            throws Exception {
         if (!fs.deleteDatabase(dbName)) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         }
@@ -200,7 +205,9 @@ public final class DatabaseOperationHelper {
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);
         listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
-        GrantPruner.forDroppedDatabase(dbName);
+        triggerExecutor.discardQueuedFor(dbName, null);
+        TriggerRunLog.discardAllFor(dbName, null);
+        GrantPruner.forDroppedDatabase(dbName, grantRewrite);
         return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
     }
 
@@ -214,9 +221,11 @@ public final class DatabaseOperationHelper {
         return Math.max(0, deadline - System.currentTimeMillis());
     }
 
-    public static OperationResponse processListDatabasesOperation() {
+    public static OperationResponse processListDatabasesOperation(String actingUser) {
         return OperationResponse.respondOrError(OperationType.LIST_DATABASES, ErrorCode.ERROR_LISTING_DATABASES, () -> {
-            final var names = cache.getUserDatabaseNames();
+            final var user = actingUser == null ? null : cache.getAdminUserEntry(actingUser);
+            final var names = cache.getUserDatabaseNames().stream()
+                    .filter(name -> DatabaseVisibility.isVisible(user, cache.getAdminDbEntry(name))).toList();
             return new ListDatabasesResponse("Ok", names);
         });
     }

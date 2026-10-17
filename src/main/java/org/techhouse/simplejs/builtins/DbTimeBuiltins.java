@@ -30,9 +30,9 @@ public final class DbTimeBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("DbTime", (thisArg, args) -> {
-            requireNewTarget("DbTime", thisArg);
-            return withNewTargetPrototype(new JsDbTime(construct(args, ops)), ops);
+        final var ctor = new JsNativeFunction("DbTime", (thisArg, args, newTarget) -> {
+            requireNewTarget("DbTime", thisArg, newTarget);
+            return withNewTargetPrototype(new JsDbTime(construct(args, ops)), newTarget, ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> new JsDbTime(toLocalTime(arg(args, 0), ops)));
         from.setLength(1);

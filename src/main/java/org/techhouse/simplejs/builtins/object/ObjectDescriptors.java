@@ -57,7 +57,8 @@ public final class ObjectDescriptors {
     public static JsValue createObject(List<JsValue> args, InterpreterOps ops, Intrinsics intrinsics) {
         final var proto = first(args);
         if (!InterpreterUtils.isObjectLike(proto) && !(proto instanceof JsNull)) {
-            throw new TypeErrorException("Object prototype may only be an Object or null: " + JsCoercion.toStr(proto));
+            throw new TypeErrorException(
+                    "Object prototype may only be an Object or null: " + JsCoercion.describe(proto));
         }
         final var object = new JsObject();
         object.setProto(InterpreterUtils.isObjectLike(proto) ? proto : null);
@@ -81,7 +82,7 @@ public final class ObjectDescriptors {
         }
         if (!InterpreterUtils.isObjectLike(protoArg) && !(protoArg instanceof JsNull)) {
             throw new TypeErrorException(
-                    "Object prototype may only be an Object or null: " + JsCoercion.toStr(protoArg));
+                    "Object prototype may only be an Object or null: " + JsCoercion.describe(protoArg));
         }
         if (!InterpreterUtils.isObjectLike(target)) {
             return true;
@@ -115,7 +116,11 @@ public final class ObjectDescriptors {
             throw new TypeErrorException("Property description must be an object");
         }
         final var descriptor = toPropertyDescriptor(args.get(2), ops);
-        JsArray.withLengthCoercionOps(ops, () -> target.defineOwnProperty(propertyKey, descriptor));
+        if (target instanceof JsArray array) {
+            array.defineOwnProperty(propertyKey, descriptor, ops);
+        } else {
+            target.defineOwnProperty(propertyKey, descriptor);
+        }
         return target;
     }
 
@@ -168,7 +173,7 @@ public final class ObjectDescriptors {
             if (key instanceof JsSymbol symbol) {
                 result.setSymbol(symbol, descriptor);
             } else {
-                result.set(JsCoercion.toStr(key), descriptor);
+                result.set(JsCoercion.toStr(key, ops), descriptor);
             }
         }
         final var table = target.ownProperties();

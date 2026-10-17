@@ -14,6 +14,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -52,7 +53,7 @@ public class AdminCachePageTest {
     }
 
     @Test
-    public void test_shift_pk_positions_for_collections_map() throws NoSuchFieldException, IllegalAccessException {
+    public void test_reposition_after_vacuum_for_collections_map() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
         final var before = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c1", 0,
                 10, 0);
@@ -64,15 +65,16 @@ public class AdminCachePageTest {
         map.put("c1", before);
         map.put("c2", after);
 
-        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, 0, 0,
-                10);
+        cache.repositionAfterVacuum(new VacuumedPage(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
+                0, Map.of("c2", new VacuumedPage.Move(10, 0))));
 
         assertEquals(0, before.getPosition());
-        assertEquals(0, after.getPosition(), "entry after removed position shifts left by removed length");
+        assertEquals(0, after.getPosition(), "a row the vacuum moved takes its new position");
     }
 
     @Test
-    public void test_shift_pk_positions_for_pages_collection() throws NoSuchFieldException, IllegalAccessException {
+    public void test_reposition_after_vacuum_for_pages_collection()
+            throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "db", "coll");
         final var entry = new PkIndexEntry(Globals.ADMIN_PAGES_DB_NAME, pagesCollName, "p1", 30, 10, 0);
@@ -82,16 +84,17 @@ public class AdminCachePageTest {
                 Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
                 new ArrayList<>(List.of(entry)));
 
-        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME, pagesCollName, 0, 0, 10);
+        cache.repositionAfterVacuum(new VacuumedPage(Globals.ADMIN_PAGES_DB_NAME, pagesCollName, 0,
+                Map.of("p1", new VacuumedPage.Move(30, 20))));
 
         assertEquals(20, entry.getPosition());
     }
 
     @Test
-    public void test_shift_pk_positions_for_unknown_pages_collection_is_noop() {
+    public void test_reposition_after_vacuum_for_unknown_pages_collection_is_noop() {
         AdminCache cache = new AdminCache();
-        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME,
-                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "no", "coll"), 0, 0, 10));
+        assertDoesNotThrow(() -> cache.repositionAfterVacuum(new VacuumedPage(Globals.ADMIN_PAGES_DB_NAME,
+                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "no", "coll"), 0, Map.of())));
     }
 
     @Test
@@ -165,13 +168,11 @@ public class AdminCachePageTest {
         final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(cache), "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
-        // 1MB existing + 500KB pending + 100KB new = 1.6MB, still under 2MB cap
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 500_000L));
-        assertEquals(0L, target, "Within-batch pending bytes still leave room on page 0");
-
-        // 1MB existing + 1.5MB pending + 100KB new = 2.6MB, exceeds 2MB cap
-        long target2 = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 1_500_000L));
-        assertEquals(1L, target2, "Pending bytes can push selection to a new page");
+        assertArrayEquals(new long[]{0L, 0L}, cache.selectPagesForInsert("myDb", "myColl", new int[]{500_000, 100_000}),
+                "Within-batch pending bytes still leave room on page 0");
+        assertArrayEquals(new long[]{0L, 0L, 1L, 1L},
+                cache.selectPagesForInsert("myDb", "myColl", new int[]{500_000, 500_000, 500_000, 100_000}),
+                "Pending bytes can push selection to a new page");
     }
 
     @Test
@@ -213,28 +214,28 @@ public class AdminCachePageTest {
     @Test
     public void test_select_page_for_insert_packs_into_pending_only_page() {
         AdminCache cache = new AdminCache();
-        long first = cache.selectPageForInsert("myDb", "myColl", 100);
-        assertEquals(0L, first, "First insert allocates page 0");
-        long second = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 100L));
-        assertEquals(0L, second, "Second insert reuses the pending (not-yet-committed) page 0");
+        assertArrayEquals(new long[]{0L, 0L}, cache.selectPagesForInsert("myDb", "myColl", new int[]{100, 100}),
+                "Second insert reuses the pending (not-yet-committed) page 0");
     }
 
     @Test
     public void test_select_page_for_insert_allocates_new_when_pending_only_page_full() {
         AdminCache cache = new AdminCache();
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 2_097_100L));
-        assertEquals(1L, target, "Full pending-only page forces a new page allocation");
+        assertArrayEquals(new long[]{0L, 1L},
+                cache.selectPagesForInsert("myDb", "myColl", new int[]{2_097_100, 100_000}),
+                "Full pending-only page forces a new page allocation");
     }
 
     @Test
     public void test_select_page_for_insert_prefers_lowest_pending_only_page() {
         AdminCache cache = new AdminCache();
-        long target = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 2_097_150L, 1L, 100L));
-        assertEquals(1L, target, "First pending page with room is chosen in ascending order");
+        assertArrayEquals(new long[]{0L, 1L, 1L},
+                cache.selectPagesForInsert("myDb", "myColl", new int[]{2_097_150, 100, 100}),
+                "First pending page with room is chosen in ascending order");
     }
 
     @Test
-    public void test_a_user_collection_named_trigger_runs_does_not_shift_admin_rows()
+    public void test_a_user_collection_named_trigger_runs_does_not_move_admin_rows()
             throws NoSuchFieldException, IllegalAccessException {
         final var cache = new AdminCache();
         final var adminRow = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, "run1",
@@ -243,11 +244,12 @@ public class AdminCachePageTest {
         };
         TestUtils.getPrivateField(cache, "triggerRunsPkIndex", type).put("run1", adminRow);
 
-        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME,
-                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "trigger", "runs"), 0, 0, 10);
+        cache.repositionAfterVacuum(new VacuumedPage(Globals.ADMIN_PAGES_DB_NAME,
+                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "trigger", "runs"), 0,
+                Map.of("run1", new VacuumedPage.Move(30, 0))));
 
         assertEquals(30, adminRow.getPosition(),
                 "names allow underscores, so db 'trigger' + collection 'runs' collides with admin/trigger_runs;"
-                        + " a compaction in the page metadata must not shift the real admin index");
+                        + " a vacuum of the page metadata must not move the real admin index");
     }
 }

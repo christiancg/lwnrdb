@@ -2,6 +2,7 @@ import os
 import socket
 import json
 import sys
+import tempfile
 import time
 
 import base_utils as bu
@@ -9,9 +10,10 @@ from base_utils import Conn, check, check_code, check_field, check_status, secti
 
 HOST = os.environ.get("TXN_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TXN_TEST_PORT", "8989"))
+TRIGGER_SERVER_PORT = int(os.environ.get("TXN_TRIGGER_TEST_PORT", "9448"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "txn_test_db"
 COLL = "orders"
@@ -20,7 +22,7 @@ JOIN_COLL = "order_configs"
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-def send_only(c, payload: dict):
+def send_only(c: Conn, payload: dict):
     c.s.sendall((json.dumps(payload) + "\n").encode())
 
 
@@ -342,7 +344,7 @@ def test_lock_timeout_aborts_and_refuses_retries(c):
               orphan.get("status") == "NOT_FOUND", f"got {orphan}")
 
 
-def test_crossed_read_and_write_sets_do_not_hang(c):
+def test_crossed_read_and_write_sets_do_not_hang(c: Conn):
     section("Two transactions whose read and write sets cross time out instead of deadlocking")
     other = "orders_crossed"
     check_status("create the second collection",
@@ -414,6 +416,26 @@ def test_a_non_admin_user_can_use_transactions(c):
         c.send({"type": "DELETE_USER", "username": name})
 
 
+def test_a_commit_after_the_write_grant_is_revoked_is_refused(c):
+    section("COMMIT_TRANSACTION re-checks the write grant and rolls back once it was revoked")
+
+    c.send({"type": "DELETE_USER", "username": "txn_revoked"})
+    check_status("CREATE_USER 'txn_revoked' with READ_WRITE",
+                 create_user(c, "txn_revoked", "txn_revoked1234", "READ_WRITE"), "OK")
+    with Conn.authenticated("txn_revoked", "txn_revoked1234") as writer:
+        check_status("START_TRANSACTION", start_txn(writer), "OK")
+        check_status("SAVE inside it", save(writer, {"_id": "revoked_commit", "v": 1}), "OK")
+        check_status("The admin lowers the grant to READ",
+                     c.send({"type": "CHANGE_PERMISSIONS", "username": "txn_revoked", "admin": False,
+                             "globalPermissions": [], "databasePermissions": {DB: "READ"},
+                             "collectionPermissions": {}}), "OK")
+        check_code("COMMIT_TRANSACTION -> 403-1", commit_txn(writer), "FORBIDDEN", "403-1")
+    check_status("The buffered write never landed", find_by_id(c, "revoked_commit"), "NOT_FOUND")
+    check_status("The collection lock was released", save(c, {"_id": "after_revoke", "v": 1}), "OK")
+    delete(c, "after_revoke")
+    c.send({"type": "DELETE_USER", "username": "txn_revoked"})
+
+
 def test_entry_size_is_checked_after_the_id_is_assigned(c):
     section("An oversized-once-identified document is refused at buffer time")
 
@@ -463,6 +485,36 @@ def test_a_committed_transaction_survives_the_disconnect():
                      save(c, {"_id": "disc4", "v": 4}), "OK")
         for stale in ("disc3", "disc4"):
             c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": stale})
+
+
+BULKY_DOCS = 20
+UNREAD_AGGREGATES = 60
+
+
+def test_a_client_that_stops_reading_mid_transaction_releases_its_locks():
+    section("A transaction whose client stops reading is rolled back once its backlog overflows")
+
+    with authed_conn() as (c):
+        bulk_save(c, [{"_id": f"bulky-{i}", "kind": "bulky", "blob": "x" * 50_000} for i in range(BULKY_DOCS)])
+    slow = bu.non_reading_conn()
+    check_status("START_TRANSACTION", start_txn(slow), "OK")
+    check_status("SAVE buffered (takes the collection write lock)", save(slow, {"_id": "unread-1", "v": 1}), "OK")
+    bulky = {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+             "aggregationSteps": [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind",
+                                                                   "value": "bulky"}}]}
+    for _ in range(UNREAD_AGGREGATES):
+        if not bu.send_without_reading(slow, bulky):
+            break
+
+    with authed_conn() as (other):
+        send_only(other, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "unread-1"})
+        unblocked = other.recv(timeout=30.0)
+        check_code("another connection gets the collection back, without the rolled-back write",
+                   unblocked or {}, "NOT_FOUND", "404-2")
+        check("the non-reading connection is closed", bu.read_until_closed(slow, timeout=30.0))
+        slow.close()
+        for i in range(BULKY_DOCS):
+            delete(other, f"bulky-{i}")
 
 
 def test_join_reads_your_own_writes(c):
@@ -536,6 +588,72 @@ def test_custom_typed_writes_are_readable_inside_the_transaction(c):
         delete(oc, "custom-1")
 
 
+def test_transactional_deletes_count_deleted_document_bytes():
+    section("A transactional DELETE with a delete trigger counts the deleted document's bytes")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-txn-triggers-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, TRIGGER_SERVER_PORT, transactionMaxBytes="64Kb", scriptsEnabled=True,
+                    triggersEnabled=True, maxMemory="512mb")
+    proc = bu.start_server(work_dir, log_path, port=TRIGGER_SERVER_PORT)
+    padding = "x" * 40_000
+    try:
+        with Conn(port=TRIGGER_SERVER_PORT) as c:
+            check_status("authenticate", c.authenticate(), "OK")
+            setup_fixtures(c)
+            for doc_id in ("fat1", "fat2", "fat3", "fat4"):
+                check_status(f"save {doc_id} outside a transaction", save(c, {"_id": doc_id, "p": padding}), "OK")
+
+            check_status("start a transaction without a delete trigger", start_txn(c), "OK")
+            check_status("delete fat1", delete(c, "fat1"), "OK")
+            check_status("delete fat2: only the ids are buffered", delete(c, "fat2"), "OK")
+            check_status("roll it back", rollback_txn(c), "OK")
+
+            check_status("store the audit procedure",
+                         c.send({"type": "SAVE_PROCEDURE", "databaseName": DB, "name": "on_delete",
+                                 "script": "return 1;"}), "OK")
+            check_status("install a delete trigger",
+                         c.send({"type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                                 "name": "audit_deletes", "events": ["DELETED"],
+                                 "procedureName": "on_delete"}), "OK")
+            check_status("start a transaction with the delete trigger", start_txn(c), "OK")
+            check_status("delete fat3: its document rides in the buffered payload", delete(c, "fat3"), "OK")
+            check_code("delete fat4 pushes the transaction past transactionMaxBytes", delete(c, "fat4"),
+                       "ERROR", "400-26")
+            check_status("the transaction still commits what it buffered", commit_txn(c), "OK")
+            check_status("fat3 is gone", find_by_id(c, "fat3"), "NOT_FOUND")
+            check_status("fat4 was never deleted", find_by_id(c, "fat4"), "OK")
+            teardown_fixtures(c)
+    finally:
+        bu.stop_server(proc, port=TRIGGER_SERVER_PORT)
+
+
+def test_an_aggregate_inside_a_transaction_obeys_the_deadline():
+    section("An aggregate over a transaction's overlay stops at aggregateTimeoutMs")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-txn-deadline-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, TRIGGER_SERVER_PORT, aggregateTimeoutMs=1, maxMemory="512mb")
+    proc = bu.start_server(work_dir, log_path, port=TRIGGER_SERVER_PORT)
+    try:
+        with Conn(port=TRIGGER_SERVER_PORT) as c:
+            check_status("authenticate", c.authenticate(), "OK")
+            setup_fixtures(c)
+            for chunk in range(5):
+                docs = [{"_id": f"d{chunk}-{i}", "n": i} for i in range(10_000)]
+                check_status(f"bulk save chunk {chunk}", bulk_save(c, docs), "OK")
+            check_status("start a transaction", start_txn(c), "OK")
+            check_status("buffer one save so the overlay is not empty", save(c, {"_id": "buffered", "n": -1}), "OK")
+            check_code("a FILTER matching nothing is cut at the deadline",
+                       aggregate(c, [{"type": "FILTER", "operator": {
+                           "fieldOperatorType": "EQUALS", "field": "missing", "value": 1}}]),
+                       "ERROR", "408-6")
+            check_status("roll it back", rollback_txn(c), "OK")
+            teardown_fixtures(c)
+    finally:
+        bu.stop_server(proc, port=TRIGGER_SERVER_PORT)
+
+
 def main():
     bu.banner("Transactions test suite", HOST, PORT)
 
@@ -544,7 +662,7 @@ def main():
         if r.get("status") != "OK":
             print(f"\n[ERROR] Cannot authenticate as admin: {r.get('message')}")
             print("        Make sure the server is running and lwnrdb.cfg has the correct")
-            print(f"        defaultAdminUsername={ADMIN_USERNAME!r} / defaultAdminPassword set.\n")
+            print(f"        defaultAdminUsername={ADMIN_USERNAME} / defaultAdminPassword={ADMIN_PASSWORD} (base_utils.PASSWORD).\n")
             sys.exit(1)
         print("\n  Setting up fixtures...")
         setup_fixtures(c)
@@ -584,8 +702,13 @@ def main():
         test_entry_size_is_checked_after_the_id_is_assigned(c)
     with authed_conn() as (c):
         test_a_non_admin_user_can_use_transactions(c)
+    with authed_conn() as (c):
+        test_a_commit_after_the_write_grant_is_revoked_is_refused(c)
     test_auto_rollback_on_disconnect()
     test_a_committed_transaction_survives_the_disconnect()
+    test_a_client_that_stops_reading_mid_transaction_releases_its_locks()
+    test_transactional_deletes_count_deleted_document_bytes()
+    test_an_aggregate_inside_a_transaction_obeys_the_deadline()
 
     with authed_conn() as (c):
         teardown_fixtures(c)

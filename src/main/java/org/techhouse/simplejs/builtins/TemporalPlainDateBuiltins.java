@@ -66,9 +66,9 @@ public final class TemporalPlainDateBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("PlainDate", (thisArg, args) -> {
-            requireNewTargetOrSubclassInstance("Temporal.PlainDate", thisArg);
-            return withNewTargetPrototype(construct(args, ops), ops);
+        final var ctor = new JsNativeFunction("PlainDate", (thisArg, args, newTarget) -> {
+            requireNewTargetOrSubclassInstance("Temporal.PlainDate", thisArg, newTarget);
+            return withNewTargetPrototype(construct(args, ops), newTarget, ops);
         });
         ctor.setLength(3);
         final var from = new JsNativeFunction("from", (_, args) -> toPlainDate(arg(args, 0), arg(args, 1), ops));

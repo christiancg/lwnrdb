@@ -5,8 +5,13 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
+import org.techhouse.config.Globals;
+import org.techhouse.conn.PreAuthSlots;
+import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.log.Logger;
 
 public class ClusterServer {
@@ -16,9 +21,11 @@ public class ClusterServer {
     private final String bindAddress;
     private final SSLServerSocketFactory sslServerSocketFactory;
     private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private final AtomicInteger inHandshake = new AtomicInteger();
     private volatile ServerSocket serverSocket;
     private volatile boolean running;
     private volatile boolean refusingWrites;
+    private final PreAuthSlots preAuthSlots = new PreAuthSlots(() -> Globals.CLUSTER_MAX_UNAUTHENTICATED_PER_ADDRESS);
 
     public ClusterServer(int port, String bindAddress, SSLServerSocketFactory sslServerSocketFactory) {
         this.port = port;
@@ -40,13 +47,34 @@ public class ClusterServer {
         while (running && !Thread.currentThread().isInterrupted()) {
             try {
                 final var socket = serverSocket.accept();
-                pool.execute(new ClusterConnectionHandler(socket, this::isRefusingWrites));
+                final var address = socket.getInetAddress().getHostAddress();
+                if (!preAuthSlots.acquire(address)) {
+                    socket.close();
+                    continue;
+                }
+                if (inHandshake.incrementAndGet() > Globals.CLUSTER_MAX_UNAUTHENTICATED_CONNECTIONS) {
+                    inHandshake.decrementAndGet();
+                    preAuthSlots.release(address);
+                    socket.close();
+                    continue;
+                }
+                pool.execute(new ClusterConnectionHandler(socket, this::isRefusingWrites, handshakeDone(address)));
             } catch (IOException e) {
                 if (running) {
                     logger.warning("Cluster server accept failed: " + e.getMessage());
                 }
             }
         }
+    }
+
+    private Runnable handshakeDone(String address) {
+        final var done = new AtomicBoolean();
+        return () -> {
+            if (done.compareAndSet(false, true)) {
+                inHandshake.decrementAndGet();
+                preAuthSlots.release(address);
+            }
+        };
     }
 
     public void stop() {
@@ -78,7 +106,8 @@ public class ClusterServer {
         if (sslServerSocketFactory != null) {
             final var sslServerSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(port, BACKLOG,
                     address);
-            sslServerSocket.setEnabledProtocols(new String[]{"TLSv1.3", "TLSv1.2"});
+            sslServerSocket.setEnabledProtocols(TlsContextFactory.enabledProtocols());
+            sslServerSocket.setNeedClientAuth(true);
             return sslServerSocket;
         }
         return new ServerSocket(port, BACKLOG, address);

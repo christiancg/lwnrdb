@@ -3,7 +3,6 @@ package org.techhouse.fs;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -35,8 +34,7 @@ final class DocumentPageStore {
     DbEntry getById(PkIndexEntry pkIndexEntry) throws IOException {
         final var file = paths.collectionPage(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
                 pkIndexEntry.getPage());
-        final var lock = FileLocks.lockFor(file).readLock();
-        lock.lock();
+        final var lock = FileLocks.lockRead(file);
         try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
             return readEntryFromOpenFile(reader, pkIndexEntry);
         } finally {
@@ -56,8 +54,7 @@ final class DocumentPageStore {
                     pageGroup.getKey());
             final var pageEntries = pageGroup.getValue().stream()
                     .sorted(Comparator.comparingLong(PkIndexEntry::getPosition)).toList();
-            final var lock = FileLocks.lockFor(file).readLock();
-            lock.lock();
+            final var lock = FileLocks.lockRead(file);
             try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
                 for (var pkEntry : pageEntries) {
                     result.add(readEntryFromOpenFile(reader, pkEntry));
@@ -75,18 +72,22 @@ final class DocumentPageStore {
             return new HashMap<>();
         }
         final var result = new HashMap<String, DbEntry>();
-        for (var line : FileLocks.readAllLinesLocked(collectionFile)) {
-            if (line.isEmpty())
-                continue;
-            try {
-                final var entry = DbEntry.fromString(dbName, collectionName, line);
-                entry.setPage(page);
-                result.put(entry.get_id(), entry);
-            } catch (Exception e) {
-                // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
-                // line here would invalidate every later entry's recorded position.
-                logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
+        final var bytes = FileLocks.readAllBytesLocked(collectionFile);
+        var start = 0;
+        while (start < bytes.length) {
+            final var end = FileLocks.lineEnd(bytes, start);
+            if (!PageHoles.isSkippable(bytes, start, end)) {
+                try {
+                    final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
+                    entry.setPage(page);
+                    result.put(entry.get_id(), entry);
+                } catch (Exception e) {
+                    // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
+                    // line here would invalidate every later entry's recorded position.
+                    logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
+                }
             }
+            start = FileLocks.nextLineStart(bytes, end);
         }
         return result;
     }
@@ -148,8 +149,7 @@ final class DocumentPageStore {
         final var entryLength = (int) pkIndexEntry.getLength();
         byte[] buffer = new byte[entryLength];
         reader.readFully(buffer, 0, entryLength);
-        final var strEntry = new String(buffer, StandardCharsets.UTF_8);
-        final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
+        final var jsonObject = eJson.fromJson(buffer, 0, entryLength, JsonObject.class);
         final var storedId = jsonObject.get(Globals.PK_FIELD);
         if (storedId != null && storedId.isJsonString()
                 && !storedId.asJsonString().getValue().equals(pkIndexEntry.getValue())) {

@@ -16,6 +16,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.PartitionedMissCache;
 import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.EJson;
@@ -69,7 +70,7 @@ public class AdminCacheBoundsTest {
     }
 
     private void installMissCache(int maxEntries) throws Exception {
-        TestUtils.setPrivateField(adminCache, "metadataMisses", new BoundedLruCache<Boolean>(maxEntries, 0L, _ -> 1L));
+        TestUtils.setPrivateField(adminCache, "metadataMisses", new PartitionedMissCache(maxEntries));
     }
 
     private void installTriggerCache(int maxEntries) throws Exception {
@@ -125,6 +126,20 @@ public class AdminCacheBoundsTest {
         }
         assertTrue(cache.metadataCacheStats().missEntries() <= 16,
                 "expected the miss cache to stay at its cap, was " + cache.metadataCacheStats().missEntries());
+    }
+
+    @Test
+    public void missesArePartitionedPerDatabase() throws Exception {
+        assertNull(cache.getProcedure(TestGlobals.DB, "mine"));
+        writeProcedure("mine", "return 1;");
+        for (var i = 0; i < 2000; i++) {
+            assertNull(cache.getProcedure("floodDb", "ghost" + i));
+        }
+        assertNull(cache.getProcedure(TestGlobals.DB, "mine"),
+                "another database's misses must not flush this database's remembered miss");
+        assertTrue(cache.metadataCacheStats().missEntries() <= PartitionedMissCache.MAX_ENTRIES_PER_DATABASE + 1);
+        cache.removeProcedure(TestGlobals.DB, "mine");
+        assertNotNull(cache.getProcedure(TestGlobals.DB, "mine"));
     }
 
     @Test

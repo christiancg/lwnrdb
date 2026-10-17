@@ -90,6 +90,7 @@ public final class ArrayFromAsync {
             throw new TypeErrorException("Array.fromAsync requires an array-like or iterable object");
         }
         final var length = arrayLikeLength(ops, items);
+        InterpreterOps.requireArrayLength(ops, length);
         final JsValue target;
         if (InterpreterUtils.isConstructor(receiver)) {
             target = ops.construct(receiver, List.of(new JsNumber(length)));

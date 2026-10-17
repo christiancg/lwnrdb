@@ -2,10 +2,10 @@ package org.techhouse.unit.listen;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.StringWriter;
-import java.io.Writer;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -17,6 +17,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
@@ -211,7 +212,7 @@ public class ListenProcessorThreadTest {
         dirtyReq.setDirtyRead(true);
         final var listenId = registerDelivered(manager, UUID.randomUUID(), dirtyReq, "stale-hash-for-lock-null-test");
 
-        final var stubWriter = new BufferedWriter(new StringWriter());
+        final var stubOutbound = TestUtils.inlineOutbound(new ByteArrayOutputStream());
         final var stub = new ClientTracker() {
             @Override
             public String getAuthenticatedUsername(UUID clientId) {
@@ -219,8 +220,8 @@ public class ListenProcessorThreadTest {
             }
 
             @Override
-            public BufferedWriter getWriter(UUID clientId) {
-                return stubWriter;
+            public OutboundQueue getOutbound(UUID clientId) {
+                return stubOutbound;
             }
 
             @Override
@@ -259,12 +260,11 @@ public class ListenProcessorThreadTest {
 
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
-        final var stringWriter = new StringWriter();
-        final var bufferedWriter = new BufferedWriter(stringWriter);
-        clientTracker.registerWriter(clientId, bufferedWriter);
+        final var pushed = new ByteArrayOutputStream();
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(pushed));
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash(), registration.delivered());
+                registration.collectionKeys(), registration.lastHash(), registration.delivered(), null, 0L);
         final var manager2 = new ListenManager() {
             @Override
             public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {
@@ -290,7 +290,7 @@ public class ListenProcessorThreadTest {
 
             final var expectedHash = ResultHasher.hash(List.of(), false);
             assertEquals(expectedHash, registration.lastHash().get());
-            final var written = stringWriter.toString();
+            final var written = pushed.toString(StandardCharsets.UTF_8);
             assertTrue(written.contains(listenId.toString()));
         } finally {
             clientTracker.removeById(clientId);
@@ -307,24 +307,21 @@ public class ListenProcessorThreadTest {
 
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
-        final var throwingWriter = new BufferedWriter(new Writer() {
+        final var throwingWriter = new OutputStream() {
             @Override
-            public void write(char @NonNull [] cbuf, int off, int len) throws IOException {
+            public void write(int b) throws IOException {
                 throw new IOException("boom");
             }
 
             @Override
-            public void flush() {
+            public void write(byte @NonNull [] b, int off, int len) throws IOException {
+                throw new IOException("boom");
             }
-
-            @Override
-            public void close() {
-            }
-        });
-        clientTracker.registerWriter(clientId, throwingWriter);
+        };
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(throwingWriter));
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash(), registration.delivered());
+                registration.collectionKeys(), registration.lastHash(), registration.delivered(), null, 0L);
         final var manager2 = new ListenManager() {
             @Override
             public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {

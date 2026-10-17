@@ -11,8 +11,12 @@ import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.heap.DocumentHeapSizer;
 import org.techhouse.cache.heap.HeapLayout;
+import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonGeo;
@@ -26,14 +30,15 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.KeyTable;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.GeoPoint;
 
 public class DocumentHeapSizerTest {
     private static final HeapLayout LAYOUT = new HeapLayout(8, 12, 4);
-    private static final long JSON_OBJECT = 16L;
-    private static final long LINKED_HASH_MAP = 56L;
-    private static final long LINKED_HASH_MAP_ENTRY = 32L;
-    private static final long SIXTEEN_SLOT_TABLE = 80L;
+    private static final long JSON_OBJECT = 24L;
+    private static final long SMALL_OBJECT_ARRAYS = 64L;
+    private static final long PARSED_ONE_MEMBER_ARRAYS = 32L;
     private static final long JSON_STRING = 16L;
     private static final long JSON_NUMBER = 16L;
     private static final long JSON_ARRAY = 16L;
@@ -42,9 +47,8 @@ public class DocumentHeapSizerTest {
     private static final long BOX = 16L;
     private static final long STRING_UP_TO_4_CHARS = 40L;
     private static final long STRING_OF_5_TO_12_CHARS = 48L;
-    private static final long EMPTY_OBJECT = JSON_OBJECT + LINKED_HASH_MAP;
-    private static final long NESTING_LEVEL = EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + LINKED_HASH_MAP_ENTRY
-            + STRING_UP_TO_4_CHARS;
+    private static final long EMPTY_OBJECT = JSON_OBJECT;
+    private static final long NESTING_LEVEL = EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + STRING_UP_TO_4_CHARS;
 
     private final Map<String, Class<? extends JsonCustom<?>>> registeredBefore = new HashMap<>();
 
@@ -59,23 +63,27 @@ public class DocumentHeapSizerTest {
         CustomTypeFactory.getCustomTypes().putAll(registeredBefore);
     }
 
+    private static String fresh(String key) {
+        return String.valueOf(key.toCharArray());
+    }
+
     private static long size(JsonBaseElement element) {
         return DocumentHeapSizer.sizeOf(element, LAYOUT);
     }
 
     @Test
-    public void test_flat_object_sums_map_entries_keys_and_values() {
+    public void test_flat_object_sums_its_arrays_keys_and_values() {
         final var document = new JsonObject();
-        document.addProperty("_id", "c_000001");
-        document.addProperty("name", "abc");
+        document.addProperty(fresh("_id"), "c_000001");
+        document.addProperty(fresh("name"), "abc");
 
-        final var idMember = LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS + JSON_STRING + STRING_OF_5_TO_12_CHARS;
-        final var nameMember = LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS + JSON_STRING + STRING_UP_TO_4_CHARS;
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + idMember + nameMember, size(document));
+        final var idMember = STRING_UP_TO_4_CHARS + JSON_STRING + STRING_OF_5_TO_12_CHARS;
+        final var nameMember = STRING_UP_TO_4_CHARS + JSON_STRING + STRING_UP_TO_4_CHARS;
+        assertEquals(EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + idMember + nameMember, size(document));
     }
 
     @Test
-    public void test_empty_object_has_no_table() {
+    public void test_empty_object_has_no_arrays() {
         assertEquals(EMPTY_OBJECT, size(new JsonObject()));
     }
 
@@ -86,16 +94,15 @@ public class DocumentHeapSizerTest {
         tags.add("b");
         tags.add("c");
         final var address = new JsonObject();
-        address.addProperty("zip", 4321);
+        address.addProperty(fresh("zip"), 4321);
         final var document = new JsonObject();
-        document.add("tags", tags);
-        document.add("addr", address);
+        document.add(fresh("tags"), tags);
+        document.add(fresh("addr"), address);
 
         final var tagsValue = JSON_ARRAY + ARRAY_LIST + TEN_SLOT_ARRAY + 3 * (JSON_STRING + STRING_UP_TO_4_CHARS);
-        final var addressValue = EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS
-                + JSON_NUMBER + BOX;
-        final var members = 2 * (LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS) + tagsValue + addressValue;
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + members, size(document));
+        final var addressValue = EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + STRING_UP_TO_4_CHARS + JSON_NUMBER;
+        final var members = 2 * (STRING_UP_TO_4_CHARS) + tagsValue + addressValue;
+        assertEquals(EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + members, size(document));
     }
 
     @Test
@@ -104,19 +111,19 @@ public class DocumentHeapSizerTest {
     }
 
     @Test
-    public void test_numbers_count_their_box_except_the_integer_cache() {
+    public void test_numbers_hold_their_value_without_a_box() {
         assertEquals(JSON_NUMBER, size(new JsonNumber("5")));
         assertEquals(JSON_NUMBER, size(new JsonNumber("-128")));
-        assertEquals(JSON_NUMBER + BOX, size(new JsonNumber("500")));
-        assertEquals(JSON_NUMBER + BOX, size(new JsonNumber("1.5")));
-        assertEquals(JSON_NUMBER + BOX, size(new JsonNumber(3_000_000_000L)));
+        assertEquals(JSON_NUMBER, size(new JsonNumber("500")));
+        assertEquals(JSON_NUMBER, size(new JsonNumber("1.5")));
+        assertEquals(JSON_NUMBER, size(new JsonNumber(3_000_000_000L)));
         assertEquals(JSON_NUMBER, size(new JsonNumber(7L)));
         assertEquals(JSON_NUMBER, size(new JsonNumber((Number) null)));
     }
 
     @Test
     public void test_boolean_and_null_share_their_instances() {
-        assertEquals(16L, size(new JsonBoolean(true)));
+        assertEquals(0L, size(JsonBoolean.of(true)));
         assertEquals(0L, size(JsonNull.INSTANCE));
         assertEquals(0L, size(null));
     }
@@ -124,10 +131,9 @@ public class DocumentHeapSizerTest {
     @Test
     public void test_a_document_holding_only_nulls_costs_its_entries() {
         final var document = new JsonObject();
-        document.add("a", JsonNull.INSTANCE);
-        document.add("b", JsonNull.INSTANCE);
-        assertEquals(EMPTY_OBJECT + SIXTEEN_SLOT_TABLE + 2 * (LINKED_HASH_MAP_ENTRY + STRING_UP_TO_4_CHARS),
-                size(document));
+        document.add(fresh("a"), JsonNull.INSTANCE);
+        document.add(fresh("b"), JsonNull.INSTANCE);
+        assertEquals(EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + 2 * (STRING_UP_TO_4_CHARS), size(document));
     }
 
     @Test
@@ -196,10 +202,74 @@ public class DocumentHeapSizerTest {
         var nested = new JsonObject();
         for (var depth = 0; depth < 500; depth++) {
             final var parent = new JsonObject();
-            parent.add("n", nested);
+            parent.add(fresh("n"), nested);
             nested = parent;
         }
         assertEquals(500 * NESTING_LEVEL + EMPTY_OBJECT, size(nested));
+    }
+
+    private static String canonicalKey(String text) {
+        KeyTable.canonical(text);
+        final var key = KeyTable.canonical(text);
+        assertTrue(KeyTable.isCanonical(key), text + " entered the key table");
+        return key;
+    }
+
+    private static JsonObject parsed(String json) {
+        return IocContainer.get(EJson.class).fromJson(json, JsonObject.class);
+    }
+
+    private static String pinnedKey(String text) {
+        for (var hit = 0; hit <= Globals.KEY_TABLE_PIN_HITS; hit++) {
+            KeyTable.canonical(text);
+        }
+        final var key = KeyTable.canonical(text);
+        assertTrue(KeyTable.isPinned(key), text + " was pinned after enough hits");
+        return key;
+    }
+
+    @Test
+    public void aSharedKeyIsChargedUntilItIsPinned() {
+        final var name = "sizer-shared-" + System.nanoTime();
+        final var key = canonicalKey(name);
+        final var document = parsed("{\"" + name + "\":\"abc\"}");
+
+        assertSame(key, document.entrySet().iterator().next().getKey());
+        assertFalse(KeyTable.isPinned(key));
+        assertEquals(
+                EMPTY_OBJECT + PARSED_ONE_MEMBER_ARRAYS + LAYOUT.stringSize(key) + JSON_STRING + STRING_UP_TO_4_CHARS,
+                size(document));
+    }
+
+    @Test
+    public void aPinnedKeyCostsNothingAndIsNeverDisplaced() {
+        final var name = "sizer-pinned-" + System.nanoTime();
+        final var key = pinnedKey(name);
+        final var document = parsed("{\"" + name + "\":\"abc\"}");
+        for (var churn = 0; churn < 200_000; churn++) {
+            final var other = "pin-churn-" + churn;
+            KeyTable.canonical(other);
+            KeyTable.canonical(other);
+        }
+
+        assertSame(key, document.entrySet().iterator().next().getKey());
+        assertTrue(KeyTable.isPinned(key), "a pinned key outlives any amount of churn");
+        assertEquals(EMPTY_OBJECT + PARSED_ONE_MEMBER_ARRAYS + JSON_STRING + STRING_UP_TO_4_CHARS, size(document));
+    }
+
+    @Test
+    public void aDocumentsCachedEstimateKeepsItsFirstValueWhenAKeyIsPinnedLater() {
+        final var name = "sizer-later-" + System.nanoTime();
+        canonicalKey(name);
+        final var entry = new DbEntry();
+        entry.setData(parsed("{\"" + name + "\":\"abc\"}"));
+        final var first = CacheSizeEstimator.estimateEntry(entry);
+        pinnedKey(name);
+
+        assertTrue(size(entry.getData()) < first, "the raw size drops once the key is pinned");
+        assertEquals(first, CacheSizeEstimator.estimateEntry(entry),
+                "the memo keeps the first estimate, so the add and remove of one entry always agree");
+        assertEquals(first, entry.memoizeHeapBytes(1L), "a second estimate never replaces the first");
     }
 
     public static class LocaleType extends JsonCustom<Locale> {
@@ -233,5 +303,17 @@ public class DocumentHeapSizerTest {
         public JsonBaseElement deepCopy() {
             return this;
         }
+    }
+
+    @Test
+    public void anObjectPastSixteenMembersAlsoPaysForItsIndex() {
+        final var document = new JsonObject(17);
+        for (var member = 0; member < 17; member++) {
+            document.add(fresh("k" + member), JsonNull.INSTANCE);
+        }
+
+        final var arrays = 2 * LAYOUT.referenceArraySize(17);
+        assertEquals(EMPTY_OBJECT + arrays + LAYOUT.arraySize(Integer.BYTES, 64) + 17 * STRING_UP_TO_4_CHARS,
+                size(document));
     }
 }

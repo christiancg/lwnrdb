@@ -13,7 +13,7 @@ RUN mvn clean package -DskipTests
 #   jdk.unsupported  - sun.misc.Unsafe, used by EJson's UnsafeAllocator fallback
 #                      to instantiate objects without a matching constructor
 RUN jlink \
-        --add-modules java.base,java.management,jdk.crypto.ec,jdk.unsupported \
+        --add-modules java.base,java.management,java.net.http,jdk.crypto.ec,jdk.unsupported \
         --strip-debug \
         --no-man-pages \
         --no-header-files \
@@ -37,6 +37,12 @@ COPY --from=build /app/target/lwnrdb-1.0-SNAPSHOT.jar /app/app.jar
 WORKDIR /app
 
 COPY lwnrdb.cfg /app
+
+RUN addgroup -S lwnrdb && adduser -S -G lwnrdb lwnrdb \
+    && mkdir -p /app/db /app/logs /app/certs \
+    && chown -R lwnrdb:lwnrdb /app
+
+USER lwnrdb
 
 VOLUME /app/db
 VOLUME /app/logs

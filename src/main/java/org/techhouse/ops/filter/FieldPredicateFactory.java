@@ -58,8 +58,8 @@ public final class FieldPredicateFactory {
                     toTestPrimitive.asJsonBoolean().getValue(), operation);
         }
         if (operatorPrimitive.isJsonNumber() && toTestPrimitive.isJsonNumber()) {
-            return numberMatches(operatorElement.asJsonNumber().getValue(), toTestElement.asJsonNumber().getValue(),
-                    operation);
+            return numberMatches(operatorElement.asJsonNumber().doubleValue(),
+                    toTestElement.asJsonNumber().doubleValue(), operation);
         }
         if (operatorPrimitive.isJsonCustom() && toTestPrimitive.isJsonCustom()
                 && operatorPrimitive.getClass().equals(toTestPrimitive.getClass())) {
@@ -94,14 +94,14 @@ public final class FieldPredicateFactory {
         };
     }
 
-    private static boolean numberMatches(Number operand, Number stored, FieldOperatorType operation) {
+    private static boolean numberMatches(double operand, double stored, FieldOperatorType operation) {
         return switch (operation) {
             case EQUALS -> FieldIndexEntry.compareIndexedNumbers(operand, stored) == 0;
             case NOT_EQUALS -> FieldIndexEntry.compareIndexedNumbers(operand, stored) != 0;
-            case GREATER_THAN -> operand.doubleValue() < stored.doubleValue();
-            case GREATER_THAN_EQUALS -> operand.doubleValue() <= stored.doubleValue();
-            case SMALLER_THAN -> operand.doubleValue() > stored.doubleValue();
-            case SMALLER_THAN_EQUALS -> operand.doubleValue() >= stored.doubleValue();
+            case GREATER_THAN -> operand < stored;
+            case GREATER_THAN_EQUALS -> operand <= stored;
+            case SMALLER_THAN -> operand > stored;
+            case SMALLER_THAN_EQUALS -> operand >= stored;
             case IN, NOT_IN, CONTAINS -> false;
         };
     }
@@ -198,8 +198,9 @@ public final class FieldPredicateFactory {
         if (operand.size() != stored.size()) {
             return false;
         }
-        for (final var member : operand.entrySet()) {
-            if (!stored.has(member.getKey()) || !elementsMatch(member.getValue(), stored.get(member.getKey()), true)) {
+        for (var i = 0; i < operand.size(); i++) {
+            final var storedValue = stored.get(operand.keyAt(i));
+            if (storedValue == null || !elementsMatch(operand.valueAt(i), storedValue, true)) {
                 return false;
             }
         }

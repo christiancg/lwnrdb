@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -61,8 +62,8 @@ public class IndexScanAgreementTest extends FilterResolutionSupport {
     }
 
     private void seedBooleans() throws IOException {
-        insert("b_true", "flag", new JsonBoolean(true));
-        insert("b_false", "flag", new JsonBoolean(false));
+        insert("b_true", "flag", JsonBoolean.of(true));
+        insert("b_false", "flag", JsonBoolean.of(false));
         insert("b_absent", "flag", null);
     }
 
@@ -160,15 +161,15 @@ public class IndexScanAgreementTest extends FilterResolutionSupport {
     private Map<String, Supplier<BaseAggregationStep[]>> booleanQueries() {
         final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
         for (final var operand : List.of(true, false)) {
-            queries.put("EQUALS flag " + operand, () -> new BaseAggregationStep[]{
-                    filter(FieldOperatorType.EQUALS, "flag", new JsonBoolean(operand))});
+            queries.put("EQUALS flag " + operand,
+                    () -> new BaseAggregationStep[]{filter(FieldOperatorType.EQUALS, "flag", JsonBoolean.of(operand))});
             queries.put("NOT_EQUALS flag " + operand, () -> new BaseAggregationStep[]{
-                    filter(FieldOperatorType.NOT_EQUALS, "flag", new JsonBoolean(operand))});
+                    filter(FieldOperatorType.NOT_EQUALS, "flag", JsonBoolean.of(operand))});
         }
         queries.put("IN flag [true]",
-                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "flag", arrayOf(new JsonBoolean(true)))});
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "flag", arrayOf(JsonBoolean.of(true)))});
         queries.put("NOT_IN flag [true]", () -> new BaseAggregationStep[]{
-                filter(FieldOperatorType.NOT_IN, "flag", arrayOf(new JsonBoolean(true)))});
+                filter(FieldOperatorType.NOT_IN, "flag", arrayOf(JsonBoolean.of(true)))});
         queries.put("SORT flag asc", () -> new BaseAggregationStep[]{new SortAggregationStep("flag", true)});
         return queries;
     }
@@ -242,7 +243,7 @@ public class IndexScanAgreementTest extends FilterResolutionSupport {
     public void test_a_field_holding_several_types_still_agrees() throws Exception {
         insert("m_num", "mixed", parsed("1"));
         insert("m_str", "mixed", new JsonString("1"));
-        insert("m_bool", "mixed", new JsonBoolean(true));
+        insert("m_bool", "mixed", JsonBoolean.of(true));
         insert("m_absent", "mixed", null);
         final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
         queries.put("EQUALS mixed 1",
@@ -318,7 +319,8 @@ public class IndexScanAgreementTest extends FilterResolutionSupport {
 
         assertEquals(Set.of("complete"), cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).getIndexes(),
                 "the field must be registered, or every query above silently proves nothing");
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "complete");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "complete",
+                ReadObserver.NONE);
         assertFalse(entries == null || entries.isEmpty(),
                 "the index must hold entries, or agreement is only scan-against-scan");
     }

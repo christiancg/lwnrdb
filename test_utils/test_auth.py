@@ -1,13 +1,16 @@
+import os
+import statistics
 import sys
+import time
 
 import base_utils as bu
-from base_utils import Conn, check_code, check_status, section
+from base_utils import Conn, check, check_code, check_status, section
 
 HOST = "127.0.0.1"
-PORT = 8989
+PORT = int(os.environ.get("AUTH_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -69,46 +72,52 @@ def teardown_fixtures(c):
         c.send({"type": "DROP_DATABASE", "databaseName": db})
 
 
-def test_unauthenticated(c):
+def send_unauthenticated(message: dict) -> dict:
+    with Conn() as c:
+        response = c.send(message)
+    return response
+
+
+def test_unauthenticated():
     section("Unauthenticated requests — all must return UNAUTHENTICATED")
 
     check_status("SAVE without auth",
-          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+          send_unauthenticated({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
                       "object": {"x": 1}}),
           "UNAUTHENTICATED")
 
     check_status("FIND_BY_ID without auth",
-          c.send({"type": "FIND_BY_ID", "databaseName": "auth_db",
+          send_unauthenticated({"type": "FIND_BY_ID", "databaseName": "auth_db",
                       "collectionName": "allowed", "_id": "doc1"}),
           "UNAUTHENTICATED")
 
     check_status("AGGREGATE without auth",
-          c.send({"type": "AGGREGATE", "databaseName": "auth_db",
+          send_unauthenticated({"type": "AGGREGATE", "databaseName": "auth_db",
                       "collectionName": "allowed", "aggregationSteps": []}),
           "UNAUTHENTICATED")
 
     check_status("CREATE_DATABASE without auth",
-          c.send({"type": "CREATE_DATABASE", "databaseName": "new_db"}),
+          send_unauthenticated({"type": "CREATE_DATABASE", "databaseName": "new_db"}),
           "UNAUTHENTICATED")
 
     check_status("DROP_DATABASE without auth",
-          c.send({"type": "DROP_DATABASE", "databaseName": "auth_db"}),
+          send_unauthenticated({"type": "DROP_DATABASE", "databaseName": "auth_db"}),
           "UNAUTHENTICATED")
 
     check_status("CREATE_USER without auth",
-          c.send({"type": "CREATE_USER", "username": "ghost", "password": "ghost1234"}),
+          send_unauthenticated({"type": "CREATE_USER", "username": "ghost", "password": "ghost1234"}),
           "UNAUTHENTICATED")
 
     check_status("LIST_COLLECTIONS without auth",
-          c.send({"type": "LIST_COLLECTIONS", "databaseName": "auth_db"}),
+          send_unauthenticated({"type": "LIST_COLLECTIONS", "databaseName": "auth_db"}),
           "UNAUTHENTICATED")
 
-    check_status("LIST_DATABASES is public (must return OK)",
-          c.send({"type": "LIST_DATABASES"}),
-          "OK")
+    check_code("LIST_DATABASES requires authentication",
+          send_unauthenticated({"type": "LIST_DATABASES"}),
+          "UNAUTHENTICATED", "401-1")
 
     check_status("CLOSE_CONNECTION is public (must return OK)",
-          c.send({"type": "CLOSE_CONNECTION"}),
+          send_unauthenticated({"type": "CLOSE_CONNECTION"}),
           "OK")
 
 
@@ -123,6 +132,177 @@ def test_bad_credentials(c):
           c.authenticate("nobody", "whatever123"),
           "ERROR")
 
+
+def test_list_databases_requires_authentication():
+    section("LIST_DATABASES needs an authenticated connection")
+
+    with Conn() as fresh:
+        check_code("LIST_DATABASES on a fresh connection", fresh.send({"type": "LIST_DATABASES"}),
+                   "UNAUTHENTICATED", "401-1")
+
+
+LSDB_DATABASES = ("lsdb_a", "lsdb_b", "lsdb_c", "lsdb_d")
+LSDB_USERS = ("lsdb_dbgrant", "lsdb_collgrant", "lsdb_scriptgrant", "lsdb_nogrant", "lsdb_owner")
+LSDB_PASSWORD = "lsdb_pass1234"
+
+
+def listed_databases(username, password):
+    with Conn() as session:
+        check_status(f"AUTHENTICATE as {username!r}", session.authenticate(username, password), "OK")
+        response = session.send({"type": "LIST_DATABASES"})
+    return [name for name in response.get("databases") or [] if name.startswith("lsdb_")]
+
+
+def test_list_databases_is_filtered_by_grant(c):
+    section("LIST_DATABASES lists only the databases the caller owns or holds a grant on")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    for db in LSDB_DATABASES:
+        c.send({"type": "DROP_DATABASE", "databaseName": db})
+        check_status(f"CREATE_DATABASE {db}", c.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
+    for user in LSDB_USERS:
+        delete_user(c, user)
+    create_user(c, "lsdb_dbgrant", LSDB_PASSWORD, db_perms={"lsdb_a": "READ"})
+    check_status("CREATE_COLLECTION lsdb_b.xcoll", c.send({"type": "CREATE_COLLECTION", "databaseName": "lsdb_b",
+                                                     "collectionName": "xcoll"}), "OK")
+    check_status("CREATE_USER with a collection grant",
+                 create_user(c, "lsdb_collgrant", LSDB_PASSWORD, coll_perms={"lsdb_b|xcoll": "READ"}), "OK")
+    c.send({"type": "CREATE_USER", "username": "lsdb_scriptgrant", "password": LSDB_PASSWORD, "admin": False,
+            "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {},
+            "scriptPermissions": {"lsdb_c": "RUN"}})
+    create_user(c, "lsdb_nogrant", LSDB_PASSWORD)
+    create_user(c, "lsdb_owner", LSDB_PASSWORD)
+    check_status("SET_DATABASE_OWNERS lsdb_d -> lsdb_owner", set_database_owners(c, "lsdb_d", ["lsdb_owner"]), "OK")
+
+    expectations = (("lsdb_dbgrant", ["lsdb_a"], "a database grant lists that database"),
+                    ("lsdb_collgrant", ["lsdb_b"], "a collection grant lists its database"),
+                    ("lsdb_scriptgrant", ["lsdb_c"], "a script grant lists its database"),
+                    ("lsdb_owner", ["lsdb_d"], "ownership lists the owned database"),
+                    ("lsdb_nogrant", [], "no grant lists nothing"))
+    for username, expected, label in expectations:
+        listed = listed_databases(username, LSDB_PASSWORD)
+        check(label, listed == expected, f"expected={expected} got={listed}")
+    admin_list = listed_databases(ADMIN_USERNAME, ADMIN_PASSWORD)
+    check("admin lists all four", admin_list == list(LSDB_DATABASES), f"got={admin_list}")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    for user in LSDB_USERS:
+        delete_user(c, user)
+    for db in LSDB_DATABASES:
+        c.send({"type": "DROP_DATABASE", "databaseName": db})
+
+
+BRUTE_TARGET = "brute_target"
+BRUTE_PASSWORD = "brute_target1234"
+BRUTE_BYSTANDER = "brute_bystander"
+DELAY_BUDGET_S = 2.0
+
+
+def read_eof(conn, timeout=10.0):
+    conn.s.settimeout(timeout)
+    try:
+        return conn.f.readline() == b""
+    except OSError:
+        return False
+
+
+def test_too_many_failed_attempts_closes_the_connection(c):
+    section("Too many failed AUTHENTICATEs on one connection answer 401-4 and close it")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, BRUTE_TARGET)
+    delete_user(c, BRUTE_BYSTANDER)
+    check_status(f"CREATE_USER {BRUTE_TARGET!r}", create_user(c, BRUTE_TARGET, BRUTE_PASSWORD), "OK")
+    check_status(f"CREATE_USER {BRUTE_BYSTANDER!r}", create_user(c, BRUTE_BYSTANDER, BRUTE_PASSWORD), "OK")
+
+    with Conn() as attacker:
+        for attempt in range(1, 5):
+            check_code(f"wrong password #{attempt} answers 401-3", attacker.authenticate(BRUTE_TARGET, "wrong_pass"),
+                       "ERROR", "401-3")
+        check_code("wrong password #5 answers 401-4", attacker.authenticate(BRUTE_TARGET, "wrong_pass"),
+                   "UNAUTHENTICATED", "401-4")
+        check("the server closes the connection after 401-4", read_eof(attacker))
+
+    with Conn() as again:
+        check_status("a fresh connection with the right password still authenticates (no lockout)",
+                     again.authenticate(BRUTE_TARGET, BRUTE_PASSWORD), "OK")
+
+
+def test_failures_do_not_slow_a_different_username():
+    section("Failures against one username do not delay another from the same address")
+
+    with Conn() as attacker:
+        attacker.authenticate(BRUTE_TARGET, "wrong_pass")
+        attacker.authenticate(BRUTE_TARGET, "wrong_pass")
+    with Conn() as other:
+        started = time.monotonic()
+        response = other.authenticate(BRUTE_BYSTANDER, BRUTE_PASSWORD)
+        elapsed = time.monotonic() - started
+        check_status(f"AUTHENTICATE as {BRUTE_BYSTANDER!r}", response, "OK")
+        check(f"not delayed beyond {DELAY_BUDGET_S}s", elapsed < DELAY_BUDGET_S, f"took {elapsed:.2f}s")
+    with Conn() as cleanup:
+        cleanup.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        delete_user(cleanup, BRUTE_TARGET)
+        delete_user(cleanup, BRUTE_BYSTANDER)
+
+
+def timed_wrong_attempts(username, attempts=3):
+    timings = []
+    for _ in range(attempts):
+        with Conn() as session:
+            started = time.monotonic()
+            session.authenticate(username, "definitely_wrong")
+            timings.append(time.monotonic() - started)
+    return statistics.median(timings)
+
+
+def test_unknown_user_costs_like_a_known_user(c):
+    section("A wrong password costs the same for an unknown user as for a known one")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, "timing_known")
+    create_user(c, "timing_known", "timing_known1234")
+    known = timed_wrong_attempts("timing_known")
+    unknown = timed_wrong_attempts("timing_unknown_user")
+    ratio = max(known, unknown) / max(min(known, unknown), 1e-6)
+    check("known and unknown usernames take comparable time", ratio < 3.0,
+          f"known={known * 1000:.0f}ms unknown={unknown * 1000:.0f}ms")
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, "timing_known")
+
+
+def test_set_password_deauthenticates_other_sessions(c):
+    section("SET_PASSWORD signs the user's other connections out")
+
+    list_dbs = {"type": "LIST_DATABASES"}
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, "pw_sess_user")
+    check_status("CREATE_USER 'pw_sess_user'", create_user(c, "pw_sess_user", "pw_sess_old1"), "OK")
+    with Conn() as a, Conn() as b:
+        check_status("A authenticates", a.authenticate("pw_sess_user", "pw_sess_old1"), "OK")
+        check_status("B authenticates", b.authenticate("pw_sess_user", "pw_sess_old1"), "OK")
+        check_status("A changes its own password",
+                     set_password(a, "pw_sess_user", "pw_sess_new1", current_password="pw_sess_old1"), "OK")
+        check_status("A keeps its session", a.send(list_dbs), "OK")
+        check_code("B must authenticate again", b.send(list_dbs), "UNAUTHENTICATED", "401-1")
+        with Conn() as third:
+            check_status("C authenticates with the new password",
+                         third.authenticate("pw_sess_user", "pw_sess_new1"), "OK")
+            check_status("admin resets the password", set_password(c, "pw_sess_user", "pw_sess_admin1"), "OK")
+            check_code("C must authenticate again", third.send(list_dbs), "UNAUTHENTICATED", "401-1")
+            check_code("A must authenticate again too", a.send(list_dbs), "UNAUTHENTICATED", "401-1")
+    check_status("admin keeps its own session", c.send(list_dbs), "OK")
+    delete_user(c, "pw_sess_user")
+
+
+def test_unknown_type_with_newline_is_refused_cleanly():
+    section("An unknown request type carrying a newline is refused and the connection keeps serving")
+
+    with Conn() as fresh:
+        response = fresh.send({"type": "X\nFAKE-LOG-LINE"})
+        check("the forged type is refused", response.get("status") != "OK", f"got={response}")
+        check_code("the connection still answers afterwards", fresh.send({"type": "LIST_DATABASES"}),
+                   "UNAUTHENTICATED", "401-1")
 
 def test_no_db_permission(c):
     section("User without CREATE_DATABASE / DROP_DATABASE — must return FORBIDDEN")
@@ -240,8 +420,8 @@ def test_a_collection_carve_out_bounds_trigger_installation(c):
                        "name": "admin_hook"}),
                "FORBIDDEN", "403-1")
 
-    check_status("SAVE_TRIGGER on a collection with no entry of its own (OK)",
-                 save_trigger_on(c, "allowed", "allowed_hook"), "OK")
+    check_code("SAVE_TRIGGER on a collection with no entry of its own and no database grant (FORBIDDEN)",
+               save_trigger_on(c, "allowed", "allowed_hook"), "FORBIDDEN", "403-1")
 
     check_status("SAVE_TRIGGER on a collection granted READ_WRITE (OK)",
                  save_trigger_on(c, "forbidden", "granted_hook"), "OK")
@@ -250,6 +430,76 @@ def test_a_collection_carve_out_bounds_trigger_installation(c):
                  c.send({"type": "SAVE_PROCEDURE", "databaseName": "auth_db", "name": "carve_proc_two",
                          "script": "return 2;"}),
                  "OK")
+
+
+SCRIPT_MANAGERS = {
+    "scripts_only": ({}, {}),
+    "scripts_db_reader": ({"auth_db": "READ"}, {}),
+    "scripts_db_writer": ({"auth_db": "READ_WRITE"}, {}),
+    "scripts_coll_writer": ({}, {"auth_db|allowed": "READ_WRITE"}),
+}
+
+
+def create_script_managers(c):
+    for username, (db_perms, coll_perms) in SCRIPT_MANAGERS.items():
+        c.send({"type": "CREATE_USER", "username": username, "password": username + "1234", "admin": False,
+                "globalPermissions": [], "databasePermissions": db_perms, "collectionPermissions": coll_perms,
+                "scriptPermissions": {"auth_db": "MANAGE"}})
+
+
+def trigger_request(op_type: str, coll: str, name: str) -> dict:
+    request = {"type": op_type, "databaseName": "auth_db", "collectionName": coll, "name": name}
+    if op_type == "TEST_TRIGGER":
+        request.update({"event": "CREATED", "document": {"_id": "probe"}})
+    return request
+
+
+def check_trigger_management_refused(c, username: str, coll: str):
+    check_code(f"SAVE_TRIGGER by '{username}' on '{coll}' (FORBIDDEN)",
+               save_trigger_on(c, coll, "scripts_hook"), "FORBIDDEN", "403-1")
+    for op_type in ("DELETE_TRIGGER", "TEST_TRIGGER"):
+        check_code(f"{op_type} by '{username}' on '{coll}' (FORBIDDEN)",
+                   c.send(trigger_request(op_type, coll, "admin_hook")), "FORBIDDEN", "403-1")
+
+
+def check_trigger_installed_and_removed(c, label: str, coll: str):
+    check_status(f"SAVE_TRIGGER by {label} on '{coll}' (OK)", save_trigger_on(c, coll, "scripts_hook"), "OK")
+    check_status(f"DELETE_TRIGGER by {label} on '{coll}' (OK)",
+                 c.send(trigger_request("DELETE_TRIGGER", coll, "scripts_hook")), "OK")
+
+
+def test_script_management_needs_data_access_to_install_triggers(c):
+    section("Installing a trigger needs READ_WRITE on its collection, not just MANAGE")
+
+    for username in ("scripts_only", "scripts_db_reader"):
+        check_status(f"AUTHENTICATE as '{username}'", c.authenticate(username, username + "1234"), "OK")
+        check_trigger_management_refused(c, username, "allowed")
+
+    for username in ("scripts_db_writer", "scripts_coll_writer"):
+        check_status(f"AUTHENTICATE as '{username}'", c.authenticate(username, username + "1234"), "OK")
+        check_trigger_installed_and_removed(c, f"'{username}'", "allowed")
+    check_code("SAVE_TRIGGER by 'scripts_coll_writer' on another collection (FORBIDDEN)",
+               save_trigger_on(c, "forbidden", "scripts_hook"), "FORBIDDEN", "403-1")
+
+    check_status("AUTHENTICATE as 'scripts_only'", c.authenticate("scripts_only", "scripts_only1234"), "OK")
+    check_status("SAVE_PROCEDURE by 'scripts_only' is not bounded by data access (OK)",
+                 c.send({"type": "SAVE_PROCEDURE", "databaseName": "auth_db", "name": "scripts_only_proc",
+                         "script": "return 1;"}), "OK")
+    check_status("SAVE_SCHEDULE by 'scripts_only' is not bounded by data access (OK)",
+                 c.send({"type": "SAVE_SCHEDULE", "databaseName": "auth_db", "name": "scripts_only_schedule",
+                         "procedureName": "scripts_only_proc", "intervalMs": 3600000}), "OK")
+    check_status("DELETE_SCHEDULE by 'scripts_only' (OK)",
+                 c.send({"type": "DELETE_SCHEDULE", "databaseName": "auth_db", "name": "scripts_only_schedule"}),
+                 "OK")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_trigger_installed_and_removed(c, "the admin", "forbidden")
+    check_status("make 'new_owner' an owner of auth_db",
+                 set_database_owners(c, "auth_db", [ADMIN_USERNAME, "new_owner"]), "OK")
+    check_status("AUTHENTICATE as 'new_owner'", c.authenticate("new_owner", "new_owner1234"), "OK")
+    check_trigger_installed_and_removed(c, "a database owner with no grant", "forbidden")
+    check_status("AUTHENTICATE as admin again", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_status("restore the auth_db owners", set_database_owners(c, "auth_db", [ADMIN_USERNAME]), "OK")
 
 
 def test_admin_operations(c):
@@ -770,6 +1020,25 @@ def test_a_deleted_user_can_still_roll_back(c):
     c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "after_rollback"})
 
 
+def test_a_collection_reader_cannot_list_database_wide_metadata(c):
+    section("A collection-only reader cannot list database-wide metadata by naming its collection")
+    check_status("AUTHENTICATE as 'coll_reader'", c.authenticate("coll_reader", "coll_reader1234"), "OK")
+    for request_type in ("LIST_PROCEDURES", "LIST_SCHEDULES", "LIST_COLLECTIONS"):
+        check_code(f"{request_type} with an injected collectionName (403-1)",
+                   c.send({"type": request_type, "databaseName": "auth_db", "collectionName": "allowed",
+                           "includeSource": True}),
+                   "FORBIDDEN", "403-1")
+
+
+def test_set_password_on_another_user_is_uniform(c):
+    section("SET_PASSWORD on another user answers the same whether or not that user exists")
+    check_status("AUTHENTICATE as 'db_reader'", c.authenticate("db_reader", "db_reader1234"), "OK")
+    for target in ("no_perms", "no_such_user_anywhere"):
+        check_code(f"SET_PASSWORD on '{target}' (403-1)",
+                   set_password(c, target, "another-password-1", current_password="x"),
+                   "FORBIDDEN", "403-1")
+
+
 def main():
     bu.banner("Authentication & Authorization test suite", HOST, PORT)
 
@@ -778,7 +1047,7 @@ def main():
         if r.get("status") != "OK":
             print(f"\n[ERROR] Cannot authenticate as admin: {r.get('message')}")
             print("        Make sure the server is running and lwnrdb.cfg has the correct")
-            print(f"        defaultAdminUsername={ADMIN_USERNAME!r} / defaultAdminPassword set.\n")
+            print(f"        defaultAdminUsername={ADMIN_USERNAME} / defaultAdminPassword={ADMIN_PASSWORD} (base_utils.PASSWORD).\n")
             sys.exit(1)
 
         print("\n  Setting up fixtures and test users...")
@@ -800,12 +1069,29 @@ def main():
                 "collectionPermissions": {"auth_db|carved": "READ", "auth_db|forbidden": "READ_WRITE"},
                 "scriptPermissions": {"auth_db": "MANAGE"}})
         create_user(c, "new_owner", "new_owner1234")
+        create_script_managers(c)
 
-    with Conn() as c:
-        test_unauthenticated(c)
+    test_unauthenticated()
 
     with Conn() as c:
         test_bad_credentials(c)
+
+    test_list_databases_requires_authentication()
+    test_unknown_type_with_newline_is_refused_cleanly()
+
+    with Conn() as c:
+        test_too_many_failed_attempts_closes_the_connection(c)
+
+    test_failures_do_not_slow_a_different_username()
+
+    with Conn() as c:
+        test_unknown_user_costs_like_a_known_user(c)
+
+    with Conn() as c:
+        test_list_databases_is_filtered_by_grant(c)
+
+    with Conn() as c:
+        test_set_password_deauthenticates_other_sessions(c)
 
     with Conn() as c:
         test_no_db_permission(c)
@@ -821,6 +1107,9 @@ def main():
 
     with Conn() as c:
         test_a_collection_carve_out_bounds_trigger_installation(c)
+
+    with Conn() as c:
+        test_script_management_needs_data_access_to_install_triggers(c)
 
     with Conn() as c:
         test_admin_operations(c)
@@ -853,13 +1142,18 @@ def main():
         test_a_deleted_user_can_still_roll_back(c)
 
     with Conn() as c:
+        test_a_collection_reader_cannot_list_database_wide_metadata(c)
+
+    with Conn() as c:
+        test_set_password_on_another_user_is_uniform(c)
+
+    with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(c)
         for u in ("no_perms", "db_reader", "coll_reader", "carve_user", "carve_manager", "db_maker", "new_owner",
-                  "pwd_user"):
+                  "pwd_user", *SCRIPT_MANAGERS):
             delete_user(c, u)
 
-    total_run = 0
     bu.summary()
 
 

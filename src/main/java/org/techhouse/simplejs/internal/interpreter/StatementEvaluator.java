@@ -94,14 +94,14 @@ public final class StatementEvaluator {
                         ? interp.callValue(entry.method(), entry.resource(), List.of())
                         : JsUndefined.getInstance();
                 if (entry.async()) {
-                    interp.currentCoroutine().await(interp.toPromise(outcome));
+                    env.resolveCoroutine().await(interp.toPromise(outcome));
                 }
             } catch (ScriptAbortException abort) {
                 throw abort;
             } catch (RuntimeException disposeError) {
                 error = error == null
                         ? disposeError
-                        : new JsThrowException(ErrorBuiltins.makeSuppressedError(
+                        : new JsThrowException(ErrorBuiltins.makeSuppressedError(interp.intrinsics(),
                                 toErrorValue(disposeError, interp.intrinsics()),
                                 toErrorValue(error, interp.intrinsics()), "An error was suppressed during disposal"));
             }
@@ -146,7 +146,7 @@ public final class StatementEvaluator {
             return Completion.returnValue(JsUndefined.getInstance());
         }
         final var value = interp.eval(argument, env);
-        final var coroutine = interp.currentCoroutine();
+        final var coroutine = env.resolveCoroutine();
         if (coroutine != null && coroutine.isAsync() && coroutine.isYieldAllowed()) {
             return Completion.returnValue(coroutine.await(interp.toPromise(value)));
         }

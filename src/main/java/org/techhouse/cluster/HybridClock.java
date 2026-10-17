@@ -31,6 +31,10 @@ public final class HybridClock {
         last.updateAndGet(previous -> Math.max(previous, version));
     }
 
+    public boolean withinSkew(long version, long skewMillis) {
+        return physicalOf(version) <= System.currentTimeMillis() + skewMillis;
+    }
+
     public long current() {
         return last.get();
     }

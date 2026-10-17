@@ -45,7 +45,7 @@ public final class ObjectOwnKeys {
         if (key instanceof JsSymbol symbol) {
             return JsBoolean.of(hasOwnSymbol(args.getFirst(), symbol, ops));
         }
-        return JsBoolean.of(hasOwnKey(args.getFirst(), JsCoercion.toStr(key), ops));
+        return JsBoolean.of(hasOwnKey(args.getFirst(), JsCoercion.toStr(key, ops), ops));
     }
 
     public static boolean hasOwnKey(JsValue target, String key, InterpreterOps ops) {
@@ -123,7 +123,7 @@ public final class ObjectOwnKeys {
                 continue;
             }
             if (!ops.defineProperty(target, key, integrityDescriptor(descriptor, frozen))) {
-                throw new TypeErrorException("Cannot redefine property: " + JsCoercion.toStr(key));
+                throw new TypeErrorException("Cannot redefine property: " + JsCoercion.describe(key));
             }
         }
         return target;

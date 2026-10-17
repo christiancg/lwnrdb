@@ -1,9 +1,6 @@
 package org.techhouse.config;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -11,6 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntPredicate;
+import org.techhouse.fs.io.Folders;
+import org.techhouse.ops.req.validations.NameValidations;
 
 public final class ConfigurationValidator {
 
@@ -28,6 +27,8 @@ public final class ConfigurationValidator {
         validateWritablePath(configs, "filePath", errors);
         validateWritablePath(configs, "logPath", errors);
         validatePageAndEntrySize(configs, errors);
+        validateRequestSize(configs, errors);
+        validateAuthFailureDelay(configs, errors);
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
         validateCursorBatchSizes(configs, errors);
@@ -44,6 +45,33 @@ public final class ConfigurationValidator {
         final var maxEntrySize = sizeOrNull(configs.get("maxEntrySize"));
         if (maxPageSize != null && maxEntrySize != null && maxPageSize <= maxEntrySize) {
             errors.add("maxPageSize (" + maxPageSize + ") must be greater than maxEntrySize (" + maxEntrySize + ")");
+        }
+    }
+
+    private static void validateRequestSize(Map<String, String> configs, List<String> errors) {
+        final var maxRequestSize = sizeOrNull(
+                configs.getOrDefault(ConfigKey.MAX_REQUEST_SIZE.key(), ConfigKey.MAX_REQUEST_SIZE.defaultValue()));
+        final var maxEntrySize = sizeOrNull(
+                configs.getOrDefault(ConfigKey.MAX_ENTRY_SIZE.key(), ConfigKey.MAX_ENTRY_SIZE.defaultValue()));
+        if (maxRequestSize == null) {
+            return;
+        }
+        if (maxEntrySize != null && maxRequestSize < maxEntrySize) {
+            errors.add("maxRequestSize (" + maxRequestSize + ") must not be smaller than maxEntrySize (" + maxEntrySize
+                    + ")");
+        }
+        if (maxRequestSize > Globals.MAX_REQUEST_SIZE_CEILING) {
+            errors.add("maxRequestSize (" + maxRequestSize + ") must not be greater than "
+                    + Globals.MAX_REQUEST_SIZE_CEILING);
+        }
+    }
+
+    private static void validateAuthFailureDelay(Map<String, String> configs, List<String> errors) {
+        final var base = parseLongOrNull(configs.get("authFailureDelayBaseMs"));
+        final var max = parseLongOrNull(configs.get("authFailureDelayMaxMs"));
+        if (base != null && max != null && max < base) {
+            errors.add("authFailureDelayMaxMs (" + max + ") must not be smaller than authFailureDelayBaseMs (" + base
+                    + ")");
         }
     }
 
@@ -101,13 +129,32 @@ public final class ConfigurationValidator {
         if (isBlank(configs.get("clusterAdvertisedAddress"))) {
             errors.add("clusterAdvertisedAddress must be a non-blank address when clusterEnabled is true");
         }
-        if (isBlank(configs.get("clusterSecret"))) {
-            errors.add("clusterSecret must be a non-blank string when clusterEnabled is true");
-        }
+        validateSecret(configs.get("clusterSecret"), errors);
+        validateFrameSize(configs, errors);
         validateSeeds(configs.get("clusterSeeds"), errors);
         validateExpectedSize(configs, errors);
         validateDeadEviction(configs, errors);
         validateDeadProbeInterval(configs, errors);
+    }
+
+    private static void validateSecret(String secret, List<String> errors) {
+        if (isBlank(secret)) {
+            errors.add("clusterSecret must be a non-blank string when clusterEnabled is true");
+        } else if (secret.length() < Globals.CLUSTER_MIN_SECRET_LENGTH) {
+            errors.add("clusterSecret must be at least " + Globals.CLUSTER_MIN_SECRET_LENGTH
+                    + " characters when clusterEnabled is true");
+        }
+    }
+
+    private static void validateFrameSize(Map<String, String> configs, List<String> errors) {
+        final var frameSize = sizeOrNull(configs.getOrDefault(ConfigKey.CLUSTER_MAX_FRAME_SIZE.key(),
+                ConfigKey.CLUSTER_MAX_FRAME_SIZE.defaultValue()));
+        final var maxRequestSize = sizeOrNull(
+                configs.getOrDefault(ConfigKey.MAX_REQUEST_SIZE.key(), ConfigKey.MAX_REQUEST_SIZE.defaultValue()));
+        if (frameSize != null && maxRequestSize != null && frameSize < 2 * maxRequestSize) {
+            errors.add("clusterMaxFrameSize (" + frameSize + ") must be at least twice maxRequestSize ("
+                    + maxRequestSize + ") when clusterEnabled is true");
+        }
     }
 
     private static void validateExpectedSize(Map<String, String> configs, List<String> errors) {
@@ -168,30 +215,33 @@ public final class ConfigurationValidator {
             errors.add("tlsEnabled must be true or false, but was: " + enabledValue);
             return;
         }
-        if (!Boolean.parseBoolean(enabledValue.trim())) {
+        if (!Boolean.parseBoolean(enabledValue.trim()) && !usesClusterTls(configs)) {
             return;
         }
         final var keystorePath = configs.get("tlsKeystorePath");
         if (keystorePath == null || keystorePath.isBlank()) {
-            errors.add("tlsKeystorePath must be a non-blank path when tlsEnabled is true");
+            errors.add("tlsKeystorePath must be a non-blank path when tlsEnabled or clusterTlsEnabled is true");
         } else {
-            final Path parent = Paths.get(keystorePath.trim()).toAbsolutePath().getParent();
+            final Path parent = Path.of(keystorePath.trim()).toAbsolutePath().getParent();
             if (parent != null) {
-                try {
-                    Files.createDirectories(parent);
-                    if (!Files.isWritable(parent)) {
-                        errors.add("tlsKeystorePath (" + keystorePath + ") parent directory is not writable");
-                    }
-                } catch (IOException | RuntimeException e) {
+                final var check = Folders.ensureWritable(parent);
+                if (check.failure() != null) {
                     errors.add("tlsKeystorePath (" + keystorePath + ") parent directory could not be created: "
-                            + e.getMessage());
+                            + check.failure());
+                } else if (!check.writable()) {
+                    errors.add("tlsKeystorePath (" + keystorePath + ") parent directory is not writable");
                 }
             }
         }
         final var keystorePassword = configs.get("tlsKeystorePassword");
         if (keystorePassword == null || keystorePassword.isBlank()) {
-            errors.add("tlsKeystorePassword must be a non-blank string when tlsEnabled is true");
+            errors.add("tlsKeystorePassword must be a non-blank string when tlsEnabled or clusterTlsEnabled is true");
         }
+    }
+
+    private static boolean usesClusterTls(Map<String, String> configs) {
+        return Boolean.parseBoolean(configs.getOrDefault("clusterEnabled", "false").trim())
+                && Boolean.parseBoolean(configs.getOrDefault("clusterTlsEnabled", "false").trim());
     }
 
     private static void validateWritablePath(Map<String, String> configs, String key, List<String> errors) {
@@ -200,14 +250,10 @@ public final class ConfigurationValidator {
             errors.add(key + " must be a non-blank path");
             return;
         }
-        final Path path = Paths.get(value.trim());
-        try {
-            Files.createDirectories(path);
-        } catch (IOException | RuntimeException e) {
-            errors.add(key + " (" + value + ") could not be created: " + e.getMessage());
-            return;
-        }
-        if (!Files.isWritable(path)) {
+        final var check = Folders.ensureWritable(Path.of(value.trim()));
+        if (check.failure() != null) {
+            errors.add(key + " (" + value + ") could not be created: " + check.failure());
+        } else if (!check.writable()) {
             errors.add(key + " (" + value + ") is not writable by the application");
         }
     }
@@ -216,14 +262,14 @@ public final class ConfigurationValidator {
         final var value = configs.get("defaultAdminUsername");
         if (value == null || value.isBlank()) {
             errors.add("defaultAdminUsername must be a non-blank string");
+        } else if (!NameValidations.isUsername(value)) {
+            errors.add("defaultAdminUsername must be 3-64 characters from A-Z a-z 0-9 _ -, like any user name");
         }
     }
 
     private static void validateAdminPassword(Map<String, String> configs, List<String> errors) {
         final var value = configs.get("defaultAdminPassword");
-        if (value == null || value.isBlank()) {
-            errors.add("defaultAdminPassword must be a non-blank string");
-        } else if (value.length() < Globals.PASSWORD_MIN_LENGTH) {
+        if (value != null && !value.isBlank() && value.length() < Globals.PASSWORD_MIN_LENGTH) {
             errors.add("defaultAdminPassword must be at least " + Globals.PASSWORD_MIN_LENGTH + " characters");
         }
     }

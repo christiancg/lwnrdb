@@ -36,7 +36,7 @@ public record ConstructEvaluator(Interpreter interp) {
 
     public JsValue constructValue(JsValue callee, List<JsValue> args, JsValue newTarget) {
         if (!isConstructor(callee)) {
-            throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
+            throw new TypeErrorException(JsCoercion.describe(callee) + " is not a constructor");
         }
         return switch (callee) {
             case JsProxy proxy -> interp.proxies.construct(proxy, args, newTarget);
@@ -46,7 +46,7 @@ public record ConstructEvaluator(Interpreter interp) {
                         newTarget == callee ? nativeFunction.getBoundTarget() : newTarget);
             case JsNativeFunction nativeFunction -> constructNative(nativeFunction, args, newTarget);
             case JsFunction function -> constructFunction(function, args, newTarget);
-            default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
+            default -> throw new TypeErrorException(JsCoercion.describe(callee) + " is not a constructor");
         };
     }
 

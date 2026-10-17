@@ -4,11 +4,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ops.AggregateLimitException;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.MapOperatorHelper;
-import org.techhouse.ops.PipelineScriptContext;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ScriptMidOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -32,7 +35,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_adds_computed_field() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new AddFieldMapOperator("total", null,
                     new ScriptMidOperator("export default (doc) => doc.price * doc.qty;"));
             final var result = MapOperatorHelper.processOperator(operator, document(3, 4), context);
@@ -42,7 +45,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_computed_field_under_a_condition() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var condition = new FieldOperator(FieldOperatorType.GREATER_THAN, "price", new JsonNumber(10));
             final var operator = new AddFieldMapOperator("total", condition,
                     new ScriptMidOperator("export default (doc) => doc.price * doc.qty;"));
@@ -54,7 +57,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_script_condition_gates_the_field() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var condition = new ScriptOperator("export default (doc) => doc.qty > 2;");
             final var operator = new AddFieldMapOperator("total", condition,
                     new ScriptMidOperator("export default (doc) => doc.price * doc.qty;"));
@@ -66,7 +69,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_script_returning_undefined_omits_the_field() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new AddFieldMapOperator("total", null,
                     new ScriptMidOperator("export default (doc) => undefined;"));
             assertNull(MapOperatorHelper.processOperator(operator, document(3, 4), context).get("total"));
@@ -74,8 +77,44 @@ public class MapOperatorHelperScriptTest {
     }
 
     @Test
+    public void test_script_value_over_max_entry_size_is_400_28() {
+        final var oversized = Configuration.getInstance().getMaxEntrySize() + 1;
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
+            final var operator = new AddFieldMapOperator("big", null,
+                    new ScriptMidOperator("export default (doc) => 'x'.repeat(" + oversized + ");"));
+            final var refused = assertThrows(AggregateLimitException.class,
+                    () -> MapOperatorHelper.processOperator(operator, document(3, 4), context));
+            assertEquals(ErrorCode.MAP_RESULT_TOO_LARGE, refused.getErrorCode());
+        }
+    }
+
+    @Test
+    public void test_script_values_count_toward_the_aggregate_result_budget() {
+        try (var context = PipelineContext.of(0L, 1000L, null)) {
+            final var operator = new AddFieldMapOperator("text", null,
+                    new ScriptMidOperator("export default (doc) => 'x'.repeat(400);"));
+            MapOperatorHelper.processOperator(operator, document(1, 1), context);
+            MapOperatorHelper.processOperator(operator, document(2, 1), context);
+            final var refused = assertThrows(AggregateLimitException.class,
+                    () -> MapOperatorHelper.processOperator(operator, document(3, 1), context));
+            assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE, refused.getErrorCode());
+        }
+    }
+
+    @Test
+    public void test_a_script_returning_nothing_charges_nothing() {
+        try (var context = PipelineContext.of(0L, 1L, null)) {
+            final var operator = new AddFieldMapOperator("nothing", null,
+                    new ScriptMidOperator("export default (doc) => undefined;"));
+            for (var i = 0; i < 3; i++) {
+                assertNull(MapOperatorHelper.processOperator(operator, document(i, 1), context).get("nothing"));
+            }
+        }
+    }
+
+    @Test
     public void test_script_throwing_surfaces_script_failed() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new AddFieldMapOperator("total", null,
                     new ScriptMidOperator("export default (doc) => { throw new Error('boom'); };"));
             final var error = assertThrows(ScriptCallableException.class,
@@ -87,7 +126,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_custom_type_value_round_trips() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new AddFieldMapOperator("where", null,
                     new ScriptMidOperator("export default (doc) => Geo.from({ lat: 1, lng: 2 });"));
             final var value = MapOperatorHelper.processOperator(operator, document(3, 4), context).get("where");
@@ -98,7 +137,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_object_and_array_results_are_stored() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var objectOperator = new AddFieldMapOperator("meta", null,
                     new ScriptMidOperator("export default (doc) => ({ a: 1, b: [1, 2] });"));
             final var result = MapOperatorHelper.processOperator(objectOperator, document(3, 4), context);
@@ -109,7 +148,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_string_result_is_stored() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new AddFieldMapOperator("label", null,
                     new ScriptMidOperator("export default (doc) => `p${doc.price}`;"));
             final var result = MapOperatorHelper.processOperator(operator, document(3, 4), context);
@@ -119,7 +158,7 @@ public class MapOperatorHelperScriptTest {
 
     @Test
     public void test_script_cannot_mutate_the_source_document() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new AddFieldMapOperator("total", null,
                     new ScriptMidOperator("export default (doc) => { doc.price = 999; return doc.price; };"));
             final var document = document(3, 4);

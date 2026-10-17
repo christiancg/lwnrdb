@@ -36,6 +36,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -118,7 +119,7 @@ public class TriggerStartupReplayTest {
         }
         final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
         ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
-        final var applier = new org.techhouse.ops.tx.VersionedApply();
+        final var applier = new org.techhouse.ops.tx.VersionedApply(IocContainer.get(ListenManager.class));
         assertTrue(TransactionRecovery.applyAllWithRetry(ops, txId, applier), "the slice's ops must apply");
         CommittedOpTriggers.stage(ops, "admin", 0, transaction, applier.outcomes(), txId);
         if (!prepared) {

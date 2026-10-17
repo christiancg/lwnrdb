@@ -12,6 +12,7 @@ import java.io.OutputStreamWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.PeerConnection;
@@ -78,6 +79,8 @@ public class PeerConnectionTest {
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             final var writer = new BufferedWriter(
                     new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+            final var hello = eJson.fromJson(Objects.requireNonNull(reader.readLine()), ClusterMessage.class);
+            assertEquals(ClusterMessageType.HELLO, hello.getType(), "a peer connection must open with a HELLO");
             final var line = reader.readLine();
             assertNotNull(line, "peer closed before sending a request");
             final var request = eJson.fromJson(line, ClusterMessage.class);

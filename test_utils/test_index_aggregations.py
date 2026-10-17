@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import time
+from typing import Callable
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_status, section
@@ -10,7 +11,7 @@ HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("INDEX_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "idxagg_db"
 COLL = "idxagg_main"
@@ -23,6 +24,7 @@ LEFT_DOCS = int(os.environ.get("INDEX_TEST_LEFT_DOCS", "100"))
 PAYLOAD_BYTES = int(os.environ.get("INDEX_TEST_PAYLOAD_BYTES", "256"))
 BULK_BATCH_SIZE = int(os.environ.get("INDEX_TEST_BATCH_SIZE", "500"))
 REPEATS = int(os.environ.get("INDEX_TEST_REPEATS", "5"))
+WARMUPS = int(os.environ.get("INDEX_TEST_WARMUPS", "20"))
 SPEED_TOLERANCE = float(os.environ.get("INDEX_TEST_SPEED_TOLERANCE", "1.25"))
 
 CONS = "idxagg_cons"
@@ -37,6 +39,13 @@ GEO = "idxagg_geo"
 GEO_SCAN = "idxagg_geo_scan"
 GEO_TARGET = "#geo(40.0,-74.0)"
 GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
+WIDE_AND = "idxagg_wide_and"
+WIDE_AND_DOCS = int(os.environ.get("INDEX_TEST_WIDE_AND_DOCS", "20000"))
+WIDE_AND_CHILDREN = 2000
+COLLIDING_STRINGS = "idxagg_colliding_strings"
+COLLIDING_OBJECTS = "idxagg_colliding_objects"
+COLLIDING_BLOCKS = int(os.environ.get("INDEX_TEST_COLLIDING_BLOCKS", "15"))
+COLLIDING_BUDGET_S = float(os.environ.get("INDEX_TEST_COLLIDING_BUDGET_S", "3"))
 GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -80,6 +89,9 @@ def index_used(c, coll, steps):
 
 
 def timed_scan_and_index(c, coll, steps, scan_steps):
+    for _ in range(WARMUPS):
+        agg(c, coll, scan_steps)
+        agg(c, coll, steps)
     scan_best = None
     index_best = None
     index_resp = None
@@ -169,7 +181,7 @@ def indexes_present(c, expected) -> bool:
     return all(field in present.get(coll, set()) for coll, field in expected)
 
 
-def wait_for_indexes(c, expected, timeout_s=20.0):
+def wait_for_indexes(c: Conn, expected, timeout_s=20.0):
     if bu.wait_until(lambda: indexes_present(c, expected), timeout_s, interval_s=0.5):
         return True
     time.sleep(3)
@@ -236,7 +248,7 @@ def join_signature(r):
     for row in rows:
         joined = row.get("joined") or []
         labels.append(tuple(sorted(j.get("label") for j in joined)))
-    return (len(rows), sorted(labels))
+    return len(rows), sorted(labels)
 
 
 def compare(label, scan_time, unindexed_resp, indexed_time, indexed_resp, signature, strict_speed):
@@ -445,7 +457,7 @@ def probe_save_delete_converges(c):
                detail=f"{bad}/{CONS_REPEATS} deleted values still present after settling")
 
 
-def probe_concurrent_save_during_create_index(c):
+def probe_concurrent_save_during_create_index(c: Conn):
     seed = 40
     for i in range(seed):
         save_doc(c, CONS_CREATE, {"_id": f"seed_{i}", "tag": f"t{i % 5}"})
@@ -457,14 +469,14 @@ def probe_concurrent_save_during_create_index(c):
     def writer():
         with Conn() as wc:
             wc.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
-            i = 0
+            written = 0
             while not stop.is_set():
-                doc_id = f"conc_{i}"
+                doc_id = f"conc_{written}"
                 r = save_doc(wc, CONS_CREATE, {"_id": doc_id, "tag": "concurrent"})
                 if r.get("status") == "OK":
                     with saved_lock:
                         saved_ids.append(doc_id)
-                i += 1
+                written += 1
 
     t = threading.Thread(target=writer)
     t.start()
@@ -542,6 +554,56 @@ def wait_for_background():
 DISTINCT_STATUS_STEPS = [{"type": "DISTINCT", "fieldName": "status"}]
 
 
+LOGGED_DOCS = 60
+LOGGED_UPDATES = 500
+LOGGED_JOIN_LEFT = "idx_cons_logged_left"
+
+
+def logged_status(i: int, round_number: int) -> str:
+    return f"logged_{(i * 7 + round_number) % 13}"
+
+
+def probe_index_log_after_many_updates(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": LOGGED_JOIN_LEFT})
+    for value in range(13):
+        save_doc(c, LOGGED_JOIN_LEFT, {"_id": f"left_{value}", "joinKey": f"logged_{value}"})
+    for i in range(LOGGED_DOCS):
+        save_doc(c, CONS_JOIN, {"_id": f"logged_{i}", "joinKey": logged_status(i, 0), "status": "x"})
+    for round_number in range(1, LOGGED_UPDATES + 1):
+        i = round_number % LOGGED_DOCS
+        save_doc(c, CONS_JOIN, {"_id": f"logged_{i}", "joinKey": logged_status(i, round_number), "status": "x"})
+    wait_for_background()
+    bad = []
+    for value in range(13):
+        steps = [bu.filter_step("joinKey", "EQUALS", f"logged_{value}")]
+        if sorted(agg_ids(c, CONS_JOIN, steps)) != sorted(agg_ids(c, CONS_JOIN, forced_scan(steps))):
+            bad.append(f"FILTER logged_{value}")
+    for label, steps, signature in (
+            ("DISTINCT", [{"type": "DISTINCT", "fieldName": "joinKey"}],
+             lambda r: sorted({d.get("joinKey") for d in (r.get("results") or [])})),
+            ("GROUP_BY", [{"type": "GROUP_BY", "fieldName": "joinKey"}],
+             lambda r: sorted((d.get("joinKey"), len(d.get("group") or [])) for d in (r.get("results") or []))),
+    ):
+        if signature(agg(c, CONS_JOIN, steps)) != signature(agg(c, CONS_JOIN, forced_scan(steps))):
+            bad.append(label)
+    join_steps = [{"type": "JOIN", "joinCollection": CONS_JOIN, "localField": "joinKey", "remoteField": "joinKey",
+                   "asField": "joined"}]
+    joined = sorted((row.get("_id"), sorted(d.get("_id") for d in (row.get("joined") or [])))
+                    for row in (agg(c, LOGGED_JOIN_LEFT, join_steps).get("results") or []))
+    expected = sorted((f"left_{value}", sorted(f"logged_{i}" for i in range(LOGGED_DOCS)
+                                               if logged_status(i, last_round(i)) == f"logged_{value}"))
+                      for value in range(13))
+    if [row for row in joined if row[1]] != [row for row in expected if row[1]]:
+        bad.append("JOIN")
+    check(f"after {LOGGED_UPDATES} updates through the field-index log, index-backed answers equal the scan",
+          not bad, detail=f"disagreeing: {bad}")
+
+
+def last_round(i: int) -> int:
+    rounds = [r for r in range(1, LOGGED_UPDATES + 1) if r % LOGGED_DOCS == i]
+    return rounds[-1] if rounds else 0
+
+
 def consistency_suite(c):
     section("Consistency under asynchronous index maintenance (pending-write window)")
     setup_consistency(c)
@@ -560,6 +622,7 @@ def consistency_suite(c):
     probe_concurrent_save_during_create_index(c)
     probe_drop_burst_no_background_errors(c)
     probe_bulk_update_same_page_no_corruption(c)
+    probe_index_log_after_many_updates(c)
     probe_convergence(c)
 
 
@@ -772,7 +835,7 @@ def agree(c, label, query_coll, steps, index_coll, index_field, extract=agree_id
               f"expected={expected!r}  got={scanned!r}")
 
 
-def index_matches_scan(c, coll, steps, extract=agree_ids):
+def index_matches_scan(c: Conn, coll, steps, extract: Callable[[dict], object] = agree_ids):
     return extract(agg(c, coll, steps)), extract(agg(c, coll, forced_scan(steps)))
 
 
@@ -1055,16 +1118,16 @@ def probe_lone_surrogate_before_a_pair_orders_the_index_consistently(c):
     build_index(c, AGREE_SURROGATE_FOLD, "v")
 
     def compare_every_operator(label):
-        for doc_id, value in values.items():
-            for operator, operand in (("EQUALS", value), ("NOT_EQUALS", value), ("IN", [value])):
+        for probe_id, probe_value in values.items():
+            for operator, operand in (("EQUALS", probe_value), ("NOT_EQUALS", probe_value), ("IN", [probe_value])):
                 indexed, scanned = index_matches_scan(c, AGREE_SURROGATE_FOLD,
                                                       [bu.filter_step("v", operator, operand)])
-                check(f"{label}: an index-backed {operator} on the {doc_id} value equals the scan",
+                check(f"{label}: an index-backed {operator} on the {probe_id} value equals the scan",
                       indexed == scanned, f"index={indexed!r} scan={scanned!r}")
             counted, scanned_count = index_matches_scan(c, AGREE_SURROGATE_FOLD,
-                                                        [bu.filter_step("v", "EQUALS", value), {"type": "COUNT"}],
+                                                        [bu.filter_step("v", "EQUALS", probe_value), {"type": "COUNT"}],
                                                         extract=bu.count_of)
-            check(f"{label}: index-only COUNT on the {doc_id} value equals the scan count",
+            check(f"{label}: index-only COUNT on the {probe_id} value equals the scan count",
                   counted == scanned_count, f"index={counted} scan={scanned_count}")
 
     compare_every_operator("after CREATE_INDEX")
@@ -1210,7 +1273,7 @@ def probe_index_values_containing_delimiters(c):
 
     scanned, indexed = scanned_then_indexed(
         c, [(REG_DELIMITER, "note")],
-        [lambda note=note: filter_ids(c, REG_DELIMITER, "note", note) for note in values.values()], settle=True)
+        [lambda expected=expected: filter_ids(c, REG_DELIMITER, "note", expected) for expected in values.values()], settle=True)
     for (doc_id, note), got in zip(values.items(), scanned):
         check(f"{doc_id}: unindexed scan finds {note!r}", got == [doc_id], detail=f"got {got}")
     for (doc_id, note), got in zip(values.items(), indexed):
@@ -1541,8 +1604,8 @@ def probe_a_conjunction_after_a_row_reshaping_step(c):
         save_doc(c, REG_NOID, {"_id": doc_id, "category": category})
     wait_for_background()
 
-    def conjunction(kind):
-        return {"type": "FILTER", "operator": {"conjunctionType": kind, "operators": [
+    def conjunction(conjunction_type):
+        return {"type": "FILTER", "operator": {"conjunctionType": conjunction_type, "operators": [
             {"fieldOperatorType": "EQUALS", "field": "category", "value": "books"},
             {"fieldOperatorType": "NOT_EQUALS", "field": "category", "value": "music"}]}}
 
@@ -1645,9 +1708,9 @@ def probe_a_field_operator_without_a_value_is_refused(c):
     save_doc(c, REG_VALUELESS, {"_id": "v1", "name": "alice"})
     wait_for_background()
 
-    def valueless(field, operator_type):
+    def valueless(field, operator):
         return agg(c, REG_VALUELESS,
-                   [{"type": "FILTER", "operator": {"fieldOperatorType": operator_type, "field": field}}])
+                   [{"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": field}}])
 
     for indexed in (False, True):
         if indexed:
@@ -1839,6 +1902,147 @@ def regression_suite(c):
     probe_nearest_scores_huge_and_tiny_vectors(c)
 
 
+def limits_suite(c):
+    section("Request limits on custom literals, filter operands and MAP results")
+    over = "#vector(" + ",".join(["0.5"] * 16385) + ")"
+    refused = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                      "object": {"_id": "vec-over", "embedding": over}})
+    check("A vector past maxVectorDimensions is not a valid command",
+          refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid",
+          f"got={str(refused)[:200]}")
+    check_status("It was never stored",
+                 c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "vec-over"}),
+                 "NOT_FOUND")
+    check_code("IN with more than maxFilterOperands values -> 400-27",
+               agg(c, COLL, [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "category",
+                                                             "value": list(range(10001))}}]), "ERROR", "400-27")
+    check_status("IN at maxFilterOperands values still answers",
+                 agg(c, COLL, [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "category",
+                                                               "value": list(range(10000))}}, {"type": "COUNT"}]),
+                 "OK")
+    operators = [{"fieldName": "g0", "operator": {"type": "CONCAT", "operands": ["-AAAAAAAA", "-AAAAAAAA"]}}]
+    operators += [{"fieldName": f"g{i}", "operator": {"type": "CONCAT", "operands": [f"g{i - 1}", f"g{i - 1}"]}}
+                  for i in range(1, 31)]
+    check_code("A doubling CONCAT chain stops at the maximum entry size -> 400-28",
+               agg(c, COLL, [{"type": "LIMIT", "limit": 1}, {"type": "MAP", "operators": operators}]),
+               "ERROR", "400-28")
+    counted = agg(c, COLL, [{"type": "MAP", "operators": operators}, {"type": "COUNT"}])
+    scanned = agg(c, COLL, forced_scan([{"type": "MAP", "operators": operators}, {"type": "COUNT"}]))
+    check_code("[MAP doubling-CONCAT, COUNT] is refused like its scan, not counted from the index", counted,
+               "ERROR", "400-28")
+    check("and its forced-scan twin answers the same", scanned.get("errorCode") == counted.get("errorCode"),
+          f"index={counted.get('errorCode')} scan={scanned.get('errorCode')}")
+    wide_and = {"conjunctionType": "AND", "operators": [
+        {"fieldOperatorType": "EQUALS", "field": "category", "value": i} for i in range(10001)]}
+    check_code("An AND with more than maxFilterOperands operands -> 400-27",
+               agg(c, COLL, [{"type": "FILTER", "operator": wide_and}]), "ERROR", "400-27")
+    copies = [{"fieldName": f"p{i}", "operator": {"type": "CONCAT", "operands": ["payload"]}}
+              for i in range(MAX_ENTRY_BYTES // PAYLOAD_BYTES + 1)]
+    check_code("A MAP whose CONCATs add more than maxEntrySize to one document -> 400-28",
+               agg(c, COLL, [{"type": "LIMIT", "limit": 1}, {"type": "MAP", "operators": copies}]), "ERROR", "400-28")
+    check_status("and the same MAP with half the copies still answers",
+                 agg(c, COLL, [{"type": "LIMIT", "limit": 1}, {"type": "MAP", "operators": copies[:len(copies) // 2]}]),
+                 "OK")
+    join_cap_suite(c)
+    check_status("A geo point written with a trailing comma is accepted",
+                 c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                         "object": {"_id": "geo-trailing", "location": "#geo(40.0,-74.0,)"}}), "OK")
+    check_status("and stays readable", c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                               "_id": "geo-trailing"}), "OK")
+    c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "geo-trailing"})
+
+
+MAX_ENTRY_BYTES = 1024 * 1024
+JOIN_CAP_COLL = "idxagg_joincap"
+
+
+def join_cap_suite(c):
+    section("A JOIN row whose joined array passes maxEntrySize is refused, indexed or not")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
+    shared = [{"_id": f"jc{i}", "key": "k", "pad": rand_payload(400)} for i in range(3000)]
+    check_status("load 3000 documents sharing one join key",
+                 c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": JOIN_CAP_COLL, "objects": shared}),
+                 "OK")
+    join = [{"type": "LIMIT", "limit": 1}, {"type": "JOIN", "joinCollection": JOIN_CAP_COLL, "localField": "key",
+                                             "remoteField": "key", "asField": "matched"}]
+    check_code("the scanned JOIN is refused -> 400-28", agg(c, JOIN_CAP_COLL, join), "ERROR", "400-28")
+    check_status("index the join key",
+                 c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": JOIN_CAP_COLL,
+                         "fieldName": "key"}), "OK")
+    check_code("the indexed JOIN is refused the same way -> 400-28", agg(c, JOIN_CAP_COLL, join), "ERROR", "400-28")
+    counted = agg(c, JOIN_CAP_COLL, [bu.filter_step("key", "EQUALS", "k"), join[1], {"type": "COUNT"}])
+    check_code("[FILTER indexed, JOIN, COUNT] is refused rather than counted from the index", counted,
+               "ERROR", "400-28")
+    check_status("a JOIN on a key shared by a few documents still answers",
+                 agg(c, COLL, [{"type": "LIMIT", "limit": 3}, {"type": "JOIN", "joinCollection": JOIN_CAP_COLL,
+                                                                "localField": "_id", "remoteField": "_id",
+                                                                "asField": "matched"}]), "OK")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
+
+
+def test_wide_and_conjunction_stays_within_memory(c):
+    section("A source AND of 2000 children keeps one tally per document, not one row per child")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
+    bulk_load(c, WIDE_AND, ({"_id": f"w{i:05d}", "n": i % 1000} for i in range(WIDE_AND_DOCS)))
+    leaves = [{"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "n", "value": 0}] * (WIDE_AND_CHILDREN - 1)
+    leaves.append({"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "n", "value": 999})
+    steps = [{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": leaves}}, {"type": "COUNT"}]
+
+    r = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": WIDE_AND, "aggregationSteps": steps},
+               timeout=300.0)
+    check_status(f"AND of {WIDE_AND_CHILDREN} children over {WIDE_AND_DOCS} docs (OK)", r, "OK")
+    check("the AND keeps only the documents every child matched", bu.count_of(r) == WIDE_AND_DOCS // 1000,
+          detail=f"count={bu.count_of(r)}")
+    check_status("the server stays alive afterwards (LIST_DATABASES)", c.send({"type": "LIST_DATABASES"}), "OK")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
+
+
+def colliding_strings(blocks: int) -> list:
+    strings = [""]
+    for _ in range(blocks):
+        strings = [prefix + block for prefix in strings for block in ("Aa", "BB")]
+    return strings
+
+
+def group_signature(r) -> list:
+    return sorted((repr(d.get("k")), len(d.get("group") or [])) for d in (r.get("results") or []))
+
+
+def check_colliding_groups(c: Conn, coll, values, label):
+    bulk_load(c, coll, ({"_id": f"c{i:05d}", "k": value} for i, value in enumerate(values)))
+    started = time.perf_counter()
+    build_index(c, coll, "k")
+    built_in = time.perf_counter() - started
+    check(f"{label}: CREATE_INDEX over {len(values)} colliding values took {built_in:.2f}s, under "
+          f"{COLLIDING_BUDGET_S:.0f}s", built_in < COLLIDING_BUDGET_S)
+    group_by = [{"type": "GROUP_BY", "fieldName": "k"}]
+    check(f"{label}: GROUP_BY uses the index", index_used(c, coll, group_by))
+    started = time.perf_counter()
+    indexed = agg(c, coll, group_by)
+    elapsed = time.perf_counter() - started
+    check_status(f"{label}: GROUP_BY over {len(values)} colliding values (OK)", indexed, "OK")
+    check(f"{label}: one group per value", len(indexed.get("results") or []) == len(values),
+          detail=f"groups={len(indexed.get('results') or [])}")
+    check(f"{label}: the index answers what the scan answers",
+          group_signature(indexed) == group_signature(agg(c, coll, forced_scan(group_by))))
+    check(f"{label}: GROUP_BY answered in {elapsed:.2f}s, under {COLLIDING_BUDGET_S:.0f}s",
+          elapsed < COLLIDING_BUDGET_S)
+    distinct = agg(c, coll, [{"type": "DISTINCT", "fieldName": "k"}])
+    check(f"{label}: DISTINCT agrees", len(distinct.get("results") or []) == len(values),
+          detail=f"rows={len(distinct.get('results') or [])}")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
+def test_colliding_values_group_exactly_and_fast(c: Conn):
+    section(f"GROUP_BY over {2 ** COLLIDING_BLOCKS} values sharing one hash code stays exact and fast")
+    for coll in (COLLIDING_STRINGS, COLLIDING_OBJECTS):
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    keys = colliding_strings(COLLIDING_BLOCKS)
+    check_colliding_groups(c, COLLIDING_STRINGS, keys, "strings")
+    check_colliding_groups(c, COLLIDING_OBJECTS, [{key: 1} for key in keys], "objects")
+
+
 def main():
     bu.banner("index-backed aggregation performance test suite", HOST, PORT)
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
@@ -1913,7 +2117,19 @@ def main():
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_wide_and_conjunction_stays_within_memory(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_colliding_values_group_exactly_and_fast(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         agreement_suite(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        limits_suite(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

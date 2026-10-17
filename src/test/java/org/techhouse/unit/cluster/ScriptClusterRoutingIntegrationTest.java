@@ -31,8 +31,8 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         db.save(TestGlobals.DB, remote, doc("remote-part"));
         final var error = assertThrows(JsThrowException.class, db::commitTransaction);
         final var message = ((JsObject) error.getValue()).get("message");
-        assertTrue(JsCoercion.toStr(message).contains("not the owner"),
-                "expected a NOT_COLLECTION_OWNER message, got: " + JsCoercion.toStr(message));
+        assertTrue(JsCoercion.toStrDataOnly(message).contains("not the owner"),
+                "expected a NOT_COLLECTION_OWNER message, got: " + JsCoercion.toStrDataOnly(message));
         assertEquals(OperationStatus.NOT_FOUND, findStatus(remote, "remote-part"));
     }
 

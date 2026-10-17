@@ -23,7 +23,8 @@ public class ListenRegistrationTest {
         final var keys = Set.of("db|coll");
         final var lastHash = new AtomicReference<>("initialHash");
 
-        final var reg = new ListenRegistration(listenId, clientId, request, keys, lastHash, new AtomicBoolean(true));
+        final var reg = new ListenRegistration(listenId, clientId, request, keys, lastHash, new AtomicBoolean(true),
+                "listener", 42L);
 
         assertEquals(listenId, reg.listenId());
         assertEquals(clientId, reg.clientId());
@@ -31,12 +32,14 @@ public class ListenRegistrationTest {
         assertEquals(keys, reg.collectionKeys());
         assertEquals("initialHash", reg.lastHash().get());
         assertTrue(reg.delivered().get());
+        assertEquals("listener", reg.username());
+        assertEquals(42L, reg.retainedBytes());
     }
 
     @Test
     public void lastHash_canBeUpdated() {
         final var reg = new ListenRegistration(UUID.randomUUID(), UUID.randomUUID(), new AggregateRequest("db", "coll"),
-                Set.of("db|coll"), new AtomicReference<>("hash1"), new AtomicBoolean(false));
+                Set.of("db|coll"), new AtomicReference<>("hash1"), new AtomicBoolean(false), null, 0L);
 
         reg.lastHash().set("hash2");
 

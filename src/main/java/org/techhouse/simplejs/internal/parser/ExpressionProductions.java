@@ -54,6 +54,15 @@ abstract class ExpressionProductions extends BindingProductions {
 
     @Override
     protected Expression parseAssignment() {
+        enterNesting();
+        try {
+            return parseAssignmentLevel();
+        } finally {
+            leaveNesting();
+        }
+    }
+
+    private Expression parseAssignmentLevel() {
         if (isKeyword("yield")) {
             return parseYield();
         }
@@ -125,7 +134,7 @@ abstract class ExpressionProductions extends BindingProductions {
                 rejectPrivateInRhs();
             }
             final int nextMinPrec = "**".equals(op) ? prec : prec + 1;
-            final var right = parseBinary(nextMinPrec);
+            final var right = binaryOperand(nextMinPrec);
             if (ParserTables.LOGICAL_OPERATORS.contains(op)) {
                 rejectCoalesceChain(op, left);
                 rejectCoalesceChain(op, right);
@@ -136,6 +145,15 @@ abstract class ExpressionProductions extends BindingProductions {
             op = currentBinaryOperator();
         }
         return left;
+    }
+
+    private Expression binaryOperand(int minPrec) {
+        enterNesting();
+        try {
+            return parseBinary(minPrec);
+        } finally {
+            leaveNesting();
+        }
     }
 
     protected void rejectCoalesceChain(String op, Expression operand) {
@@ -179,11 +197,11 @@ abstract class ExpressionProductions extends BindingProductions {
             final var op = ((JsOperator) t).getValue();
             if (ParserTables.PREFIX_UNARY_OPERATORS.contains(op)) {
                 advance();
-                return rejectExponentiationBase(new UnaryExpression(op, parseUnary(), true));
+                return rejectExponentiationBase(new UnaryExpression(op, unaryOperand(), true));
             }
             if ("++".equals(op) || "--".equals(op)) {
                 advance();
-                final var argument = parseUnary();
+                final var argument = unaryOperand();
                 checkUpdateTarget(argument);
                 return new UpdateExpression(op, argument, true);
             }
@@ -192,7 +210,7 @@ abstract class ExpressionProductions extends BindingProductions {
             final var kw = ((JsKeyword) t).getValue();
             if ("delete".equals(kw)) {
                 advance();
-                final var argument = parseUnary();
+                final var argument = unaryOperand();
                 if (argument instanceof Identifier) {
                     throw new SyntaxErrorException("Delete of an unqualified identifier in strict mode");
                 }
@@ -203,17 +221,26 @@ abstract class ExpressionProductions extends BindingProductions {
             }
             if ("typeof".equals(kw) || "void".equals(kw)) {
                 advance();
-                return rejectExponentiationBase(new UnaryExpression(kw, parseUnary(), true));
+                return rejectExponentiationBase(new UnaryExpression(kw, unaryOperand(), true));
             }
             if ("await".equals(kw) && !awaitIsIdentifierReference()) {
                 advance();
                 if (!inAsync) {
                     throw new SyntaxErrorException("await is only valid inside an async function");
                 }
-                return rejectExponentiationBase(new AwaitExpression(parseUnary()));
+                return rejectExponentiationBase(new AwaitExpression(unaryOperand()));
             }
         }
         return parsePostfix();
+    }
+
+    private Expression unaryOperand() {
+        enterNesting();
+        try {
+            return parseUnary();
+        } finally {
+            leaveNesting();
+        }
     }
 
     protected Expression rejectExponentiationBase(Expression unary) {

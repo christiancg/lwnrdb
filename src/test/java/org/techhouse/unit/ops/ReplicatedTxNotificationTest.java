@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -117,24 +118,27 @@ public class ReplicatedTxNotificationTest {
                 "the flush must cover every collection the batch wrote, not only the last one");
     }
 
+    private boolean applyActive() throws ReflectiveOperationException {
+        final var tracker = TestUtils.getPrivateField(listenManager, "applyTracker", Object.class);
+        final var anyActive = tracker.getClass().getDeclaredMethod("anyActive", Collection.class);
+        anyActive.setAccessible(true);
+        return (boolean) anyActive.invoke(tracker, Set.of(TestGlobals.DB + "|" + TestGlobals.COLL));
+    }
+
     @Test
-    public void test_the_deferral_does_not_leak_onto_the_applying_thread() throws Exception {
+    public void test_the_batch_ends_its_apply_when_it_closes() throws Exception {
         listenOn(TestGlobals.COLL);
         ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert(TestGlobals.COLL, "leak", "130"))),
                 TestGlobals.APPLY_BUDGET_MS);
 
-        final var deferred = TestUtils.getPrivateField(listenManager, "deferred", ThreadLocal.class);
-
-        assertFalse(deferred.get() instanceof Set,
-                "a window left open would silently hold back every later notification on this thread");
+        assertFalse(applyActive(),
+                "an apply left open would hold back every later re-run of a listen on this collection");
     }
 
     @Test
-    public void test_an_empty_batch_opens_no_window() throws Exception {
+    public void test_an_empty_batch_begins_no_apply() throws Exception {
         assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of()), TestGlobals.APPLY_BUDGET_MS));
 
-        final var deferred = TestUtils.getPrivateField(listenManager, "deferred", ThreadLocal.class);
-
-        assertFalse(deferred.get() instanceof Set);
+        assertFalse(applyActive());
     }
 }

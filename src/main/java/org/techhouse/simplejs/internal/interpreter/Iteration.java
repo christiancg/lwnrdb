@@ -168,7 +168,7 @@ public final class Iteration {
                 ? ops.getMember(iterable, JsSymbol.ITERATOR)
                 : interp.getMemberByKey(iterable, JsSymbol.ITERATOR);
         if (!isCallable(iterFn)) {
-            throw new TypeErrorException(JsCoercion.toStr(iterable) + " is not iterable");
+            throw new TypeErrorException(JsCoercion.describe(iterable) + " is not iterable");
         }
         final var iter = invoke(iterFn, iterable);
         if (!isObjectLike(iter)) {

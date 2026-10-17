@@ -11,6 +11,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.fs.LegacyIndexLines;
 import org.techhouse.test.TestGlobals;
 
 public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
@@ -39,7 +40,7 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_field_index_round_trip_with_accented_value() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(ACCENTED, "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(ACCENTED, "id1"), null);
 
         List<FieldIndexEntry<String>> index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                 String.class);
@@ -52,7 +53,7 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_index_file_is_valid_utf8_after_update() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id1"), null);
 
         final var raw = Files.readAllBytes(indexFile().toPath());
         final var expected = (CJK + Globals.ID_SEPARATOR + "id1").getBytes(StandardCharsets.UTF_8);
@@ -67,11 +68,12 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_updating_a_non_ascii_entry_preserves_its_neighbours() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("aaa", "id1"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id2"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("zzz", "id3"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("aaa", "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id2"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("zzz", "id3"), null);
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id2", "id4"), entry(CJK, "id2"));
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id2", "id4"),
+                entry(CJK, "id2"));
 
         final var index = byValue(fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class));
         assertEquals(3, index.size(), "updating the middle entry must not drop or merge its neighbours");
@@ -83,11 +85,11 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_removing_a_non_ascii_entry_preserves_its_neighbours() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("aaa", "id1"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(ACCENTED, "id2"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("zzz", "id3"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("aaa", "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(ACCENTED, "id2"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("zzz", "id3"), null);
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, null,
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, null,
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, ACCENTED, Set.of()));
 
         final var index = byValue(fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class));
@@ -100,8 +102,9 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_field_index_round_trip_with_surrogate_pair_value() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id1"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id1", "id2"), entry(EMOJI, "id1"));
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id1", "id2"),
+                entry(EMOJI, "id1"));
 
         final var index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
         assertNotNull(index);
@@ -113,7 +116,8 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_field_index_round_trip_with_non_ascii_ids() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("value", "idé", "id日"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("value", "idé", "id日"),
+                null);
 
         final var index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
         assertNotNull(index);
@@ -124,10 +128,10 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_mixed_ascii_and_non_ascii_values_all_survive() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("plain", "id1"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(ACCENTED, "id2"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id3"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id4"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("plain", "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(ACCENTED, "id2"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(CJK, "id3"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id4"), null);
 
         final var index = byValue(fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class));
         assertEquals(4, index.size());
@@ -141,7 +145,7 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     public void test_lone_surrogate_value_round_trips_through_index_file() throws Exception {
         final var value = "a\ud800b";
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(value, "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(value, "id1"), null);
 
         final var index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
         assertNotNull(index);
@@ -153,9 +157,11 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_two_lone_surrogate_values_occupy_two_distinct_lines() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\ud800b", "hi"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\udc00b", "lo"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a?b", "plain"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\ud800b", "hi"),
+                null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\udc00b", "lo"),
+                null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a?b", "plain"), null);
 
         final var index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
         assertNotNull(index);
@@ -168,10 +174,12 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
 
     @Test
     public void test_updating_a_lone_surrogate_entry_leaves_siblings_intact() throws Exception {
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\ud800b", "hi"), null);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a?b", "plain"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\ud800b", "hi"),
+                null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a?b", "plain"), null);
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("zzz", "hi"), entry("a\ud800b"));
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("zzz", "hi"),
+                entry("a\ud800b"));
 
         final var index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
         assertNotNull(index);
@@ -183,7 +191,7 @@ public class FileSystemIndexUnicodeTest extends FileSystemTestBase {
     @Test
     public void test_paired_surrogate_value_is_stored_raw() throws Exception {
 
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id1"), null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id1"), null);
 
         final var raw = Files.readString(indexFile().toPath(), StandardCharsets.UTF_8);
         assertTrue(raw.startsWith(EMOJI), "a paired surrogate must not be escaped");

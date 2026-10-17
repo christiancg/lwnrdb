@@ -6,12 +6,13 @@ import threading
 import time
 
 import base_utils as bu
+import write_intent_kills
 from base_utils import check, check_code, check_field, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("STORAGE_CONSISTENCY_TEST_PORT", "8996"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "storage_db"
 COLL = "docs"
@@ -22,6 +23,11 @@ RECREATE_DB = "recreate_db"
 SCHEMA_COLL = "schema_guarded"
 LOCK_COLL = "items"
 DIRTY_COLL = "dirty_index_docs"
+DIRTY_BATCH = 200
+CONVERGE_COLL = "converge_two_indexes"
+CONVERGE_DOCS = 20000
+CONVERGE_BULK = 2000
+CONVERGE_DEADLINE_S = 30.0
 HEAL_COLL = "heal_race_docs"
 SCRIPT_COLL = "script_written"
 NON_FINITE_COLL = "non_finite_numbers"
@@ -59,6 +65,10 @@ UNLISTED_GHOST = "unlisted_docX"
 DROPPED_DB_COLLECTIONS = 4
 ADMIN_PAGES_DB = "admin_pages_spill_db"
 ADMIN_PAGES_COLLECTIONS = 80
+SYMLINK_DB = "symlink_db"
+SYMLINK_COLL = "linked_docs"
+SYMLINK_TARGET = "outside_symlink_target"
+SYMLINK_PRECIOUS = "precious.txt"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -119,9 +129,9 @@ class Conn(bu.Conn):
 admin_conn = Conn.authenticated
 
 
-def write_config(work_dir: str, max_memory: str = "256mb"):
+def write_config(work_dir: str, max_memory: str = "256mb", faults: bool = False):
     bu.write_config(work_dir, PORT, maxMemory=max_memory, maxPageSize=MAX_PAGE_SIZE,
-                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True)
+                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True, faultInjectionEnabled=faults)
 
 
 def page_files(work_dir: str, db=DB, coll=COLL):
@@ -160,13 +170,17 @@ def recorded_pages(work_dir: str, db=DB, coll=COLL) -> dict:
     return rows
 
 
+def live_records(content: bytes) -> list:
+    return [line + b"\n" for line in content.split(b"\n")[:-1] if line and not line.startswith(b" ")]
+
+
 def actual_pages(work_dir: str, db=DB, coll=COLL) -> dict:
     folder = os.path.join(work_dir, "db", db, coll)
     pages = {}
     for name in page_files(work_dir, db, coll):
         with open(os.path.join(folder, name), "rb") as fp:
-            content = fp.read()
-        pages[int(name[len(coll) + 1:-len(".dat")])] = (len(content), content.count(b"\n"))
+            records = live_records(fp.read())
+        pages[int(name[len(coll) + 1:-len(".dat")])] = (sum(len(record) for record in records), len(records))
     return pages
 
 
@@ -325,8 +339,8 @@ def test_a_script_written_document_survives_a_restart(conn: Conn):
 def test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn: Conn):
     section("A script-written custom value lands in its own index family")
 
-    def ids_for(value, force_scan):
-        return conn.ids(SCRIPT_COLL, (FULL_SCAN if force_scan else []) + [bu.filter_step("loc", "EQUALS", value)])
+    def ids_for(operand, force_scan):
+        return conn.ids(SCRIPT_COLL, (FULL_SCAN if force_scan else []) + [bu.filter_step("loc", "EQUALS", operand)])
 
     for value, expected in (("#geo(3.0,4.0)", ["sw_geo"]), ("#geo(1.0,2.0)", ["ww_geo"]),
                             ("#time(08:00:00)", ["sw_time"]), ("ordinary", ["sw_plain", "ww_plain"])):
@@ -388,7 +402,13 @@ def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, wo
     oversized = oversized_pages(work_dir, GROWTH_COLL, MAX_PAGE_BYTES)
     check("no page grew past maxPageSize", not oversized, f"oversized: {oversized}")
 
-    drifted = occupancy_drift(recorded_pages(work_dir, DB, GROWTH_COLL), actual_pages(work_dir, DB, GROWTH_COLL))
+    drifted = ["unchecked"]
+
+    def settled() -> bool:
+        drifted[:] = occupancy_drift(recorded_pages(work_dir, DB, GROWTH_COLL), actual_pages(work_dir, DB, GROWTH_COLL))
+        return not drifted
+
+    bu.wait_until(settled, timeout_s=15, interval_s=0.2)
     check("the recorded page occupancy still matches the pages on disk", not drifted, "; ".join(drifted))
 
     pk = conn.count_via_pk(coll=GROWTH_COLL)
@@ -676,7 +696,7 @@ def leave_the_index_half_built(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, HALF_BUILT_COLL)
     prefix = f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}-"
     for name in os.listdir(folder):
-        if name.startswith(prefix) and name.endswith(".idx"):
+        if name.startswith(prefix) and name.endswith((".idx", ".idxlog")):
             os.remove(os.path.join(folder, name))
     with open(os.path.join(folder, f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}.building"), "w") as marker:
         marker.write("0")
@@ -715,121 +735,14 @@ def leave_an_unindexed_record(work_dir: str):
         page.write(record.encode("utf-8"))
 
 
-KILLED_UPDATE_COLL = "killed_update_docs"
-KILLED_DELETE_COLL = "killed_delete_docs"
-KILLED_RELOCATE_COLL = "killed_relocate_docs"
-KILLED_DOCS = 5
-KILLED_ID = "killed1"
-
-
-def killed_doc(i: int, value: str = "acknowledged") -> dict:
-    return {"_id": f"killed{i}", "v": f"{value}-{i}"}
-
-
-def seed_collections_whose_compactions_a_kill_will_interrupt(conn: Conn):
-    section("Seed collections whose in-place update, delete and relocation a kill will interrupt")
-    for coll in (KILLED_UPDATE_COLL, KILLED_DELETE_COLL, KILLED_RELOCATE_COLL):
-        check_status(f"create {coll}",
-                     conn.create_coll(coll), "OK")
-        for i in range(KILLED_DOCS):
-            check_status(f"save killed{i} into {coll}", conn.save(killed_doc(i), coll=coll), "OK")
-    check_status(f"index v in {KILLED_DELETE_COLL}",
-                 conn.create_index("v", coll=KILLED_DELETE_COLL), "OK")
-
-
-def interrupt_a_compaction(work_dir: str, coll: str, kind: str):
-    folder = os.path.join(work_dir, "db", DB, coll)
-    pk_path = pk_index_file(work_dir, DB, coll)
-    rows = bu.read_pk_rows(pk_path)
-    row = next(r for r in rows if r[0] == KILLED_ID)
-    _, position, length, page, _ = row
-    page_path = os.path.join(folder, f"{coll}-{page}.dat")
-    with open(page_path, "rb") as fp:
-        page_bytes = fp.read()
-    bu.write_compaction_marker(folder, kind, DB, coll, row, page_bytes)
-    shifted = page_bytes[:position] + page_bytes[position + length:]
-    if kind == "UPDATE":
-        shifted += (json.dumps(killed_doc(1, "unacknowledged"), separators=(",", ":")) + "\n").encode("utf-8")
-    with open(page_path, "wb") as fp:
-        fp.write(shifted)
-    if kind == "RELOCATE":
-        kept = [r for r in rows if r[0] != KILLED_ID]
-        for r in kept:
-            if r[3] == page and r[1] > position:
-                r[1] -= length
-        bu.write_pk_rows(pk_path, kept)
-
-
-def interrupt_the_compactions(work_dir: str):
-    interrupt_a_compaction(work_dir, KILLED_UPDATE_COLL, "UPDATE")
-    interrupt_a_compaction(work_dir, KILLED_DELETE_COLL, "DELETE")
-    interrupt_a_compaction(work_dir, KILLED_RELOCATE_COLL, "RELOCATE")
-
-
-def found_value(conn: Conn, coll: str, doc_id: str):
-    response = conn.find(doc_id, coll=coll)
-    return (response.get("object") or {}).get("v") if response.get("status") == "OK" else None
-
-
-def compaction_markers_left(work_dir: str, coll: str) -> list:
-    folder = os.path.join(work_dir, "db", DB, coll)
-    return [name for name in os.listdir(folder) if name.endswith(".compacting")]
-
-
-def check_every_document_is_acknowledged(conn: Conn, work_dir: str, coll: str, expected_ids: list):
-    values = {f"killed{i}": found_value(conn, coll, f"killed{i}") for i in range(KILLED_DOCS)}
-    expected = {f"killed{i}": (f"acknowledged-{i}" if f"killed{i}" in expected_ids else None)
-                for i in range(KILLED_DOCS)}
-    check("FIND_BY_ID answers every document with its last acknowledged value", values == expected,
-          f"expected {expected} got {values}")
-    scanned = conn.ids(coll, FULL_SCAN)
-    check("a full scan lists exactly the same documents", scanned == sorted(expected_ids),
-          f"expected {sorted(expected_ids)} got {scanned}")
-    pk = conn.count_via_pk(coll=coll)
-    check("the index-only COUNT agrees with the scan", pk == len(expected_ids), f"count={pk}")
-    check("the compaction marker is gone", not compaction_markers_left(work_dir, coll),
-          f"left: {compaction_markers_left(work_dir, coll)}")
-
-
-def test_an_update_killed_mid_compaction_is_undone_at_startup(conn: Conn, work_dir: str):
-    section("An in-place update a kill interrupted mid-compaction is undone at startup")
-    check_every_document_is_acknowledged(conn, work_dir, KILLED_UPDATE_COLL,
-                                         [f"killed{i}" for i in range(KILLED_DOCS)])
-
-
-def test_a_delete_killed_mid_compaction_is_completed_at_startup(conn: Conn, work_dir: str):
-    section("A delete a kill interrupted mid-compaction is completed at startup")
-    check_every_document_is_acknowledged(conn, work_dir, KILLED_DELETE_COLL,
-                                         [f"killed{i}" for i in range(KILLED_DOCS) if f"killed{i}" != KILLED_ID])
-
-
-def killed_value_count(conn: Conn, prefix: list) -> int:
-    return conn.count(KILLED_DELETE_COLL, prefix + [bu.filter_step("v", "EQUALS", killed_doc(1)["v"])]) or 0
-
-
-def test_a_delete_killed_mid_compaction_leaves_no_index_entry(conn: Conn):
-    section("A delete a kill interrupted mid-compaction leaves no field-index entry behind")
-    scanned = killed_value_count(conn, FULL_SCAN)
-    bu.wait_until(lambda: killed_value_count(conn, []) == 0, timeout_s=15, interval_s=0.2)
-    indexed = killed_value_count(conn, [])
-    check("the scan no longer finds the deleted document", scanned == 0, f"scan={scanned}")
-    check("the index-only COUNT agrees with the scan once startup removed the deleted id",
-          indexed == scanned, f"indexed={indexed} scan={scanned}")
-
-
-def test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn: Conn, work_dir: str):
-    section("A grow-relocation a kill interrupted between its delete and its insert keeps the document")
-    check_every_document_is_acknowledged(conn, work_dir, KILLED_RELOCATE_COLL,
-                                         [f"killed{i}" for i in range(KILLED_DOCS)])
-
-
 def leftover_rows_folder(work_dir: str) -> str:
     return os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{LEFTOVER_ROWS_COLL}")
 
 
 def page_rows_mid_compaction(work_dir: str, coll: str) -> bool:
     folder = os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{coll}")
-    return os.path.isdir(folder) and any(name.endswith(".compacting") for name in os.listdir(folder))
+    return os.path.isdir(folder) and any(name.endswith((".intent", ".vacuum"))
+                                         for name in os.listdir(folder))
 
 
 def wait_for_settled_page_rows(work_dir: str, coll: str, timeout_s=15.0):
@@ -863,7 +776,8 @@ def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
     check("its page rows reached disk", settled, f"recorded {recorded} actual {actual}")
     copy = os.path.join(work_dir, LEFTOVER_ROWS_COPY)
     shutil.rmtree(copy, ignore_errors=True)
-    shutil.copytree(leftover_rows_folder(work_dir), copy, ignore=shutil.ignore_patterns("*.compacting"))
+    shutil.copytree(leftover_rows_folder(work_dir), copy,
+                    ignore=shutil.ignore_patterns("*.intent", "*.vacuum"))
     check_status("drop it", conn.send({"type": "DROP_COLLECTION", "databaseName": DB,
                                        "collectionName": LEFTOVER_ROWS_COLL}), "OK")
 
@@ -1045,7 +959,7 @@ def index_files(work_dir: str, db: str, coll: str) -> dict:
         return {}
     sizes = {}
     for f in os.listdir(folder):
-        if f.endswith(".idx"):
+        if f.endswith((".idx", ".idxlog")):
             try:
                 sizes[f] = os.path.getsize(os.path.join(folder, f))
             except FileNotFoundError:
@@ -1053,13 +967,17 @@ def index_files(work_dir: str, db: str, coll: str) -> dict:
     return sizes
 
 
-def await_index_file(conn: Conn, work_dir: str, coll: str, name: str, present: bool,
+def await_index_file(work_dir: str, coll: str, name: str, present: bool,
                      timeout: float = 15.0) -> bool:
-    return bool(bu.wait_until(lambda: (name in index_files(work_dir, DB, coll)) == present, timeout, 0.2))
+    def type_present() -> bool:
+        files = index_files(work_dir, DB, coll)
+        return name in files or name + "log" in files
+
+    return bool(bu.wait_until(lambda: type_present() == present, timeout, 0.2))
 
 
 def test_an_index_with_no_entries_left_is_removed(conn: Conn, work_dir: str):
-    section("An index file whose last line was removed is deleted, not left empty")
+    section("An index type whose last entry was removed is deleted, base and log alike, not left empty")
     boolean_index = f"{EMPTY_IDX_COLL}-mixed-Boolean.idx"
     check_status("create the collection",
                  conn.create_coll(EMPTY_IDX_COLL), "OK")
@@ -1071,14 +989,14 @@ def test_an_index_with_no_entries_left_is_removed(conn: Conn, work_dir: str):
         check_status(f"write a string-valued document {i}",
                      conn.save({"_id": f"str{i}", "mixed": f"value{i}"}, coll=EMPTY_IDX_COLL), "OK")
     check("the boolean index file exists while a boolean value does",
-          await_index_file(conn, work_dir, EMPTY_IDX_COLL, boolean_index, True),
+          await_index_file(work_dir, EMPTY_IDX_COLL, boolean_index, True),
           f"index files: {sorted(index_files(work_dir, DB, EMPTY_IDX_COLL))}")
 
     check_status("rewrite the only boolean document with a string value",
                  conn.save({"_id": "bool1", "mixed": "value9"}, coll=EMPTY_IDX_COLL), "OK")
 
     check("the now-entryless boolean index file is gone rather than empty",
-          await_index_file(conn, work_dir, EMPTY_IDX_COLL, boolean_index, False),
+          await_index_file(work_dir, EMPTY_IDX_COLL, boolean_index, False),
           f"index files: {index_files(work_dir, DB, EMPTY_IDX_COLL)}")
 
     contains = bu.filter_step("mixed", "CONTAINS", "value")
@@ -1568,8 +1486,8 @@ def test_not_equals_null_returns_the_documents_that_are_not_null(conn: Conn):
     conn.save({"_id": "u_num", "v": 7}, coll=coll)
     conn.save({"_id": "u_absent"}, coll=coll)
 
-    def against_null(operator: str) -> list:
-        return conn.ids(coll, [bu.filter_step("v", operator, None)])
+    def against_null(operator_type: str) -> list:
+        return conn.ids(coll, [bu.filter_step("v", operator_type, None)])
 
     for stage in ("unindexed", "indexed"):
         if stage == "indexed":
@@ -1593,8 +1511,8 @@ def test_in_and_not_in_treat_null_as_a_member(conn: Conn):
     conn.save({"_id": "m_one", "x": 1}, coll=coll)
     conn.save({"_id": "m_absent"}, coll=coll)
 
-    def ids(operator: str, value) -> list:
-        return conn.ids(coll, [bu.filter_step("x", operator, value)])
+    def ids(operator_type: str, operand) -> list:
+        return conn.ids(coll, [bu.filter_step("x", operator_type, operand)])
 
     expected = [("IN", [None], ["m_null"]), ("IN", [1, None], ["m_null", "m_one"]),
                 ("NOT_IN", [None], ["m_one"]), ("NOT_IN", [1, None], []), ("NOT_IN", [1], ["m_null"])]
@@ -1617,35 +1535,56 @@ def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
     return sorted(f for f in os.listdir(folder) if f.endswith(("-indexes.dirty", "-indexes.unclean")))
 
 
-def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
+def kill_while_an_index_batch_is_half_flushed(conn: Conn, work_dir: str, proc) -> bool:
     check_status("create the collection whose indexes will be left dirty",
                  conn.create_coll(DIRTY_COLL), "OK")
     check_status("index a field on it",
                  conn.create_index("n", coll=DIRTY_COLL), "OK")
-    stop = threading.Event()
-
-    def writer():
-        with admin_conn() as writer_conn:
-            index = 0
-            while not stop.is_set():
-                writer_conn.save({"_id": f"d{index:05d}", "n": index, "pad": PAD}, coll=DIRTY_COLL)
-                index += 1
-
-    thread = threading.Thread(target=writer, daemon=True)
-    thread.start()
-    try:
-        deadline = time.time() + 30.0
-        while time.time() < deadline:
-            if dirty_markers(work_dir):
-                proc.kill()
-                return bool(dirty_markers(work_dir))
-        return False
-    finally:
-        stop.set()
-        thread.join(timeout=5.0)
+    check_status("park the index worker right after it flushed the batch's first type file",
+                 conn.send({"type": "ARM_FAULT", "point": "INDEX_BATCH_FLUSHED", "action": "PAUSE",
+                            "match": f"{DB}|{DIRTY_COLL}"}), "OK")
+    check_status("write a batch the parked worker will be indexing",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": DIRTY_COLL,
+                            "objects": [{"_id": f"d0000-{i:03d}", "n": i, "pad": PAD}
+                                        for i in range(DIRTY_BATCH)]}), "OK")
+    check_status("the worker reached the flush point and is parked there",
+                 conn.send({"type": "AWAIT_FAULT", "point": "INDEX_BATCH_FLUSHED", "timeoutMs": 30000}), "OK")
+    marked = bool(dirty_markers(work_dir))
+    proc.kill()
+    return marked and bool(dirty_markers(work_dir))
 
 
-def test_an_unclean_stop_is_reported_at_the_next_startup(work_dir: str, log_path: str, log_offset: int):
+def wait_for_drained_markers(work_dir: str, coll: str, deadline_s: float) -> float:
+    started = time.time()
+    while time.time() - started < deadline_s:
+        if not dirty_markers(work_dir, coll=coll):
+            return time.time() - started
+        time.sleep(0.2)
+    return -1.0
+
+
+def test_bulk_insert_with_two_indexes_converges_quickly(conn: Conn, work_dir: str):
+    section(f"{CONVERGE_DOCS} inserts into a collection with two indexes are indexed within {CONVERGE_DEADLINE_S:.0f}s")
+    check_status("create the collection", conn.create_coll(CONVERGE_COLL), "OK")
+    for field in ("cat", "email"):
+        check_status(f"index {field}", conn.create_index(field, coll=CONVERGE_COLL), "OK")
+    for start in range(0, CONVERGE_DOCS, CONVERGE_BULK):
+        check_status(f"bulk insert {start}..{start + CONVERGE_BULK - 1}",
+                     conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": CONVERGE_COLL,
+                                "objects": [{"_id": f"v{i:05d}", "cat": f"c{i % 20}", "email": f"u{i}@x.io"}
+                                            for i in range(start, start + CONVERGE_BULK)]}), "OK")
+    drained_after = wait_for_drained_markers(work_dir, CONVERGE_COLL, CONVERGE_DEADLINE_S)
+    check("field-index maintenance drained the pending marker in time", drained_after >= 0,
+          f"the -indexes.dirty marker was still there {CONVERGE_DEADLINE_S:.0f}s after the last acknowledgement")
+    for field, value in (("cat", "c7"), ("email", "u12345@x.io")):
+        equals = bu.filter_step(field, "EQUALS", value)
+        by_index = sorted(conn.ids(CONVERGE_COLL, [equals]))
+        by_scan = sorted(conn.ids(CONVERGE_COLL, [{"type": "SKIP", "skip": 0}, equals]))
+        check(f"the {field} index answers exactly what a scan answers", by_index == by_scan and by_index,
+              f"index={len(by_index)} scan={len(by_scan)}")
+
+
+def test_an_unclean_stop_is_reported_at_the_next_startup(log_path: str, log_offset: int):
     section("Startup names a collection whose field-index work never drained")
 
     with open(log_path, "rb") as fp:
@@ -1766,11 +1705,11 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
             with admin_conn() as writer_conn:
                 counter = 0
                 while not stop.is_set():
-                    doc_id = f"race{index}-{counter:05d}"
+                    race_id = f"race{index}-{counter:05d}"
                     counter += 1
-                    if writer_conn.save({"_id": doc_id, "pad": "x"}, coll=HEAL_COLL).get("status") == "OK":
+                    if writer_conn.save({"_id": race_id, "pad": "x"}, coll=HEAL_COLL).get("status") == "OK":
                         with guard:
-                            committed.append(doc_id)
+                            committed.append(race_id)
         except Exception as exc:
             errors.append(f"writer {index}: {exc}")
 
@@ -1897,8 +1836,9 @@ def admin_collection_rows(work_dir: str) -> str:
     folder = os.path.join(work_dir, "db", "admin", "collections")
     text = []
     for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
-        with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as fp:
-            text.append(fp.read())
+        if name.endswith(".dat"):
+            with open(os.path.join(folder, name), "rb") as fp:
+                text.extend(record.decode("utf-8", errors="replace") for record in live_records(fp.read()))
     return "\n".join(text)
 
 
@@ -1921,6 +1861,161 @@ def test_every_registered_collection_is_unregistered_when_its_database_is_droppe
     check("the re-created database lists no collection", registration_collections(conn) == [],
           f"got {registration_collections(conn)}")
     conn.send({"type": "DROP_DATABASE", "databaseName": REGISTRATION_DB})
+
+
+LARGE_COLL = "large_update_docs"
+LARGE_DOCS = 50_000
+LARGE_BATCH = 1000
+LARGE_UPDATES = 2000
+LARGE_UPDATE_BUDGET_S = 20.0
+MEMORY_PK_COLL = "pk_rewritten_from_memory"
+MEMORY_PK_DOCS = 3000
+MEMORY_PK_OPS = 1500
+PK_ORDER_COLL = "pk_order_churn"
+PK_ORDER_DOCS = 2000
+PK_ORDER_OPS = 1500
+
+
+def sized_doc(prefix: str, i: int, value: int) -> dict:
+    return {"_id": f"{prefix}_{i:05d}", "v": value, "pad": "q" * (20 + value % 7 * 9)}
+
+
+def bulk_insert(conn: Conn, coll: str, prefix: str, count: int) -> bool:
+    for start in range(0, count, LARGE_BATCH):
+        objects = [sized_doc(prefix, i, 0) for i in range(start, min(start + LARGE_BATCH, count))]
+        response = conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": objects})
+        if response.get("status") != "OK":
+            return check_status(f"bulk insert {coll} from {start}", response, "OK")
+    return True
+
+
+def values_by_id_lookup(conn: Conn, coll: str, ids: list) -> dict:
+    found = {}
+    for start in range(0, len(ids), LARGE_BATCH):
+        response = conn.aggregate(coll, [bu.filter_step("_id", "IN", ids[start:start + LARGE_BATCH])])
+        found.update({d.get("_id"): d.get("v") for d in response.get("results") or []})
+    return found
+
+
+def values_by_scan(conn: Conn, coll: str) -> dict:
+    return {d.get("_id"): d.get("v") for d in conn.aggregate(coll, FULL_SCAN).get("results") or []}
+
+
+def test_updates_on_a_large_collection_stay_fast(conn: Conn):
+    section(f"{LARGE_UPDATES} SAVE updates on a {LARGE_DOCS}-document collection stay fast and consistent")
+    check_status(f"create {LARGE_COLL}", conn.create_coll(LARGE_COLL), "OK")
+    if not bulk_insert(conn, LARGE_COLL, "large", LARGE_DOCS):
+        return
+    expected = {f"large_{i:05d}": 0 for i in range(LARGE_DOCS)}
+    refused = []
+    started = time.monotonic()
+    for update in range(LARGE_UPDATES):
+        doc = sized_doc("large", (update * 7919 + 13) % LARGE_DOCS, update + 1)
+        if conn.save(doc, coll=LARGE_COLL).get("status") != "OK":
+            refused.append(doc["_id"])
+        expected[doc["_id"]] = doc["v"]
+    elapsed = time.monotonic() - started
+    check("every update was acknowledged", not refused, f"refused: {refused[:5]}")
+    if elapsed >= LARGE_UPDATE_BUDGET_S:
+        bu.warn(f"the updates took {elapsed:.1f} s, over the {LARGE_UPDATE_BUDGET_S:.0f} s expected on an idle machine",
+                "timing is load-sensitive; AllocationBudgetTest is the deterministic guard")
+    by_id = values_by_id_lookup(conn, LARGE_COLL, sorted(expected))
+    check("every document reads back by id with its last value", by_id == expected,
+          f"wrong or missing: {sorted(k for k in expected if by_id.get(k) != expected[k])[:5]}")
+    scanned = values_by_scan(conn, LARGE_COLL)
+    check("and a scan answers the same", scanned == expected,
+          f"scanned={len(scanned)} expected={len(expected)}")
+
+
+def rewrite_a_pk_index_from_memory(conn: Conn) -> tuple:
+    section("Updates, deletes, relocations and inserts rewrite pk.idx from the resident rows")
+    check_status(f"create {MEMORY_PK_COLL}", conn.create_coll(MEMORY_PK_COLL), "OK")
+    bulk_insert(conn, MEMORY_PK_COLL, "mem", MEMORY_PK_DOCS)
+    live = [f"mem_{i:05d}" for i in range(MEMORY_PK_DOCS)]
+    expected = dict.fromkeys(live, 0)
+    deleted = []
+    refused = []
+    for op in range(MEMORY_PK_OPS):
+        target = live[(op * 7919 + 17) % len(live)]
+        if op % 10 < 7:
+            doc = sized_doc("mem", int(target[4:]), op + 1)
+            response = conn.save(doc, coll=MEMORY_PK_COLL)
+            expected[target] = doc["v"]
+        elif op % 10 < 9:
+            response = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": MEMORY_PK_COLL,
+                                  "_id": target})
+            live.remove(target)
+            del expected[target]
+            deleted.append(target)
+        else:
+            doc = sized_doc("mem", MEMORY_PK_DOCS + op, 1)
+            response = conn.save(doc, coll=MEMORY_PK_COLL)
+            live.append(doc["_id"])
+            expected[doc["_id"]] = 1
+        if response.get("status") != "OK":
+            refused.append(target)
+    check("every write was acknowledged", not refused, f"refused: {refused[:5]}")
+    return expected, deleted
+
+
+def churn_relocations_deletes_and_inserts(conn: Conn) -> tuple:
+    section("Growing updates, deletes and inserts keep the resident pk rows sorted")
+    check_status(f"create {PK_ORDER_COLL}", conn.create_coll(PK_ORDER_COLL), "OK")
+    bulk_insert(conn, PK_ORDER_COLL, "ord", PK_ORDER_DOCS)
+    expected = {f"ord_{i:05d}": 0 for i in range(PK_ORDER_DOCS)}
+    deleted = []
+    refused = []
+    for op in range(PK_ORDER_OPS):
+        target = f"ord_{(op * 7919 + 29) % PK_ORDER_DOCS:05d}"
+        if op % 3 == 0 and target in expected:
+            response = conn.save({"_id": target, "v": op + 1, "pad": GROWTH_PAD}, coll=PK_ORDER_COLL)
+            expected[target] = op + 1
+        elif op % 3 == 1 and target in expected:
+            response = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PK_ORDER_COLL,
+                                  "_id": target})
+            del expected[target]
+            deleted.append(target)
+        else:
+            doc = sized_doc("ord", PK_ORDER_DOCS + op, 1)
+            response = conn.save(doc, coll=PK_ORDER_COLL)
+            expected[doc["_id"]] = 1
+        if response.get("status") != "OK":
+            refused.append(target)
+    check("every write was acknowledged", not refused, f"refused: {refused[:5]}")
+    written = (expected, deleted)
+    test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn, written)
+    return written
+
+
+def test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn: Conn, written: tuple):
+    section("An _id IN served by the pk index answers what a scan answers")
+    expected, deleted = written
+    sample = sorted(expected)[::7] + deleted[::5]
+    in_sample = [bu.filter_step("_id", "IN", sample)]
+    by_pk = conn.ids(PK_ORDER_COLL, in_sample)
+    by_scan = conn.ids(PK_ORDER_COLL, FULL_SCAN + in_sample)
+    check("the pk index and the scan return the same ids", by_pk == by_scan,
+          f"pk={len(by_pk)} scan={len(by_scan)} differ={sorted(set(by_pk) ^ set(by_scan))[:5]}")
+    check("and they are exactly the surviving ids of the sample",
+          by_pk == sorted(i for i in sample if i in expected), f"got {len(by_pk)}")
+    check("FIND_BY_ID answers every surviving id with its last value",
+          values_by_id_lookup(conn, PK_ORDER_COLL, sorted(expected)) == expected)
+    check("the scan returns exactly the surviving values", values_by_scan(conn, PK_ORDER_COLL) == expected)
+
+
+def test_pk_index_rewritten_from_memory_survives_restart(conn: Conn, written: tuple):
+    section("A pk.idx rewritten from memory serves every id after an unclean restart")
+    expected, deleted = written
+    wrong = [i for i, v in expected.items()
+             if (conn.find(i, coll=MEMORY_PK_COLL).get("object") or {}).get("v") != v]
+    check("FIND_BY_ID answers every surviving id with its last value", not wrong, f"wrong: {wrong[:5]}")
+    resurrected = [i for i in deleted if conn.find(i, coll=MEMORY_PK_COLL).get("status") == "OK"]
+    check("no deleted id is found", not resurrected, f"found: {resurrected[:5]}")
+    by_pk = conn.count_via_pk(coll=MEMORY_PK_COLL)
+    by_scan = conn.count_via_scan(coll=MEMORY_PK_COLL)
+    check("COUNT over the pk index equals the scan and the acknowledged writes",
+          by_pk == by_scan == len(expected), f"pk={by_pk} scan={by_scan} expected={len(expected)}")
+    check("the scan returns exactly the surviving values", values_by_scan(conn, MEMORY_PK_COLL) == expected)
 
 
 SHUTDOWN_COLL = "shutdown_writes"
@@ -1971,6 +2066,111 @@ def test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_co
           f"indexed={len(found)} scanned={len(scanned)}")
 
 
+def seed_a_database_whose_collection_will_be_a_symlink(conn: Conn):
+    check_status("create the database whose collection folder becomes a symlink",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": SYMLINK_DB}), "OK")
+    check_status("create the collection that will be linked", conn.create_coll(SYMLINK_COLL, db=SYMLINK_DB), "OK")
+    check_status("write a document into it",
+                 conn.save({"_id": "linked", "v": 1}, db=SYMLINK_DB, coll=SYMLINK_COLL), "OK")
+
+
+def symlink_target(work_dir: str) -> str:
+    return os.path.join(work_dir, SYMLINK_TARGET)
+
+
+def link_the_collection_folder_elsewhere(work_dir: str) -> bool:
+    folder = os.path.join(work_dir, "db", SYMLINK_DB, SYMLINK_COLL)
+    target = symlink_target(work_dir)
+    shutil.move(folder, target)
+    with open(os.path.join(target, SYMLINK_PRECIOUS), "w") as fp:
+        fp.write("must survive the drop")
+    try:
+        os.symlink(target, folder, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        shutil.move(target, folder)
+        return False
+    return True
+
+
+def test_drop_database_does_not_follow_a_symlink(conn: Conn, work_dir: str, linked: bool):
+    section("DROP_DATABASE unlinks a symlinked collection folder and keeps its target")
+    if not linked:
+        bu.warn("symbolic links are not available on this host; skipped")
+        return
+    check_status("the collection is served through the link",
+                 conn.find("linked", db=SYMLINK_DB, coll=SYMLINK_COLL), "OK")
+    check_status("DROP_DATABASE over a symlinked collection folder",
+                 conn.send({"type": "DROP_DATABASE", "databaseName": SYMLINK_DB}), "OK")
+    check("the database folder is gone", not os.path.lexists(os.path.join(work_dir, "db", SYMLINK_DB)))
+    check("the file in the link's target survived the drop",
+          os.path.isfile(os.path.join(symlink_target(work_dir), SYMLINK_PRECIOUS)))
+    check("the link's target still holds the collection's page files",
+          any(name.endswith(".dat") for name in os.listdir(symlink_target(work_dir))))
+
+
+BACKLOG_DB = "backlog_db"
+BACKLOG_PARKED_COLL = "parked_index_docs"
+BACKLOG_COLL = "held_back_docs"
+BACKLOG_MAX_EVENTS = 10
+BACKLOG_WAIT_MS = 200
+
+
+def test_backlog_full_write_is_503_16(conn: Conn):
+    section("A write that finds the background queue full waits, then is refused with nothing written")
+    check_status("create the database", conn.send({"type": "CREATE_DATABASE", "databaseName": BACKLOG_DB}), "OK")
+    for coll in (BACKLOG_PARKED_COLL, BACKLOG_COLL):
+        check_status(f"create {coll}", conn.create_coll(coll, db=BACKLOG_DB), "OK")
+    check_status("index the collection whose batch will park the only worker",
+                 conn.create_index("n", coll=BACKLOG_PARKED_COLL, db=BACKLOG_DB), "OK")
+    check_status("park the background worker inside its next index batch",
+                 conn.send({"type": "ARM_FAULT", "point": "INDEX_BATCH_FLUSHED", "action": "PAUSE",
+                            "match": f"{BACKLOG_DB}|{BACKLOG_PARKED_COLL}"}), "OK")
+    check_status("write the document whose indexing parks the worker",
+                 conn.save({"_id": "parker", "n": 1}, db=BACKLOG_DB, coll=BACKLOG_PARKED_COLL), "OK")
+    check_status("the worker is parked", conn.send({"type": "AWAIT_FAULT", "point": "INDEX_BATCH_FLUSHED",
+                                                    "timeoutMs": 30000}), "OK")
+    refused = None
+    acknowledged = 0
+    for i in range(BACKLOG_MAX_EVENTS * 4):
+        started = time.time()
+        response = conn.save({"_id": f"held{i}", "n": i}, db=BACKLOG_DB, coll=BACKLOG_COLL)
+        if response.get("errorCode") == "503-16":
+            refused = (f"held{i}", (time.time() - started) * 1000)
+            break
+        acknowledged += 1
+    check("once the queue holds backgroundQueueMaxEvents events a SAVE is refused with 503-16",
+          refused is not None, f"{acknowledged} saves were all acknowledged behind a parked worker")
+    if refused is not None:
+        check(f"the refused SAVE waited about backgroundBacklogWaitMs ({BACKLOG_WAIT_MS} ms) first",
+              refused[1] >= BACKLOG_WAIT_MS * 0.8, f"refused after {refused[1]:.0f} ms")
+        check_code("the refused SAVE wrote nothing", conn.find(refused[0], db=BACKLOG_DB, coll=BACKLOG_COLL),
+                   "NOT_FOUND", "404-2")
+    check_status("a read is never held back", conn.find("held0", db=BACKLOG_DB, coll=BACKLOG_COLL), "OK")
+    check_status("release the parked worker", conn.send({"type": "RELEASE_FAULT", "point": "INDEX_BATCH_FLUSHED"}),
+                 "OK")
+    deadline = time.time() + 30.0
+    retried = conn.save({"_id": "after-drain", "n": 0}, db=BACKLOG_DB, coll=BACKLOG_COLL)
+    while retried.get("errorCode") == "503-16" and time.time() < deadline:
+        time.sleep(0.1)
+        retried = conn.save({"_id": "after-drain", "n": 0}, db=BACKLOG_DB, coll=BACKLOG_COLL)
+    check_status("the same write succeeds once the queue drains", retried, "OK")
+
+
+def run_backlog_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-backlog-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, faultInjectionEnabled=True, backgroundProcessingThreads=1,
+                    backgroundQueueMaxEvents=BACKLOG_MAX_EVENTS, backgroundBacklogWaitMs=BACKLOG_WAIT_MS)
+    print(f"\n  Starting server on {HOST}:{PORT} with backgroundQueueMaxEvents={BACKLOG_MAX_EVENTS} ...")
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            test_backlog_full_write_is_503_16(conn)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -1982,7 +2182,7 @@ def main():
 
     proc = None
     try:
-        write_config(work_dir)
+        write_config(work_dir, faults=True)
         print(f"  Starting server on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
@@ -2022,22 +2222,26 @@ def main():
             test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn)
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
+            test_bulk_insert_with_two_indexes_converges_quickly(conn, work_dir)
+            test_updates_on_a_large_collection_stay_fast(conn)
+            memory_pk_written = rewrite_a_pk_index_from_memory(conn)
+            pk_order_written = churn_relocations_deletes_and_inserts(conn)
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
             seed_a_collection_whose_page_tail_will_tear(conn)
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
             seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn)
             seed_collections_for_primary_key_rebuilds(conn)
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
-            seed_collections_whose_compactions_a_kill_will_interrupt(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
             seed_a_collection_its_database_will_stop_listing(conn)
+            seed_a_database_whose_collection_will_be_a_symlink(conn)
             interrupted = admin_conn()
             arrange_a_killed_commit_with_repeated_ids(interrupted, work_dir)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
-                  kill_while_the_indexes_are_dirty(conn, work_dir, proc),
-                  "the background queue drained before the kill landed")
+                  kill_while_an_index_batch_is_half_flushed(conn, work_dir, proc),
+                  "the index batch was not parked at INDEX_BATCH_FLUSHED when the kill landed")
         proc.wait(timeout=30)
         log_offset = os.path.getsize(log_path)
         proc = None
@@ -2053,16 +2257,18 @@ def main():
         damage_the_pk_indexes_to_rebuild(work_dir)
         leave_the_index_half_built(work_dir)
         leave_an_unindexed_record(work_dir)
-        interrupt_the_compactions(work_dir)
         interrupt_the_drops(work_dir)
         unlist_the_collection(work_dir)
         tear_an_admin_page_tail(work_dir)
+        linked = link_the_collection_folder_elsewhere(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
         proc = bu.start_server(work_dir, log_path)
-        test_an_unclean_stop_is_reported_at_the_next_startup(work_dir, log_path, log_offset)
+        test_an_unclean_stop_is_reported_at_the_next_startup(log_path, log_offset)
         with admin_conn() as conn:
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
+            test_pk_index_rewritten_from_memory_survives_restart(conn, memory_pk_written)
+            test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn, pk_order_written)
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
             test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
             test_a_lost_line_end_is_restored_at_startup(conn, work_dir)
@@ -2073,10 +2279,6 @@ def main():
             test_reindex_primary_key_restores_a_record_pk_idx_lost(conn)
             test_reindex_primary_key_refuses_a_duplicated_record(conn, work_dir)
             test_an_unindexed_record_is_adopted_at_startup(conn)
-            test_an_update_killed_mid_compaction_is_undone_at_startup(conn, work_dir)
-            test_a_delete_killed_mid_compaction_is_completed_at_startup(conn, work_dir)
-            test_a_delete_killed_mid_compaction_leaves_no_index_entry(conn)
-            test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn, work_dir)
             test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn)
             test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn, work_dir)
             test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
@@ -2087,6 +2289,7 @@ def main():
             test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn, work_dir)
             test_an_unlisted_collection_is_relisted_at_startup(conn, work_dir)
             test_a_killed_commit_with_repeated_ids_replays_to_its_last_value(conn, work_dir)
+            test_drop_database_does_not_follow_a_symlink(conn, work_dir, linked)
         bu.stop_server(proc)
         proc = None
         restore_the_old_grammar_pk_index(work_dir)
@@ -2105,6 +2308,28 @@ def main():
         with admin_conn() as conn:
             test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_connected(conn, acknowledged)
             test_every_registered_collection_is_unregistered_when_its_database_is_dropped(conn, work_dir)
+        bu.stop_server(proc)
+        proc = None
+
+        proc, kill_rounds = write_intent_kills.run(work_dir, log_path, admin_conn,
+                                                   lambda: write_config(work_dir, faults=True))
+        with admin_conn() as conn:
+            write_intent_kills.test_every_killed_write_recovers_to_what_its_pk_index_committed(conn, work_dir,
+                                                                                               kill_rounds)
+            latest = write_intent_kills.churn(conn)
+            write_intent_kills.test_update_churn_keeps_every_page_within_a_quarter_of_dead_space(conn, work_dir, latest,
+                                                                                                MAX_PAGE_BYTES)
+            write_intent_kills.test_pk_idx_compacts_under_update_churn(work_dir, latest)
+        bu.stop_server(proc)
+        proc = None
+
+        print(f"  Restarting server on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path)
+        write_intent_kills.test_page_rows_equal_live_bytes_after_a_restart(work_dir, recorded_pages)
+        bu.stop_server(proc)
+        proc = None
+
+        run_backlog_phase()
     finally:
         bu.stop_server(proc)
 

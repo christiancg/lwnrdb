@@ -50,12 +50,12 @@ public final class ObjectEnumeration {
             final var rawKey = invoker.call(callback, JsUndefined.getInstance(),
                     List.of(items.get(i), new JsNumber(i)));
             final var propertyKey = toPropertyKey(rawKey, ops);
-            groupByBucket(result, propertyKey).push(items.get(i));
+            groupByBucket(result, propertyKey, ops).push(items.get(i));
         }
         return result;
     }
 
-    public static JsArray groupByBucket(JsObject result, JsValue propertyKey) {
+    public static JsArray groupByBucket(JsObject result, JsValue propertyKey, InterpreterOps ops) {
         if (propertyKey instanceof JsSymbol symbol) {
             if (result.getSymbol(symbol) instanceof JsArray existing) {
                 return existing;
@@ -64,7 +64,7 @@ public final class ObjectEnumeration {
             result.setSymbol(symbol, bucket);
             return bucket;
         }
-        final var key = JsCoercion.toStr(propertyKey);
+        final var key = JsCoercion.toStr(propertyKey, ops);
         if (result.get(key) instanceof JsArray existing) {
             return existing;
         }
@@ -75,11 +75,24 @@ public final class ObjectEnumeration {
 
     public static void chargeEnumeration(JsValue target, int perKey, InterpreterOps ops) {
         final var count = switch (target) {
-            case JsArray array -> array.length() + array.namedPropertyKeys().size();
+            case JsArray array -> array.populatedIndices().size() + array.namedPropertyKeys().size();
             case JsObject object -> object.keys().size();
             default -> 0L;
         };
         InterpreterOps.chargeElements(ops, count * perKey);
+    }
+
+    private static List<Integer> enumerableIndices(JsArray array, InterpreterOps ops) {
+        final var indices = new ArrayList<Integer>();
+        var visited = 0L;
+        for (final var index : array.populatedIndices()) {
+            visited++;
+            InterpreterOps.pace(ops, visited);
+            if (array.getIndexFlags(index).enumerable()) {
+                indices.add(index);
+            }
+        }
+        return indices;
     }
 
     public static JsValue keys(List<JsValue> args, InterpreterOps ops) {
@@ -107,10 +120,8 @@ public final class ObjectEnumeration {
                 }
             }
             case JsArray array -> {
-                for (var i = 0; i < array.length(); i++) {
-                    if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
-                        result.push(new JsString(Integer.toString(i)));
-                    }
+                for (final var i : enumerableIndices(array, ops)) {
+                    result.push(new JsString(Integer.toString(i)));
                 }
                 for (final var key : array.namedPropertyKeys()) {
                     if (array.getPropFlags(key).enumerable()) {
@@ -158,10 +169,8 @@ public final class ObjectEnumeration {
                 }
             }
             case JsArray array -> {
-                for (var i = 0; i < array.length(); i++) {
-                    if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
-                        result.push(ops.getMember(array, new JsString(Integer.toString(i))));
-                    }
+                for (final var i : enumerableIndices(array, ops)) {
+                    result.push(ops.getMember(array, new JsString(Integer.toString(i))));
                 }
                 for (final var key : array.namedPropertyKeys()) {
                     if (array.getPropFlags(key).enumerable()) {
@@ -204,11 +213,9 @@ public final class ObjectEnumeration {
                 }
             }
             case JsArray array -> {
-                for (var i = 0; i < array.length(); i++) {
-                    if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
-                        final var key = Integer.toString(i);
-                        result.push(new JsArray(List.of(new JsString(key), ops.getMember(array, new JsString(key)))));
-                    }
+                for (final var i : enumerableIndices(array, ops)) {
+                    final var key = Integer.toString(i);
+                    result.push(new JsArray(List.of(new JsString(key), ops.getMember(array, new JsString(key)))));
                 }
                 for (final var key : array.namedPropertyKeys()) {
                     if (array.getPropFlags(key).enumerable()) {
@@ -267,7 +274,7 @@ public final class ObjectEnumeration {
                 final var value = ops.getMember(from, key);
                 if (!ops.setMember(to, key, value)) {
                     throw new TypeErrorException(
-                            "Cannot assign to read only property '" + JsCoercion.toStr(key) + "' of object");
+                            "Cannot assign to read only property '" + JsCoercion.describe(key) + "' of object");
                 }
             }
         }
@@ -286,7 +293,8 @@ public final class ObjectEnumeration {
         final var one = new JsString("1");
         new Iteration(ops, source).forEach(entry -> {
             if (!InterpreterUtils.isObjectLike(entry)) {
-                throw new TypeErrorException("Iterator value " + JsCoercion.toStr(entry) + " is not an entry object");
+                throw new TypeErrorException(
+                        "Iterator value " + JsCoercion.describe(entry) + " is not an entry object");
             }
             final var key = ops.getMember(entry, zero);
             final var value = ops.getMember(entry, one);
@@ -294,7 +302,7 @@ public final class ObjectEnumeration {
             if (propertyKey instanceof JsSymbol symbol) {
                 result.setSymbol(symbol, value);
             } else {
-                result.set(JsCoercion.toStr(propertyKey), value);
+                result.set(JsCoercion.toStr(propertyKey, ops), value);
             }
         });
         return result;

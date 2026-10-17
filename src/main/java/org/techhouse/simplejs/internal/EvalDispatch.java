@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.*;
 
 import java.util.List;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.internal.interpreter.HoistPlan;
@@ -106,9 +107,17 @@ final class EvalDispatch {
 
     Completion evalStatement(Statement statement, Environment env) {
         interpreter.callStack.setPosition(statement.getPosition());
+        try {
+            return dispatchStatement(statement, env);
+        } catch (SimpleJsRuntimeException error) {
+            throw interpreter.callStack.stamp(error);
+        }
+    }
+
+    private Completion dispatchStatement(Statement statement, Environment env) {
         return switch (statement.getType()) {
             case BLOCK_STATEMENT -> interpreter.statements.evalBlock((BlockStatement) statement, env);
-            case EMPTY_STATEMENT -> Completion.empty();
+            case EMPTY_STATEMENT, FUNCTION_DECLARATION, EXPORT_ALL_DECLARATION -> Completion.empty();
             case EXPRESSION_STATEMENT ->
                 Completion.normal(eval(((ExpressionStatement) statement).getExpression(), env));
             case VARIABLE_DECLARATION -> interpreter.evalVariableDeclaration((VariableDeclaration) statement, env);
@@ -126,7 +135,6 @@ final class EvalDispatch {
             case THROW_STATEMENT -> throw new JsThrowException(eval(((ThrowStatement) statement).getArgument(), env));
             case TRY_STATEMENT -> interpreter.statements.evalTry((TryStatement) statement, env);
             case CLASS_DECLARATION -> interpreter.classes.evalClassDeclaration((ClassDeclaration) statement, env);
-            case FUNCTION_DECLARATION -> Completion.empty();
             case IMPORT_DECLARATION -> {
                 interpreter.modules.bindImport((ImportDeclaration) statement, env);
                 yield Completion.empty();
@@ -139,7 +147,6 @@ final class EvalDispatch {
                 interpreter.modules.evalExportDefault((ExportDefaultDeclaration) statement, env);
                 yield Completion.empty();
             }
-            case EXPORT_ALL_DECLARATION -> Completion.empty();
             default -> throw new UnsupportedNodeException(statement.getType().name());
         };
     }

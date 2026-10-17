@@ -16,6 +16,9 @@ public final class CacheSizeEstimator {
     private static final int TYPICAL_ID_LENGTH = 36;
     private static final int COLLECTION_TABLE_SLOTS_PER_ENTRY = 2;
     private static final String TYPICAL_ID = "x".repeat(TYPICAL_ID_LENGTH);
+    private static final String SHORTEST_ID = "x";
+    private static final int SHORTEST_LIVE_PK_ROW_BYTES = 11;
+    private static final int TYPICAL_INDEXED_ID_BYTES = TYPICAL_ID_LENGTH + 1;
     private static final Class<?> HASH_MAP_NODE = HeapLayout.jdkClass("java.util.HashMap$Node");
     private static final Class<?> CONCURRENT_HASH_MAP_NODE = HeapLayout
             .jdkClass("java.util.concurrent.ConcurrentHashMap$Node");
@@ -28,9 +31,7 @@ public final class CacheSizeEstimator {
         if (memoized >= 0) {
             return memoized;
         }
-        final var estimate = estimateEntry(entry, HeapLayout.current());
-        entry.setCachedHeapBytes(estimate);
-        return estimate;
+        return entry.memoizeHeapBytes(estimateEntry(entry, HeapLayout.current()));
     }
 
     public static long estimateEntry(DbEntry entry, HeapLayout layout) {
@@ -91,6 +92,16 @@ public final class CacheSizeEstimator {
         return entries.size() * pkIndexBytesPerEntry(entries, layout);
     }
 
+    public static long estimatePkIndexSizeFromFileBytes(long fileBytes) {
+        final var mostLiveRows = Math.ceilDiv(fileBytes, SHORTEST_LIVE_PK_ROW_BYTES);
+        return mostLiveRows * pkEntrySize(SHORTEST_ID, HeapLayout.current()) + fileBytes;
+    }
+
+    public static long estimateFieldIndexSizeFromFileBytes(long fileBytes) {
+        final var ids = Math.ceilDiv(fileBytes, TYPICAL_INDEXED_ID_BYTES);
+        return estimateFieldIndexSizeByCount((int) Math.min(Integer.MAX_VALUE, ids));
+    }
+
     public static long estimateCollectionSize(Map<String, DbEntry> entries) {
         if (entries == null)
             return 0L;
@@ -130,6 +141,16 @@ public final class CacheSizeEstimator {
             }
         }
         return total;
+    }
+
+    public static long estimateFieldIndexLookupSize(int ids) {
+        return estimateFieldIndexLookupSize(ids, HeapLayout.current());
+    }
+
+    public static long estimateFieldIndexLookupSize(int ids, HeapLayout layout) {
+        return layout.shallowSize(FieldIndexLookup.class) + layout.shallowSize(HashMap.class)
+                + layout.hashTableSize(ids)
+                + (long) ids * (layout.shallowSize(HASH_MAP_NODE) + layout.shallowSize(FieldIndexLookup.Located.class));
     }
 
     private static long fieldEntryOverhead(HeapLayout layout) {

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -368,8 +369,8 @@ public class OperationProcessorWriteTest {
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id("singleSaveId1");
         entry.setPage(0L);
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry),
-                0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                EntityRef.allOf(List.of(entry)), 0L);
 
         final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(p -> p.getPage() == 0L).findFirst();
@@ -402,8 +403,8 @@ public class OperationProcessorWriteTest {
         e1.setPage(0L);
         final var e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
         e2.setPage(0L);
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(e1, e2),
-                0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                EntityRef.allOf(List.of(e1, e2)), 0L);
 
         final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(p -> p.getPage() == 0L).findFirst();
@@ -439,12 +440,11 @@ public class OperationProcessorWriteTest {
         final var response = processor.processMessage(find);
         assertInstanceOf(FindByIdResponse.class, response);
         assertEquals("original", ((FindByIdResponse) response).getObject().get("source").asJsonString().getValue(),
-                "a relocation is a delete followed by an insert, so a failing insert must put the previously"
-                        + " committed document back rather than lose it");
+                "a relocation commits with one pk.idx row, so a failure before it leaves the original in place");
     }
 
     @Test
-    public void test_a_failed_relocation_does_not_move_the_queued_delete_to_the_restore_page() throws Exception {
+    public void test_a_failed_relocation_queues_no_event() throws Exception {
         final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var object = new JsonObject();
         object.add("_id", new JsonString("reloc-event"));
@@ -466,7 +466,7 @@ public class OperationProcessorWriteTest {
         TestUtils.setPrivateField(taskManager, "inFlight", new java.util.concurrent.atomic.AtomicInteger());
         TestUtils.setPrivateField(taskManager, "draining", false);
         try {
-            assertDeletedEventKeepsItsPage(cache, idxEntry, pkIndex, isolatedQueue);
+            assertNoEventIsQueued(cache, idxEntry, pkIndex, isolatedQueue);
         } finally {
             TestUtils.setPrivateField(taskManager, "draining", wasDraining);
             TestUtils.setPrivateField(taskManager, "inFlight", sharedInFlight);
@@ -474,10 +474,9 @@ public class OperationProcessorWriteTest {
         }
     }
 
-    private static void assertDeletedEventKeepsItsPage(Cache cache, org.techhouse.data.PkIndexEntry idxEntry,
+    private static void assertNoEventIsQueued(Cache cache, org.techhouse.data.PkIndexEntry idxEntry,
             java.util.List<org.techhouse.data.PkIndexEntry> pkIndex, java.util.concurrent.LinkedBlockingQueue<?> queue)
             throws Exception {
-        final var originalPage = idxEntry.getPage();
         final var broken = new DbEntry();
         broken.setDatabaseName(TestGlobals.DB);
         broken.setCollectionName(TestGlobals.COLL);
@@ -486,14 +485,11 @@ public class OperationProcessorWriteTest {
         assertThrows(Exception.class, () -> SaveOperationHelper.relocateOnGrowUpdate(TestGlobals.DB, TestGlobals.COLL,
                 broken, idxEntry, pkIndex));
 
-        final var deleted = queue.stream()
-                .filter(event -> event instanceof EntityEvent entity && entity.getType() == EventType.DELETED
-                        && "reloc-event".equals(entity.getDbEntry().get_id()))
-                .map(event -> ((EntityEvent) event).getDbEntry()).findFirst().orElseThrow();
-        final var restored = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
-                .filter(entry -> entry.getValue().equals("reloc-event")).findFirst().orElseThrow();
-        assertEquals(originalPage, deleted.getPage(),
-                "the delete's page delta belongs to the page the document was removed from");
-        assertNotSame(cache.getById(TestGlobals.DB, TestGlobals.COLL, restored), deleted);
+        assertTrue(
+                queue.stream().noneMatch(
+                        event -> event instanceof EntityEvent entity && "reloc-event".equals(entity.getId())),
+                "nothing moved, so there is no delete or insert to maintain");
+        assertTrue(cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
+                .anyMatch(entry -> entry.getValue().equals("reloc-event")), "the original is still indexed");
     }
 }

@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.analyze.AnalyzeContext;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -25,6 +26,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.SaltedKey;
 
 public final class IndexEntryReader {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -35,8 +37,8 @@ public final class IndexEntryReader {
 
     // Entries are read under the field's index read lock and returned as deep copies, so the background
     // index writer can never mutate a set a consumer is still iterating.
-    public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
-            throws IOException {
+    public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName,
+            ReadObserver observer) throws IOException {
         if (cache.hasNoIndex(dbName, collName, fieldName)) {
             return null;
         }
@@ -65,10 +67,10 @@ public final class IndexEntryReader {
             rl.releaseIndexRead(dbName, collName, fieldName);
         }
         if (!hashIds.isEmpty()) {
-            addHashIndexEntries(combined, dbName, collName, fieldName, hashIds);
+            addHashIndexEntries(combined, dbName, collName, fieldName, hashIds, observer);
         }
         final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
-        if (!pendingIds.isEmpty() && !reconcilePending(combined, dbName, collName, fieldName, pendingIds)) {
+        if (!pendingIds.isEmpty() && !reconcilePending(combined, dbName, collName, fieldName, pendingIds, observer)) {
             return null;
         }
         if (combined.isEmpty() || doesNotCoverEveryDocument(combined, dbName, collName)) {
@@ -77,12 +79,12 @@ public final class IndexEntryReader {
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
             cache.recordFieldIndexAccess(dbName, collName, fieldName);
         }
-        recordAnalyzeIndexUse(dbName, collName, fieldName);
+        recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
         return combined;
     }
 
     public static List<String> sortedIdsForField(String dbName, String collName, String fieldName,
-            Comparator<FieldIndexEntry<?>> order, long maxIds) throws IOException {
+            Comparator<FieldIndexEntry<?>> order, long maxIds, ReadObserver observer) throws IOException {
         if (cache.hasNoIndex(dbName, collName, fieldName)
                 || !PendingWriteReconciler.pendingIds(dbName, collName).isEmpty()) {
             return null;
@@ -118,7 +120,7 @@ public final class IndexEntryReader {
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
             cache.recordFieldIndexAccess(dbName, collName, fieldName);
         }
-        recordAnalyzeIndexUse(dbName, collName, fieldName);
+        recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
         return ordered;
     }
 
@@ -172,18 +174,15 @@ public final class IndexEntryReader {
         }
     }
 
-    private static void recordAnalyzeIndexUse(String dbName, String collName, String fieldName) {
-        final var analyzeContext = AnalyzeContext.current();
-        if (analyzeContext != null) {
-            analyzeContext.addIndexUsed(fieldName);
-            analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, fieldName));
-        }
+    private static void recordAnalyzeIndexUse(String dbName, String collName, String fieldName, ReadObserver observer) {
+        observer.indexUsed(fieldName, AnalyzeContext.fieldLockId(dbName, collName, fieldName));
     }
 
     private static void addHashIndexEntries(List<FieldIndexEntry<?>> combined, String dbName, String collName,
-            String fieldName, Set<String> hashIds) throws IOException {
+            String fieldName, Set<String> hashIds, ReadObserver observer) throws IOException {
         final var docs = cache.getEntriesByIds(dbName, collName, hashIds);
-        final var byValue = new HashMap<JsonBaseElement, FieldIndexEntry<JsonBaseElement>>();
+        observer.scanned(docs.size());
+        final var byValue = new HashMap<SaltedKey, FieldIndexEntry<JsonBaseElement>>();
         for (var doc : docs) {
             final var data = doc.getData();
             final var value = JsonUtils.resolvePath(data, fieldName);
@@ -193,8 +192,8 @@ public final class IndexEntryReader {
             if (!value.isJsonObject() && !value.isJsonArray()) {
                 continue;
             }
-            byValue.computeIfAbsent(value, v -> {
-                final var entry = new FieldIndexEntry<>(dbName, collName, v, new HashSet<>());
+            byValue.computeIfAbsent(new SaltedKey(value), key -> {
+                final var entry = new FieldIndexEntry<>(dbName, collName, key.element(), new HashSet<>());
                 combined.add(entry);
                 return entry;
             }).getIds().add(doc.get_id());
@@ -215,15 +214,15 @@ public final class IndexEntryReader {
     // Pending ids are dropped from every entry and re-added under the document's CURRENT value; a
     // non-scalar pending value returns false so the caller falls back to a full scan.
     private static boolean reconcilePending(List<FieldIndexEntry<?>> combined, String dbName, String collName,
-            String fieldName, Set<String> pendingIds) throws IOException {
+            String fieldName, Set<String> pendingIds, ReadObserver observer) throws IOException {
         for (var entry : combined) {
             entry.getIds().removeAll(pendingIds);
         }
-        final var byValue = new HashMap<JsonBaseElement, FieldIndexEntry<?>>();
+        final var byValue = new HashMap<SaltedKey, FieldIndexEntry<?>>();
         for (var entry : combined) {
-            byValue.put(IndexValueCodec.indexValueToElement(entry.getValue()), entry);
+            byValue.put(new SaltedKey(IndexValueCodec.indexValueToElement(entry.getValue())), entry);
         }
-        for (var dbEntry : PendingWriteReconciler.pendingDocuments(dbName, collName, pendingIds)) {
+        for (var dbEntry : PendingWriteReconciler.pendingDocuments(dbName, collName, pendingIds, observer)) {
             final var data = dbEntry.getData();
             final var element = JsonUtils.resolvePath(data, fieldName);
             if (element == null) {
@@ -233,24 +232,24 @@ public final class IndexEntryReader {
                 return false;
             }
             if (element.isJsonNull()) {
-                final var nullEntry = byValue.get(JsonNull.INSTANCE);
+                final var nullEntry = byValue.get(new SaltedKey(JsonNull.INSTANCE));
                 if (nullEntry != null) {
                     nullEntry.getIds().add(dbEntry.get_id());
                 } else {
                     final var newEntry = new FieldIndexEntry<>(dbName, collName, JsonNull.INSTANCE,
                             new HashSet<>(Set.of(dbEntry.get_id())));
                     combined.add(newEntry);
-                    byValue.put(JsonNull.INSTANCE, newEntry);
+                    byValue.put(new SaltedKey(JsonNull.INSTANCE), newEntry);
                 }
                 continue;
             }
-            final var existing = byValue.get(element);
+            final var existing = byValue.get(new SaltedKey(element));
             if (existing != null) {
                 existing.getIds().add(dbEntry.get_id());
             } else {
                 final var newEntry = scalarEntryFor(dbName, collName, element.asJsonPrimitive(), dbEntry.get_id());
                 combined.add(newEntry);
-                byValue.put(element, newEntry);
+                byValue.put(new SaltedKey(element), newEntry);
             }
         }
         combined.removeIf(entry -> entry.getIds().isEmpty());
@@ -261,7 +260,7 @@ public final class IndexEntryReader {
             String id) {
         final var ids = new HashSet<>(Set.of(id));
         return switch (primitive) {
-            case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
+            case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.doubleValue() + 0.0, ids);
             case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
             case JsonString jsonString -> jsonString.isJsonCustom()
                     ? new FieldIndexEntry<>(dbName, collName, CustomTypeFactory.getCustomTypeInstance(jsonString), ids)
@@ -271,7 +270,7 @@ public final class IndexEntryReader {
     }
 
     public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
-            Set<JsonBaseElement> localValues) throws IOException {
+            Set<JsonBaseElement> localValues, ReadObserver observer) throws IOException {
         if (cache.hasNoIndex(dbName, collName, fieldName)) {
             return null;
         }
@@ -280,7 +279,7 @@ public final class IndexEntryReader {
                 return null;
             }
         }
-        recordAnalyzeIndexUse(dbName, collName, fieldName);
+        recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var matchingIds = new HashSet<String>();
         for (var localValue : localValues) {
@@ -300,6 +299,6 @@ public final class IndexEntryReader {
                 (data, field) -> {
                     final var resolved = JsonUtils.resolvePath(data, field);
                     return resolved != null && localValues.contains(resolved);
-                });
+                }, observer);
     }
 }

@@ -90,6 +90,15 @@ abstract class LiteralProductions extends ClassProductions {
 
     @Override
     protected ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async, int start) {
+        enterNesting();
+        try {
+            return parseArrowBodyLevel(params, async, start);
+        } finally {
+            leaveNesting();
+        }
+    }
+
+    private ArrowFunctionExpression parseArrowBodyLevel(List<JsNode> params, boolean async, int start) {
         if (params.stream().anyMatch(GrammarPredicates::containsYieldOrAwait)) {
             throw new SyntaxErrorException("Arrow parameters may not contain 'yield' or 'await' expressions");
         }

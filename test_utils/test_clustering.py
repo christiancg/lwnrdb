@@ -1,9 +1,12 @@
 import argparse
+import base64
 import bisect
 import hashlib
 import json
 import os
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -11,6 +14,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from typing import Union
 
 import base_utils as bu
 from base_utils import (Conn, check, check_code, check_field, check_status, filter_step, holds_throughout, ids_of,
@@ -22,8 +26,8 @@ BASE_CLUSTER_PORT = int(os.environ.get("CLUSTER_TEST_CLUSTER_PORT", "9991"))
 NODE_COUNT = 3
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
-CLUSTER_SECRET = "integration-cluster-secret"
+ADMIN_PASSWORD = bu.PASSWORD
+CLUSTER_SECRET = "integration-cluster-secret-of-32-plus-chars"
 
 GOSSIP_INTERVAL_S = 0.5
 ANTI_ENTROPY_INTERVAL_S = 3.0
@@ -132,7 +136,7 @@ def burst(port, script, count: int) -> list:
 
 class BackgroundOp:
 
-    def __init__(self, target, payload: dict):
+    def __init__(self, target: Union[Conn, int], payload: dict):
         self.response = None
         self._thread = threading.Thread(target=self._run, args=(target, payload), daemon=True)
         self._thread.start()
@@ -187,7 +191,7 @@ def wait_until_forwarding_is_live(port, timeout_s: float = 60.0) -> bool:
 
 def script_stats(port) -> dict:
     r = op(port, {"type": "GET_DATABASE_STATS"})
-    return ((r.get("stats") or {}).get("scripts") or {})
+    return (r.get("stats") or {}).get("scripts") or {}
 
 
 def all_ports() -> list:
@@ -238,10 +242,10 @@ def _folder_contains(folder: str, token: str, suffixes: tuple) -> bool:
 
 def holds_tx_record(node, tx_id, suffix="") -> bool:
     return _folder_contains(os.path.join(node.work_dir, "db", "admin", "transactions"),
-                            f"{tx_id}|{suffix}", (".idx", ".dat"))
+                            f"{tx_id}|{suffix}", (".dat",))
 
 
-def commit_in_background(conn, node, tx_id, marker, timeout_s, interval_s):
+def commit_in_background(conn: Conn, node, tx_id, marker, timeout_s, interval_s):
     pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
     return pending, wait_until(lambda: holds_tx_record(node, tx_id, marker), timeout_s=timeout_s, interval_s=interval_s)
 
@@ -320,7 +324,7 @@ def collections_by_owner(port, db, prefix, count=24) -> dict:
     names = [f"{prefix}{i}" for i in range(count)]
 
     def _created():
-        return all(create_coll(port, db, name).get("status") == "OK" for name in names)
+        return all(create_coll(port, db, coll_name).get("status") == "OK" for coll_name in names)
 
     if not wait_until(_created, timeout_s=30.0, interval_s=1.0):
         return {}
@@ -411,6 +415,8 @@ class Node:
             scriptTimeoutMs=20000,
             scriptRoutingEnabled=self.index != 2,
             scriptLocalityWeight=100 if self.index == 0 else 0,
+            maxConcurrentScriptsPerUser=0,
+            maxConcurrentScriptsPerDatabase=0,
             triggersEnabled=True,
             beforeHookInstructionBudget=200000,
             beforeHookTimeoutMs=2000,
@@ -506,7 +512,7 @@ def test_formation_and_quorum_writes():
 RETRYABLE_CODES = {"503-2", "503-5", "503-9", "503-10"}
 
 
-def op_with_retry(fn, timeout_s=30.0, interval_s=1.0):
+def op_with_retry(fn: Callable[[], dict], timeout_s=30.0, interval_s=1.0):
     deadline = time.time() + timeout_s
     response = fn()
     while response.get("errorCode") in RETRYABLE_CODES and time.time() < deadline:
@@ -598,6 +604,12 @@ def test_bulk_delete_and_upsert():
 
     check("deleted doc is NOT_FOUND on every node", wait_until(_gone, timeout_s=15.0))
 
+    check_code("DELETE of an id that never existed via node-0",
+               delete(nodes[0].client_port, DB, "bulk", "never-there"), "NOT_FOUND", "404-2")
+    check("only the deleted id is tombstoned, on every node",
+          wait_until(lambda: all(tombstone_ids(n, DB, "bulk") == {"b2"} for n in nodes), timeout_s=15.0),
+          f"tombstones: {[sorted(tombstone_ids(n, DB, 'bulk')) for n in nodes]}")
+
 
 def test_index_replication():
     section("Index replication (CREATE_INDEX is DDL — applied on every node)")
@@ -619,18 +631,37 @@ def test_index_replication():
     check("index-backed query is correct on every node", wait_until(_query_ok, timeout_s=15.0))
 
 
-def _index_file(node, coll, field) -> str:
-    folder = os.path.join(node.work_dir, "db", DB, coll)
-    names = [n for n in os.listdir(folder) if n.startswith(f"{coll}-{field}-") and n.endswith(".idx")]
-    return os.path.join(folder, names[0]) if names else ""
+INDEX_TOKEN_SEPARATOR = "\x1f"
+
+
+def _index_folder(node, coll) -> str:
+    return os.path.join(node.work_dir, "db", DB, coll)
 
 
 def _index_lines(node, coll, field) -> list:
-    path = _index_file(node, coll, field)
-    if not path:
-        return []
-    with open(path, encoding="utf-8") as fp:
-        return [line for line in fp.read().split("\n") if line]
+    folder = _index_folder(node, coll)
+    names = sorted(n for n in os.listdir(folder) if n.startswith(f"{coll}-{field}-"))
+    entries = {}
+    for name in [n for n in names if n.endswith(".idx")] + [n for n in names if n.endswith(".idxlog")]:
+        with open(os.path.join(folder, name), encoding="utf-8") as fp:
+            for line in fp.read().split("\n")[:-1]:
+                tokens = line.split(INDEX_TOKEN_SEPARATOR)
+                if name.endswith(".idx"):
+                    entries.setdefault(tokens[0], set()).update(tokens[1:])
+                elif tokens[0] == "+":
+                    entries.setdefault(tokens[1], set()).update(tokens[2:])
+                elif tokens[0] == "-":
+                    entries.get(tokens[1], set()).difference_update(tokens[2:])
+    return sorted(INDEX_TOKEN_SEPARATOR.join([key] + sorted(ids)) for key, ids in entries.items() if ids)
+
+
+def _damage_string_index(node, coll, field, kept: list):
+    folder = _index_folder(node, coll)
+    with open(os.path.join(folder, f"{coll}-{field}-String.idx"), "w", encoding="utf-8") as fp:
+        fp.write("".join(line + "\n" for line in kept))
+    log = os.path.join(folder, f"{coll}-{field}-String.idxlog")
+    if os.path.exists(log):
+        os.remove(log)
 
 
 def test_reindex_rebuilds_the_index_on_every_node():
@@ -641,9 +672,7 @@ def test_reindex_rebuilds_the_index_on_every_node():
           wait_until(lambda: len(_index_lines(victim, "indexed", "email")) == 2, timeout_s=20.0),
           detail=str(_index_lines(victim, "indexed", "email")))
     lines = _index_lines(victim, "indexed", "email")
-    damaged = [line for line in lines if not line.startswith("a@x.io")]
-    with open(_index_file(victim, "indexed", "email"), "w", encoding="utf-8") as fp:
-        fp.write("".join(line + "\n" for line in damaged))
+    _damage_string_index(victim, "indexed", "email", [line for line in lines if not line.startswith("a@x.io")])
     check("node-2's index file lost the a@x.io line", len(_index_lines(victim, "indexed", "email")) == 1)
 
     check_status("REINDEX via node-1", op_with_retry(lambda: op(nodes[1].client_port, {
@@ -751,6 +780,38 @@ def test_grants_are_pruned_on_every_node():
     op_with_retry(lambda: drop_db(port, grant_db))
 
 
+def test_password_change_deauthenticates_sessions_on_every_node():
+    section("A password change signs the user out on every node, not only on the coordinator")
+
+    username = "cluster_pw_rotator"
+    old_password = "cluster_pw_old1234"
+    port = nodes[0].client_port
+    op(port, {"type": "DELETE_USER", "username": username})
+    check_status("CREATE_USER via node-0", op(port, {
+        "type": "CREATE_USER", "username": username, "password": old_password, "admin": False,
+        "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}}), "OK")
+    check("the user authenticates on every node",
+          wait_until(lambda: all(_authenticates(p, username, old_password) for p in all_ports()), timeout_s=15.0))
+
+    probe = {"type": "LIST_DATABASES"}
+    sessions = [Conn(port=nodes[i].client_port) for i in (1, 2)]
+    try:
+        for i, session in zip((1, 2), sessions):
+            check_status(f"session on node-{i} authenticates",
+                         session.send({"type": "AUTHENTICATE", "username": username, "password": old_password}),
+                         "OK")
+            check_status(f"session on node-{i} is served", session.send(probe), "OK")
+        check_status("admin changes the password through node-0", op(port, {
+            "type": "SET_PASSWORD", "username": username, "newPassword": "cluster_pw_new1234"}), "OK")
+        for i, session in zip((1, 2), sessions):
+            check(f"session on node-{i} must authenticate again",
+                  wait_until(lambda s=session: s.send(probe).get("errorCode") == "401-1", timeout_s=15.0))
+    finally:
+        for session in sessions:
+            session.close()
+    op(port, {"type": "DELETE_USER", "username": username})
+
+
 def test_a_deleted_users_ownership_is_pruned_on_every_node():
     section("A deleted user stops owning databases on every node, so a recreated name inherits nothing")
 
@@ -794,7 +855,7 @@ def test_a_client_cannot_advance_the_write_clock_through_an_incarnation():
         "incarnationText": "9223372036854775805"})), "OK")
     for value in (1, 2, 3):
         check_status(f"SAVE v={value}", op_with_retry(
-            lambda value=value: save(port, forged_db, "docs", {"_id": "d1", "v": value})), "OK")
+            lambda v=value: save(port, forged_db, "docs", {"_id": "d1", "v": v})), "OK")
     check("the last write wins on every node, so versions kept increasing",
           all_nodes_see(forged_db, "docs", "d1", 3))
 
@@ -806,7 +867,7 @@ def test_a_client_cannot_advance_the_write_clock_through_an_incarnation():
         return found
 
     check("every node registered the collection", wait_until(
-        lambda: all(value is not None for value in stored_incarnations()), timeout_s=15.0),
+        lambda: all(incarnation is not None for incarnation in stored_incarnations()), timeout_s=15.0),
         f"got {stored_incarnations()}")
     incarnations = stored_incarnations()
     check("no node holds the forged incarnation", "9223372036854775805" not in incarnations,
@@ -876,6 +937,170 @@ def test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates():
 
     op(port, {"type": "DELETE_USER", "username": manager})
     op_with_retry(lambda: drop_db(port, stamp_db))
+
+
+class PeerSession:
+    def __init__(self, node, secret=CLUSTER_SECRET, hello=True):
+        self.sock = socket.create_connection((HOST, node.cluster_port), timeout=15)
+        self.reader = self.sock.makefile("r", encoding="utf-8")
+        self.counter = 0
+        if hello:
+            self.write_line(json.dumps({"type": "HELLO", "secret": secret}))
+
+    def write_line(self, text):
+        self.sock.sendall((text + "\n").encode("utf-8"))
+
+    def frame(self, message: dict) -> dict:
+        self.counter += 1
+        self.write_line(json.dumps({"correlationId": f"forged-{self.counter}", "secret": CLUSTER_SECRET,
+                                    **message}))
+        line = self.reader.readline()
+        return json.loads(line) if line else {}
+
+    def closed_without_reply(self) -> bool:
+        try:
+            return self.sock.recv(1) == b""
+        except (ConnectionResetError, socket.timeout):
+            return True
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def _clock_version_now() -> str:
+    return _clock_version_ahead(0)
+
+
+def _clock_version_ahead(seconds: int) -> str:
+    return str(int((time.time() + seconds) * 1000) << 16)
+
+
+def _escape_marker_anywhere(marker) -> list:
+    found = []
+    for node in nodes:
+        root = os.path.dirname(node.work_dir)
+        for folder, _, files in os.walk(root):
+            for name in files + [os.path.basename(folder)]:
+                if name.startswith(marker):
+                    found.append(os.path.join(folder, name))
+    return found
+
+
+def _forwarded(session: PeerSession, acting_user, body: dict) -> dict:
+    message = {"type": "FORWARD_REQUEST",
+               "forwardBody": base64.b64encode(json.dumps(body).encode("utf-8")).decode("ascii")}
+    if acting_user is not None:
+        message["actingUser"] = acting_user
+    reply = session.frame(message)
+    if reply.get("type") != "FORWARD_RESPONSE":
+        return reply
+    return json.loads(base64.b64decode(reply["forwardBody"]).decode("utf-8"))
+
+
+def test_forged_peer_frames_are_refused():
+    section("Forged peer frames are refused: handshake, names, versions and forwarded identity")
+
+    forged_db = "cluster_forged_db"
+    reader = "cluster_forged_reader"
+    reader_password = "cluster_forged1234"
+    marker = "peer_escape_marker"
+    port = nodes[0].client_port
+    fresh_database(port, forged_db, seed_value=None)
+    op(port, {"type": "DELETE_USER", "username": reader})
+    check_status("CREATE_USER with READ only", op(port, {
+        "type": "CREATE_USER", "username": reader, "password": reader_password, "admin": False,
+        "databasePermissions": {forged_db: "READ"}}), "OK")
+    target = nodes[1]
+    check("the reader reaches the target node", wait_until(
+        lambda: as_user(target.client_port, reader, reader_password, {"type": "LIST_DATABASES"}).get("status")
+        == "OK", timeout_s=15.0))
+
+    wrong = PeerSession(target, secret="not-the-cluster-secret-but-long-enough")
+    check("a first line with a wrong secret is closed with no reply", wrong.closed_without_reply())
+    wrong.close()
+
+    oversized = PeerSession(target, hello=False)
+    try:
+        oversized.sock.sendall(b"a" * 5000)
+    except OSError:
+        pass
+    check("a first line over 4 KB is closed", oversized.closed_without_reply())
+    oversized.close()
+
+    session = PeerSession(target)
+    try:
+        traversal = f"../{marker}"
+        reply = session.frame({"type": "REPLICATE_ADMIN", "adminSnapshot": {"records": [{
+            "key": f"database|{traversal}|{traversal}", "version": _clock_version_now(),
+            "body": {"_id": traversal, "collections": [], "owners": []}}]}})
+        check_field("REPLICATE_ADMIN with a traversal database is skipped, not retried", reply, "type",
+                    "REPLICATE_ADMIN_ACK")
+        check("and creates no folder outside the data root", not _escape_marker_anywhere(marker),
+              f"found {_escape_marker_anywhere(marker)}")
+        check("and registers no database", all(
+            traversal not in stored_documents(node, "admin", "databases") for node in nodes))
+
+        reply = session.frame({"type": "REPLICATE_ADMIN", "adminSnapshot": {"records": [{
+            "key": f"procedure|{forged_db}|../../{marker}", "version": _clock_version_now(),
+            "body": {"name": f"../../{marker}", "source": "return 1;"}}]}})
+        check_field("REPLICATE_ADMIN with a traversal procedure is skipped, not retried", reply, "type",
+                    "REPLICATE_ADMIN_ACK")
+        check("and writes no procedure file", not _escape_marker_anywhere(marker),
+              f"found {_escape_marker_anywhere(marker)}")
+
+        reply = session.frame({"type": "REPLICATE_ADMIN", "adminSnapshot": {"records": [{
+            "key": f"collection|{forged_db}|idx_forged", "version": _clock_version_now(),
+            "body": {"_id": f"{forged_db}|idx_forged", "indexes": [f"../{marker}"]}}]}})
+        check_field("REPLICATE_ADMIN naming an invalid index field is skipped, not retried", reply, "type",
+                    "REPLICATE_ADMIN_ACK")
+        check("and writes no index marker", not _escape_marker_anywhere(marker),
+              f"found {_escape_marker_anywhere(marker)}")
+
+        skewed_db = "cluster_skewed_db"
+        reply = session.frame({"type": "REPLICATE_ADMIN", "adminSnapshot": {"records": [{
+            "key": f"database|{skewed_db}|{skewed_db}", "version": _clock_version_ahead(7200),
+            "body": {"_id": skewed_db, "collections": [], "owners": []}}]}})
+        check_field("REPLICATE_ADMIN with a version beyond the skew is not acknowledged", reply, "type", "ERROR")
+        check("and the deferred database is registered nowhere", all(
+            skewed_db not in stored_documents(node, "admin", "databases") for node in nodes))
+
+        reply = session.frame({"type": "REPLICATE", "replication": {
+            "dbName": traversal, "collName": "docs", "op": "UPSERT", "documents": [{"_id": "x1"}]}})
+        check_field("REPLICATE into a traversal database", reply, "type", "ERROR")
+        check("and creates nothing", not _escape_marker_anywhere(marker))
+
+        reply = session.frame({"type": "REPLICATE", "replication": {
+            "dbName": forged_db, "collName": "docs", "op": "UPSERT", "documents": [{"_id": "poison"}],
+            "versions": ["9223372036854775000"]}})
+        check_field("REPLICATE with a version far beyond the clock", reply, "type", "ERROR")
+        check("the poisoned document is stored nowhere",
+              all("poison" not in stored_documents(node, forged_db, "docs") for node in nodes))
+        check_status("an ordinary SAVE afterwards", op_with_retry(
+            lambda: save(port, forged_db, "docs", {"_id": "after", "v": 1})), "OK")
+        check_status("and a newer one", op_with_retry(
+            lambda: save(port, forged_db, "docs", {"_id": "after", "v": 2})), "OK")
+        check("still replicates in order, so the clock was not poisoned",
+              all_nodes_see(forged_db, "docs", "after", 2))
+
+        save_body = {"type": "SAVE", "databaseName": forged_db, "collectionName": "docs",
+                     "object": {"_id": "forged", "v": 1}}
+        denied = _forwarded(session, reader, save_body)
+        check_code("a forwarded SAVE as a READ-only user answers 403-1", denied, "FORBIDDEN", "403-1")
+        check("and is stored on no node",
+              all("forged" not in stored_documents(node, forged_db, "docs") for node in nodes))
+        traversal_body = dict(save_body, databaseName=traversal)
+        check_code("a forwarded SAVE into a traversal database answers 400-1",
+                   _forwarded(session, ADMIN_USERNAME, traversal_body), "ERROR", "400-1")
+        check_code("a forwarded SAVE with no acting user answers 401-1", _forwarded(session, None, save_body),
+                   "UNAUTHENTICATED", "401-1")
+    finally:
+        session.close()
+
+    op(port, {"type": "DELETE_USER", "username": reader})
+    op_with_retry(lambda: drop_db(port, forged_db))
 
 
 def test_single_node_transaction():
@@ -960,9 +1185,9 @@ def test_multi_collection_transaction():
               all_nodes_see(DB, collection, "z", 7), detail=f"collection={collection}")
 
     def _none_have_y():
-        for c in mc:
+        for rolled_back in mc:
             for p in all_ports():
-                if find_by_id(p, DB, c, "y").get("status") != "NOT_FOUND":
+                if find_by_id(p, DB, rolled_back, "y").get("status") != "NOT_FOUND":
                     return False
         return True
 
@@ -1179,6 +1404,47 @@ def test_script_placement_forwards_runs():
                after.get("running") == 0, detail=f"running={after.get('running')!r}")
 
 
+def test_script_run_history_still_reaches_the_collection_owner():
+    section("Script-run history recorded on any node reaches the owner of script_runs")
+
+    hist_db = "cluster_history_db"
+    port = nodes[0].client_port
+    fresh_database(port, hist_db, seed_value=None)
+    check_status("SAVE_PROCEDURE", op_with_retry(lambda: op(port, {
+        "type": "SAVE_PROCEDURE", "databaseName": hist_db, "name": "histproc", "script": "return 1;"})), "OK")
+
+    calls = []
+
+    def _batch(_round):
+        conn = authed(port)
+        try:
+            batch = [conn.send({"type": "CALL_PROCEDURE", "databaseName": hist_db, "procedureName": "histproc"})
+                     for _ in range(20)]
+        finally:
+            conn.close()
+        calls.extend(batch)
+        return batch
+
+    def history_rows():
+        reply = op(port, {"type": "AGGREGATE", "databaseName": hist_db, "collectionName": "script_runs",
+                          "aggregationSteps": [filter_step("name", "EQUALS", "histproc")]})
+        return reply.get("results") or []
+
+    def runners():
+        return {row.get("node") for row in history_rows()}
+
+    deadline = time.time() + 40.0
+    while time.time() < deadline and len(runners()) < 2:
+        until_forwarded(port, _batch)
+    check("every call answered OK", calls and all(c.get("status") == "OK" for c in calls),
+          f"statuses={sorted({c.get('status') for c in calls})}")
+    check("every call left a history row", wait_until(lambda: len(history_rows()) >= len(calls), timeout_s=20.0),
+          f"rows={len(history_rows())} calls={len(calls)}")
+    check("rows were recorded by more than one node, so at least one came from a non-owner",
+          len(runners()) >= 2, f"runners={runners()}")
+    op_with_retry(lambda: drop_db(port, hist_db))
+
+
 def test_forwarded_script_reads_and_writes():
     section("Script node selection — a forwarded script still reads and writes correctly")
 
@@ -1196,10 +1462,10 @@ def test_forwarded_script_reads_and_writes():
         try:
             out = []
             for i in range(8):
-                doc_id = f"scripted-{round_no}-{i}"
+                run_id = f"scripted-{round_no}-{i}"
                 out.append(conn.send({"type": "RUN_SCRIPT", "databaseName": DB,
-                                                 "script": script, "args": {"id": doc_id}}))
-                written.append(doc_id)
+                                                 "script": script, "args": {"id": run_id}}))
+                written.append(run_id)
             return out
         finally:
             conn.close()
@@ -1227,7 +1493,7 @@ def test_forwarded_script_relays_its_stack():
               "}\n"
               "outer();")
 
-    def _batch(round_no):
+    def _batch(_round):
         conn = authed(nodes[0].client_port)
         try:
             return [conn.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
@@ -1269,14 +1535,14 @@ def test_forwarded_script_preserves_the_acting_user():
               'return db.findById(db.name, "scripted", "as-user").v;')
 
     def _batch(_round):
-        c = Conn(port=nodes[0].client_port)
+        user_conn = Conn(port=nodes[0].client_port)
         try:
-            c.send({"type": "AUTHENTICATE", "username": "cluster_script_user",
+            user_conn.send({"type": "AUTHENTICATE", "username": "cluster_script_user",
                             "password": "cluster_script1234"})
-            return [c.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
+            return [user_conn.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
                     for _ in range(12)]
         finally:
-            c.close()
+            user_conn.close()
 
     results, forwarded = until_forwarded(nodes[0].client_port, _batch)
 
@@ -1340,8 +1606,8 @@ def test_script_control_is_cluster_wide():
 
     expected_node = f"{HOST}:{runner_node.cluster_port}"
 
-    def _row_on_the_runner(port):
-        for candidate in list_scripts(port):
+    def _row_on_the_runner(client_port):
+        for candidate in list_scripts(client_port):
             if candidate.get("node") == expected_node and candidate.get("kind") == "RUN_SCRIPT":
                 return candidate
         return None
@@ -1598,6 +1864,15 @@ def test_node_rejoin():
 DOWN_COLL = "changed_while_down"
 DOWN_PROC = "deleted_while_down"
 DOWN_USER = "changed_while_down_user"
+STALE_GRANT_COLL = "regranted_while_down"
+STALE_GRANTEE = "stale_grantee"
+STALE_GRANT_KEY = f"{DB}|{STALE_GRANT_COLL}"
+
+
+def _collection_grants_on(node, username):
+    users = op(node.client_port, {"type": "LIST_USERS"}).get("users") or []
+    entry = next((user for user in users if user.get("_id") == username), None)
+    return None if entry is None else (entry.get("collectionPermissions") or {})
 
 
 def _admin(payload: dict) -> dict:
@@ -1617,9 +1892,17 @@ def arrange_admin_changes_for_a_downed_node():
     check_status("CREATE_USER", _admin({"type": "CREATE_USER", "username": DOWN_USER,
                                          "password": "before_the_outage1", "admin": False, "globalPermissions": [],
                                          "databasePermissions": {DB: "READ"}, "collectionPermissions": {}}), "OK")
+    check_status("CREATE_COLLECTION for the collection-only grant",
+                 _admin({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL}), "OK")
+    _admin({"type": "DELETE_USER", "username": STALE_GRANTEE})
+    check_status("CREATE_USER holding only a grant on that collection",
+                 _admin({"type": "CREATE_USER", "username": STALE_GRANTEE, "password": "stale_grantee1",
+                         "admin": False, "globalPermissions": [], "databasePermissions": {},
+                         "collectionPermissions": {STALE_GRANT_KEY: "READ"}}), "OK")
     check("node-2 holds every record before the outage",
           wait_until(lambda: os.path.isfile(procedure_file(nodes[2], DOWN_PROC))
-                     and _authenticates(nodes[2].client_port, DOWN_USER, "before_the_outage1"), timeout_s=20.0))
+                     and _authenticates(nodes[2].client_port, DOWN_USER, "before_the_outage1")
+                     and STALE_GRANT_KEY in (_collection_grants_on(nodes[2], STALE_GRANTEE) or {}), timeout_s=20.0))
 
 
 def make_admin_changes_while_a_node_is_down():
@@ -1638,6 +1921,10 @@ def make_admin_changes_while_a_node_is_down():
                                                 "collectionPermissions": {}}), "OK")
     check_status("DROP_INDEX", _admin({"type": "DROP_INDEX", "databaseName": DB, "collectionName": DOWN_COLL,
                                         "fieldName": "f"}), "OK")
+    check_status("DROP_COLLECTION of the granted collection",
+                 _admin({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL}), "OK")
+    check_status("CREATE_COLLECTION re-creates it under the same name",
+                 _admin({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL}), "OK")
 
 
 def _schema_file(node) -> str:
@@ -1651,7 +1938,8 @@ def test_a_schema_saved_while_a_node_is_down_reaches_it():
         if not os.path.isfile(_schema_file(nodes[2])):
             return False
         with open(_schema_file(nodes[2]), encoding="utf-8") as fp:
-            return '"required"' in fp.read()
+            content = fp.read()
+        return '"required"' in content
 
     check("node-2 holds the schema saved during its outage", wait_until(_has_schema, timeout_s=60.0))
 
@@ -1692,6 +1980,23 @@ def test_permission_changes_and_dropped_indexes_replicate():
 
     check("node-2 dropped the index removed during its outage", wait_until(_index_dropped_on_node_2, timeout_s=60.0))
     _admin({"type": "DELETE_USER", "username": DOWN_USER})
+
+
+def test_a_grant_on_a_collection_dropped_while_a_node_is_down_is_pruned_there():
+    section("A grant on a collection dropped and re-created while a node was down is pruned there too")
+
+    def _pruned_on(node):
+        grants = _collection_grants_on(node, STALE_GRANTEE)
+        return grants is not None and STALE_GRANT_KEY not in grants
+
+    check("the coordinator pruned the grant", _pruned_on(nodes[0]))
+    check("node-2 pruned the grant it held before its outage", wait_until(lambda: _pruned_on(nodes[2]),
+                                                                           timeout_s=60.0))
+    check("no node brings it back over several admin sweeps",
+          holds_throughout(lambda: all(_pruned_on(node) for node in nodes if node.alive),
+                           seconds=2 * ANTI_ENTROPY_INTERVAL_S))
+    _admin({"type": "DELETE_USER", "username": STALE_GRANTEE})
+    _admin({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": STALE_GRANT_COLL})
 
 
 def test_a_restarted_participant_does_not_commit_half_a_transaction():
@@ -1867,7 +2172,6 @@ def test_a_participant_killed_mid_commit_finishes_without_its_coordinator():
         return
 
     conn = authed(edge.client_port)
-    caught = False
     try:
         tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
         check_status("a write to the coordinator's own collection", conn.send({
@@ -2077,9 +2381,9 @@ def test_a_prepared_participant_resolves_without_its_coordinator():
         return
 
     def _buffer(conn):
-        for coll in slices:
-            check_status(f"buffered SAVE into {coll}", conn.send({
-                "type": "SAVE", "databaseName": DB, "collectionName": coll,
+        for slice_coll in slices:
+            check_status(f"buffered SAVE into {slice_coll}", conn.send({
+                "type": "SAVE", "databaseName": DB, "collectionName": slice_coll,
                 "object": {"_id": "dc", "v": 1}}), "OK")
 
     tx_id = drive_to_prepared(coordinator, watched, frozen, _buffer, coordinator)
@@ -2249,11 +2553,11 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
 
     frozen = [node for node in nodes if node is not host]
 
-    def _write_with_the_peers_frozen(doc_id):
+    def _write_with_the_peers_frozen(write_id):
         for node in frozen:
             node.suspend()
         try:
-            return save(host.client_port, DB, watched, {"_id": doc_id, "v": 1})
+            return save(host.client_port, DB, watched, {"_id": write_id, "v": 1})
         finally:
             for node in frozen:
                 node.resume()
@@ -2281,6 +2585,34 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
 
 
 STARTUP_REPLAY_SETTLE_S = 10
+
+
+CLUSTER_RESET_FLOOD = 500
+CLUSTER_RESET_LOG_CEILING = 50
+
+
+def reset_connection(port: int):
+    try:
+        sock = socket.create_connection((HOST, port), timeout=5)
+    except OSError:
+        return
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    sock.close()
+
+
+def test_cluster_port_reset_flood_is_rate_limited():
+    section(f"{CLUSTER_RESET_FLOOD} resets on the cluster port log at most {CLUSTER_RESET_LOG_CEILING} lines")
+    victim = nodes[0]
+    marker = "Cluster connection error"
+    before = bu.read_log(victim.log_path).count(marker)
+    for _ in range(CLUSTER_RESET_FLOOD):
+        reset_connection(victim.cluster_port)
+    time.sleep(2.0)
+    logged = bu.read_log(victim.log_path).count(marker) - before
+    check(f"fewer than {CLUSTER_RESET_LOG_CEILING} connection-error lines were logged",
+          logged < CLUSTER_RESET_LOG_CEILING, f"{logged} lines for {CLUSTER_RESET_FLOOD} resets")
+    with Conn(port=victim.client_port) as conn:
+        check_status("the node still serves clients", conn.authenticate(), "OK")
 
 
 def test_a_trigger_writing_only_to_another_owner_consumes_its_run():
@@ -2341,6 +2673,32 @@ def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
           wait_until(_all_accepted, timeout_s=30.0, interval_s=1.0))
 
 
+def test_an_escaped_trigger_depth_does_not_suppress_the_owners_trigger():
+    section("An escaped triggerDepth key does not survive forwarding to suppress the owner's trigger")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "escdepth")
+    host_index = next((index for index, names in owners.items() if len(names) >= 2), None)
+    if not check("found two collections owned by one node", host_index is not None, f"owners={owners}"):
+        return
+    host = nodes[host_index]
+    watched, marks = owners[host_index][0], owners[host_index][1]
+    install_marking_trigger(host, watched, marks, "escdepth", "store the marking procedure",
+                            "install the after trigger")
+
+    for node in (n for n in nodes if n is not host):
+        doc_id = f"esc{node.index}"
+        line = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + watched
+                + '","trigger\\u0044epth":99,"object":{"_id":"' + doc_id + '","v":1}}')
+        conn = authed(node.client_port)
+        try:
+            check_status(f"SAVE {doc_id} with an escaped triggerDepth through node-{node.index}",
+                         conn.send_raw(line), "OK")
+        finally:
+            conn.close()
+        check(f"the owner's trigger still ran for {doc_id}",
+              wait_until(lambda: runs_marked(host, marks, doc_id) >= 1, timeout_s=30.0))
+
+
 SCHEDULE_DB = DB
 SCHEDULE_PROC = "sched_marker"
 SCHEDULE_SOURCE = (
@@ -2372,6 +2730,59 @@ def fire_count(port, coll, db=SCHEDULE_DB) -> int:
     r = aggregate(port, db, coll, [{"type": "COUNT"}])
     value = bu.dig(r, "results.0.count")
     return int(value) if value is not None else 0
+
+
+def admin_coordinator_node():
+    alive = [node for node in nodes if node.alive]
+    winner = _ring_owner([node_id_of(node) for node in alive], ADMIN_COORDINATOR_KEY)
+    return next(node for node in alive if node_id_of(node) == winner)
+
+
+def procedure_version_on(port, db, name):
+    listed = op(port, {"type": "LIST_PROCEDURES", "databaseName": db, "includeSource": True})
+    stored = next((p for p in (listed.get("procedures") or []) if p.get("name") == name), {})
+    return stored.get("version"), stored.get("source")
+
+
+def test_a_procedure_bound_by_another_definer_is_protected_through_any_node():
+    section("A procedure bound by another definer is protected through any node")
+
+    definer, intruder, password = "cluster_bound_definer", "cluster_bound_intruder", "cluster_bound1234"
+    port = nodes[0].client_port
+    for username in (definer, intruder):
+        op(port, {"type": "DELETE_USER", "username": username})
+        check_status(f"CREATE_USER {username} with MANAGE", op(port, {
+            "type": "CREATE_USER", "username": username, "password": password, "admin": False,
+            "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}), "OK")
+    coordinator = admin_coordinator_node()
+    edges = [node for node in nodes if node is not coordinator]
+    check("both users authenticate on every node", wait_until(lambda: all(
+        as_user(n.client_port, u, password).get("status") == "OK" for n in nodes for u in (definer, intruder)),
+        timeout_s=15.0))
+
+    check_status("the definer saves the procedure through an edge node", as_user(edges[0].client_port, definer,
+                 password, {"type": "SAVE_PROCEDURE", "databaseName": DB, "name": "bound_proc",
+                            "script": "return 1;"}), "OK")
+    check_status("and binds a trigger to it through an edge node", as_user(edges[0].client_port, definer, password, {
+        "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": "docs", "name": "bound_trigger",
+        "events": ["CREATED"], "procedureName": "bound_proc"}), "OK")
+    overwrite = {"type": "SAVE_PROCEDURE", "databaseName": DB, "name": "bound_proc", "script": "return 666;"}
+    for label, node in (("a non-coordinator node", edges[1]), ("the admin coordinator", coordinator)):
+        check_code(f"the foreign overwrite through {label} is refused",
+                   as_user(node.client_port, intruder, password, overwrite), "FORBIDDEN", "403-4")
+
+    saved = as_user(edges[1].client_port, definer, password, {
+        "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "bound_proc", "script": "return 2;"})
+    check_status("the definer's overwrite through a non-coordinator node succeeds", saved, "OK")
+    expected = (saved.get("version"), "return 2;")
+    check("and replicates to every node", wait_until(
+        lambda: all(procedure_version_on(n.client_port, DB, "bound_proc") == expected for n in nodes),
+        timeout_s=15.0), f"expected {expected}")
+
+    op(port, {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": "docs", "name": "bound_trigger"})
+    op(port, {"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "bound_proc"})
+    for username in (definer, intruder):
+        op(port, {"type": "DELETE_USER", "username": username})
 
 
 def test_before_hook_runs_on_the_owner():
@@ -2550,7 +2961,7 @@ def test_schedule_failover():
         check_status(f"save {name}", save_schedule(nodes[0].client_port, name, name), "OK")
 
     def _all_firing():
-        return all(fire_count(nodes[0].client_port, name) >= 1 for name in names)
+        return all(fire_count(nodes[0].client_port, schedule_name) >= 1 for schedule_name in names)
 
     check("every schedule fires from a surviving node after the owner died",
                wait_until(_all_firing, timeout_s=60.0, interval_s=1.0),
@@ -2708,7 +3119,7 @@ def test_a_node_that_missed_the_last_database_drop_converges():
     check("the cluster still holds databases before the drop", bool(databases), "nothing left to drop")
     for db in databases:
         check(f"the survivors drop {db}",
-              wait_until(lambda db=db: drop_db(nodes[0].client_port, db).get("status") == "OK",
+              wait_until(lambda dropped=db: drop_db(nodes[0].client_port, dropped).get("status") == "OK",
                          timeout_s=30.0, interval_s=1.0))
     check("the survivors hold no database",
           wait_until(lambda: all(not (list_databases(p).get("databases") or []) for p in all_ports()),
@@ -2727,7 +3138,7 @@ def test_a_node_that_missed_the_last_database_drop_converges():
 
     def _every_database_quarantined():
         log = bu.read_log(victim.log_path)
-        return all(f"Quarantined database {db}" in log for db in databases)
+        return all(f"Quarantined database {dropped}" in log for dropped in databases)
 
     check("its data folders were moved aside, not deleted", wait_until(_every_database_quarantined, timeout_s=30.0),
           f"node-{victim.index} logged no quarantine for some of {databases!r}")
@@ -2748,9 +3159,9 @@ def test_rapid_collection_creates_are_not_quarantined():
     check("every burst collection got its seed document", not unseeded, f"unseeded: {unseeded}")
 
     def _all_nodes_hold_every_burst_collection():
-        for coll in colls:
+        for burst_coll in colls:
             for port in all_ports():
-                if ids_of(aggregate(port, DB, coll, [])) != ["seed"]:
+                if ids_of(aggregate(port, DB, burst_coll, [])) != ["seed"]:
                     return False
         return True
 
@@ -3136,8 +3547,10 @@ GROUPS = {
         test_user_and_permission_replication,
         test_grants_are_pruned_on_every_node,
         test_a_deleted_users_ownership_is_pruned_on_every_node,
+        test_password_change_deauthenticates_sessions_on_every_node,
         test_a_client_cannot_advance_the_write_clock_through_an_incarnation,
         test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates,
+        test_forged_peer_frames_are_refused,
         test_single_node_transaction,
         test_multi_collection_transaction,
         test_a_transactional_join_sees_a_participants_buffered_writes,
@@ -3148,10 +3561,13 @@ GROUPS = {
         test_admin_ops_replicate_in_commit_order,
         test_an_unreadable_definition_is_not_deleted_on_peers,
         test_forwarded_write_ignores_a_client_supplied_trigger_depth,
+        test_an_escaped_trigger_depth_does_not_suppress_the_owners_trigger,
     ],
     "scripts": [
         test_formation_and_quorum_writes,
+        test_a_procedure_bound_by_another_definer_is_protected_through_any_node,
         test_script_placement_forwards_runs,
+        test_script_run_history_still_reaches_the_collection_owner,
         test_forwarded_script_reads_and_writes,
         test_forwarded_script_relays_its_stack,
         test_forwarded_script_preserves_the_acting_user,
@@ -3176,6 +3592,7 @@ GROUPS = {
         test_a_procedure_deleted_while_a_node_is_down_stays_deleted,
         test_a_password_changed_while_a_node_is_down_reaches_it,
         test_permission_changes_and_dropped_indexes_replicate,
+        test_a_grant_on_a_collection_dropped_while_a_node_is_down_is_pruned_there,
         test_schedule_rejoin_catch_up,
         test_a_restarted_participant_does_not_commit_half_a_transaction,
         test_restart_does_not_regress_write_versions,
@@ -3194,6 +3611,7 @@ GROUPS = {
         test_a_participant_killed_mid_commit_finishes_without_its_coordinator,
         test_a_trigger_fires_once_despite_a_replication_timeout,
         test_a_trigger_writing_only_to_another_owner_consumes_its_run,
+        test_cluster_port_reset_flood_is_rate_limited,
     ],
     "recreate": [
         test_formation_and_quorum_writes,

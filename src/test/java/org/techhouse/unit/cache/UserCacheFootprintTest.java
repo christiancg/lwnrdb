@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -19,12 +20,19 @@ import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.CacheableResource;
+import org.techhouse.cache.Measure;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.FieldIndexBatch;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -248,5 +256,94 @@ public class UserCacheFootprintTest {
         } finally {
             locks.releaseIndex(DB, COLL, FIELD);
         }
+    }
+
+    private static final long FINITE_BUDGET = 1L << 30;
+
+    private static long withFiniteBudget(TestBody body) throws Exception {
+        final var configuration = Configuration.getInstance();
+        final var original = configuration.getMaxMemoryBytes();
+        TestUtils.setPrivateField(configuration, "maxMemoryBytes", FINITE_BUDGET);
+        try {
+            FIELD_INDEX_ITERATIONS.set(0);
+            body.run();
+            return FIELD_INDEX_ITERATIONS.get();
+        } finally {
+            TestUtils.setPrivateField(configuration, "maxMemoryBytes", original);
+        }
+    }
+
+    @FunctionalInterface
+    private interface TestBody {
+        void run() throws Exception;
+    }
+
+    @Test
+    public void admissionDoesNotRemeasureResidentIndexes() throws Exception {
+        final var cache = new UserCache();
+        publishFieldIndex(cache);
+
+        final var iterations = withFiniteBudget(() -> cache.addEntryToCache(DB, COLL, entry("admitted", "payload")));
+
+        assertEquals(0, iterations, "admission sums remembered sizes and must not walk a resident index");
+        assertNotNull(cache.getCachedCollection(DB, COLL).get("admitted"));
+    }
+
+    @Test
+    public void sweepStillMeasuresFully() throws Exception {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var memoryManagement = IocContainer.get(MemoryManagement.class);
+        publishFieldIndex(userCache);
+        try {
+            assertEquals(0, withFiniteBudget(() -> memoryManagement.ensureHeadroomForBytes(1L)),
+                    "the write path's headroom check uses remembered sizes");
+            assertTrue(withFiniteBudget(memoryManagement::runEvictionSweep) > 0,
+                    "the 5 s sweep re-measures every resident index");
+            assertTrue(withFiniteBudget(() -> userCache.listCacheableResources(Measure.FULL)) > 0);
+            assertEquals(0, withFiniteBudget(() -> userCache.listCacheableResources(Measure.REMEMBERED)));
+        } finally {
+            userCache.evictCollection(DB, COLL);
+        }
+    }
+
+    private static long rememberedStatusBytes(UserCache cache, Measure measure) {
+        return cache.listCacheableResources(measure).stream()
+                .filter(resource -> resource.kind() == AccessKind.FIELD_INDEX
+                        && TestGlobals.DB.equals(resource.dbName())
+                        && Cache.getIndexIdentifier(FIELD, String.class).equals(resource.indexKey()))
+                .mapToLong(CacheableResource::estimatedSizeBytes).sum();
+    }
+
+    @Test
+    public void batchUpdatesRememberedAverage() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        final var userCache = IocContainer.get(UserCache.class);
+        final var locks = IocContainer.get(ResourceLocking.class);
+        IocContainer.get(FileSystem.class).writeIndexFile(TestGlobals.DB, TestGlobals.COLL, FIELD, Map.of(String.class,
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "v", new HashSet<>(Set.of("a"))))));
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            userCache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+        final var before = rememberedStatusBytes(userCache, Measure.REMEMBERED);
+
+        locks.lockIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
+        try {
+            final var batch = FieldIndexBatch.open(TestGlobals.DB, TestGlobals.COLL, FIELD);
+            for (var i = 0; i < 50; i++) {
+                batch.apply("a-rather-long-document-identifier-" + i, new JsonString("v"));
+            }
+            batch.flush();
+        } finally {
+            locks.releaseIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
+        }
+
+        final var remembered = rememberedStatusBytes(userCache, Measure.REMEMBERED);
+        final var measured = rememberedStatusBytes(userCache, Measure.FULL);
+        assertTrue(remembered > before,
+                "50 new ids must grow the remembered footprint: " + before + " -> " + remembered);
+        assertEquals(measured, remembered, 64, "the remembered size tracks a full measurement");
     }
 }

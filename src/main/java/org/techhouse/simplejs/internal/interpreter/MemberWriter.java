@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayIndex;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.canonicalArrayIndexWide;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 
 import java.util.List;
@@ -72,7 +73,9 @@ final class MemberWriter {
     boolean setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
         if (!object.has(key) && "length".equals(key) && receiver == object
                 && object.getPrimitive() instanceof JsArray primitiveArray) {
-            return primitiveArray.setLength(requireLength(value, interp.ops()));
+            final var newLength = requireLength(value, interp.ops());
+            primitiveArray.chargeDenseGrowth(interp.ops(), newLength);
+            return primitiveArray.setLength(newLength);
         }
         if (!object.has(key) && object.getPrimitive() instanceof JsTypedArray primitiveTyped
                 && primitiveTyped.hasCanonicalNumericIndex(new JsString(key))) {
@@ -134,10 +137,20 @@ final class MemberWriter {
         if (existing != null && (existing.isAccessorDescriptor() || !existing.writableOr(false))) {
             return false;
         }
+        if (receiver instanceof JsArray array) {
+            chargeIndexGrowth(array, key);
+        }
         return receiver.defineOwnProperty(keyValue,
                 existing == null
                         ? PropertyDescriptor.data(value, JsObject.PropertyFlags.DEFAULT)
                         : new PropertyDescriptor(value, null, null, null, null, null));
+    }
+
+    private void chargeIndexGrowth(JsArray array, String key) {
+        final var index = canonicalArrayIndexWide(key);
+        if (index != null) {
+            array.chargeDenseGrowth(interp.ops(), index + 1L);
+        }
     }
 
     boolean setOnProxyReceiver(JsValue receiver, String key, JsValue value) {
@@ -194,9 +207,9 @@ final class MemberWriter {
             case JsRegExp regexp -> (regexp.ownProperties().has(key) || !RegexBuiltins.isSetterless(key))
                     && regexp.ownProperties().set(key, value);
             case JsNull ignored -> throw new TypeErrorException(
-                    "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+                    "Cannot set properties of " + JsCoercion.describe(target) + " (setting '" + key + "')");
             case JsUndefined ignored -> throw new TypeErrorException(
-                    "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+                    "Cannot set properties of " + JsCoercion.describe(target) + " (setting '" + key + "')");
             case JsCallableProperties callable -> {
                 if (isNonWritableMetadata(callable, key)) {
                     yield false;
@@ -300,8 +313,8 @@ final class MemberWriter {
                 && !callable.isMetadataDeleted(key);
     }
 
-    static String writeRejectionMessage(JsValue target, JsValue key) {
-        final var name = JsCoercion.toStr(key);
+    static String writeRejectionMessage(JsValue target, JsValue key, InterpreterOps ops) {
+        final var name = JsCoercion.toStr(key, ops);
         if (target instanceof JsObject object) {
             if (object.hasAccessor(name) && object.getAccessorSetter(name) == null) {
                 return "Cannot set property " + name + " of #<Object> which has only a getter";
@@ -328,7 +341,9 @@ final class MemberWriter {
 
     boolean setArrayMember(JsArray array, String key, JsValue value) {
         if ("length".equals(key)) {
-            return array.setLength(requireLength(value, interp.ops()));
+            final var newLength = requireLength(value, interp.ops());
+            array.chargeDenseGrowth(interp.ops(), newLength);
+            return array.setLength(newLength);
         }
         if (array.hasPropAccessor(key)) {
             final var setter = array.getPropAccessorSetter(key);
@@ -355,6 +370,7 @@ final class MemberWriter {
             }
         }
         if (index != null) {
+            array.chargeDenseGrowth(interp.ops(), index + 1L);
             return array.set(index, value);
         }
         return wideIndex != null ? array.setWideIndex(wideIndex, value) : array.setProperty(key, value);

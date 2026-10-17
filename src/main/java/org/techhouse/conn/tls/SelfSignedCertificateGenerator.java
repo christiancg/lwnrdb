@@ -1,10 +1,10 @@
 package org.techhouse.conn.tls;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
@@ -16,8 +16,12 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
+import org.techhouse.fs.io.KeystoreFiles;
+import org.techhouse.fs.io.OwnerOnlyFiles.Creation;
+import org.techhouse.log.Logger;
 
 /**
  * The X.509 structure is hand-encoded because the JDK exposes no public {@code X509Certificate} builder.
@@ -31,6 +35,8 @@ public final class SelfSignedCertificateGenerator {
     private static final int SAN_IP_ADDRESS = 7;
     private static final int VERSION_V3 = 2;
     private static final int SERIAL_BITS = 159;
+    private static final int FIRST_GENERALIZED_TIME_YEAR = 2050;
+    private static final Logger logger = Logger.logFor(SelfSignedCertificateGenerator.class);
 
     private SelfSignedCertificateGenerator() {
     }
@@ -56,13 +62,19 @@ public final class SelfSignedCertificateGenerator {
         return generator.generateKeyPair();
     }
 
+    public static byte[] certificateTime(Instant instant) {
+        return instant.atZone(ZoneOffset.UTC).getYear() < FIRST_GENERALIZED_TIME_YEAR
+                ? DerWriter.utcTime(instant)
+                : DerWriter.generalizedTime(instant);
+    }
+
     private static Certificate buildSelfSignedCertificate(KeyPair keyPair) throws GeneralSecurityException {
         final var sigAlgId = DerWriter.sequence(DerWriter.oid(OID_SHA256_WITH_RSA), DerWriter.nullValue());
         final var name = encodeCommonName();
         final var now = Instant.now();
         final var notBefore = now.minus(Duration.ofHours(1));
         final var notAfter = now.plus(Duration.ofDays(Globals.TLS_CERT_VALIDITY_DAYS));
-        final var validity = DerWriter.sequence(DerWriter.utcTime(notBefore), DerWriter.utcTime(notAfter));
+        final var validity = DerWriter.sequence(certificateTime(notBefore), certificateTime(notAfter));
         // publicKey.getEncoded() is already a DER-encoded SubjectPublicKeyInfo, so it is embedded verbatim.
         final var subjectPublicKeyInfo = keyPair.getPublic().getEncoded();
         final var serial = new BigInteger(SERIAL_BITS, new SecureRandom()).add(BigInteger.ONE);
@@ -107,12 +119,10 @@ public final class SelfSignedCertificateGenerator {
 
     private static void persist(KeyStore keyStore, Path keystorePath, char[] password)
             throws GeneralSecurityException, IOException {
-        final var parent = keystorePath.toAbsolutePath().getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        try (var out = Files.newOutputStream(keystorePath)) {
-            keyStore.store(out, password);
+        final var content = new ByteArrayOutputStream();
+        keyStore.store(content, password);
+        if (KeystoreFiles.writeOwnerOnly(keystorePath, content.toByteArray()) == Creation.DEFAULT_PERMISSIONS) {
+            logger.warning("Could not create " + keystorePath + " as owner-only; creating it with default permissions");
         }
     }
 }

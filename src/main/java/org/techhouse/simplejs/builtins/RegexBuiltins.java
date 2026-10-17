@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 import static org.techhouse.simplejs.builtins.regex.RegexEscape.escape;
+import static org.techhouse.simplejs.builtins.regex.RegexExec.EXEC;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.builtinExec;
 import static org.techhouse.simplejs.builtins.regex.RegexExec.regExpExec;
 import static org.techhouse.simplejs.internal.regex.RegexFlags.ACCESSOR_NAMES;
@@ -41,7 +42,8 @@ public final class RegexBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var self = new JsValue[1];
-        final var regExp = new JsNativeFunction("RegExp", (_, args) -> construct(args, self[0], ops));
+        final var regExp = new JsNativeFunction("RegExp",
+                (_, args, newTarget) -> construct(args, self[0], newTarget, ops));
         self[0] = regExp;
         regExp.setProperty("escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(args))));
         final var speciesGetter = new JsNativeFunction("get [Symbol.species]", (thisArg, _) -> thisArg);
@@ -51,11 +53,11 @@ public final class RegexBuiltins {
         return regExp;
     }
 
-    private static JsValue construct(List<JsValue> args, JsValue self, InterpreterOps ops) {
+    private static JsValue construct(List<JsValue> args, JsValue self, JsValue newTarget, InterpreterOps ops) {
         final var first = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var flagsArg = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         final var explicitFlags = !(flagsArg instanceof JsUndefined);
-        if (!explicitFlags && JsNativeFunction.currentNewTarget() == null && isRegExp(first, ops)
+        if (!explicitFlags && !NewTargetSupport.isConstructCall(newTarget) && isRegExp(first, ops)
                 && SameValueZero.equal(ops.getMember(first, new JsString("constructor")), self)) {
             return first;
         }
@@ -68,10 +70,10 @@ public final class RegexBuiltins {
             final var flags = explicitFlags
                     ? JsCoercion.toStr(flagsArg, ops)
                     : JsCoercion.toStr(ops.getMember(first, new JsString("flags")), ops);
-            return RegexTranslator.compile(source, flags);
+            return RegexTranslator.compile(source, flags, ops);
         }
         final var source = first instanceof JsUndefined ? "" : JsCoercion.toStr(first, ops);
-        return RegexTranslator.compile(source, explicitFlags ? JsCoercion.toStr(flagsArg, ops) : "");
+        return RegexTranslator.compile(source, explicitFlags ? JsCoercion.toStr(flagsArg, ops) : "", ops);
     }
 
     public static boolean isRegExp(JsValue value, InterpreterOps ops) {
@@ -145,7 +147,7 @@ public final class RegexBuiltins {
         return switch (name) {
             case "test" -> new JsNativeFunction("test", (thisArg, args) -> JsBoolean
                     .of(!(regExpExec(receiverOf(thisArg, receiver), str(args, ops), ops) instanceof JsNull)));
-            case "exec" -> new JsNativeFunction("exec",
+            case EXEC -> new JsNativeFunction(EXEC,
                     (thisArg, args) -> builtinExec(receiverOf(thisArg, receiver), receiver, str(args, ops), ops));
             case "toString" -> new JsNativeFunction("toString",
                     (thisArg, _) -> new JsString(regExpToString(receiverOf(thisArg, receiver), receiver, ops)));

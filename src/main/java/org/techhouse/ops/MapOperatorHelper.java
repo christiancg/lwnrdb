@@ -35,19 +35,24 @@ public final class MapOperatorHelper {
         return processOperator(operator, toMap, null);
     }
 
-    public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineScriptContext context) {
+    public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context) {
+        return processOperator(operator, toMap, context, new MapResultBudget(context));
+    }
+
+    static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context,
+            MapResultBudget budget) {
         final var condition = operator.getCondition();
         boolean continueProcessing = true;
         if (condition != null) {
             continueProcessing = filterCondition(condition, toMap, context);
         }
         return continueProcessing ? switch (operator.getType()) {
-            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context);
+            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context, budget);
             case REMOVE_FIELD -> removeField((RemoveFieldMapOperator) operator, toMap);
         } : toMap;
     }
 
-    private static boolean filterCondition(BaseOperator condition, JsonObject toMap, PipelineScriptContext context) {
+    private static boolean filterCondition(BaseOperator condition, JsonObject toMap, PipelineContext context) {
         return switch (condition.getType()) {
             case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) condition, toMap, context);
             case FIELD -> processFieldOperator((FieldOperator) condition, toMap);
@@ -56,13 +61,11 @@ public final class MapOperatorHelper {
         };
     }
 
-    private static boolean processScriptOperator(ScriptOperator operator, JsonObject toMap,
-            PipelineScriptContext context) {
+    private static boolean processScriptOperator(ScriptOperator operator, JsonObject toMap, PipelineContext context) {
         return FilterOperatorHelper.testScript(operator, toMap, context);
     }
 
-    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap,
-            PipelineScriptContext context) {
+    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap, PipelineContext context) {
         final var tester = context != null
                 ? context.customTesterFor(operator)
                 : FilterOperatorHelper.getCustomTester(operator);
@@ -70,7 +73,7 @@ public final class MapOperatorHelper {
     }
 
     private static boolean processConjunctionOperator(ConjunctionOperator operator, JsonObject toMap,
-            PipelineScriptContext context) {
+            PipelineContext context) {
         final var steps = operator.getOperators();
         var trueCount = 0;
         for (var step : steps) {
@@ -105,7 +108,8 @@ public final class MapOperatorHelper {
         return test.test(toMap, fieldName);
     }
 
-    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineScriptContext context) {
+    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineContext context,
+            MapResultBudget budget) {
         final var addFieldName = operator.getFieldName();
         final var midOperator = operator.getOperator();
         return switch (midOperator.getType()) {
@@ -120,16 +124,17 @@ public final class MapOperatorHelper {
             case ROOT -> root((ArrayParamMidOperator) midOperator, addFieldName, toMap);
             case ABS -> abs((OneParamMidOperator) midOperator, addFieldName, toMap);
             case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
-            case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap);
-            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context);
+            case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap, budget);
+            case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap, budget);
+            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context, budget);
         };
     }
 
     private static JsonObject script(ScriptMidOperator midOperator, String addFieldName, JsonObject toMap,
-            PipelineScriptContext context) {
+            PipelineContext context, MapResultBudget budget) {
         final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
         if (value != null) {
+            budget.charge(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value));
             JsonUtils.setPath(toMap, addFieldName, value);
         }
         return toMap;
@@ -174,15 +179,13 @@ public final class MapOperatorHelper {
             return null;
         }
         if (operand.isJsonNumber()) {
-            return operand.asJsonNumber().getValue().doubleValue();
+            return operand.asJsonNumber().doubleValue();
         }
         if (!operand.isJsonString()) {
             return null;
         }
         final var resolved = JsonUtils.getFromPath(obj, operand.asJsonString().getValue());
-        return !resolved.isJsonNull() && resolved.isJsonNumber()
-                ? resolved.asJsonNumber().getValue().doubleValue()
-                : null;
+        return !resolved.isJsonNull() && resolved.isJsonNumber() ? resolved.asJsonNumber().doubleValue() : null;
     }
 
     private static Double finiteOrNull(Double value) {
@@ -241,7 +244,7 @@ public final class MapOperatorHelper {
         final var element = JsonUtils.getFromPath(obj, operand);
         Double absValue = null;
         if (element.isJsonNumber()) {
-            final var doubleValue = element.asJsonNumber().getValue().doubleValue();
+            final var doubleValue = element.asJsonNumber().doubleValue();
             absValue = Math.abs(doubleValue);
         }
         JsonUtils.setPath(obj, addFieldName, numberOrNull(absValue));
@@ -263,7 +266,8 @@ public final class MapOperatorHelper {
         return obj;
     }
 
-    private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+    private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj,
+            MapResultBudget budget) {
         final var operands = midOperator.getOperands();
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
@@ -288,7 +292,11 @@ public final class MapOperatorHelper {
             } else if (concatStep.isJsonNull()) {
                 result.append(concatTextOf(concatStep));
             }
+            if (EntrySizeGuard.exceedsMaxEntrySize(result)) {
+                throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
+            }
         }
+        budget.charge(result);
         JsonUtils.setPath(obj, addFieldName, new JsonString(result.toString()));
         return obj;
     }
@@ -336,12 +344,13 @@ public final class MapOperatorHelper {
 
     private static JsonBaseElement booleanFromString(String text) {
         if ("true".equalsIgnoreCase(text)) {
-            return new JsonBoolean(true);
+            return JsonBoolean.of(true);
         }
-        return "false".equalsIgnoreCase(text) ? new JsonBoolean(false) : JsonNull.INSTANCE;
+        return "false".equalsIgnoreCase(text) ? JsonBoolean.of(false) : JsonNull.INSTANCE;
     }
 
-    private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj) {
+    private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj,
+            MapResultBudget budget) {
         final var fieldName = midOperator.getFieldName();
         final var type = midOperator.getToType();
         final var field = JsonUtils.getFromPath(obj, fieldName);
@@ -351,9 +360,7 @@ public final class MapOperatorHelper {
             casted = switch (type) {
                 case NUMBER -> {
                     if (primitive.isJsonNumber()) {
-                        yield Double.isFinite(primitive.asJsonNumber().getValue().doubleValue())
-                                ? primitive
-                                : JsonNull.INSTANCE;
+                        yield Double.isFinite(primitive.asJsonNumber().doubleValue()) ? primitive : JsonNull.INSTANCE;
                     }
                     yield primitive.isJsonString()
                             ? numberFromString(primitive.asJsonString().getValue())
@@ -365,8 +372,7 @@ public final class MapOperatorHelper {
                     } else if (primitive.isJsonString()) {
                         yield primitive;
                     } else if (primitive.isJsonNumber()) {
-                        yield new JsonString(
-                                NumberFormatter.toJsString(primitive.asJsonNumber().getValue().doubleValue()));
+                        yield new JsonString(NumberFormatter.toJsString(primitive.asJsonNumber().doubleValue()));
                     } else if (primitive.isJsonBoolean()) {
                         yield new JsonString(Boolean.toString(primitive.asJsonBoolean().getValue()));
                     }
@@ -377,7 +383,7 @@ public final class MapOperatorHelper {
                         yield primitive;
                     }
                     if (primitive.isJsonNumber()) {
-                        yield new JsonBoolean(primitive.asJsonNumber().getValue().doubleValue() != 0);
+                        yield JsonBoolean.of(primitive.asJsonNumber().doubleValue() != 0);
                     }
                     yield primitive.isJsonString()
                             ? booleanFromString(primitive.asJsonString().getValue())
@@ -399,6 +405,9 @@ public final class MapOperatorHelper {
                     yield JsonNull.INSTANCE;
                 }
             };
+        }
+        if (casted instanceof JsonCustom<?> || casted.isJsonString()) {
+            budget.charge(concatTextOf(casted));
         }
         JsonUtils.setPath(obj, addFieldName, casted);
         return obj;

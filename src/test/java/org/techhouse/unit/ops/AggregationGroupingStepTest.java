@@ -3,6 +3,7 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -11,6 +12,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -18,17 +21,22 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -249,5 +257,69 @@ public class AggregationGroupingStepTest {
         assertEquals(1, result.size());
         assertEquals("books", result.getFirst().get("category").asJsonString().getValue());
         assertEquals(2, result.getFirst().get("group").asJsonArray().size());
+    }
+
+    private static final int COLLIDING_BLOCKS = 15;
+
+    private static List<JsonObject> collidingDocuments() {
+        final var documents = new ArrayList<JsonObject>(1 << COLLIDING_BLOCKS);
+        for (var bits = 0; bits < 1 << COLLIDING_BLOCKS; bits++) {
+            final var key = new StringBuilder(COLLIDING_BLOCKS * 2);
+            for (var block = 0; block < COLLIDING_BLOCKS; block++) {
+                key.append((bits >> block & 1) == 0 ? "Aa" : "BB");
+            }
+            final var document = new JsonObject();
+            document.add(Globals.PK_FIELD, new JsonString("c" + bits));
+            document.addProperty("k", key.toString());
+            documents.add(document);
+        }
+        return documents;
+    }
+
+    @Test
+    public void collidingStringKeysDoNotDegrade() throws IOException {
+        final var documents = collidingDocuments();
+        assertEquals(1, documents.stream().map(document -> document.get("k").hashCode()).distinct().count());
+        final var start = System.nanoTime();
+        final var grouped = AggregationOperationHelper.processStepsOnStream(List.of(new GroupByAggregationStep("k")),
+                documents.stream());
+        final var distinct = AggregationOperationHelper.processStepsOnStream(List.of(new DistinctAggregationStep("k")),
+                documents.stream());
+        final var distinctRows = AggregationOperationHelper.processStepsOnStream(
+                List.of(new DistinctAggregationStep(null)),
+                documents.stream().map(document -> document.copyWithout(Globals.PK_FIELD)));
+        final var elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertEquals(documents.size(), grouped.size());
+        assertEquals(documents.size(), distinct.size());
+        assertEquals(documents.size(), distinctRows.size());
+        assertTrue(elapsedMs < 2_000, "colliding keys took " + elapsedMs + " ms");
+    }
+
+    @Test
+    public void joinLookupBuildIsWatched() throws Exception {
+        final var configuration = Configuration.getInstance();
+        final var remote = new StringBuilder(3_000 * 64);
+        for (var i = 0; i < 3_000; i++) {
+            remote.append(i == 0 ? "" : ",").append("{\"_id\":\"r").append(i).append("\",\"k\":\"v").append(i)
+                    .append("\"}");
+        }
+        final var processor = IocContainer.get(OperationProcessor.class);
+        processor.processMessage(
+                RequestParser.parseRequest("{\"type\":\"BULK_SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                        + "\",\"collectionName\":\"" + TestGlobals.JOIN_COLL + "\",\"objects\":[" + remote + "]}"));
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "k", "k", "joined")));
+        TestUtils.setPrivateField(configuration, "aggregateTimeoutMs", 1L);
+        try {
+            final var left = categorised("left", "books");
+            left.addProperty("k", "v1");
+            final var refused = assertThrows(AggregateLimitException.class,
+                    () -> AggregationOperationHelper.processAggregation(request, Stream.of(left)));
+            assertEquals(ErrorCode.AGGREGATE_TIMEOUT, refused.getErrorCode());
+        } finally {
+            TestUtils.setPrivateField(configuration, "aggregateTimeoutMs",
+                    ConfigKey.AGGREGATE_TIMEOUT_MS.defaultValue());
+            TestUtils.releaseAllLocks();
+        }
     }
 }

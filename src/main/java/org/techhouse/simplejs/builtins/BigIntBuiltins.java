@@ -8,6 +8,7 @@ import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.BigIntLimits;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -21,7 +22,7 @@ public final class BigIntBuiltins {
 
     private static final int MIN_RADIX = 2;
     private static final int MAX_RADIX = 36;
-    private static final int MAX_BITS = 1 << 24;
+    private static final int DECIMAL_RADIX = 10;
 
     private BigIntBuiltins() {
     }
@@ -40,8 +41,8 @@ public final class BigIntBuiltins {
             case "toString" ->
                 new JsNativeFunction("toString", (_, args) -> new JsString(toString(receiver, args, ops)));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> receiver);
-            case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_,
-                    _) -> new JsString(java.text.NumberFormat.getInstance(locale(ops)).format(receiver.getValue())));
+            case "toLocaleString" ->
+                new JsNativeFunction("toLocaleString", (_, _) -> new JsString(toLocaleString(receiver, ops)));
             default -> null;
         };
     }
@@ -87,21 +88,26 @@ public final class BigIntBuiltins {
 
     private static String toString(JsBigInt receiver, List<JsValue> args, InterpreterOps ops) {
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
+            BigIntLimits.chargeText(receiver.getValue(), DECIMAL_RADIX, ops);
             return receiver.getValue().toString();
         }
         final var radix = (int) toIntegerOrInfinity(JsCoercion.toNumber(args.getFirst(), ops));
         if (radix < MIN_RADIX || radix > MAX_RADIX) {
             throw new RangeErrorException("toString() radix must be between 2 and 36");
         }
+        BigIntLimits.chargeText(receiver.getValue(), radix, ops);
         return receiver.getValue().toString(radix);
+    }
+
+    private static String toLocaleString(JsBigInt receiver, InterpreterOps ops) {
+        BigIntLimits.chargeGroupedText(receiver.getValue(), ops);
+        return java.text.NumberFormat.getInstance(locale(ops)).format(receiver.getValue());
     }
 
     private static JsValue asIntN(List<JsValue> args, boolean signed, InterpreterOps ops) {
         final var bits = toIndex(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(), ops);
         final var value = toBigInt(args.size() < 2 ? JsUndefined.getInstance() : args.get(1), ops);
-        if (bits > MAX_BITS) {
-            throw new RangeErrorException("BigInt is too big");
-        }
+        BigIntLimits.checkBits(bits, ops);
         final var modulus = BigInteger.ONE.shiftLeft(bits);
         final var remainder = value.getValue().mod(modulus);
         if (signed && bits > 0 && remainder.compareTo(BigInteger.ONE.shiftLeft(bits - 1)) >= 0) {

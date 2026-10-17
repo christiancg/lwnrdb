@@ -6,7 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.simplejs.host.ScriptErrorNames;
+import org.techhouse.simplejs.host.ScriptResult;
+import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsString;
@@ -62,6 +68,37 @@ public class JsonStringifyTest {
         assertEquals("{\"a\":{\"c\":3}}", str("JSON.stringify({a: {c: 3, d: 4}, b: 2}, ['a', 'c'])"));
         assertEquals("{}", str("JSON.stringify({a: 1}, [])"));
         assertEquals("{\"1\":2}", str("JSON.stringify({1: 2, b: 3}, [1])"));
+    }
+
+    @Test
+    public void test_replacer_dedup_keeps_first_occurrence_order() {
+        assertEquals("{\"c\":3,\"a\":2,\"b\":1}", str("JSON.stringify({b: 1, a: 2, c: 3}, ['c', 'a', 'c', 'b', 'a'])"));
+        assertEquals("{\"1\":2,\"x\":{\"1\":4}}", str("JSON.stringify({x: {1: 4}, 1: 2}, [1, '1', 'x', 1])"));
+    }
+
+    @Test
+    public void test_a_replacer_array_with_many_keys_respects_the_deadline() {
+        final var start = System.nanoTime();
+        final var distinct = runWithin(5_000, "const keys = Array.from({ length: 300000 }, (_, i) => 'k' + i);"
+                + " return JSON.stringify({ k7: 7 }, keys);");
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+        assertEquals("{\"k7\":7}", distinct.getValue().asJsonString().getValue(), distinct.getErrorMessage());
+        assertTrue(elapsedMillis < 2_000, "300000 replacer keys took " + elapsedMillis + " ms");
+    }
+
+    @Test
+    public void test_the_replacer_array_build_is_paced_against_the_deadline() {
+        final var start = System.nanoTime();
+        final var holes = runWithin(100, "const keys = []; keys.length = 2 ** 23; return JSON.stringify({}, keys);");
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+        assertTrue(holes.isError());
+        assertEquals(ScriptErrorNames.TIMEOUT, holes.getErrorName(), holes.getErrorMessage());
+        assertTrue(elapsedMillis < 2_000, "ran " + elapsedMillis + " ms past a 100 ms deadline");
+    }
+
+    private static ScriptResult runWithin(long wallClockMillis, String source) {
+        return new SimpleJs().run(source,
+                new SimpleHostBindings(new JsonObject(), null, null, new ResourceLimits(-1, wallClockMillis, 200)));
     }
 
     @Test

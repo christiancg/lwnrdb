@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
+import org.techhouse.ejson.internal.EncodedJson;
 import org.techhouse.ejson.internal.JsonPrettyWriter;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
@@ -29,6 +30,9 @@ import org.techhouse.ejson.type_adapters.impl.NumberTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.StringTypeAdapter;
 import org.techhouse.ejson.validate.JsonSchema;
 import org.techhouse.ejson.validate.MetaSchemaValidator;
+import org.techhouse.ejson.validate.SchemaBudget;
+import org.techhouse.ejson.validate.SchemaComplexity;
+import org.techhouse.ejson.validate.SchemaPatternLengths;
 import org.techhouse.ejson.validate.SchemaValidationResult;
 import org.techhouse.ejson.validate.SchemaValidator;
 
@@ -106,6 +110,18 @@ public class EJson {
         return reader.fromJson(jsonString, tClass, maxDepth);
     }
 
+    public <T> T fromJson(String jsonString, Class<T> tClass, int maxDepth, int maxTokens) {
+        return reader.fromJson(jsonString, tClass, maxDepth, maxTokens);
+    }
+
+    public <T> T fromJson(byte[] utf8, int start, int end, Class<T> tClass) {
+        return reader.fromJson(utf8, start, end, tClass, Integer.MAX_VALUE, Integer.MAX_VALUE);
+    }
+
+    public <T> T fromJson(byte[] utf8, int start, int end, Class<T> tClass, int maxDepth, int maxTokens) {
+        return reader.fromJson(utf8, start, end, tClass, maxDepth, maxTokens);
+    }
+
     public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass) {
         final var adapter = TypeAdapterFactory.getAdapter(tClass);
         return adapter.fromJson(jsonObject);
@@ -115,6 +131,24 @@ public class EJson {
     public <T> String toJson(T obj) {
         final Class<T> clazz = (Class<T>) obj.getClass();
         return writer.toJson(obj, clazz);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> byte[] toJsonBytes(T obj, int sizeHint) {
+        final Class<T> clazz = (Class<T>) obj.getClass();
+        return writer.toJsonBytes(obj, clazz, sizeHint);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> EncodedJson toJsonFrame(T obj, int sizeHint) {
+        final Class<T> clazz = (Class<T>) obj.getClass();
+        return writer.toJsonFrame(obj, clazz, sizeHint);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> byte[] toJsonLine(T obj, int sizeHint, String terminator) {
+        final Class<T> clazz = (Class<T>) obj.getClass();
+        return writer.toJsonLine(obj, clazz, sizeHint, terminator);
     }
 
     public String toJson(JsonBaseElement element, String indent) {
@@ -152,5 +186,26 @@ public class EJson {
 
     public SchemaValidationResult validateInstance(JsonBaseElement instance, JsonObject schema) {
         return schemaValidator.validate(instance, new JsonSchema(schema));
+    }
+
+    public SchemaValidationResult validateInstance(JsonBaseElement instance, JsonObject schema, long stepBudget) {
+        return schemaValidator.validate(instance, new JsonSchema(schema, stepBudget));
+    }
+
+    public SchemaValidationResult validateInstance(JsonBaseElement instance, JsonObject schema,
+            SchemaBudget sharedBudget) {
+        return schemaValidator.validate(instance, new JsonSchema(schema, sharedBudget));
+    }
+
+    public long schemaExpandedNodeCount(JsonObject schema, int limit) {
+        return SchemaComplexity.expandedNodeCount(schema, limit);
+    }
+
+    public int longestSchemaPattern(JsonObject schema) {
+        return SchemaPatternLengths.longestPattern(schema);
+    }
+
+    public int schemaPatternCount(JsonObject schema) {
+        return SchemaPatternLengths.count(schema);
     }
 }

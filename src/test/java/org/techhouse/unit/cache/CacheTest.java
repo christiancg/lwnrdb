@@ -8,13 +8,15 @@ import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
@@ -157,14 +159,6 @@ public class CacheTest extends CacheFixtureSupport {
     }
 
     @Test
-    public void test_returns_provided_resultStream_if_not_null() throws IOException {
-        Cache cache = new Cache();
-        Stream<JsonObject> mockStream = Stream.of(new JsonObject());
-        Stream<JsonObject> result = cache.initializeStreamIfNecessary(mockStream, "dbName", "collName");
-        assertEquals(mockStream, result);
-    }
-
-    @Test
     public void test_handles_ioexception_when_reading_collection()
             throws NoSuchFieldException, IllegalAccessException, IOException {
         Cache cache = new Cache();
@@ -174,7 +168,7 @@ public class CacheTest extends CacheFixtureSupport {
         fsField.set(cache, fsMock);
 
         when(fsMock.streamEntries(anyString(), anyString())).thenThrow(IOException.class);
-        assertThrows(IOException.class, () -> cache.initializeStreamIfNecessary(null, "dbName", "collName"));
+        assertThrows(IOException.class, () -> cache.streamCollection("dbName", "collName"));
     }
 
     @Test
@@ -203,23 +197,31 @@ public class CacheTest extends CacheFixtureSupport {
     // background-updated (lagging) admin page entry count.
 
     @Test
-    public void test_shift_pk_positions_routes_admin_vs_user() throws NoSuchFieldException, IllegalAccessException {
-        Cache cache = new Cache();
+    @SuppressWarnings("unchecked")
+    public void test_the_vacuum_listener_routes_admin_vs_user() {
+        final var fsMock = mock(FileSystem.class);
         final var adminMock = mock(org.techhouse.cache.AdminCache.class);
         final var userMock = mock(org.techhouse.cache.UserCache.class);
-        TestUtils.setPrivateField(cache, "adminCache", adminMock);
-        TestUtils.setPrivateField(cache, "userCache", userMock);
+        try (var ioc = mockStatic(IocContainer.class, CALLS_REAL_METHODS)) {
+            ioc.when(() -> IocContainer.get(FileSystem.class)).thenReturn(fsMock);
+            ioc.when(() -> IocContainer.get(org.techhouse.cache.AdminCache.class)).thenReturn(adminMock);
+            ioc.when(() -> IocContainer.get(org.techhouse.cache.UserCache.class)).thenReturn(userMock);
+            assertDoesNotThrow(Cache::new);
+        }
+        final var registered = ArgumentCaptor.forClass(Consumer.class);
+        verify(fsMock).onVacuum(registered.capture());
+        final Consumer<VacuumedPage> listener = registered.getValue();
+        final var admin = new VacuumedPage(Globals.ADMIN_DB_NAME, "collections", 0, Map.of());
+        final var pages = new VacuumedPage(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, Map.of());
+        final var user = new VacuumedPage("userDb", "userColl", 1, Map.of());
 
-        cache.shiftPkPositionsAfterCompaction(
-                new org.techhouse.fs.PkCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5));
-        cache.shiftPkPositionsAfterCompaction(
-                new org.techhouse.fs.PkCompaction(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, 30, 9));
-        cache.shiftPkPositionsAfterCompaction(new org.techhouse.fs.PkCompaction("userDb", "userColl", 1, 20, 7));
-        cache.shiftPkPositionsAfterCompaction(null);
+        listener.accept(admin);
+        listener.accept(pages);
+        listener.accept(user);
 
-        verify(adminMock).shiftPkPositionsAfterCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5);
-        verify(adminMock).shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, 30, 9);
-        verify(userMock).shiftPkPositionsAfterCompaction("userDb", "userColl", 1, 20, 7);
+        verify(adminMock).repositionAfterVacuum(admin);
+        verify(adminMock).repositionAfterVacuum(pages);
+        verify(userMock).repositionAfterVacuum(user);
         verifyNoMoreInteractions(adminMock, userMock);
     }
 

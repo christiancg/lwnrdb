@@ -62,9 +62,9 @@ public final class TemporalPlainYearMonthBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("PlainYearMonth", (thisArg, args) -> {
-            requireNewTargetOrSubclassInstance("Temporal.PlainYearMonth", thisArg);
-            return withNewTargetPrototype(construct(args, ops), ops);
+        final var ctor = new JsNativeFunction("PlainYearMonth", (thisArg, args, newTarget) -> {
+            requireNewTargetOrSubclassInstance("Temporal.PlainYearMonth", thisArg, newTarget);
+            return withNewTargetPrototype(construct(args, ops), newTarget, ops);
         });
         ctor.setLength(2);
         final var from = new JsNativeFunction("from", (_, args) -> toPlainYearMonth(arg(args, 0), arg(args, 1), ops));

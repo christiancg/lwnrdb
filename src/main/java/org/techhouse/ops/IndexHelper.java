@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -10,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -20,36 +22,37 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
-import org.techhouse.ejson.elements.JsonCustom;
-import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.FieldIndexBatch;
 import org.techhouse.ops.index.IndexEntryReader;
 import org.techhouse.ops.index.IndexValueCodec;
 import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.SaltedKey;
 
 public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     public static List<String> getSortedIdsForField(String dbName, String collName, String fieldName,
-            java.util.Comparator<FieldIndexEntry<?>> order, long maxIds) throws IOException {
-        return IndexEntryReader.sortedIdsForField(dbName, collName, fieldName, order, maxIds);
+            java.util.Comparator<FieldIndexEntry<?>> order, long maxIds, ReadObserver observer) throws IOException {
+        return IndexEntryReader.sortedIdsForField(dbName, collName, fieldName, order, maxIds, observer);
     }
 
-    public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
-            throws IOException {
-        return IndexEntryReader.getIndexEntriesForField(dbName, collName, fieldName);
+    public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName,
+            ReadObserver observer) throws IOException {
+        return IndexEntryReader.getIndexEntriesForField(dbName, collName, fieldName, observer);
     }
 
     public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
-            Set<JsonBaseElement> localValues) throws IOException {
-        return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues);
+            Set<JsonBaseElement> localValues, ReadObserver observer) throws IOException {
+        return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues, observer);
     }
 
     public static List<String> idsInOrder(List<FieldIndexEntry<?>> sortedEntries,
@@ -82,11 +85,11 @@ public class IndexHelper {
         fs.dropIndex(dbName, collName, fieldName);
         final var coll = cache.getWholeCollection(dbName, collName);
         final var entriesToBeIndexed = coll.values().stream().map(DbEntry::getData)
-                .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName))
-                .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, fieldName)));
+                .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).collect(Collectors
+                        .groupingBy(jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, fieldName))));
         final Map<Class<?>, List<FieldIndexEntry<?>>> indexes = entriesToBeIndexed.entrySet().stream()
                 .map(jsonElementListEntry -> {
-                    final var key = jsonElementListEntry.getKey();
+                    final var key = jsonElementListEntry.getKey().element();
                     final var ids = jsonElementListEntry.getValue().stream()
                             .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue())
                             .collect(Collectors.toSet());
@@ -94,7 +97,7 @@ public class IndexHelper {
                         final var primitive = key.asJsonPrimitive();
                         return switch (primitive) {
                             case JsonNumber jsonNumber ->
-                                new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
+                                new FieldIndexEntry<>(dbName, collName, jsonNumber.doubleValue() + 0.0, ids);
                             case JsonString jsonString -> {
                                 if (jsonString.isJsonCustom()) {
                                     final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
@@ -122,11 +125,11 @@ public class IndexHelper {
     }
 
     private static void writeHashIndexes(String dbName, String collName, String fieldName,
-            Map<JsonBaseElement, List<JsonObject>> grouped) {
+            Map<SaltedKey, List<JsonObject>> grouped) {
         final var objectIds = new LinkedHashMap<String, Set<String>>();
         final var arrayIds = new LinkedHashMap<String, Set<String>>();
         for (var groupedEntry : grouped.entrySet()) {
-            final var key = groupedEntry.getKey();
+            final var key = groupedEntry.getKey().element();
             if (!key.isJsonObject() && !key.isJsonArray()) {
                 continue;
             }
@@ -165,8 +168,8 @@ public class IndexHelper {
                 .filter(fieldName -> !fs.indexMarkers().isMarked(dbName, collName, fieldName)).toList();
     }
 
-    private static void lockCollectionForMaintenance(String dbName, String collName) throws InterruptedException {
-        final var budget = Configuration.getInstance().getTransactionLockTimeoutMs();
+    private static void lockCollectionForMaintenance(String dbName, String collName, long budget)
+            throws InterruptedException {
         if (!rl.tryLockRead(dbName, collName, budget)) {
             throw new CollectionBusyException(Cache.getCollectionIdentifier(dbName, collName), budget);
         }
@@ -174,10 +177,15 @@ public class IndexHelper {
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
             throws IOException, InterruptedException {
+        bulkUpdateIndexes(dbName, collName, ids, configuration.getTransactionLockTimeoutMs());
+    }
+
+    public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids, long lockBudgetMs)
+            throws IOException, InterruptedException {
         if (ids.isEmpty() || maintainedIndexes(dbName, collName).isEmpty()) {
             return;
         }
-        lockCollectionForMaintenance(dbName, collName);
+        lockCollectionForMaintenance(dbName, collName, lockBudgetMs);
         try {
             final var existingIndexes = maintainedIndexes(dbName, collName);
             if (existingIndexes.isEmpty()) {
@@ -188,283 +196,35 @@ public class IndexHelper {
                 byId.put(doc.get_id(), doc);
             }
             for (var fieldName : existingIndexes) {
-                rl.lockIndex(dbName, collName, fieldName);
-                try {
-                    for (var id : ids) {
-                        applyCurrentState(dbName, collName, fieldName, id, byId.get(id));
-                    }
-                } finally {
-                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-                    rl.releaseIndex(dbName, collName, fieldName);
-                }
+                maintainField(dbName, collName, fieldName, ids, byId);
             }
         } finally {
             rl.releaseRead(dbName, collName);
         }
     }
 
-    // Background events for one id may run out of order, so re-read the CURRENT committed document by id
-    // rather than trusting the event snapshot; whichever event runs last makes the index converge.
     public static void updateIndexes(String dbName, String collName, String id)
             throws IOException, InterruptedException {
-        if (maintainedIndexes(dbName, collName).isEmpty()) {
-            return;
-        }
-        lockCollectionForMaintenance(dbName, collName);
+        bulkUpdateIndexes(dbName, collName, Collections.singletonList(id));
+    }
+
+    private static void maintainField(String dbName, String collName, String fieldName, List<String> ids,
+            Map<String, DbEntry> byId) throws IOException, InterruptedException {
+        rl.lockIndex(dbName, collName, fieldName);
+        var flushed = false;
         try {
-            final var existingIndexes = maintainedIndexes(dbName, collName);
-            if (existingIndexes.isEmpty()) {
-                return;
+            final var batch = FieldIndexBatch.open(dbName, collName, fieldName);
+            for (var id : ids) {
+                final var doc = byId.get(id);
+                batch.apply(id, doc == null ? null : JsonUtils.getFromPath(doc.getData(), fieldName));
             }
-            final var current = cache.getEntriesByIds(dbName, collName, Set.of(id));
-            final var doc = current.isEmpty() ? null : current.getFirst();
-            for (var fieldName : existingIndexes) {
-                rl.lockIndex(dbName, collName, fieldName);
-                try {
-                    applyCurrentState(dbName, collName, fieldName, id, doc);
-                } finally {
-                    // Drop the cached index so the next read reloads the rewritten .idx files from disk.
-                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-                    rl.releaseIndex(dbName, collName, fieldName);
-                }
-            }
+            batch.flush();
+            flushed = true;
         } finally {
-            rl.releaseRead(dbName, collName);
-        }
-    }
-
-    // Must be called holding the field index write lock.
-    private static void applyCurrentState(String dbName, String collName, String fieldName, String id, DbEntry doc)
-            throws IOException {
-        if (doc != null) {
-            internalSelectIndexType(doc, dbName, collName, fieldName);
-        } else {
-            removeIdFromScalarIndexes(dbName, collName, fieldName, id);
-            removeIdFromHashIndexes(dbName, collName, fieldName, id);
-        }
-    }
-
-    private static void internalSelectIndexType(DbEntry entry, String dbName, String collName, String fieldName)
-            throws IOException {
-        final var element = JsonUtils.getFromPath(entry.getData(), fieldName);
-        final var entryId = entry.get_id();
-        // An update can change the value or even the kind (object <-> array, scalar <-> object/array), so clear
-        // the hash families unconditionally up front; the scalar families are cleared on the branches below.
-        removeIdFromHashIndexes(dbName, collName, fieldName, entryId);
-        if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
-            final var primitive = element.asJsonPrimitive();
-            switch (primitive) {
-                case JsonNumber jsonNumber -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId,
-                        jsonNumber.getValue(), Number.class);
-                case JsonString jsonString -> {
-                    if (jsonString.isJsonCustom()) {
-                        final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
-                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, custom, null);
-                    } else {
-                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, jsonString.getValue(),
-                                String.class);
-                    }
-                }
-                case JsonBoolean jsonBoolean -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId,
-                        jsonBoolean.getValue(), Boolean.class);
-                default -> throw new IllegalStateException("Unexpected value: " + primitive);
+            if (!flushed) {
+                cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
             }
-        } else if (element.isJsonObject()) {
-            removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
-            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.OBJECT, JsonUtils.hashElement(element));
-        } else if (element.isJsonArray()) {
-            removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
-            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.ARRAY, JsonUtils.hashElement(element));
-        } else {
-            // null or absent value (DELETE, or a field removed on update): only remove, nothing to add.
-            removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
+            rl.releaseIndex(dbName, collName, fieldName);
         }
-    }
-
-    // The id has already been cleared from every hash family by internalSelectIndexType, so this only adds.
-    private static void addToHashIndex(String dbName, String collName, String fieldName, String entryId, IndexKind kind,
-            String hash) throws IOException {
-        final var entries = cache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
-        final var found = entries == null
-                ? null
-                : entries.stream().filter(e -> e.getValue().equals(hash)).findFirst().orElse(null);
-        if (found != null) {
-            found.getIds().add(entryId);
-            fs.updateHashIndexFiles(dbName, collName, fieldName, kind, found, null);
-        } else {
-            final var indexEntry = new FieldIndexEntry<>(dbName, collName, hash, new HashSet<>(Set.of(entryId)));
-            final var cached = cache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
-            if (cached != null) {
-                cached.add(indexEntry);
-            }
-            fs.updateHashIndexFiles(dbName, collName, fieldName, kind, indexEntry, null);
-        }
-    }
-
-    private static void removeIdFromHashIndexes(String dbName, String collName, String fieldName, String entryId)
-            throws IOException {
-        for (var kind : IndexKind.HASH_KINDS) {
-            final var entries = cache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
-            if (entries != null) {
-                for (var entry : entries) {
-                    if (entry.getIds().remove(entryId)) {
-                        fs.updateHashIndexFiles(dbName, collName, fieldName, kind, null, entry);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    private static void removeIdFromScalarIndexes(String dbName, String collName, String fieldName, String entryId)
-            throws IOException {
-        removeScalarOfType(dbName, collName, fieldName, entryId, Boolean.class);
-        removeScalarOfType(dbName, collName, fieldName, entryId, Number.class);
-        removeScalarOfType(dbName, collName, fieldName, entryId, String.class);
-        for (var customType : CustomTypeFactory.getCustomTypes().values()) {
-            removeScalarOfType(dbName, collName, fieldName, entryId, customType);
-        }
-    }
-
-    private static <T> void removeScalarOfType(String dbName, String collName, String fieldName, String entryId,
-            Class<T> type) throws IOException {
-        final var removed = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, type);
-        if (removed != null) {
-            fs.updateIndexFiles(dbName, collName, fieldName, null, removed);
-        }
-    }
-
-    private static <T> void findExistingValuesAndUpdate(String dbName, String collName, String fieldName,
-            String entryId, T value, Class<T> tClass) throws IOException {
-        FieldIndexEntry<Boolean> toRemoveBoolean = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId,
-                Boolean.class);
-        FieldIndexEntry<Number> toRemoveNumber = null;
-        FieldIndexEntry<String> toRemoveString = null;
-        FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom = null;
-        if (toRemoveBoolean == null) {
-            toRemoveNumber = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, Number.class);
-            if (toRemoveNumber == null) {
-                toRemoveString = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, String.class);
-                if (toRemoveString == null) {
-                    final var customTypes = CustomTypeFactory.getCustomTypes();
-                    final var customTypeValues = customTypes.values();
-                    for (var customType : customTypeValues) {
-                        final var foundJsonCustom = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId,
-                                customType);
-                        if (foundJsonCustom != null) {
-                            //noinspection unchecked
-                            toRemoveJsonCustom = (FieldIndexEntry<JsonCustom<?>>) foundJsonCustom;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if (value instanceof JsonCustom<?> jsonCustom) {
-            internalUpdateCustomIndex(dbName, collName, fieldName, entryId, jsonCustom, toRemoveBoolean, toRemoveNumber,
-                    toRemoveString, toRemoveJsonCustom);
-        } else {
-            internalUpdateIndex(dbName, collName, fieldName, entryId, value, tClass, toRemoveBoolean, toRemoveNumber,
-                    toRemoveString, toRemoveJsonCustom);
-        }
-    }
-
-    private static void internalUpdateCustomIndex(String dbName, String collName, String fieldName, String entryId,
-            JsonCustom<?> value, FieldIndexEntry<Boolean> toRemoveBoolean, FieldIndexEntry<Number> toRemoveNumber,
-            FieldIndexEntry<String> toRemoveString, FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom)
-            throws IOException {
-        FieldIndexEntry<?> found = findMatchingEntryFromCustomJson(dbName, collName, fieldName, value);
-        if (found != null) {
-            final var ids = found.getIds();
-            ids.add(entryId);
-            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                    toRemoveJsonCustom, found);
-        } else {
-            FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value,
-                    new HashSet<>(Set.of(entryId)));
-            addToCachedIndex(dbName, collName, fieldName, value.getClass(), indexEntry);
-            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                    toRemoveJsonCustom, indexEntry);
-        }
-    }
-
-    private static <T> void internalUpdateIndex(String dbName, String collName, String fieldName, String entryId,
-            T value, Class<T> tClass, FieldIndexEntry<Boolean> toRemoveBoolean, FieldIndexEntry<Number> toRemoveNumber,
-            FieldIndexEntry<String> toRemoveString, FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom)
-            throws IOException {
-        FieldIndexEntry<T> found = findMatchingEntry(dbName, collName, fieldName, value, tClass);
-        if (found != null) {
-            final var ids = found.getIds();
-            ids.add(entryId);
-            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                    toRemoveJsonCustom, found);
-        } else {
-            FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value,
-                    new HashSet<>(Set.of(entryId)));
-            addToCachedIndex(dbName, collName, fieldName, tClass, indexEntry);
-            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                    toRemoveJsonCustom, indexEntry);
-        }
-    }
-
-    private static void addToCachedIndex(String dbName, String collName, String fieldName, Class<?> tClass,
-            FieldIndexEntry<?> indexEntry) throws IOException {
-        @SuppressWarnings("unchecked")
-        final var lookupType = (Class<Object>) tClass;
-        final var cached = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, lookupType);
-        if (cached != null) {
-            @SuppressWarnings("unchecked")
-            final var typed = (FieldIndexEntry<Object>) indexEntry;
-            cached.add(typed);
-        }
-    }
-
-    private static FieldIndexEntry<?> findMatchingEntryFromCustomJson(String dbName, String collName, String fieldName,
-            JsonCustom<?> value) throws IOException {
-        final var indexEntries = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, value.getClass());
-        if (indexEntries != null) {
-            return indexEntries.stream().filter(indexEntry -> indexEntry.getValue().getValue().equals(value.getValue()))
-                    .findFirst().orElse(null);
-        }
-        return null;
-    }
-
-    private static <T> FieldIndexEntry<T> findMatchingEntry(String dbName, String collName, String fieldName, T value,
-            Class<T> tClass) throws IOException {
-        final var indexEntries = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, tClass);
-        if (indexEntries != null) {
-            return indexEntries.stream()
-                    .filter(indexEntry -> FieldIndexEntry.sameIndexedValue(indexEntry.getValue(), value)).findFirst()
-                    .orElse(null);
-        }
-        return null;
-    }
-
-    private static <T> void updateFromFiles(String dbName, String collName, String fieldName,
-            FieldIndexEntry<Boolean> toRemoveBoolean, FieldIndexEntry<Number> toRemoveNumber,
-            FieldIndexEntry<String> toRemoveString, FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom,
-            FieldIndexEntry<T> indexEntry) throws IOException {
-        if (toRemoveBoolean != null) {
-            fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveBoolean);
-        } else if (toRemoveNumber != null) {
-            fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveNumber);
-        } else if (toRemoveJsonCustom != null) {
-            fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveJsonCustom);
-        } else {
-            fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveString);
-        }
-    }
-
-    private static <T> FieldIndexEntry<T> getExistingFieldIndexEntry(String dbName, String collName, String fieldName,
-            String entityId, Class<T> tClass) throws IOException {
-        final var fieldIndexEntry = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, tClass);
-        if (fieldIndexEntry != null) {
-            return fieldIndexEntry.stream().filter(tFieldIndexEntry -> tFieldIndexEntry.getIds().contains(entityId))
-                    .findFirst().map(tFieldIndexEntry -> {
-                        tFieldIndexEntry.getIds().remove(entityId);
-                        return tFieldIndexEntry;
-                    }).orElse(null);
-        }
-        return null;
     }
 }

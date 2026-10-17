@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.analyze.AnalyzeContext;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -27,7 +28,8 @@ public final class GeoSpatialIndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
 
-    public static Set<String> candidateIds(CustomOperator operator, String dbName, String collName) throws IOException {
+    public static Set<String> candidateIds(CustomOperator operator, String dbName, String collName,
+            ReadObserver observer) throws IOException {
         final var bbox = boundingBoxFor(operator);
         if (bbox == null) {
             return null;
@@ -53,7 +55,7 @@ public final class GeoSpatialIndexHelper {
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
         }
-        recordAnalyzeIndexUse(dbName, collName, fieldName);
+        recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
             cache.recordFieldIndexAccess(dbName, collName, fieldName);
         }
@@ -116,11 +118,7 @@ public final class GeoSpatialIndexHelper {
         return lo;
     }
 
-    private static void recordAnalyzeIndexUse(String dbName, String collName, String fieldName) {
-        final var analyzeContext = AnalyzeContext.current();
-        if (analyzeContext != null) {
-            analyzeContext.addIndexUsed(fieldName);
-            analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, fieldName));
-        }
+    private static void recordAnalyzeIndexUse(String dbName, String collName, String fieldName, ReadObserver observer) {
+        observer.indexUsed(fieldName, AnalyzeContext.fieldLockId(dbName, collName, fieldName));
     }
 }

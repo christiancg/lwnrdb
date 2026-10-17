@@ -145,7 +145,7 @@ public class IndexScanComplementAgreementTest extends FilterResolutionSupport {
     private void storeMixedKinds() throws IOException {
         insert("num", FIELD, new JsonNumber(5));
         insert("str", FIELD, new JsonString("a"));
-        insert("bool", FIELD, new JsonBoolean(true));
+        insert("bool", FIELD, JsonBoolean.of(true));
         insert("nul", FIELD, JsonNull.INSTANCE);
         insert("arr", FIELD, arrayOf(new JsonNumber(5)));
         insert("obj", FIELD, objectWithA(5));
@@ -156,7 +156,7 @@ public class IndexScanComplementAgreementTest extends FilterResolutionSupport {
         storeMixedKinds();
         assertEquals(6, rowsJson(where(FieldOperatorType.NOT_EQUALS, new JsonString("b"))).size());
         assertEquals(5, rowsJson(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(5))).size());
-        assertEquals(5, rowsJson(where(FieldOperatorType.NOT_EQUALS, new JsonBoolean(true))).size());
+        assertEquals(5, rowsJson(where(FieldOperatorType.NOT_EQUALS, JsonBoolean.of(true))).size());
     }
 
     @Test

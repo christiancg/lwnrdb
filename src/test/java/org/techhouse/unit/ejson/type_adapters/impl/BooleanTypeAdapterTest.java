@@ -21,13 +21,13 @@ public class BooleanTypeAdapterTest {
     public void test_null_value_converts_to_json_string() {
         BooleanTypeAdapter adapter = new BooleanTypeAdapter();
 
-        assertThrows(NullPointerException.class, () -> adapter.toJson(null));
+        assertEquals("null", adapter.toJson(null));
     }
 
     @Test
     public void test_convert_json_boolean_to_boolean() {
         BooleanTypeAdapter adapter = new BooleanTypeAdapter();
-        JsonBoolean jsonBoolean = new JsonBoolean(true);
+        JsonBoolean jsonBoolean = JsonBoolean.of(true);
 
         Boolean result = adapter.fromJson(jsonBoolean);
 

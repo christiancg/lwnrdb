@@ -60,7 +60,9 @@ public final class CryptoBuiltins {
 
     private static JsValue hash(List<JsValue> args, InterpreterOps ops) {
         final var digest = digestFor(JsCoercion.toStr(arg(args, 0), ops));
-        final var hashed = digest.digest(bytesOf(arg(args, 1), ops));
+        final var input = bytesOf(arg(args, 1), ops);
+        InterpreterOps.paceWork(ops, input.length);
+        final var hashed = digest.digest(input);
         final var encoding = arg(args, 2) instanceof JsUndefined ? "hex" : JsCoercion.toStr(arg(args, 2), ops);
         return switch (encoding) {
             case "hex" -> new JsString(toHex(hashed));

@@ -1,6 +1,8 @@
 package org.techhouse.ejson.type_adapters.impl;
 
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.internal.CharJsonOut;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.internal.JsonStrings;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 
@@ -8,15 +10,22 @@ public class StringTypeAdapter implements TypeAdapter<String> {
 
     @Override
     public String toJson(String value) {
-        return value == null ? "null" : "\"" + JsonStrings.escape(value) + "\"";
+        if (value == null) {
+            return "null";
+        }
+        final var out = new CharJsonOut();
+        toJson(value, out);
+        return out.toString();
     }
 
     @Override
-    public void toJson(String value, StringBuilder out) {
+    public void toJson(String value, JsonOut out) {
         if (value == null) {
             out.append("null");
         } else {
-            out.append('"').append(JsonStrings.escape(value)).append('"');
+            out.append('"');
+            JsonStrings.appendEscaped(out, value);
+            out.append('"');
         }
     }
 

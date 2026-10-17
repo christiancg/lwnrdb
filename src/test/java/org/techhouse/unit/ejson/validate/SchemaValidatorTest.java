@@ -274,8 +274,8 @@ public class SchemaValidatorTest {
 
     @Test
     public void test_direct_boolean_root_schema() {
-        assertTrue(validator.validate(new JsonNumber(1), new JsonSchema(new JsonBoolean(true))).isValid());
-        assertFalse(validator.validate(new JsonNumber(1), new JsonSchema(new JsonBoolean(false))).isValid());
+        assertTrue(validator.validate(new JsonNumber(1), new JsonSchema(JsonBoolean.of(true))).isValid());
+        assertFalse(validator.validate(new JsonNumber(1), new JsonSchema(JsonBoolean.of(false))).isValid());
     }
 
     @Test

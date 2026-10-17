@@ -4,6 +4,7 @@ import java.util.UUID;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.ioc.IocContainer;
@@ -16,6 +17,7 @@ public final class ScheduleDispatcher {
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ScheduleRegistry registry = IocContainer.get(ScheduleRegistry.class);
+    private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(ScheduleDispatcher.class);
 
@@ -38,14 +40,27 @@ public final class ScheduleDispatcher {
             return;
         }
         final var definer = definition.getDefiner();
-        if (definer == null || cache.getAdminUserEntry(definer) == null) {
+        final var refusal = DefinerAuthority.refusal(definer, dbName, null);
+        if (refusal != null) {
             scheduleExecutor.countSkip();
-            final var reason = "definer '" + definer + "' no longer exists; the schedule is disabled";
+            final var reason = refusal + "; the schedule is disabled";
             registry.warnOnce(entry.key(), reason);
             recordSkip(entry, definition, reason);
+            DefinerAuthority.disableSchedule(dbName, definition, refusal);
             return;
         }
-        run(entry, definition, procedure.getVersion(), procedure.getSource(), definer);
+        switch (admission.acquireSlices(definer, dbName)) {
+            case ScriptAdmission.Refusal limited -> {
+                scheduleExecutor.countSkip();
+                recordSkip(entry, definition, "the " + limited.scope()
+                        + " script concurrency limit was reached; this occurrence was skipped");
+            }
+            case ScriptAdmission.Permit permit -> {
+                try (permit) {
+                    run(entry, definition, procedure.getVersion(), procedure.getSource(), definer);
+                }
+            }
+        }
     }
 
     private static void run(ScheduleRegistry.Entry entry, ScheduleDefinition definition, long version, String source,
@@ -81,12 +96,14 @@ public final class ScheduleDispatcher {
 
     private static ResourceLimits limits(ScheduleDefinition definition) {
         final var base = DatabaseHostBindings.limitsFromConfiguration();
-        final var timeout = definition.getTimeoutMs() > 0
+        final var requested = definition.getTimeoutMs() > 0
                 ? definition.getTimeoutMs()
                 : configuration.getScheduleTimeoutMs();
+        final var timeout = Math.min(requested, configuration.longValue(ConfigKey.SCHEDULE_MAX_TIMEOUT_MS));
         return new ResourceLimits(base.instructionBudget(), timeout, base.maxDepth(), base.reportUnhandledRejections(),
                 base.fetchEnabled(), base.fetchHostAllowlist(), base.maxResponseBytes(), base.fetchTimeoutMillis(),
                 base.strictScriptGoal(), base.textImportEnabled(), base.maxModuleDepth(), base.maxLogLines(),
-                base.maxLogLineChars(), base.memoryBudget(), -1, base.cursorBatchSize(), base.cursorMaxBatchSize());
+                base.maxLogLineChars(), base.memoryBudget(), -1, base.cursorBatchSize(), base.cursorMaxBatchSize(),
+                base.fetchMaxConcurrent(), base.maxArrayLength());
     }
 }

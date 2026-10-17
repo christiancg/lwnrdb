@@ -12,6 +12,9 @@ import org.techhouse.ex.InvalidCronException;
 public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, BitSet months, BitSet daysOfWeek,
         boolean domRestricted, boolean dowRestricted, boolean firesInBothFallBackPasses) {
     private static final int SEARCH_HORIZON_YEARS = 4;
+    private static final int MINUTES_PER_HOUR = 60;
+    private static final int MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
+    private static final long MILLIS_PER_MINUTE = 60_000L;
     private static final Map<String, Integer> MONTH_NAMES = Map.ofEntries(Map.entry("JAN", 1), Map.entry("FEB", 2),
             Map.entry("MAR", 3), Map.entry("APR", 4), Map.entry("MAY", 5), Map.entry("JUN", 6), Map.entry("JUL", 7),
             Map.entry("AUG", 8), Map.entry("SEP", 9), Map.entry("OCT", 10), Map.entry("NOV", 11), Map.entry("DEC", 12));
@@ -49,6 +52,34 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
             return walked;
         }
         return walked == null || repeated.toInstant().isBefore(walked.toInstant()) ? repeated : walked;
+    }
+
+    public long shortestGapMillis(ZonedDateTime from) {
+        var shortest = shortestDailyGapMinutes() * MILLIS_PER_MINUTE;
+        final var first = nextAfter(from);
+        final var second = first == null ? null : nextAfter(first);
+        if (second != null) {
+            shortest = Math.min(shortest, second.toInstant().toEpochMilli() - first.toInstant().toEpochMilli());
+        }
+        return shortest;
+    }
+
+    private long shortestDailyGapMinutes() {
+        var shortest = Long.MAX_VALUE / MILLIS_PER_MINUTE;
+        var first = -1;
+        var previous = -1;
+        for (var hour = hours.nextSetBit(0); hour >= 0; hour = hours.nextSetBit(hour + 1)) {
+            for (var minute = minutes.nextSetBit(0); minute >= 0; minute = minutes.nextSetBit(minute + 1)) {
+                final var minuteOfDay = hour * MINUTES_PER_HOUR + minute;
+                if (previous >= 0) {
+                    shortest = Math.min(shortest, minuteOfDay - previous);
+                } else {
+                    first = minuteOfDay;
+                }
+                previous = minuteOfDay;
+            }
+        }
+        return first < 0 ? shortest : Math.min(shortest, first + MINUTES_PER_DAY - previous);
     }
 
     private ZonedDateTime firstInRepeatedHour(ZonedDateTime from) {
@@ -179,8 +210,8 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
         if (from > to) {
             throw new InvalidCronException(text, "range '" + range + "' starts after it ends");
         }
-        for (var value = from; value <= to; value += step) {
-            bits.set(value);
+        for (long value = from; value <= to; value += step) {
+            bits.set((int) value);
         }
     }
 

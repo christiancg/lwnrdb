@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.builtins.json.JsonStringify.stringify;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 
 import java.util.List;
+import java.util.Set;
 import org.techhouse.ejson.EJson;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -23,7 +24,7 @@ public final class JsonBuiltins {
     public static final EJson EJSON = new EJson();
     public static final int MAX_INDENT = 10;
 
-    public record Replacer(JsValue function, List<String> allowList) {
+    public record Replacer(JsValue function, Set<String> allowList) {
     }
 
     private JsonBuiltins() {
@@ -46,7 +47,7 @@ public final class JsonBuiltins {
     private static JsValue parse(List<JsValue> args, InterpreterOps ops, Invoker invoker, JsObject objectProto) {
         final var text = args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), ops);
         InterpreterOps.chargeChars(ops, text.length());
-        final var parsed = new JsonTextParser(text, objectProto).parseText();
+        final var parsed = new JsonTextParser(text, objectProto, ops).parseText();
         final var reviver = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         if (!isCallable(reviver)) {
             return parsed;
@@ -58,6 +59,15 @@ public final class JsonBuiltins {
 
     private static JsValue internalize(JsValue holder, String key, JsValue reviver, InterpreterOps ops,
             Invoker invoker) {
+        NativeDepth.enter(ops);
+        try {
+            return revive(holder, key, reviver, ops, invoker);
+        } finally {
+            NativeDepth.leave(ops);
+        }
+    }
+
+    private static JsValue revive(JsValue holder, String key, JsValue reviver, InterpreterOps ops, Invoker invoker) {
         final var value = ops.getMember(holder, new JsString(key));
         if (InterpreterUtils.isObjectLike(value) && !isCallable(value)) {
             if (isArray(value)) {
@@ -109,11 +119,13 @@ public final class JsonBuiltins {
     private static final class JsonTextParser {
         private final String source;
         private final JsObject objectProto;
+        private final InterpreterOps ops;
         private int pos;
 
-        private JsonTextParser(String source, JsObject objectProto) {
+        private JsonTextParser(String source, JsObject objectProto, InterpreterOps ops) {
             this.source = source;
             this.objectProto = objectProto;
+            this.ops = ops;
         }
 
         private JsValue parseText() {
@@ -130,15 +142,25 @@ public final class JsonBuiltins {
             if (pos >= source.length()) {
                 throw fail("Unexpected end of JSON input");
             }
+            InterpreterOps.tick(ops);
+            InterpreterOps.chargeElements(ops, 1);
             return switch (source.charAt(pos)) {
-                case '{' -> parseObject();
-                case '[' -> parseArray();
+                case '{', '[' -> parseNested();
                 case '"' -> new JsString(parseString());
                 case 't' -> literal("true", JsBoolean.of(true));
                 case 'f' -> literal("false", JsBoolean.of(false));
                 case 'n' -> literal("null", JsNull.getInstance());
                 default -> parseNumber();
             };
+        }
+
+        private JsValue parseNested() {
+            NativeDepth.enter(ops);
+            try {
+                return source.charAt(pos) == '{' ? parseObject() : parseArray();
+            } finally {
+                NativeDepth.leave(ops);
+            }
         }
 
         private JsValue literal(String text, JsValue value) {

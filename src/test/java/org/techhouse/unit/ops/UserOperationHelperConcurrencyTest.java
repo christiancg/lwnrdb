@@ -23,6 +23,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
@@ -65,8 +66,10 @@ public class UserOperationHelperConcurrencyTest {
         holdUsersLock();
         final var first = new AtomicReference<OperationResponse>();
         final var second = new AtomicReference<OperationResponse>();
-        final var deleteAlpha = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("alpha")), first);
-        final var deleteBeta = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("beta")), second);
+        final var deleteAlpha = startParked(
+                () -> UserOperationHelper.processDeleteUser(deleteRequest("alpha"), new RestampedRecords()), first);
+        final var deleteBeta = startParked(
+                () -> UserOperationHelper.processDeleteUser(deleteRequest("beta"), new RestampedRecords()), second);
 
         holder.release();
         deleteAlpha.join(BUDGET_MS);
@@ -186,8 +189,10 @@ public class UserOperationHelperConcurrencyTest {
         holdUsersLock();
         final var first = new AtomicReference<OperationResponse>();
         final var second = new AtomicReference<OperationResponse>();
-        final var deleteOne = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("gamma")), first);
-        final var deleteTwo = startParked(() -> UserOperationHelper.processDeleteUser(deleteRequest("gamma")), second);
+        final var deleteOne = startParked(
+                () -> UserOperationHelper.processDeleteUser(deleteRequest("gamma"), new RestampedRecords()), first);
+        final var deleteTwo = startParked(
+                () -> UserOperationHelper.processDeleteUser(deleteRequest("gamma"), new RestampedRecords()), second);
 
         holder.release();
         deleteOne.join(BUDGET_MS);

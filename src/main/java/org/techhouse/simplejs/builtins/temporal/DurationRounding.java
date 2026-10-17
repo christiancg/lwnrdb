@@ -263,8 +263,9 @@ public final class DurationRounding {
         if (!(value instanceof JsNumber number)) {
             final var str = JsCoercion.toStr(value, ops);
             if (!"auto".equals(str)) {
-                throw new RangeErrorException(JsCoercion.toStr(value) + " is not a number and converts to the string '"
-                        + str + "' which is not valid for fractionalSecondDigits");
+                throw new RangeErrorException(
+                        JsCoercion.describe(value) + " is not a number and converts to the string '" + str
+                                + "' which is not valid for fractionalSecondDigits");
             }
             return null;
         }

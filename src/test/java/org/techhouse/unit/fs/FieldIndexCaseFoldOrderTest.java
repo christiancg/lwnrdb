@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.fs.LegacyIndexLines;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.utils.CaseFolding;
@@ -54,7 +55,7 @@ public class FieldIndexCaseFoldOrderTest extends FileSystemTestBase {
     private List<FieldIndexEntry<String>> indexWrittenInOrder(List<String> order) throws IOException {
         Files.deleteIfExists(indexFile().toPath());
         for (final var value : order) {
-            fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
+            LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD,
                     new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, value, new HashSet<>(Set.of(idOf(value)))),
                     null);
         }

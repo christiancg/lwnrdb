@@ -1,11 +1,6 @@
 package org.techhouse.cluster.membership;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -28,8 +23,7 @@ import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScriptAdmission;
@@ -41,6 +35,7 @@ public class MembershipService {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
     private final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Map<String, NodeInfo> members = new ConcurrentHashMap<>();
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
     private final Map<String, Long> lastProbe = new ConcurrentHashMap<>();
@@ -349,10 +344,11 @@ public class MembershipService {
         if (configured != null && !configured.isBlank()) {
             return configured.trim();
         }
-        final var path = nodeIdFilePath();
+        final var path = fs.nodeIdFile();
         try {
-            if (Files.exists(path)) {
-                final var stored = Files.readString(path, StandardCharsets.UTF_8).trim();
+            final var content = fs.readNodeId();
+            if (content != null) {
+                final var stored = content.trim();
                 if (isWellFormedNodeId(stored)) {
                     return stored;
                 }
@@ -362,11 +358,7 @@ public class MembershipService {
                         + " or set nodeId in the configuration.");
             }
             final var generated = UUID.randomUUID().toString();
-            final var parent = path.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
-            writeNodeIdAtomically(path, generated);
+            fs.writeNodeId(generated);
             return generated;
         } catch (IOException e) {
             throw new IllegalStateException("Could not persist the node id at " + path + ". An ephemeral id changes"
@@ -375,15 +367,15 @@ public class MembershipService {
     }
 
     public String persistedNodeId() {
-        final var path = nodeIdFilePath();
         try {
-            if (!Files.exists(path)) {
+            final var content = fs.readNodeId();
+            if (content == null) {
                 return null;
             }
-            final var stored = Files.readString(path, StandardCharsets.UTF_8).trim();
+            final var stored = content.trim();
             return isWellFormedNodeId(stored) ? stored : null;
         } catch (IOException e) {
-            logger.warning("Could not read the node id at " + path + ": " + e.getMessage());
+            logger.warning("Could not read the node id at " + fs.nodeIdFile() + ": " + e.getMessage());
             return null;
         }
     }
@@ -397,20 +389,5 @@ public class MembershipService {
         } catch (IllegalArgumentException e) {
             return false;
         }
-    }
-
-    private static void writeNodeIdAtomically(Path path, String nodeId) throws IOException {
-        final var tmp = path.resolveSibling(path.getFileName() + ".tmp");
-        Files.writeString(tmp, nodeId, StandardCharsets.UTF_8);
-        try {
-            Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
-        }
-    }
-
-    private Path nodeIdFilePath() {
-        return Paths.get(Configuration.getInstance().getFilePath(), Globals.CLUSTER_FOLDER,
-                Globals.CLUSTER_NODE_ID_FILE);
     }
 }

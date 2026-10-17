@@ -1,11 +1,12 @@
 package org.techhouse.conn.tls;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
+import java.util.List;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocketFactory;
@@ -14,9 +15,11 @@ import javax.net.ssl.TrustManagerFactory;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
+import org.techhouse.fs.io.KeystoreFiles;
 import org.techhouse.log.Logger;
 
 public final class TlsContextFactory {
+    public static final List<String> ENABLED_PROTOCOLS = List.of("TLSv1.3", "TLSv1.2");
     private static final Logger logger = Logger.logFor(TlsContextFactory.class);
 
     private TlsContextFactory() {
@@ -39,6 +42,18 @@ public final class TlsContextFactory {
 
     // The keystore is both key and trust material: nodes must share one keystore (or a common CA) to connect.
     public static SSLSocketFactory createSocketFactory(Configuration config) {
+        return mutualContext(config, "Failed to initialise the TLS client context").getSocketFactory();
+    }
+
+    public static String[] enabledProtocols() {
+        return ENABLED_PROTOCOLS.toArray(String[]::new);
+    }
+
+    public static SSLServerSocketFactory createClusterServerSocketFactory(Configuration config) {
+        return mutualContext(config, "Failed to initialise the cluster TLS context").getServerSocketFactory();
+    }
+
+    private static SSLContext mutualContext(Configuration config, String failure) {
         final var keystorePath = Paths.get(config.getTlsKeystorePath());
         final var password = config.getTlsKeystorePassword().toCharArray();
         final var keyStore = loadOrGenerateKeyStore(keystorePath, password);
@@ -49,15 +64,17 @@ public final class TlsContextFactory {
             trustManagerFactory.init(keyStore);
             final var context = SSLContext.getInstance(Globals.TLS_PROTOCOL);
             context.init(keyManagerFactory.getKeyManagers(), trustManagerFactory.getTrustManagers(), null);
-            return context.getSocketFactory();
+            return context;
         } catch (GeneralSecurityException e) {
-            throw new TlsConfigurationException("Failed to initialise the TLS client context", e);
+            throw new TlsConfigurationException(failure, e);
         }
     }
 
     private static KeyStore loadOrGenerateKeyStore(Path keystorePath, char[] password) {
-        if (Files.exists(keystorePath)) {
-            return loadKeyStore(keystorePath, password);
+        if (KeystoreFiles.exists(keystorePath)) {
+            final var keyStore = loadKeyStore(keystorePath, password);
+            CertificateExpiry.warnIfExpiringSoon(keyStore, keystorePath);
+            return keyStore;
         }
         logger.warning("SECURITY WARNING: no TLS keystore found at " + keystorePath
                 + ". Generating a self-signed certificate for development use only. Clients will not trust it; "
@@ -66,7 +83,7 @@ public final class TlsContextFactory {
     }
 
     private static KeyStore loadKeyStore(Path keystorePath, char[] password) {
-        try (var in = Files.newInputStream(keystorePath)) {
+        try (var in = new ByteArrayInputStream(KeystoreFiles.read(keystorePath))) {
             final var keyStore = KeyStore.getInstance(Globals.TLS_KEYSTORE_TYPE);
             keyStore.load(in, password);
             return keyStore;

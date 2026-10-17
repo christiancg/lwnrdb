@@ -166,7 +166,9 @@ public class ClusterRouter {
     private String finishSoleRemoteSlice(String rawJson, String owner, OperationType type, String actingUser,
             UUID clientId) {
         final var response = forwardTx(rawJson, owner, type, actingUser, clientId, true);
-        if (!ownerStillHoldsTheSlice(response)) {
+        if (ownerStillHoldsTheSlice(response)) {
+            clientTracker.markRemoteSliceFenced(clientId);
+        } else {
             clientTracker.clearActiveTransaction(clientId);
             clientTracker.clearTransactionState(clientId);
         }

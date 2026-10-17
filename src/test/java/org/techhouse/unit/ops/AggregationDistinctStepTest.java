@@ -298,4 +298,37 @@ public class AggregationDistinctStepTest {
         assertEquals(1, result.size());
         assertEquals("books", result.getFirst().get("category").asJsonString().getValue());
     }
+
+    @Test
+    public void test_whole_row_distinct_ignores_member_order() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var nestedFirst = new JsonObject();
+        nestedFirst.addProperty("p", 1);
+        nestedFirst.addProperty("q", "r");
+        final var nestedSecond = new JsonObject();
+        nestedSecond.addProperty("q", "r");
+        nestedSecond.addProperty("p", 1);
+        final var first = new JsonObject();
+        first.add(Globals.PK_FIELD, new JsonString("rowA"));
+        first.addProperty("x", 1);
+        first.addProperty("y", "z");
+        first.add("n", nestedFirst);
+        final var second = new JsonObject();
+        second.add("n", nestedSecond);
+        second.addProperty("y", "z");
+        second.add(Globals.PK_FIELD, new JsonString("rowB"));
+        second.addProperty("x", 1);
+        for (final var row : List.of(first, second)) {
+            final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, row);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
+        }
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new DistinctAggregationStep(null)));
+
+        final var result = AggregationOperationHelper.processAggregation(request);
+
+        assertEquals(1, result.size(), result.toString());
+        assertEquals(first.copyWithout(Globals.PK_FIELD), result.getFirst());
+    }
 }

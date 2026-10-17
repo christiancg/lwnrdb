@@ -80,13 +80,13 @@ public class JsValueTest {
     public void test_arguments_and_global_values() {
         final var arguments = new org.techhouse.simplejs.values.JsArguments(List.of(new JsNumber(1)), null, null);
         assertEquals("object", JsCoercion.typeOf(arguments));
-        assertEquals("[object Arguments]", JsCoercion.toStr(arguments));
+        assertEquals("[object Arguments]", JsCoercion.toStrDataOnly(arguments));
         assertEquals(1, arguments.length());
         assertEquals(1, ((JsNumber) arguments.get(0)).getValue());
         assertInstanceOf(JsUndefined.class, arguments.get(3));
         final var global = new org.techhouse.simplejs.values.JsGlobalObject(Environment.global());
         assertEquals("object", JsCoercion.typeOf(global));
-        assertEquals("[object global]", JsCoercion.toStr(global));
+        assertEquals("[object global]", JsCoercion.toStrDataOnly(global));
     }
 
     @Test
@@ -106,7 +106,7 @@ public class JsValueTest {
     public void test_proxy_value() {
         final var objectProxy = new org.techhouse.simplejs.values.JsProxy(new JsObject(), new JsObject());
         assertEquals("object", JsCoercion.typeOf(objectProxy));
-        assertEquals("[object Object]", JsCoercion.toStr(objectProxy));
+        assertEquals("[object Object]", JsCoercion.toStrDataOnly(objectProxy));
         assertFalse(objectProxy.isCallable());
         final var fnProxy = new org.techhouse.simplejs.values.JsProxy(
                 new JsNativeFunction("id", (_, _) -> JsUndefined.getInstance()), new JsObject());
@@ -120,10 +120,10 @@ public class JsValueTest {
     public void test_map_set_date_values() {
         final var map = new org.techhouse.simplejs.values.JsMap();
         assertEquals("object", JsCoercion.typeOf(map));
-        assertEquals("[object Map]", JsCoercion.toStr(map));
+        assertEquals("[object Map]", JsCoercion.toStrDataOnly(map));
         final var set = new org.techhouse.simplejs.values.JsSet();
         assertEquals("object", JsCoercion.typeOf(set));
-        assertEquals("[object Set]", JsCoercion.toStr(set));
+        assertEquals("[object Set]", JsCoercion.toStrDataOnly(set));
         final var date = new org.techhouse.simplejs.values.JsDate(0);
         assertEquals("object", JsCoercion.typeOf(date));
         assertEquals(0, JsCoercion.toNumber(date));
@@ -138,17 +138,17 @@ public class JsValueTest {
     public void test_promise_and_generator_values() {
         final var promise = new JsPromise(new EventLoop());
         assertEquals("object", JsCoercion.typeOf(promise));
-        assertEquals("[object Promise]", JsCoercion.toStr(promise));
+        assertEquals("[object Promise]", JsCoercion.toStrDataOnly(promise));
         final var generator = new JsGenerator(new Coroutine());
         assertEquals("object", JsCoercion.typeOf(generator));
-        assertEquals("[object Generator]", JsCoercion.toStr(generator));
+        assertEquals("[object Generator]", JsCoercion.toStrDataOnly(generator));
     }
 
     @Test
     public void test_class_value() {
         final var cls = new JsClass("Widget", null, Environment.global());
         assertEquals("function", JsCoercion.typeOf(cls));
-        assertEquals("function Widget() { [native code] }", JsCoercion.toStr(cls));
+        assertEquals("function Widget() { [native code] }", JsCoercion.toStrDataOnly(cls));
         assertEquals("Widget", cls.getName());
     }
 

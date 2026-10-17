@@ -13,10 +13,20 @@ import org.techhouse.simplejs.elements.JsBaseElement.JsType;
 import org.techhouse.simplejs.elements.JsEOF;
 import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsTemplateString;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnterminatedTemplateException;
 
 public final class TemplateLexer {
-    public static Lexed lexTemplate(String src, int start) {
+    private static final int MAX_TEMPLATE_NESTING = 64;
+
+    public static Lexed lexTemplate(String src, int start, int depth) {
+        if (depth >= MAX_TEMPLATE_NESTING) {
+            throw new SyntaxErrorException("Template literals nest more than " + MAX_TEMPLATE_NESTING + " levels deep");
+        }
+        return lexTemplateLevel(src, start, depth + 1);
+    }
+
+    private static Lexed lexTemplateLevel(String src, int start, int depth) {
         final var n = src.length();
         final var quasis = new ArrayList<String>();
         final var rawQuasis = new ArrayList<String>();
@@ -43,7 +53,7 @@ public final class TemplateLexer {
                 rawQuasis.add(normalizeLineTerminators(src.substring(rawStart, i)));
                 builder.setLength(0);
                 quasiValid = true;
-                final var substitution = lexSubstitution(src, i + 2, start);
+                final var substitution = lexSubstitution(src, i + 2, start, depth);
                 expressions.add(substitution.tokens());
                 i = substitution.close() + 1;
                 rawStart = i;
@@ -147,10 +157,10 @@ public final class TemplateLexer {
     public record Substitution(int close, List<JsBaseElement> tokens) {
     }
 
-    public static Substitution lexSubstitution(String src, int from, int templateStart) {
+    public static Substitution lexSubstitution(String src, int from, int templateStart, int templateDepth) {
         final var n = src.length();
         final var tokens = new ArrayList<JsBaseElement>();
-        final var braces = new BraceContext();
+        final var braces = new BraceContext(templateDepth);
         JsBaseElement last = null;
         var depth = 1;
         var j = from;

@@ -21,6 +21,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.CountOperatorHelper;
 import org.techhouse.ops.CountOperatorHelper.FastCount;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
@@ -194,7 +195,8 @@ public class FilterCountFastPathAgreementTest extends FilterResolutionSupport {
     }
 
     private static FastCount fastCountOf(BaseAggregationStep... steps) throws IOException {
-        return CountOperatorHelper.tryIndexOnlyCount(List.of(steps), TestGlobals.DB, TestGlobals.COLL);
+        return CountOperatorHelper.tryIndexOnlyCount(List.of(steps), TestGlobals.DB, TestGlobals.COLL,
+                PipelineContext.withoutScripts());
     }
 
     @Test

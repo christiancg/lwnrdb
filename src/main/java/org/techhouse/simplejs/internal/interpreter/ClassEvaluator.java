@@ -102,7 +102,7 @@ public final class ClassEvaluator {
                 superConstructor = resolved;
             } else {
                 throw new TypeErrorException(
-                        "Class extends value " + JsCoercion.toStr(resolved) + " is not a constructor or null");
+                        "Class extends value " + JsCoercion.describe(resolved) + " is not a constructor or null");
             }
         }
         final var methodScope = classScope.child();
@@ -115,7 +115,7 @@ public final class ClassEvaluator {
             final var parentPrototype = interp.getMember(superConstructor, "prototype");
             if (!isObjectLike(parentPrototype) && !(parentPrototype instanceof JsNull)) {
                 throw new TypeErrorException("Class extends value does not have valid prototype property "
-                        + JsCoercion.toStr(parentPrototype));
+                        + JsCoercion.describe(parentPrototype));
             }
             cls.setSuperConstructor(superConstructor, parentPrototype instanceof JsNull ? null : parentPrototype);
         } else if (superClass == null) {

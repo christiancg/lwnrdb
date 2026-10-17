@@ -21,7 +21,7 @@ public class JsonPrimitiveTypeAdapterTest {
     public void test_boolean_primitive_to_json() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();
 
-        JsonBoolean booleanValue = new JsonBoolean(true);
+        JsonBoolean booleanValue = JsonBoolean.of(true);
 
         String result = adapter.toJson(booleanValue);
 
@@ -51,7 +51,7 @@ public class JsonPrimitiveTypeAdapterTest {
     @Test
     public void test_boolean_element_converts_to_primitive() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();
-        JsonBoolean boolElement = new JsonBoolean(true);
+        JsonBoolean boolElement = JsonBoolean.of(true);
 
         JsonPrimitive<?> result = adapter.fromJson(boolElement);
 

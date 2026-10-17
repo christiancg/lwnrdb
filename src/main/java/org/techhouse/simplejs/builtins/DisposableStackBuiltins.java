@@ -41,19 +41,17 @@ public final class DisposableStackBuiltins {
 
     public static JsNativeFunction create(JsObject proto, boolean async, InterpreterOps ops) {
         final var name = async ? "AsyncDisposableStack" : "DisposableStack";
-        final var constructor = new JsNativeFunction(name, (thisArg, _) -> {
-            final var newTarget = JsNativeFunction.currentNewTarget();
-            if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
-                throw new TypeErrorException("Constructor " + name + " requires 'new'");
-            }
-            return newStack(proto, async, thisArg, ops);
+        final var constructor = new JsNativeFunction(name, (thisArg, _, newTarget) -> {
+            NewTargetSupport.requireNewTarget(name, thisArg, newTarget);
+            return newStack(proto, async, thisArg, newTarget, ops);
         });
         constructor.setLength(0);
         return constructor;
     }
 
-    public static JsValue getMethod(JsObject receiver, String name, InterpreterOps ops, Invoker invoker,
+    public static JsValue getMethod(JsObject receiver, String name, Intrinsics intrinsics, Invoker invoker,
             EventLoop eventLoop, boolean async) {
+        final var ops = intrinsics.ops;
         if (!isStackOfKind(receiver, async)) {
             return null;
         }
@@ -62,9 +60,9 @@ public final class DisposableStackBuiltins {
             case "defer" -> new JsNativeFunction("defer", (_, args) -> defer(receiver, arg(args, 0), invoker));
             case "adopt" ->
                 new JsNativeFunction("adopt", (_, args) -> adopt(receiver, arg(args, 0), arg(args, 1), invoker));
-            case "dispose" -> new JsNativeFunction("dispose", (_, _) -> dispose(receiver, invoker));
+            case "dispose" -> new JsNativeFunction("dispose", (_, _) -> dispose(receiver, invoker, intrinsics));
             case "disposeAsync" ->
-                new JsNativeFunction("disposeAsync", (_, _) -> disposeAsync(receiver, invoker, eventLoop));
+                new JsNativeFunction("disposeAsync", (_, _) -> disposeAsync(receiver, invoker, eventLoop, intrinsics));
             case "move" -> new JsNativeFunction("move", (_, _) -> move(receiver, async));
             default -> null;
         };
@@ -97,18 +95,18 @@ public final class DisposableStackBuiltins {
         return stack.getSymbol(ASYNC_HINT) instanceof JsBoolean flag && flag.getValue();
     }
 
-    private static JsObject newStack(JsObject proto, boolean async, JsValue thisArg, InterpreterOps ops) {
+    private static JsObject newStack(JsObject proto, boolean async, JsValue thisArg, JsValue newTarget,
+            InterpreterOps ops) {
         final var stack = thisArg instanceof JsObject instance ? instance : new JsObject();
         if (stack.getProto() == null) {
-            stack.setProto(resolvePrototype(proto, ops));
+            stack.setProto(resolvePrototype(proto, newTarget, ops));
         }
         installSlots(stack, async, new JsArray());
         return stack;
     }
 
-    private static JsObject resolvePrototype(JsObject fallback, InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+    private static JsObject resolvePrototype(JsObject fallback, JsValue newTarget, InterpreterOps ops) {
+        if (ops == null || !NewTargetSupport.isConstructCall(newTarget)) {
             return fallback;
         }
         final var proto = ops.getMember(newTarget, new JsString("prototype"));
@@ -205,7 +203,7 @@ public final class DisposableStackBuiltins {
         return reversed;
     }
 
-    private static JsValue dispose(JsObject stack, Invoker invoker) {
+    private static JsValue dispose(JsObject stack, Invoker invoker, Intrinsics intrinsics) {
         RuntimeException error = null;
         for (final var disposer : take(stack)) {
             if (disposer == AWAIT_ONLY) {
@@ -216,7 +214,7 @@ public final class DisposableStackBuiltins {
             } catch (ScriptAbortException abort) {
                 throw abort;
             } catch (RuntimeException disposeError) {
-                error = suppress(error, disposeError);
+                error = suppress(intrinsics, error, disposeError);
             }
         }
         if (error != null) {
@@ -225,13 +223,14 @@ public final class DisposableStackBuiltins {
         return JsUndefined.getInstance();
     }
 
-    private static JsValue disposeAsync(JsObject stack, Invoker invoker, EventLoop eventLoop) {
+    private static JsValue disposeAsync(JsObject stack, Invoker invoker, EventLoop eventLoop, Intrinsics intrinsics) {
         final var promise = new JsPromise(eventLoop);
-        step(new AsyncDisposal(take(stack), promise, invoker, eventLoop), 0, null, false);
+        step(new AsyncDisposal(take(stack), promise, invoker, eventLoop, intrinsics), 0, null, false);
         return promise;
     }
 
-    private record AsyncDisposal(List<JsValue> disposers, JsPromise promise, Invoker invoker, EventLoop eventLoop) {
+    private record AsyncDisposal(List<JsValue> disposers, JsPromise promise, Invoker invoker, EventLoop eventLoop,
+            Intrinsics intrinsics) {
     }
 
     private static void step(AsyncDisposal disposal, int index, RuntimeException error, boolean hasAwaited) {
@@ -250,12 +249,12 @@ public final class DisposableStackBuiltins {
         } catch (ScriptAbortException abort) {
             throw abort;
         } catch (RuntimeException disposeError) {
-            step(disposal, index + 1, suppress(error, disposeError), hasAwaited);
+            step(disposal, index + 1, suppress(disposal.intrinsics(), error, disposeError), hasAwaited);
             return;
         }
         if (outcome instanceof JsPromise pending) {
-            pending.subscribe(_ -> step(disposal, index + 1, error, true),
-                    reason -> step(disposal, index + 1, suppress(error, new JsThrowException(reason)), true));
+            pending.subscribe(_ -> step(disposal, index + 1, error, true), reason -> step(disposal, index + 1,
+                    suppress(disposal.intrinsics(), error, new JsThrowException(reason)), true));
         } else {
             step(disposal, index + 1, error, hasAwaited);
         }
@@ -264,26 +263,28 @@ public final class DisposableStackBuiltins {
     private static void settle(AsyncDisposal disposal, RuntimeException error, boolean hasAwaited) {
         final var needsAwait = disposal.disposers().stream().anyMatch(entry -> entry == AWAIT_ONLY);
         if (needsAwait && !hasAwaited) {
-            disposal.eventLoop().queueMicrotask(() -> resolveOrReject(disposal.promise(), error));
+            disposal.eventLoop()
+                    .queueMicrotask(() -> resolveOrReject(disposal.promise(), error, disposal.intrinsics()));
             return;
         }
-        resolveOrReject(disposal.promise(), error);
+        resolveOrReject(disposal.promise(), error, disposal.intrinsics());
     }
 
-    private static void resolveOrReject(JsPromise promise, RuntimeException error) {
+    private static void resolveOrReject(JsPromise promise, RuntimeException error, Intrinsics intrinsics) {
         if (error == null) {
             promise.resolve(JsUndefined.getInstance());
         } else {
-            promise.reject(toErrorValue(error));
+            promise.reject(toErrorValue(error, intrinsics));
         }
     }
 
-    private static RuntimeException suppress(RuntimeException existing, RuntimeException latest) {
+    private static RuntimeException suppress(Intrinsics intrinsics, RuntimeException existing,
+            RuntimeException latest) {
         if (existing == null) {
             return latest;
         }
-        return new JsThrowException(ErrorBuiltins.makeSuppressedError(toErrorValue(latest), toErrorValue(existing),
-                "An error was suppressed during disposal"));
+        return new JsThrowException(ErrorBuiltins.makeSuppressedError(intrinsics, toErrorValue(latest, intrinsics),
+                toErrorValue(existing, intrinsics), "An error was suppressed during disposal"));
     }
 
 }

@@ -7,6 +7,7 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -94,7 +95,8 @@ public class IndexHelperReconcileTest {
         final var pendingWrites = IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
         pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "n1");
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status",
+                ReadObserver.NONE);
 
         assertNotNull(entries, "null-valued pending doc must not force a full-scan fallback (null result)");
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
@@ -112,7 +114,7 @@ public class IndexHelperReconcileTest {
         final var strResult = IndexHelper.elementToLookupValue(new JsonString("hello"));
         assertEquals("hello", strResult);
 
-        final var boolResult = IndexHelper.elementToLookupValue(new JsonBoolean(true));
+        final var boolResult = IndexHelper.elementToLookupValue(JsonBoolean.of(true));
         assertEquals(Boolean.TRUE, boolResult);
 
         assertNull(IndexHelper.elementToLookupValue(JsonNull.INSTANCE));
@@ -136,7 +138,8 @@ public class IndexHelperReconcileTest {
         IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL,
                 "missing1");
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status",
+                ReadObserver.NONE);
 
         assertNull(entries,
                 "the pending document has no value for the field, so the index cannot cover every document and"
@@ -160,7 +163,8 @@ public class IndexHelperReconcileTest {
         pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "null1");
         pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "null2");
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status",
+                ReadObserver.NONE);
         assertNotNull(entries);
         final var nullEntry = entries.stream().filter(e -> e.getValue() == JsonNull.INSTANCE).findFirst().orElseThrow();
         assertEquals(Set.of("null1", "null2"), nullEntry.getIds());
@@ -170,14 +174,15 @@ public class IndexHelperReconcileTest {
     public void test_reconcilePending_new_boolean_value_creates_entry_via_scalarEntryFor()
             throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
-        setupCollection(cache, entryWith("b1", "flag", new JsonBoolean(true)));
+        setupCollection(cache, entryWith("b1", "flag", JsonBoolean.of(true)));
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "flag");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("flag"));
 
-        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entryWith("b2", "flag", new JsonBoolean(false)));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entryWith("b2", "flag", JsonBoolean.of(false)));
         IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "b2");
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "flag");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "flag",
+                ReadObserver.NONE);
         assertNotNull(entries);
         assertEquals(2, entries.size());
         final var falseEntry = entries.stream().filter(e -> Boolean.FALSE.equals(e.getValue())).findFirst()
@@ -197,7 +202,8 @@ public class IndexHelperReconcileTest {
                 entryWith("ct2", "startTime", new JsonTime("#time(09:00:00)")));
         IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "ct2");
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "startTime");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "startTime",
+                ReadObserver.NONE);
         assertNotNull(entries);
         assertEquals(2, entries.size());
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())

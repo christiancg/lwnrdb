@@ -3,6 +3,7 @@ package org.techhouse.simplejs.host;
 import java.time.ZoneId;
 import java.util.Locale;
 import java.util.function.Consumer;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
 
@@ -25,7 +26,7 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
                 || database.scopedDatabase() == null) {
             return null;
         }
-        return new ProcedureModuleResolver(database.scopedDatabase());
+        return new ProcedureModuleResolver(database.scopedDatabase(), database.mayReadProcedureSource());
     }
 
     public static ResourceLimits limitsFromConfiguration() {
@@ -37,6 +38,7 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
                 ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, configuration.getScriptMaxLogLines(),
                 configuration.getScriptMaxLogLineChars(), configuration.getScriptMaxMemoryBytes(),
                 configuration.getScriptMaxResultBytes(), configuration.getScriptCursorBatchSize(),
-                configuration.getScriptCursorMaxBatchSize());
+                configuration.getScriptCursorMaxBatchSize(), configuration.getScriptFetchMaxConcurrent(),
+                configuration.intValue(ConfigKey.SCRIPT_MAX_ARRAY_LENGTH));
     }
 }

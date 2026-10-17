@@ -7,6 +7,7 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -20,6 +21,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -58,7 +60,7 @@ public class IndexHelperReadTest {
         Cache cache = IocContainer.get(Cache.class);
         DbEntry entry = entryWith("n1", "tag", new JsonString("alpha"));
         setupCollection(cache, entry);
-        assertNull(IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag"));
+        assertNull(IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag", ReadObserver.NONE));
     }
 
     @Test
@@ -70,7 +72,8 @@ public class IndexHelperReadTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "tag");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("tag"));
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag",
+                ReadObserver.NONE);
         assertNotNull(entries);
         assertEquals(2, entries.size());
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
@@ -102,7 +105,8 @@ public class IndexHelperReadTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data",
+                ReadObserver.NONE);
         assertNotNull(entries);
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
@@ -121,7 +125,8 @@ public class IndexHelperReadTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data",
+                ReadObserver.NONE);
         assertNotNull(entries);
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
@@ -136,7 +141,8 @@ public class IndexHelperReadTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("score"));
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "score");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "score",
+                ReadObserver.NONE);
         assertNotNull(entries);
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
@@ -152,7 +158,8 @@ public class IndexHelperReadTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data",
+                ReadObserver.NONE);
         assertNotNull(entries);
         assertEquals(2, entries.size());
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
@@ -169,7 +176,8 @@ public class IndexHelperReadTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data",
+                ReadObserver.NONE);
         assertNotNull(entries);
         assertEquals(1, entries.size());
         assertEquals(Set.of("o1", "o2", "o3"), entries.getFirst().getIds());
@@ -180,7 +188,7 @@ public class IndexHelperReadTest {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(1)));
         final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey",
-                Set.of(new JsonNumber(1)));
+                Set.of(new JsonNumber(1)), ReadObserver.NONE);
         assertNull(result);
     }
 
@@ -193,7 +201,7 @@ public class IndexHelperReadTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("refKey"));
 
         final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey",
-                Set.of(new JsonNumber(42)));
+                Set.of(new JsonNumber(42)), ReadObserver.NONE);
 
         assertNotNull(result);
         assertEquals(Set.of("r1", "r3"), result);
@@ -215,7 +223,7 @@ public class IndexHelperReadTest {
             final var reader = new Thread(() -> {
                 readyLatch.countDown();
                 try {
-                    IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, fieldName);
+                    IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, fieldName, ReadObserver.NONE);
                 } catch (Throwable t) {
                     caught.set(t);
                 }
@@ -241,16 +249,12 @@ public class IndexHelperReadTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("tag"));
 
         final var analyzeContext = new org.techhouse.analyze.AnalyzeContext();
-        org.techhouse.analyze.AnalyzeContext.set(analyzeContext);
-        try {
-            final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag");
-            assertNotNull(entries);
-            assertTrue(analyzeContext.getIndexesUsed().contains("tag"));
-            assertTrue(analyzeContext.getLocksAcquired().contains(
-                    org.techhouse.analyze.AnalyzeContext.fieldLockId(TestGlobals.DB, TestGlobals.COLL, "tag")));
-        } finally {
-            org.techhouse.analyze.AnalyzeContext.clear();
-        }
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag",
+                PipelineContext.of(0L, Long.MAX_VALUE, analyzeContext));
+        assertNotNull(entries);
+        assertTrue(analyzeContext.getIndexesUsed().contains("tag"));
+        assertTrue(analyzeContext.getLocksAcquired()
+                .contains(org.techhouse.analyze.AnalyzeContext.fieldLockId(TestGlobals.DB, TestGlobals.COLL, "tag")));
     }
 
     // addHashIndexEntries skips a hash-matched id whose current document no longer has the field, or
@@ -272,7 +276,8 @@ public class IndexHelperReadTest {
         TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
                 entryWith("scalarNow1", "data", new JsonString("no-longer-an-object")));
 
-        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data",
+                ReadObserver.NONE);
 
         assertNull(entries,
                 "a document that lost the field is no longer covered by the index, and an index that does not"
@@ -293,7 +298,8 @@ public class IndexHelperReadTest {
         localValues.add(new JsonObject());
         localValues.add(new JsonNumber(42));
 
-        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues);
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues,
+                ReadObserver.NONE);
 
         assertNull(result,
                 "an object or null join key has no scalar index entry, so answering from the index would drop every"
@@ -312,7 +318,8 @@ public class IndexHelperReadTest {
         final var localValues = new java.util.HashSet<JsonBaseElement>();
         localValues.add(new JsonNumber(42));
 
-        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues);
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues,
+                ReadObserver.NONE);
 
         assertEquals(Set.of("r1"), result);
     }

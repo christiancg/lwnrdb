@@ -1,16 +1,32 @@
 package org.techhouse;
 
+import java.net.InetAddress;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
+import org.techhouse.config.SizeParser;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.simplejs.host.HostAllowlist;
+import org.techhouse.simplejs.host.PublicAddressPolicy;
 
 public final class StartupWarnings {
     private static final Configuration config = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(StartupWarnings.class);
+    private static final List<ConfigKey> LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_CONNECTIONS,
+            ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS, ConfigKey.MAX_UNAUTHENTICATED_INVALID_REQUESTS,
+            ConfigKey.MAX_FAILED_AUTH_ATTEMPTS, ConfigKey.AUTH_FAILURE_DELAY_BASE_MS, ConfigKey.TRANSACTION_MAX_OPS,
+            ConfigKey.TRANSACTION_MAX_AGE_MS, ConfigKey.MAX_LISTENS_PER_CONNECTION, ConfigKey.MAX_LISTENS,
+            ConfigKey.MAX_LISTENS_PER_USER, ConfigKey.MAX_FILTER_OPERANDS, ConfigKey.AGGREGATE_TIMEOUT_MS,
+            ConfigKey.MAX_CONCURRENT_SCRIPTS, ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_USER,
+            ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_DATABASE);
+    private static final List<ConfigKey> SIZE_LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_MEMORY);
 
     private StartupWarnings() {
     }
@@ -29,11 +45,63 @@ public final class StartupWarnings {
         }
     }
 
-    public static void warnIfDefaultAdminPassword() {
-        if (ConfigKey.DEFAULT_ADMIN_PASSWORD.defaultValue().equals(config.getDefaultAdminPassword())) {
-            logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "
-                    + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
-                    + "unauthorized access.");
+    public static void warnIfPlaintextClients() {
+        if (!config.isTlsEnabled()) {
+            logger.warning("SECURITY WARNING: tlsEnabled=false, so client connections are plaintext: passwords, "
+                    + "session data and documents cross the network unencrypted. Set tlsEnabled=true and point "
+                    + "tlsKeystorePath at a CA-issued PKCS12 keystore before exposing this server beyond localhost.");
+        }
+    }
+
+    public static void warnIfDefaultKeystorePassword() {
+        if (usesKeystore() && ConfigKey.TLS_KEYSTORE_PASSWORD.defaultValue().equals(config.getTlsKeystorePassword())) {
+            logger.warning("SECURITY WARNING: tlsKeystorePassword is still the shipped value '"
+                    + ConfigKey.TLS_KEYSTORE_PASSWORD.defaultValue() + "', so anyone who can read the keystore file "
+                    + "can extract the private key. Set your own in lwnrdb.cfg.");
+        }
+    }
+
+    public static void warnIfProtectiveLimitsAreOff() {
+        final var off = new ArrayList<String>();
+        for (final var key : LIMITS_OFF_AT_ZERO) {
+            if (Long.parseLong(config.stringValue(key).trim()) == 0L) {
+                off.add(key.key());
+            }
+        }
+        for (final var key : SIZE_LIMITS_OFF_AT_ZERO) {
+            if (SizeParser.parse(config.stringValue(key)) == 0L) {
+                off.add(key.key());
+            }
+        }
+        if (!off.isEmpty()) {
+            logger.warning("SECURITY WARNING: these limits are set to 0, which turns them off: "
+                    + String.join(", ", off)
+                    + ". Without them one client can hold every connection, retry passwords without pause or tie up"
+                    + " the server with unbounded work. Set a positive value unless something in front of this"
+                    + " server enforces the same limit.");
+        }
+    }
+
+    public static void warnIfStorageIsReadableByOthers() {
+        warnIfAccessibleByOthers(Path.of(config.getFilePath()), "data folder (filePath)", "chmod 700");
+        warnIfAccessibleByOthers(Path.of(config.getLogPath()), "log folder (logPath)", "chmod 700");
+        if (usesKeystore()) {
+            warnIfAccessibleByOthers(Path.of(config.getTlsKeystorePath()), "TLS keystore (tlsKeystorePath)",
+                    "chmod 600");
+        }
+        warnIfAccessibleByOthers(Path.of(Globals.FILE_CONFIG_NAME).toAbsolutePath(), Globals.FILE_CONFIG_NAME,
+                "chmod 600");
+    }
+
+    private static boolean usesKeystore() {
+        return config.isTlsEnabled() || config.isClusterEnabled() && config.isClusterTlsEnabled();
+    }
+
+    private static void warnIfAccessibleByOthers(Path path, String what, String fix) {
+        if (OwnerOnlyFiles.isAccessibleByOthers(path)) {
+            logger.warning("SECURITY WARNING: the " + what + " at " + path.toAbsolutePath()
+                    + " is accessible by group or other users, and it holds data, credentials or secrets. Run '" + fix
+                    + " " + path.toAbsolutePath() + "' to restrict it to the server's own user.");
         }
     }
 
@@ -44,22 +112,56 @@ public final class StartupWarnings {
         }
     }
 
+    public static void warnIfClusterWithoutTls() {
+        if (config.isClusterEnabled() && !config.isClusterTlsEnabled()) {
+            logger.warning("SECURITY WARNING: clusterTlsEnabled=false, so the cluster secret and every replicated "
+                    + "document cross the network in plaintext and the secret is the only peer authentication. "
+                    + "Enable clusterTlsEnabled with a shared keystore.");
+        }
+    }
+
     public static void warnIfScriptFetchEnabled() {
         if (!config.isScriptFetchEnabled()) {
             return;
         }
         final var allowlist = config.getScriptFetchAllowlist();
         if (HostAllowlist.allowsEverything(allowlist)) {
-            logger.warning("SECURITY WARNING: scriptFetchAllowlist is '*', so any script may make this server "
-                    + "issue HTTP requests to any host it can reach - including services inside your network "
-                    + "and the cloud instance-metadata endpoint (169.254.169.254), not just the public "
-                    + "internet. Narrow it in lwnrdb.cfg to the hosts your scripts actually call, or set "
-                    + "scriptFetchEnabled=false to remove the capability.");
+            logger.warning("scriptFetchAllowlist is '*', so any script may make this server issue HTTP requests to "
+                    + "any PUBLIC host. Loopback, private, link-local (169.254.169.254), CGNAT and unique-local "
+                    + "addresses are refused unless the exact host is listed, and listing an internal host exactly "
+                    + "re-opens it deliberately. Narrow it in lwnrdb.cfg to the hosts your scripts actually call, "
+                    + "or set scriptFetchEnabled=false to remove the capability.");
         } else if (allowlist.isEmpty()) {
             logger.warning("scriptFetchEnabled is true but scriptFetchAllowlist is empty, so every fetch will be "
                     + "refused. Name the hosts scripts may reach.");
         } else {
             logger.info("Script fetch is enabled for: " + String.join(", ", allowlist));
+        }
+        final var internal = internalEntries(allowlist);
+        if (!internal.isEmpty()) {
+            logger.warning("SECURITY WARNING: scriptFetchAllowlist names " + String.join(", ", internal)
+                    + " exactly, so any script may make this server issue HTTP requests to that internal "
+                    + "address. Remove the entry unless scripts must reach it.");
+        }
+    }
+
+    static List<String> internalEntries(List<String> allowlist) {
+        final var internal = new ArrayList<String>();
+        for (final var raw : allowlist) {
+            final var entry = raw == null ? "" : raw.trim();
+            if ("localhost".equalsIgnoreCase(entry) || isPrivateLiteral(entry)) {
+                internal.add(entry);
+            }
+        }
+        return internal;
+    }
+
+    private static boolean isPrivateLiteral(String entry) {
+        final var bare = entry.startsWith("[") && entry.endsWith("]") ? entry.substring(1, entry.length() - 1) : entry;
+        try {
+            return !PublicAddressPolicy.isPublic(InetAddress.ofLiteral(bare));
+        } catch (IllegalArgumentException notLiteral) {
+            return false;
         }
     }
 

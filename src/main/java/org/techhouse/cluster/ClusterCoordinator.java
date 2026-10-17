@@ -6,7 +6,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.admin.AdminRecord;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
@@ -15,7 +14,6 @@ import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Globals;
-import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -86,10 +84,9 @@ public class ClusterCoordinator {
             return DeleteReservation.NOT_CLUSTERED;
         }
         final var version = hybridClock.next();
-        final var present = cache.getPkIndexAndLoadIfNecessary(dbName, collName).stream().map(PkIndexEntry::getValue)
-                .collect(Collectors.toSet());
+        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         for (final var id : ids) {
-            if (present.contains(id)) {
+            if (Collections.binarySearch(primaryKeyIndex, id) >= 0) {
                 fs.tombstones().append(dbName, collName, id, version);
             }
         }

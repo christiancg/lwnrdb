@@ -3,6 +3,7 @@ package org.techhouse.unit.ops.auth;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.auth.AuthorizationResult;
 
 public class AuthorizationResultTest {
@@ -18,6 +19,14 @@ public class AuthorizationResultTest {
         final var result = AuthorizationResult.deny("no permission");
         assertFalse(result.isAllowed());
         assertEquals("no permission", result.getReason());
+        assertEquals(ErrorCode.NO_PERMISSIONS, result.getErrorCode());
+    }
+
+    @Test
+    public void test_deny_carries_the_given_error_code() {
+        final var result = AuthorizationResult.deny("source", ErrorCode.SOURCE_REQUIRES_MANAGE);
+        assertFalse(result.isAllowed());
+        assertEquals(ErrorCode.SOURCE_REQUIRES_MANAGE, result.getErrorCode());
     }
 
     @Test

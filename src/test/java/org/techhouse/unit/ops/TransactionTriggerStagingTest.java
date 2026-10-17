@@ -70,6 +70,7 @@ public class TransactionTriggerStagingTest {
 
     private UUID transactionSavingOneDocument() {
         final var clientId = clientTracker.registerForwardedClient("staging-" + UUID.randomUUID());
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var object = new JsonObject();
         object.addProperty("_id", DOC_ID);

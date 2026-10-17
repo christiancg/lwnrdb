@@ -15,8 +15,8 @@ public final class IndexValueCodec {
         return switch (value) {
             case null -> JsonNull.INSTANCE;
             case JsonBaseElement element -> element;
-            case Number number -> numberToElement(number);
-            case Boolean bool -> new JsonBoolean(bool);
+            case Number number -> new JsonNumber(number.doubleValue() + 0.0);
+            case Boolean bool -> JsonBoolean.of(bool);
             case String string -> new JsonString(string);
             default -> throw new IllegalStateException("Unexpected index value: " + value);
         };
@@ -36,15 +36,5 @@ public final class IndexValueCodec {
             };
         }
         return null;
-    }
-
-    // Field indexes persist numbers as doubles while documents keep integral ones as ints; normalize so
-    // an index-derived number hashes equal to the same value read from a document (JOIN keys rely on it).
-    private static JsonBaseElement numberToElement(Number number) {
-        final var asDouble = number.doubleValue();
-        if (asDouble % 1.0 == 0 && Math.abs(asDouble) <= Integer.MAX_VALUE) {
-            return new JsonNumber((int) asDouble);
-        }
-        return new JsonNumber(asDouble);
     }
 }

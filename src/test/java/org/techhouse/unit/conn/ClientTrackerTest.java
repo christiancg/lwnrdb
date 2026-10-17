@@ -4,12 +4,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Client;
@@ -288,11 +292,182 @@ public class ClientTrackerTest {
         final var departure = clientTracker.signalDisconnect(clientId);
 
         assertNotNull(departure);
-        Mockito.verify(socket).close();
+        Mockito.verify(socket, Mockito.timeout(5000)).close();
         clientTracker.removeById(bystander);
         assertEquals(1, departure.getCount(), "another client's removal must not release this departure");
         clientTracker.removeById(clientId);
         assertEquals(0, departure.getCount(),
                 "the connection thread removes the client after its disconnect cleanup, which is the departure");
+    }
+
+    private static void withMaxConnections(int maxConnections, ThrowingRunnable body) throws Exception {
+        final var config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "maxConnections", maxConnections);
+        try {
+            body.run();
+        } finally {
+            TestUtils.setPrivateField(config, "maxConnections", ConfigKey.MAX_CONNECTIONS.defaultValue());
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    @Test
+    public void test_concurrent_admission_never_exceeds_max_connections() throws Exception {
+        withMaxConnections(5, () -> {
+            final var clientTracker = new ClientTracker();
+            final var start = new CountDownLatch(1);
+            final var admitted = new AtomicInteger();
+            final var sockets = new ArrayList<Socket>();
+            for (var i = 0; i < 64; i++) {
+                sockets.add(TestUtils.clientSocket());
+            }
+            final var threads = new ArrayList<Thread>();
+            for (final var socket : sockets) {
+                threads.add(Thread.ofPlatform().start(() -> {
+                    try {
+                        start.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    if (clientTracker.addClient(socket) != null) {
+                        admitted.incrementAndGet();
+                    }
+                }));
+            }
+            start.countDown();
+            for (final var thread : threads) {
+                thread.join(5000);
+            }
+            assertEquals(5, admitted.get());
+        });
+    }
+
+    @Test
+    public void test_a_removed_client_frees_its_slot() throws Exception {
+        withMaxConnections(1, () -> {
+            final var clientTracker = new ClientTracker();
+            final var first = clientTracker.addClient(TestUtils.clientSocket());
+
+            assertNull(clientTracker.addClient(TestUtils.clientSocket()));
+            clientTracker.removeById(first);
+            clientTracker.removeById(first);
+            assertNotNull(clientTracker.addClient(TestUtils.clientSocket()));
+            assertNull(clientTracker.addClient(TestUtils.clientSocket()),
+                    "removing the same client twice must free its slot only once");
+        });
+    }
+
+    @Test
+    public void test_forwarded_clients_do_not_consume_slots() throws Exception {
+        withMaxConnections(1, () -> {
+            final var clientTracker = new ClientTracker();
+            final var forwarded = clientTracker.registerForwardedClient("alice");
+            clientTracker.registerTxSession("session-1", "alice", "node-1");
+            try {
+                final var socketClient = clientTracker.addClient(TestUtils.clientSocket());
+
+                assertNotNull(socketClient);
+                clientTracker.removeById(forwarded);
+                assertNull(clientTracker.addClient(TestUtils.clientSocket()),
+                        "removing a forwarded client must not free a socket client's slot");
+            } finally {
+                clientTracker.removeTxSession("session-1");
+            }
+        });
+    }
+
+    @Test
+    public void test_zero_means_unlimited_and_still_counts() throws Exception {
+        final var clientTracker = new ClientTracker();
+        final var admitted = new ArrayList<UUID>();
+        withMaxConnections(0, () -> {
+            for (var i = 0; i < 3; i++) {
+                admitted.add(clientTracker.addClient(TestUtils.clientSocket()));
+            }
+            assertFalse(admitted.contains(null));
+        });
+        withMaxConnections(3, () -> assertNull(clientTracker.addClient(TestUtils.clientSocket())));
+        admitted.forEach(clientTracker::removeById);
+        withMaxConnections(1, () -> assertNotNull(clientTracker.addClient(TestUtils.clientSocket())));
+    }
+
+    @Test
+    public void test_reaped_flag_is_consumed_once() {
+        final var clientTracker = new ClientTracker();
+        final var clientId = clientTracker.addClient(TestUtils.clientSocket());
+
+        assertNull(clientTracker.consumeTransactionReaped(clientId));
+        clientTracker.markTransactionReaped(clientId, Client.TransactionReap.IDLE);
+        assertEquals(Client.TransactionReap.IDLE, clientTracker.consumeTransactionReaped(clientId));
+        assertNull(clientTracker.consumeTransactionReaped(clientId));
+        clientTracker.markTransactionReaped(clientId, Client.TransactionReap.MAX_AGE);
+        assertEquals(Client.TransactionReap.MAX_AGE, clientTracker.consumeTransactionReaped(clientId));
+        assertDoesNotThrow(() -> clientTracker.markTransactionReaped(null, Client.TransactionReap.IDLE));
+        assertDoesNotThrow(() -> clientTracker.markTransactionReaped(UUID.randomUUID(), Client.TransactionReap.IDLE));
+        assertNull(clientTracker.consumeTransactionReaped(null));
+        assertNull(clientTracker.consumeTransactionReaped(UUID.randomUUID()));
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void deauthenticate_user_except_spares_the_named_client()
+            throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        UUID kept = connect(clientTracker, "erin");
+        UUID dropped = connect(clientTracker, "erin");
+        UUID other = connect(clientTracker, "frank");
+
+        clientTracker.deauthenticateUserExcept("erin", kept);
+
+        assertEquals("erin", clientTracker.getAuthenticatedUsername(kept));
+        assertNull(clientTracker.getAuthenticatedUsername(dropped));
+        assertEquals("frank", clientTracker.getAuthenticatedUsername(other));
+    }
+
+    @Test
+    public void forwarded_and_tx_session_clients_are_not_deauthenticated_by_except_variant() {
+        ClientTracker clientTracker = new ClientTracker();
+        UUID forwarded = clientTracker.registerForwardedClient("erin");
+        var session = clientTracker.registerTxSession("session-except", "erin", "edge");
+        try {
+            clientTracker.deauthenticateUserExcept("erin", null);
+
+            assertEquals("erin", clientTracker.getAuthenticatedUsername(forwarded));
+            assertEquals("erin", clientTracker.getAuthenticatedUsername(session.clientId()));
+        } finally {
+            clientTracker.removeTxSession("session-except");
+        }
+    }
+
+    @Test
+    public void record_failed_authentication_counts_per_client_and_ignores_null()
+            throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        UUID first = connect(clientTracker, null);
+        UUID second = connect(clientTracker, null);
+
+        assertEquals(1, clientTracker.recordFailedAuthentication(first));
+        assertEquals(2, clientTracker.recordFailedAuthentication(first));
+        assertEquals(1, clientTracker.recordFailedAuthentication(second));
+        assertEquals(0, clientTracker.recordFailedAuthentication(null));
+        assertEquals(0, clientTracker.recordFailedAuthentication(UUID.randomUUID()));
+    }
+
+    @Test
+    public void address_of_returns_unknown_for_missing_client() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        UUID clientId = connect(clientTracker, null);
+
+        assertEquals("127.0.0.1", clientTracker.addressOf(clientId));
+        assertEquals("unknown", clientTracker.addressOf(null));
+        assertEquals("unknown", clientTracker.addressOf(UUID.randomUUID()));
     }
 }

@@ -1,9 +1,14 @@
 package org.techhouse.config;
 
+import java.net.InetAddress;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 public record Rule(Function<String, String> check) {
     private static final Rule NONE = new Rule(_ -> null);
+    private static final Pattern LITERAL_LIKE = Pattern.compile("[0-9.]+|.*:.*");
+    private static final Pattern HOST_NAME = Pattern.compile(
+            "(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*");
 
     public static Rule none() {
         return NONE;
@@ -63,6 +68,35 @@ public record Rule(Function<String, String> check) {
             }
             return positiveSize().check().apply(value);
         });
+    }
+
+    public static Rule bindAddress() {
+        return new Rule(value -> {
+            final var trimmed = value == null ? "" : value.trim();
+            final var valid = LITERAL_LIKE.matcher(trimmed).matches()
+                    ? isAddressLiteral(trimmed)
+                    : HOST_NAME.matcher(trimmed).matches();
+            if (trimmed.isEmpty() || valid) {
+                return null;
+            }
+            return "must be an IP address or a host name, but was: " + value;
+        });
+    }
+
+    static String fitsInInt(String value) {
+        final var parsed = parseLong(value);
+        if (parsed == null || (parsed >= Integer.MIN_VALUE && parsed <= Integer.MAX_VALUE)) {
+            return null;
+        }
+        return "must be between " + Integer.MIN_VALUE + " and " + Integer.MAX_VALUE + ", but was: " + value;
+    }
+
+    private static boolean isAddressLiteral(String value) {
+        try {
+            return InetAddress.ofLiteral(value) != null;
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
     }
 
     private static long parseOrNull(String value) {

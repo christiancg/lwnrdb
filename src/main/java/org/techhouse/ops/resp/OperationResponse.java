@@ -1,10 +1,12 @@
 package org.techhouse.ops.resp;
 
+import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
 public class OperationResponse {
+    private static final int BASE_JSON_CHARS = 256;
     private final OperationType type;
     private final OperationStatus status;
     private final String message;
@@ -44,6 +46,8 @@ public class OperationResponse {
     public static OperationResponse respondOrError(OperationType type, ErrorCode errorCode, Attempt attempt) {
         try {
             return attempt.run();
+        } catch (AggregateLimitException limit) {
+            return new OperationResponse(type, limit.getErrorCode());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
@@ -52,6 +56,14 @@ public class OperationResponse {
             ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
             return new OperationResponse(type, errorCode);
         }
+    }
+
+    public int estimatedJsonChars() {
+        return BASE_JSON_CHARS;
+    }
+
+    protected static int withPayloadChars(long payloadChars) {
+        return (int) Math.min(BASE_JSON_CHARS + payloadChars, Integer.MAX_VALUE);
     }
 
     public OperationType getType() {

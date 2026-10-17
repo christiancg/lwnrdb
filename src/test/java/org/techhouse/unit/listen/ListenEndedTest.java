@@ -6,8 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.BufferedWriter;
-import java.io.StringWriter;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -43,7 +43,7 @@ public class ListenEndedTest {
     private final EJson eJson = IocContainer.get(EJson.class);
     private ListenManager manager;
     private UUID clientId;
-    private StringWriter written;
+    private ByteArrayOutputStream written;
 
     @BeforeAll
     static void setUpAll() throws Exception {
@@ -83,8 +83,8 @@ public class ListenEndedTest {
 
     private UUID connectedClient(String username) {
         final var id = clientTracker.registerForwardedClient(username);
-        written = new StringWriter();
-        clientTracker.registerWriter(id, new BufferedWriter(written));
+        written = new ByteArrayOutputStream();
+        clientTracker.registerOutbound(id, TestUtils.inlineOutbound(written));
         return id;
     }
 
@@ -121,7 +121,7 @@ public class ListenEndedTest {
     }
 
     private List<String> frames() {
-        final var text = written.toString();
+        final var text = written.toString(StandardCharsets.UTF_8);
         return text.isEmpty() ? List.of() : List.of(text.split("\\R"));
     }
 
@@ -140,7 +140,7 @@ public class ListenEndedTest {
         manager.endAllForCollection(TestGlobals.DB, TestGlobals.COLL, ListenManager.COLLECTION_DROPPED);
         runWorkerOver(listenId, listenId);
 
-        assertEquals(1, frames().size(), written.toString());
+        assertEquals(1, frames().size(), written.toString(StandardCharsets.UTF_8));
         assertEndedFrame(frames().getFirst(), listenId, ListenManager.COLLECTION_DROPPED);
         assertNull(manager.getRegistration(listenId));
     }
@@ -153,7 +153,7 @@ public class ListenEndedTest {
         manager.endAllForCollection(TestGlobals.DB, TestGlobals.JOIN_COLL, ListenManager.COLLECTION_DROPPED);
         runWorkerOver(listenId);
 
-        assertEquals(1, frames().size(), written.toString());
+        assertEquals(1, frames().size(), written.toString(StandardCharsets.UTF_8));
         assertEndedFrame(frames().getFirst(), listenId, ListenManager.COLLECTION_DROPPED);
     }
 
@@ -165,7 +165,7 @@ public class ListenEndedTest {
         manager.endAllForDatabase(TestGlobals.DB, ListenManager.DATABASE_DROPPED);
         runWorkerOver(inDatabase);
 
-        assertEquals(1, frames().size(), written.toString());
+        assertEquals(1, frames().size(), written.toString(StandardCharsets.UTF_8));
         assertEndedFrame(frames().getFirst(), inDatabase, ListenManager.DATABASE_DROPPED);
         assertNotNull(manager.getRegistration(elsewhere));
     }
@@ -181,7 +181,7 @@ public class ListenEndedTest {
         manager.markDelivered(listenId);
         runWorkerOver(listenId);
 
-        assertEquals(1, frames().size(), written.toString());
+        assertEquals(1, frames().size(), written.toString(StandardCharsets.UTF_8));
         assertEndedFrame(frames().getFirst(), listenId, ListenManager.COLLECTION_DROPPED);
     }
 
@@ -198,7 +198,7 @@ public class ListenEndedTest {
         }
 
         assertNull(manager.getRegistration(listenId));
-        assertEquals(1, frames().size(), written.toString());
+        assertEquals(1, frames().size(), written.toString(StandardCharsets.UTF_8));
         assertEndedFrame(frames().getFirst(), listenId, ListenManager.ACCESS_REVOKED);
     }
 
@@ -213,7 +213,7 @@ public class ListenEndedTest {
         manager.markDelivered(undelivered);
         runWorkerOver(stopped, undelivered);
 
-        assertTrue(frames().isEmpty(), written.toString());
+        assertTrue(frames().isEmpty(), written.toString(StandardCharsets.UTF_8));
     }
 
     @Test
@@ -237,7 +237,7 @@ public class ListenEndedTest {
         manager.endAllForCollection(TestGlobals.DB, TestGlobals.COLL, ListenManager.COLLECTION_DROPPED);
         runWorkerOver(listenId);
 
-        assertEquals(2, frames().size(), written.toString());
+        assertEquals(2, frames().size(), written.toString(StandardCharsets.UTF_8));
         assertTrue(frames().getFirst().contains("\"isUpdate\":true"), frames().getFirst());
         assertEndedFrame(frames().get(1), listenId, ListenManager.COLLECTION_DROPPED);
     }

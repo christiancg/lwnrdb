@@ -50,11 +50,12 @@ public class ReflectionUtils {
     }
 
     // Static fields are skipped: including them would put every `public static final` on the wire and
-    // then try to assign them back from the document.
+    // then try to assign them back from the document. Transient fields are node-local and never cross it.
     private static <T> Field[] internalGetFields(Class<T> tClass) {
         final List<Field> fields = new ArrayList<>();
         for (final var field : tClass.getDeclaredFields()) {
-            if (!Modifier.isStatic(field.getModifiers())) {
+            final var modifiers = field.getModifiers();
+            if (!Modifier.isStatic(modifiers) && !Modifier.isTransient(modifiers)) {
                 field.setAccessible(true);
                 fields.add(field);
             }

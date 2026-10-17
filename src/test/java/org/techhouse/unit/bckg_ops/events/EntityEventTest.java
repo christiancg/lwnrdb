@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -22,7 +23,7 @@ public class EntityEventTest {
         assertEquals(type, entityEvent.getType());
         assertEquals(dbName, entityEvent.getDbName());
         assertEquals(collName, entityEvent.getCollName());
-        assertEquals(dbEntry, entityEvent.getDbEntry());
+        assertEquals(EntityRef.of(dbEntry), entityEvent.getEntity());
     }
 
     @Test
@@ -35,7 +36,7 @@ public class EntityEventTest {
         EntityEvent entityEvent = new EntityEvent(type, dbName, collName, dbEntry);
         assertEquals("testDatabase", entityEvent.getDbName());
         assertEquals("testCollection", entityEvent.getCollName());
-        assertEquals(dbEntry, entityEvent.getDbEntry());
+        assertEquals(EntityRef.of(dbEntry), entityEvent.getEntity());
     }
 
     @Test

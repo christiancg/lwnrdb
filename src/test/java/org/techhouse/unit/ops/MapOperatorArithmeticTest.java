@@ -355,7 +355,7 @@ public class MapOperatorArithmeticTest {
     public void test_a_fold_over_only_non_numeric_operands_answers_null() {
         final var arrayOperand = new JsonArray();
         arrayOperand.add(new JsonNumber(1));
-        assertNull(foldOf(MidOperationType.SUM, new JsonBoolean(true), arrayOperand, new JsonObject(),
+        assertNull(foldOf(MidOperationType.SUM, JsonBoolean.of(true), arrayOperand, new JsonObject(),
                 new JsonString("missing")));
     }
 

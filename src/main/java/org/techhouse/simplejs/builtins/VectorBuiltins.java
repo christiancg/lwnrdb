@@ -3,7 +3,6 @@ package org.techhouse.simplejs.builtins;
 import static org.techhouse.simplejs.builtins.NewTargetSupport.requireNewTarget;
 import static org.techhouse.simplejs.builtins.NewTargetSupport.withNewTargetPrototype;
 
-import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -28,9 +27,9 @@ public final class VectorBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("Vector", (thisArg, args) -> {
-            requireNewTarget("Vector", thisArg);
-            return withNewTargetPrototype(new JsVector(construct(args, ops)), ops);
+        final var ctor = new JsNativeFunction("Vector", (thisArg, args, newTarget) -> {
+            requireNewTarget("Vector", thisArg, newTarget);
+            return withNewTargetPrototype(new JsVector(construct(args, ops)), newTarget, ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> new JsVector(toComponents(firstArg(args), ops)));
         from.setLength(1);
@@ -61,6 +60,7 @@ public final class VectorBuiltins {
         }
         if (value instanceof JsArray array) {
             final var elements = array.getElements();
+            InterpreterOps.chargeArrayLike(ops, elements.size());
             final var components = new double[elements.size()];
             for (var i = 0; i < components.length; i++) {
                 components[i] = JsCoercion.toNumber(elements.get(i), ops);
@@ -75,14 +75,13 @@ public final class VectorBuiltins {
     }
 
     private static double[] fromArrayLike(JsValue value, InterpreterOps ops) {
-        final var length = (int) JsCoercion.toNumber(ops.getMember(value, new JsString("length")), ops);
-        final var components = new ArrayList<Double>();
-        for (var i = 0; i < length; i++) {
-            components.add(JsCoercion.toNumber(ops.getMember(value, new JsString(Integer.toString(i))), ops));
-        }
-        final var result = new double[components.size()];
+        final var length = JsCoercion.toNumber(ops.getMember(value, new JsString("length")), ops);
+        final var count = Double.isNaN(length) || length <= 0 ? 0L : (long) Math.min(length, Integer.MAX_VALUE);
+        InterpreterOps.chargeArrayLike(ops, count);
+        final var result = new double[(int) count];
         for (var i = 0; i < result.length; i++) {
-            result[i] = components.get(i);
+            InterpreterOps.pace(ops, i);
+            result[i] = JsCoercion.toNumber(ops.getMember(value, new JsString(Integer.toString(i))), ops);
         }
         return result;
     }

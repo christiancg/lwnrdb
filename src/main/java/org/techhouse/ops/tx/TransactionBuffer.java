@@ -7,9 +7,11 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -44,14 +46,14 @@ public final class TransactionBuffer {
         final var payload = new JsonObject();
         payload.addProperty(AdminTransactionEntry.TRIGGER_RUN_ID_FIELD, runId);
         bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN, "", "", payload, List.of(),
-                List.of());
+                List.of(), 0L);
     }
 
     public static OperationResponse bufferSave(SaveRequest request, Transaction transaction, Runnable onLockTimeout) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var lockResult = lockedRefusal(transaction, OperationType.SAVE, dbName, collName, onLockTimeout);
+            final var lockResult = lockedRefusal(transaction, OperationType.SAVE, dbName, collName, 1, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
             }
@@ -66,7 +68,8 @@ public final class TransactionBuffer {
                     cache.getPkIndexAndLoadIfNecessary(dbName, collName), id);
             final var hooked = TransactionWrites.runBeforeHooks(dbName, collName,
                     insert ? EventType.CREATED : EventType.UPDATED,
-                    clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id, OperationType.SAVE);
+                    clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id, OperationType.SAVE,
+                    SchemaValidationHelper.budgetFor(request));
             if (hooked.isRejected()) {
                 return hooked.rejection();
             }
@@ -75,9 +78,13 @@ public final class TransactionBuffer {
             if (sizeError != null) {
                 return sizeError;
             }
+            final var bytes = byteSizeOf(dbName, collName, effective);
+            if (exceedsLimits(transaction, 1, bytes)) {
+                return new OperationResponse(OperationType.SAVE, ErrorCode.TRANSACTION_TOO_LARGE);
+            }
             final var version = hybridClock.next();
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_SAVE, dbName, collName,
-                    effective, insert ? List.of(id) : List.of(), List.of(version));
+                    effective, insert ? List.of(id) : List.of(), List.of(version), bytes);
             if (insert) {
                 transaction.recordInserts(seq, List.of(id));
             }
@@ -90,18 +97,16 @@ public final class TransactionBuffer {
             Runnable onLockTimeout) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
+        final var ops = request.getObjects().size();
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var lockResult = lockedRefusal(transaction, OperationType.BULK_SAVE, dbName, collName, onLockTimeout);
+            final var lockResult = lockedRefusal(transaction, OperationType.BULK_SAVE, dbName, collName, ops,
+                    onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
             }
-            final var schemaError = SchemaValidationHelper.check(request);
-            if (schemaError != null) {
-                return schemaError;
-            }
-            final var validationError = validateBulkObjects(request);
-            if (validationError != null) {
-                return validationError;
+            final var requestRefusal = bulkRequestRefusal(request);
+            if (requestRefusal != null) {
+                return requestRefusal;
             }
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
@@ -111,7 +116,8 @@ public final class TransactionBuffer {
             final var updated = new ArrayList<String>();
             final var overlayUpdates = new java.util.LinkedHashMap<String, JsonObject>();
             try (var hooks = BulkBeforeHooks.open(dbName, collName,
-                    clientTracker.getAuthenticatedUsername(transaction.getClientId()))) {
+                    clientTracker.getAuthenticatedUsername(transaction.getClientId()),
+                    SchemaValidationHelper.budgetFor(request))) {
                 for (final var object : request.getObjects()) {
                     final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
                     final var isUpdate = TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id);
@@ -134,13 +140,17 @@ public final class TransactionBuffer {
                     overlayUpdates.put(id, effective);
                 }
             }
+            final var bulkBytes = byteSizeOf(dbName, collName, overlayUpdates.values());
+            if (exceedsLimits(transaction, overlayUpdates.size(), bulkBytes)) {
+                return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.TRANSACTION_TOO_LARGE);
+            }
             payload.add(AdminTransactionEntry.OBJECTS_FIELD, array);
             final var versions = new ArrayList<Long>();
             for (var i = 0; i < overlayUpdates.size(); i++) {
                 versions.add(hybridClock.next());
             }
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_BULK_SAVE, dbName, collName,
-                    payload, inserted, versions);
+                    payload, inserted, versions, bulkBytes);
             final var nextVersion = versions.iterator();
             overlayUpdates.forEach((id, document) -> transaction.recordSave(collId, id, document, nextVersion.next()));
             transaction.recordInserts(seq, inserted);
@@ -154,7 +164,7 @@ public final class TransactionBuffer {
         final var collName = request.getCollectionName();
         final var id = request.get_id();
         return OperationResponse.respondOrError(OperationType.DELETE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var lockResult = lockedRefusal(transaction, OperationType.DELETE, dbName, collName, onLockTimeout);
+            final var lockResult = lockedRefusal(transaction, OperationType.DELETE, dbName, collName, 1, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
             }
@@ -175,16 +185,20 @@ public final class TransactionBuffer {
             if (deletedDocument != null) {
                 payload.add(DELETED_DOCUMENT_FIELD, deletedDocument);
             }
+            final var bytes = byteSizeOf(dbName, collName, payload);
+            if (exceedsLimits(transaction, 1, bytes)) {
+                return new OperationResponse(OperationType.DELETE, ErrorCode.TRANSACTION_TOO_LARGE);
+            }
             final var version = hybridClock.next();
             bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload, List.of(),
-                    List.of(version));
+                    List.of(version), bytes);
             transaction.recordDelete(collId, id, version);
             return new DeleteResponse("Entry with id " + id + " deleted successfully");
         });
     }
 
     private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
-            JsonObject payload, List<String> insertedIds, List<Long> versions) throws Exception {
+            JsonObject payload, List<String> insertedIds, List<Long> versions, long bytes) throws Exception {
         final var seq = transaction.nextSeq();
         final var opEntry = new AdminTransactionEntry(transaction.getTransactionId().toString(),
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
@@ -193,7 +207,26 @@ public final class TransactionBuffer {
         opEntry.setVersions(versions);
         AdminOperationHelper.saveTransactionOp(opEntry);
         transaction.addBufferedOpId(opEntry.get_id());
+        transaction.accountBuffered(versions.size(), bytes);
         return seq;
+    }
+
+    private static long byteSizeOf(String dbName, String collName, JsonObject document) {
+        return DbEntry.fromJsonObject(dbName, collName, document).byteSize();
+    }
+
+    private static long byteSizeOf(String dbName, String collName, java.util.Collection<JsonObject> documents) {
+        return documents.stream().mapToLong(document -> byteSizeOf(dbName, collName, document)).sum();
+    }
+
+    private static boolean exceedsLimits(Transaction transaction, int ops, long bytes) {
+        return transaction.wouldExceed(ops, bytes, configuration.intValue(ConfigKey.TRANSACTION_MAX_OPS),
+                configuration.sizeValue(ConfigKey.TRANSACTION_MAX_BYTES));
+    }
+
+    private static OperationResponse bulkRequestRefusal(BulkSaveRequest request) {
+        final var schemaError = SchemaValidationHelper.check(request);
+        return schemaError != null ? schemaError : validateBulkObjects(request);
     }
 
     private static OperationResponse validateBulkObjects(BulkSaveRequest request) {
@@ -209,9 +242,16 @@ public final class TransactionBuffer {
     }
 
     private static OperationResponse lockedRefusal(Transaction transaction, OperationType type, String dbName,
-            String collName, Runnable onTimeout) throws InterruptedException {
+            String collName, int ops, Runnable onTimeout) throws InterruptedException {
+        if (exceedsLimits(transaction, ops, 0L)) {
+            return new OperationResponse(type, ErrorCode.TRANSACTION_TOO_LARGE);
+        }
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         if (!transaction.holdsLock(collId)) {
+            final var notRegistered = CollectionReadinessGuard.precheck(type, dbName, collName);
+            if (notRegistered != null) {
+                return notRegistered;
+            }
             if (!locks.tryLockWrite(dbName, collName, configuration.getTransactionLockTimeoutMs())) {
                 onTimeout.run();
                 return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);

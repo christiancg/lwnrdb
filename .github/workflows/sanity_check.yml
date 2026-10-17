@@ -5,6 +5,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build & Verify
@@ -97,6 +100,11 @@ jobs:
             run: |
               python3 test_utils/test_tls.py
 
+          - name: connection-limits
+            start_server: false
+            run: |
+              python3 test_utils/test_connection_limits.py
+
           - name: clustering-replication
             start_server: false
             run: |
@@ -184,7 +192,7 @@ jobs:
           name: lwnrdb-jar
           path: target
       - name: Set admin credentials for integration tests
-        run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' lwnrdb.cfg
+        run: echo "defaultAdminPassword=Tst-Admin-9xQ2mV" >> lwnrdb.cfg
       - name: Start server
         if: ${{ matrix.start_server }}
         run: |

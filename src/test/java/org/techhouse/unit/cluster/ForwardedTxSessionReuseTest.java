@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ClusterMessage;
@@ -20,14 +21,21 @@ import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TestUtils;
 
 public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBase {
     private static final String COORDINATOR = "127.0.0.1:5000";
+    private static final String EDITOR = "editor";
 
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final String sessionId = UUID.randomUUID().toString();
     private final String tx1 = UUID.randomUUID().toString();
     private final String tx2 = UUID.randomUUID().toString();
+
+    @BeforeEach
+    public void createEditor() {
+        TestUtils.createAdmin(EDITOR);
+    }
 
     @AfterEach
     public void removeSession() throws Exception {
@@ -117,20 +125,20 @@ public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBas
         assertEquals(OperationStatus.OK, send(tx1, save("abandoned"), "admin").getStatus());
         assertEquals("admin", sessionUser());
 
-        assertEquals(OperationStatus.OK, send(tx2, save("kept"), "editor").getStatus());
+        assertEquals(OperationStatus.OK, send(tx2, save("kept"), EDITOR).getStatus());
 
-        assertEquals("editor", sessionUser(),
+        assertEquals(EDITOR, sessionUser(),
                 "the next transaction's hooks and triggers must not run as the user who created the session");
-        send(tx2, control("ROLLBACK_TRANSACTION"), "editor");
+        send(tx2, control("ROLLBACK_TRANSACTION"), EDITOR);
     }
 
     @Test
     public void test_a_continuation_keeps_the_user_its_transaction_started_with() throws Exception {
-        send(tx1, save("first"), "editor");
+        send(tx1, save("first"), EDITOR);
 
         send(tx1, save("second"), "admin");
 
-        assertEquals("editor", sessionUser(), "only a forward that starts a transaction binds the session user");
+        assertEquals(EDITOR, sessionUser(), "only a forward that starts a transaction binds the session user");
         send(tx1, control("ROLLBACK_TRANSACTION"));
     }
 

@@ -222,6 +222,15 @@ public class CronExpressionTest {
     }
 
     @Test
+    public void test_a_cron_step_overflow_is_an_invalid_cron_error() {
+        final var from = utc(2026, 1, 1, 0, 30);
+        assertEquals(utc(2026, 1, 1, 1, 0), next("*/2147483647 * * * *", from));
+        assertEquals(utc(2026, 1, 1, 0, 59), next("59/2147483647 * * * *", from));
+        assertThrows(InvalidCronException.class, () -> CronExpression.parse("*/2147483648 * * * *"));
+        assertThrows(InvalidCronException.class, () -> CronExpression.parse("* * */99999999999 * *"));
+    }
+
+    @Test
     public void test_star_and_step_one_agree_in_the_day_field() {
         final var from = utc(2026, 6, 1, 0, 0);
         assertEquals(next("0 0 * * MON", from), next("0 0 */1 * MON", from));

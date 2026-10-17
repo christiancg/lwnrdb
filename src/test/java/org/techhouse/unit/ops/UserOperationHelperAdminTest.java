@@ -14,6 +14,7 @@ import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
@@ -47,7 +48,7 @@ public class UserOperationHelperAdminTest {
 
         final var deleteReq = new DeleteUserRequest();
         deleteReq.setUsername("nonAdminToDelete");
-        final var resp = UserOperationHelper.processDeleteUser(deleteReq);
+        final var resp = UserOperationHelper.processDeleteUser(deleteReq, new RestampedRecords());
         assertEquals(OperationStatus.OK, resp.getStatus());
     }
 

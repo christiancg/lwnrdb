@@ -3,12 +3,15 @@ package org.techhouse.unit.simplejs.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.elements.SourcePosition;
+import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.interpreter.CallStack;
-import org.techhouse.simplejs.internal.interpreter.StackCapture;
+import org.techhouse.simplejs.values.JsUndefined;
 
 public class CallStackTest {
     private static SourcePosition at(int line, int column) {
@@ -126,43 +129,17 @@ public class CallStackTest {
     }
 
     @Test
-    public void test_capture_without_an_installed_stack_is_empty() {
-        assertTrue(StackCapture.current().isEmpty());
-    }
-
-    @Test
-    public void test_install_and_uninstall_round_trip() {
+    public void test_stamp_records_the_innermost_frames_once_and_skips_a_thrown_value() {
         final var stack = new CallStack();
-        stack.push("f", "main");
-        StackCapture.install(stack);
-        try {
-            assertFalse(StackCapture.current().isEmpty());
-        } finally {
-            StackCapture.uninstall(stack);
-        }
-        assertTrue(StackCapture.current().isEmpty());
-    }
-
-    // Two stacks live on one thread whenever a pipeline or a before-hook context holds a callable per script,
-    // and they are closed in map order - so uninstalling the outer one first must not leave it behind
-    @Test
-    public void test_uninstalling_out_of_order_leaves_nothing_behind() {
-        final var outer = new CallStack();
-        outer.push("outer", "main");
-        final var inner = new CallStack();
-        inner.push("inner", "main");
-        StackCapture.install(outer);
-        StackCapture.install(inner);
-
-        StackCapture.uninstall(outer);
-        assertEquals("inner (main)", StackCapture.current().getFirst());
-        StackCapture.uninstall(inner);
-        assertTrue(StackCapture.current().isEmpty());
-    }
-
-    @Test
-    public void test_uninstalling_a_stack_that_was_never_installed_is_a_no_op() {
-        StackCapture.uninstall(new CallStack());
-        assertTrue(StackCapture.current().isEmpty());
+        stack.push("inner", "main");
+        final var error = new TypeErrorException("boom");
+        assertTrue(error.getCapturedStack().isEmpty());
+        assertSame(error, stack.stamp(error));
+        stack.pop();
+        assertSame(error, stack.stamp(error));
+        assertEquals("inner (main)", error.getCapturedStack().getFirst());
+        final var thrown = new JsThrowException(JsUndefined.getInstance());
+        assertSame(thrown, stack.stamp(thrown));
+        assertFalse(thrown.hasCapturedStack());
     }
 }

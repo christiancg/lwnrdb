@@ -2,6 +2,7 @@ package org.techhouse.cluster;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 
@@ -25,7 +26,7 @@ public class ClusterConfig {
     }
 
     public String bindAddress() {
-        return configuration.getClusterBindAddress();
+        return configuration.stringValue(ConfigKey.CLUSTER_BIND_ADDRESS);
     }
 
     public String advertisedAddress() {
@@ -60,7 +61,7 @@ public class ClusterConfig {
     }
 
     public long suspectTimeoutMs() {
-        return configuration.getSuspectTimeoutMs();
+        return configuration.longValue(ConfigKey.SUSPECT_TIMEOUT_MS);
     }
 
     public long deadTimeoutMs() {
@@ -72,7 +73,7 @@ public class ClusterConfig {
     }
 
     public long deadProbeIntervalMs() {
-        return configuration.getDeadProbeIntervalMs();
+        return configuration.longValue(ConfigKey.DEAD_PROBE_INTERVAL_MS);
     }
 
     public long replicationAckTimeoutMs() {
@@ -80,11 +81,11 @@ public class ClusterConfig {
     }
 
     public int virtualNodesPerNode() {
-        return configuration.getVirtualNodesPerNode();
+        return configuration.intValue(ConfigKey.VIRTUAL_NODES_PER_NODE);
     }
 
     public boolean readFallbackToLocal() {
-        return configuration.isReadFallbackToLocal();
+        return configuration.booleanValue(ConfigKey.READ_FALLBACK_TO_LOCAL);
     }
 
     public boolean scriptRoutingEnabled() {
@@ -109,5 +110,17 @@ public class ClusterConfig {
 
     public long tombstoneRetentionMs() {
         return configuration.getTombstoneRetentionMs();
+    }
+
+    public int maxFrameBytes() {
+        return (int) Math.min(configuration.sizeValue(ConfigKey.CLUSTER_MAX_FRAME_SIZE), Integer.MAX_VALUE);
+    }
+
+    public long handshakeTimeoutMs() {
+        return configuration.longValue(ConfigKey.CLUSTER_HANDSHAKE_TIMEOUT_MS);
+    }
+
+    public long maxClockSkewMs() {
+        return configuration.longValue(ConfigKey.CLUSTER_MAX_CLOCK_SKEW_MS);
     }
 }

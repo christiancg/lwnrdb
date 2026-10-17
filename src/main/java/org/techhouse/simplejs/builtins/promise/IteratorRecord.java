@@ -25,7 +25,7 @@ public final class IteratorRecord {
     public static IteratorRecord open(Ctx ctx, JsValue source) {
         final var method = ctx.ops().getMember(source, JsSymbol.ITERATOR);
         if (!isCallable(method)) {
-            throw new TypeErrorException(JsCoercion.toStr(source) + " is not iterable");
+            throw new TypeErrorException(JsCoercion.describe(source) + " is not iterable");
         }
         final var iterator = ctx.invoker().call(method, source, List.of());
         if (!isObjectLike(iterator)) {

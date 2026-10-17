@@ -258,7 +258,7 @@ public class JsonArrayTest {
         jsonArray.add(new JsonNumber(123));
 
         List<JsonBaseElement> result = jsonArray.asList();
-        result.add(new JsonBoolean(true));
+        result.add(JsonBoolean.of(true));
 
         assertEquals(3, result.size());
         assertEquals(2, jsonArray.size());
@@ -333,7 +333,7 @@ public class JsonArrayTest {
         JsonArray array = new JsonArray();
         array.add(new JsonString("first"));
         array.add(new JsonNumber(2));
-        array.add(new JsonBoolean(true));
+        array.add(JsonBoolean.of(true));
 
         Iterator<JsonBaseElement> iterator = array.iterator();
 
@@ -344,7 +344,7 @@ public class JsonArrayTest {
         assertEquals(new JsonNumber(2), iterator.next());
 
         assertTrue(iterator.hasNext());
-        assertEquals(new JsonBoolean(true), iterator.next());
+        assertEquals(JsonBoolean.of(true), iterator.next());
 
         assertFalse(iterator.hasNext());
     }

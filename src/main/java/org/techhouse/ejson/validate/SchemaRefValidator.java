@@ -13,13 +13,13 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
 
 final class SchemaRefValidator {
-    private static final Set<String> SINGLE_SCHEMA_KEYWORDS = Set.of(SchemaKeywords.ADDITIONAL_PROPERTIES,
+    static final Set<String> SINGLE_SCHEMA_KEYWORDS = Set.of(SchemaKeywords.ADDITIONAL_PROPERTIES,
             SchemaKeywords.PROPERTY_NAMES, SchemaKeywords.ITEMS, SchemaKeywords.CONTAINS, SchemaKeywords.NOT,
             SchemaKeywords.IF, SchemaKeywords.THEN, SchemaKeywords.ELSE);
-    private static final Set<String> SCHEMA_ARRAY_KEYWORDS = Set.of(SchemaKeywords.PREFIX_ITEMS, SchemaKeywords.ALL_OF,
+    static final Set<String> SCHEMA_ARRAY_KEYWORDS = Set.of(SchemaKeywords.PREFIX_ITEMS, SchemaKeywords.ALL_OF,
             SchemaKeywords.ANY_OF, SchemaKeywords.ONE_OF);
-    private static final Set<String> SCHEMA_MAP_KEYWORDS = Set.of(SchemaKeywords.PROPERTIES,
-            SchemaKeywords.PATTERN_PROPERTIES, SchemaKeywords.DEPENDENT_SCHEMAS, SchemaKeywords.DEFS);
+    static final Set<String> SCHEMA_MAP_KEYWORDS = Set.of(SchemaKeywords.PROPERTIES, SchemaKeywords.PATTERN_PROPERTIES,
+            SchemaKeywords.DEPENDENT_SCHEMAS, SchemaKeywords.DEFS);
     private static final Set<String> SAME_INSTANCE_SINGLE_KEYWORDS = Set.of(SchemaKeywords.NOT, SchemaKeywords.IF,
             SchemaKeywords.THEN, SchemaKeywords.ELSE);
     private static final Set<String> SAME_INSTANCE_ARRAY_KEYWORDS = Set.of(SchemaKeywords.ALL_OF, SchemaKeywords.ANY_OF,

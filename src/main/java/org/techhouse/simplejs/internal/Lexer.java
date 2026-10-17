@@ -89,7 +89,7 @@ public final class Lexer {
             return lexString(src, pos);
         }
         if (c == '`') {
-            return lexTemplate(src, pos);
+            return lexTemplate(src, pos, braces.templateDepth);
         }
         if (Character.isDigit(c) || (c == '.' && pos + 1 < n && Character.isDigit(src.charAt(pos + 1)))) {
             return lexNumber(src, pos);

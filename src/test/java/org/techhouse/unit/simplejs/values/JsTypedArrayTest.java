@@ -196,9 +196,9 @@ public class JsTypedArrayTest {
         array.setElement(0, new JsNumber(1));
         array.setElement(1, new JsNumber(2));
         array.setElement(2, new JsNumber(3));
-        assertEquals("1,2,3", JsCoercion.toStr(array));
+        assertEquals("1,2,3", JsCoercion.toStrDataOnly(array));
         assertEquals("object", JsCoercion.typeOf(array));
-        assertEquals("[object ArrayBuffer]", JsCoercion.toStr(new JsArrayBuffer(4)));
-        assertEquals("[object DataView]", JsCoercion.toStr(new JsDataView(new JsArrayBuffer(4), 0, 4)));
+        assertEquals("[object ArrayBuffer]", JsCoercion.toStrDataOnly(new JsArrayBuffer(4)));
+        assertEquals("[object DataView]", JsCoercion.toStrDataOnly(new JsDataView(new JsArrayBuffer(4), 0, 4)));
     }
 }

@@ -8,7 +8,7 @@ from base_utils import check, check_code, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AGG_SCRIPT_TEST_PORT", "8999"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "agg_script_db"
 COLL = "orders"
@@ -74,6 +74,7 @@ def write_config(work_dir: str, scripts_enabled: bool):
                     scriptMaxResultBytes=65536, scriptTextImportEnabled=False, scriptTimeZone="UTC",
                     scriptLocale="en-US", aggregationScriptInstructionBudget=BUDGET,
                     aggregationScriptTimeoutMs=TIMEOUT_MS, aggregationScriptMaxSourceBytes=MAX_SOURCE_BYTES,
+                    maxEntrySize="16Kb", aggregateMaxResultBytes="1Mb",
                     triggersEnabled=False, schedulesEnabled=False)
 
 
@@ -120,6 +121,22 @@ def test_computed_field(conn: Conn):
     undefined = conn.aggregate([script_map("nothing", "export default (doc) => undefined;")])
     check("an undefined result omits the field",
           all("nothing" not in row for row in results(undefined)))
+
+
+def test_script_map_values_are_budgeted(conn: Conn):
+    section("MAP: SCRIPT values count toward maxEntrySize and aggregateMaxResultBytes")
+    oversized = conn.aggregate([script_map("big", "export default (doc) => 'x'.repeat(20000);")])
+    check_code("a value over maxEntrySize is refused like CONCAT", oversized, "ERROR", "400-28")
+
+    sources = [script_map(f"f{n}", f"export default (doc) => '{n}'.repeat(15000);") for n in range(8)]
+    over_budget = conn.aggregate(sources)
+    check_code("distinct sources adding past aggregateMaxResultBytes are refused", over_budget, "ERROR", "400-36")
+
+    limited = conn.aggregate([{"type": "LIMIT", "limit": 2}] + sources)
+    check_status("two such rows still answer", limited, "OK")
+    check("each carries every computed field",
+          len(results(limited)) == 2 and all(len(row.get("f7", "")) == 15000 for row in results(limited)),
+          f"rows={len(results(limited))}")
 
 
 def test_script_predicate(conn: Conn):
@@ -242,7 +259,7 @@ def test_permissions(admin: Conn):
 
 def test_sandbox(conn: Conn):
     section("sandbox: the per-pipeline budget, the clock and the source cap")
-    spin = ("export default (doc) => { let n = 0; for (let i = 0; i < 20000; i++) { n += i; } return true; };")
+    spin = "export default (doc) => { let n = 0; for (let i = 0; i < 20000; i++) { n += i; } return true; };"
     one_document = conn.aggregate([{"type": "LIMIT", "limit": 1}, script_filter(spin)])
     check_status("the same script over one document fits the budget", one_document, "OK")
     whole = conn.aggregate([script_filter(spin)])
@@ -405,6 +422,7 @@ def main():
         with admin_conn() as conn:
             setup_data(conn)
             test_computed_field(conn)
+            test_script_map_values_are_budgeted(conn)
             test_script_predicate(conn)
             test_reduce(conn)
             test_getters_cross_the_boundary(conn)

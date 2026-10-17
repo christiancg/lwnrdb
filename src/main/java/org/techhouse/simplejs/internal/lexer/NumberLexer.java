@@ -28,7 +28,7 @@ public final class NumberLexer {
                 if (end < n && src.charAt(end) == 'n') {
                     return endOfNumber(new JsBigInt(new BigInteger(digits, radix)), src, end + 1);
                 }
-                return endOfNumber(new JsNumber((double) Long.parseLong(digits, radix)), src, end);
+                return endOfNumber(new JsNumber(radixLiteralValue(digits, radix)), src, end);
             }
             if (Character.isDigit(src.charAt(start + 1))) {
                 throw new SyntaxErrorException("Octal literals are not allowed in strict mode; use the 0o prefix");
@@ -55,6 +55,18 @@ public final class NumberLexer {
             }
         }
         return endOfNumber(new JsNumber(Double.parseDouble(src.substring(start, j).replace("_", ""))), src, j);
+    }
+
+    private static double radixLiteralValue(String digits, int radix) {
+        var firstSignificant = 0;
+        while (firstSignificant < digits.length() && digits.charAt(firstSignificant) == '0') {
+            firstSignificant++;
+        }
+        final var significantDigits = digits.length() - firstSignificant;
+        if ((long) (significantDigits - 1) * Integer.numberOfTrailingZeros(radix) > Double.MAX_EXPONENT + 1) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return new BigInteger(digits, radix).doubleValue();
     }
 
     public static Lexed endOfNumber(JsBaseElement token, String src, int end) {

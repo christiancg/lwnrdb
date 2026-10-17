@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.ProcedureDefinition;
@@ -15,6 +16,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.StoredDefinitions;
+import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
@@ -65,6 +67,10 @@ public final class ProcedureOperationHelper {
             return new OperationResponse(OperationType.SAVE_PROCEDURE,
                     ErrorCode.INVALID_PROCEDURE.getDefaultMessage() + ": " + parseFailure.getMessage(),
                     ErrorCode.INVALID_PROCEDURE);
+        } catch (StackOverflowError tooDeep) {
+            return new OperationResponse(OperationType.SAVE_PROCEDURE,
+                    ErrorCode.INVALID_PROCEDURE.getDefaultMessage() + ": " + CompiledScriptCache.NESTING_TOO_DEEP,
+                    ErrorCode.INVALID_PROCEDURE);
         }
         final var missingImport = firstUnresolvableImport(request, dbName, compiled);
         if (missingImport != null) {
@@ -84,12 +90,23 @@ public final class ProcedureOperationHelper {
         }
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
+            final var refusal = ProcedureBindingGuard.refusal(OperationType.SAVE_PROCEDURE, dbName, request.getName(),
+                    actingUser);
+            if (refusal != null) {
+                return refusal;
+            }
             final var existing = cache.getProcedure(dbName, request.getName());
             if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
-            final var colliding = OnDiskNameRegistry.collidingDefinition(fs.listProcedureNames(dbName),
-                    request.getName());
+            final var procedureNames = fs.listProcedureNames(dbName);
+            final var maxProcedures = configuration.intValue(ConfigKey.MAX_PROCEDURES_PER_DATABASE);
+            if (existing == null && procedureNames.size() >= maxProcedures) {
+                return new OperationResponse(OperationType.SAVE_PROCEDURE,
+                        ErrorCode.TOO_MANY_PROCEDURES.getDefaultMessage() + " (" + maxProcedures + ")",
+                        ErrorCode.TOO_MANY_PROCEDURES);
+            }
+            final var colliding = OnDiskNameRegistry.collidingDefinition(procedureNames, request.getName());
             if (colliding != null) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
             }
@@ -135,7 +152,7 @@ public final class ProcedureOperationHelper {
                 request.isEnabled(), createdAt, updatedAt, actingUser);
     }
 
-    public static OperationResponse executeDelete(DeleteProcedureRequest request)
+    public static OperationResponse executeDelete(DeleteProcedureRequest request, String actingUser)
             throws IOException, InterruptedException {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
@@ -144,6 +161,11 @@ public final class ProcedureOperationHelper {
         }
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
+            final var refusal = ProcedureBindingGuard.refusal(OperationType.DELETE_PROCEDURE, dbName, request.getName(),
+                    actingUser);
+            if (refusal != null) {
+                return refusal;
+            }
             final var referencing = TriggerOperationHelper.triggerReferencing(dbName, request.getName());
             if (referencing != null) {
                 return new OperationResponse(OperationType.DELETE_PROCEDURE,
@@ -167,22 +189,27 @@ public final class ProcedureOperationHelper {
         }
     }
 
-    public static OperationResponse executeList(ListProceduresRequest request) {
+    public static OperationResponse executeList(ListProceduresRequest request, String actingUser) {
         return OperationResponse.respondOrError(OperationType.LIST_PROCEDURES, ErrorCode.ERROR_RETRIEVING,
-                () -> listProcedures(request));
+                () -> listProcedures(request, actingUser));
     }
 
-    private static OperationResponse listProcedures(ListProceduresRequest request) throws IOException {
+    private static OperationResponse listProcedures(ListProceduresRequest request, String actingUser)
+            throws IOException {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
             return new OperationResponse(OperationType.LIST_PROCEDURES, "Database '" + dbName + "' not found",
                     ErrorCode.DATABASE_NOT_FOUND);
         }
+        final var showSourceHash = actingUser == null
+                || AuthorizationChecker.mayReadProcedureSource(cache.getAdminUserEntry(actingUser), dbName);
         final var result = new ArrayList<org.techhouse.ejson.elements.JsonObject>();
         for (final var name : fs.listProcedureNames(dbName)) {
             final var definition = cache.getProcedure(dbName, name);
             if (definition != null) {
-                result.add(request.isIncludeSource() ? definition.toJsonObject() : definition.toSummaryJson());
+                result.add(request.isIncludeSource()
+                        ? definition.toJsonObject()
+                        : definition.toSummaryJson(showSourceHash));
             }
         }
         return new ListProceduresResponse("Ok", result);

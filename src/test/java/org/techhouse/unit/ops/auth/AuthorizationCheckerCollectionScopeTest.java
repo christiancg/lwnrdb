@@ -248,16 +248,19 @@ public class AuthorizationCheckerCollectionScopeTest {
     }
 
     @Test
-    public void test_manage_without_a_collection_entry_is_unchanged() {
+    public void test_manage_without_a_collection_entry_needs_a_database_grant() {
         final var manager = managerWith(Map.of());
         for (final var request : triggerRequests()) {
-            assertTrue(AuthorizationChecker.check(request, manager).isAllowed(), request.getType().name());
+            assertFalse(AuthorizationChecker.check(request, manager).isAllowed(), request.getType().name());
         }
     }
 
     @Test
     public void test_a_carve_out_on_another_collection_does_not_apply() {
-        final var manager = managerWith(Map.of(TestGlobals.DB + "|othercoll", PermissionLevel.READ));
+        final var manager = new AdminUserEntry("manager", "hash", false, new HashSet<>(),
+                new HashMap<>(Map.of(TestGlobals.DB, PermissionLevel.READ_WRITE)),
+                new HashMap<>(Map.of(TestGlobals.DB + "|othercoll", PermissionLevel.READ)),
+                new HashMap<>(Map.of(TestGlobals.DB, ScriptPermissionLevel.MANAGE)));
         for (final var request : triggerRequests()) {
             assertTrue(AuthorizationChecker.check(request, manager).isAllowed(), request.getType().name());
         }

@@ -7,6 +7,7 @@ import java.util.List;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
@@ -106,6 +107,19 @@ public final class TriggerOperationHelper {
         final var existing = findByName(existingList, request.getName());
         if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
             return new OperationResponse(OperationType.SAVE_TRIGGER, ErrorCode.PROCEDURE_VERSION_CONFLICT);
+        }
+        final var foreign = existing == null
+                ? null
+                : ProcedureBindingGuard.foreignDefinitionRefusal(OperationType.SAVE_TRIGGER, dbName,
+                        existing.getDefiner(), actingUser);
+        if (foreign != null) {
+            return foreign;
+        }
+        final var maxTriggers = Configuration.getInstance().intValue(ConfigKey.TRIGGER_MAX_PER_COLLECTION);
+        if (existing == null && existingList.size() >= maxTriggers) {
+            return new OperationResponse(OperationType.SAVE_TRIGGER,
+                    ErrorCode.TOO_MANY_TRIGGERS.getDefaultMessage() + " (" + maxTriggers + ")",
+                    ErrorCode.TOO_MANY_TRIGGERS);
         }
         final var definition = newDefinition(request, existing, actingUser, mode, timing, events);
         existingList.removeIf(trigger -> trigger.getName().equals(definition.getName()));
@@ -217,7 +231,7 @@ public final class TriggerOperationHelper {
         }
     }
 
-    public static OperationResponse executeDelete(DeleteTriggerRequest request) throws IOException {
+    public static OperationResponse executeDelete(DeleteTriggerRequest request, String actingUser) throws IOException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (cache.getAdminCollectionEntry(dbName, collName) == null) {
@@ -225,6 +239,14 @@ public final class TriggerOperationHelper {
                     ErrorCode.DATABASE_NOT_FOUND);
         }
         final var remaining = new ArrayList<>(cache.getTriggersFor(dbName, collName));
+        final var existing = findByName(remaining, request.getName());
+        final var foreign = existing == null
+                ? null
+                : ProcedureBindingGuard.foreignDefinitionRefusal(OperationType.DELETE_TRIGGER, dbName,
+                        existing.getDefiner(), actingUser);
+        if (foreign != null) {
+            return foreign;
+        }
         remaining.removeIf(trigger -> trigger.getName().equals(request.getName()));
         persist(dbName, collName, remaining);
         return OperationResponse.ok(OperationType.DELETE_TRIGGER, "Trigger deleted successfully");
@@ -255,12 +277,37 @@ public final class TriggerOperationHelper {
         return new ListTriggersResponse("Ok", result);
     }
 
-    public static String triggerReferencing(String dbName, String procedureName) {
+    public static boolean disable(String dbName, String collName, TriggerDefinition dispatched, String reason)
+            throws IOException, InterruptedException {
+        if (!locks.tryLockWrite(dbName, collName, OperationLocks.lockBudgetMillis(false))) {
+            return false;
+        }
+        try {
+            final var current = new ArrayList<>(cache.getTriggersFor(dbName, collName));
+            final var existing = findByName(current, dispatched.getName());
+            if (existing == null || !existing.isEnabled() || existing.getVersion() != dispatched.getVersion()) {
+                return false;
+            }
+            current.set(current.indexOf(existing), existing.disabledCopy(reason, System.currentTimeMillis()));
+            persist(dbName, collName, current);
+            return true;
+        } finally {
+            locks.release(dbName, collName);
+        }
+    }
+
+    public static List<TriggerDefinition> triggersIn(String dbName) {
+        final var result = new ArrayList<TriggerDefinition>();
         for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
-            for (final var trigger : cache.getTriggersFor(dbName, collName)) {
-                if (procedureName.equals(trigger.getProcedureName())) {
-                    return trigger.getName();
-                }
+            result.addAll(cache.getTriggersFor(dbName, collName));
+        }
+        return result;
+    }
+
+    public static String triggerReferencing(String dbName, String procedureName) {
+        for (final var trigger : triggersIn(dbName)) {
+            if (procedureName.equals(trigger.getProcedureName())) {
+                return trigger.getName();
             }
         }
         return null;

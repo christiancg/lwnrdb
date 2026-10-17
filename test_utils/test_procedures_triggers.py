@@ -10,7 +10,7 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("PROC_TEST_PORT", "8996"))
 CLUSTER_PORT = int(os.environ.get("PROC_TEST_CLUSTER_PORT", "9996"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "proc_test_db"
 OTHER_DB = "proc_other_db"
@@ -24,11 +24,17 @@ RETRY_COLL = "retry_shutdown"
 BATCH_DELETE_COLL = "batch_deletes"
 TWIN_FAILING_COLL = "twin_failing"
 TWIN_AUDITED_COLL = "twin_audited"
+CAP_COLL = "trigger_cap"
+REVOKE_COLL = "revoke_source"
+DROPPED_RUNS_COLL = "dropped_runs"
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
+MANAGER_TWO = "proc_manager_two"
+PROC_OWNER = "proc_owner"
 WRITER = "proc_writer"
 LEGACY = "proc_legacy"
+REVOKED_DEFINER = "proc_revoked_definer"
 USER_PASSWORD = "password123"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -45,6 +51,7 @@ BEFORE_HOOK_BUDGET = 200_000
 BEFORE_HOOK_TIMEOUT_MS = 500
 
 SHUTDOWN_BUDGET_MS = 15_000
+TRIGGER_MAX_PER_COLLECTION = 12
 LONG_RETRY_BACKOFF_MS = 60_000
 SHUTDOWN_CEILING_SECONDS = 7.0
 
@@ -113,7 +120,7 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                  clustered: bool = False):
     cluster = {"clusterEnabled": True, "clusterPort": CLUSTER_PORT, "clusterBindAddress": "127.0.0.1",
                "clusterAdvertisedAddress": "127.0.0.1", "clusterSeeds": "", "clusterExpectedSize": 2,
-               "clusterSecret": "proc-test-cluster-secret"} if clustered else {}
+               "clusterSecret": "proc-test-cluster-secret-of-32-plus-chars"} if clustered else {}
     bu.write_config(work_dir, PORT,
                     scriptsEnabled=scripts_enabled,
                     scriptInstructionBudget=INSTRUCTION_BUDGET,
@@ -131,6 +138,7 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                     triggersEnabled=triggers_enabled,
                     triggerThreads=2,
                     triggerQueueSize=1000,
+                    triggerMaxPerCollection=TRIGGER_MAX_PER_COLLECTION,
                     triggerMaxDepth=TRIGGER_MAX_DEPTH,
                     triggerTimeoutMs=TRIGGER_TIMEOUT_MS,
                     beforeHookInstructionBudget=BEFORE_HOOK_BUDGET,
@@ -152,7 +160,7 @@ def setup_data(conn: Conn):
     section("Setup")
     for db in (DB, OTHER_DB):
         conn.send({"type": "DROP_DATABASE", "databaseName": db})
-        check_status(f"create database {db}", conn.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
+        check_status(f"CREATE_DATABASE {db}", conn.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
     for coll in (COLL, AUDIT):
         check_status(f"create collection {coll}",
                      conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -171,6 +179,12 @@ def setup_data(conn: Conn):
     check_status("create a user with a legacy boolean grant", conn.send({
         "type": "CREATE_USER", "username": LEGACY, "password": USER_PASSWORD, "admin": False,
         "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: True}}), "OK")
+    for username in (MANAGER_TWO, PROC_OWNER):
+        check_status(f"create the MANAGE-level user {username}", conn.send({
+            "type": "CREATE_USER", "username": username, "password": USER_PASSWORD, "admin": False,
+            "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}), "OK")
+    check_status("make the owner user a database owner", conn.send({
+        "type": "SET_DATABASE_OWNERS", "databaseName": DB, "owners": [ADMIN_USERNAME, PROC_OWNER]}), "OK")
 
 
 def test_procedure_lifecycle(conn: Conn):
@@ -325,6 +339,11 @@ def test_storage_placement(work_dir: str):
           f"admin/ contains {admin_children}")
 
 
+GUARDED_SOURCE = (
+    "import db from 'db'; import args from 'args';"
+    "db.save(db.name, '" + AUDIT + "', { _id: 'guarded-' + args.id }); return 'guarded';"
+)
+
 AUDIT_PROCEDURE = (
     "import db from 'db'; import args from 'args';"
     "db.save(db.name, '" + AUDIT + "', { _id: args.event + '-' + args.id,"
@@ -477,6 +496,103 @@ def test_definer_rights():
                   row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
 
 
+def stored_procedure(conn: Conn, name: str) -> dict:
+    listed = conn.send({"type": "LIST_PROCEDURES", "databaseName": DB, "includeSource": True})
+    return next((p for p in listed.get("procedures") or [] if p.get("name") == name), {})
+
+
+def check_bound(label: str, response: dict):
+    check_code(label, response, "FORBIDDEN", "403-4")
+
+
+def check_the_direct_binding_is_protected(manager: Conn, intruder: Conn):
+    check_status("MANAGER installs the guarded procedure", manager.save_procedure("guarded", GUARDED_SOURCE), "OK")
+    check_status("and binds a trigger to it",
+                 manager.save_trigger("guard_trigger", ["CREATED"], "guarded"), "OK")
+    before = stored_procedure(manager, "guarded")
+    check_bound("another MANAGE user may not overwrite it", intruder.save_procedure("guarded", "return 'pwned';"))
+    check_bound("nor disable it", intruder.save_procedure("guarded", GUARDED_SOURCE, enabled=False))
+    check_bound("nor delete it",
+                intruder.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "guarded"}))
+    after = stored_procedure(manager, "guarded")
+    check("the source and version are unchanged",
+          (after.get("source"), after.get("version"), after.get("enabled"))
+          == (before.get("source"), before.get("version"), True), f"before {before} after {after}")
+    check_status("a write still fires the original procedure", manager.save_doc({"_id": "guarded-doc"}), "OK")
+    row = await_doc(manager, "guarded-guarded-doc")
+    check("the bound trigger ran the original source", row.get("status") == "OK", f"got {row}")
+
+
+def check_the_privileged_may_overwrite(manager: Conn):
+    with user_conn(PROC_OWNER) as owner, admin_conn() as admin:
+        check_status("the definer may overwrite it", manager.save_procedure("guarded", GUARDED_SOURCE), "OK")
+        check_status("a database owner may", owner.save_procedure("guarded", GUARDED_SOURCE), "OK")
+        check_status("an admin may", admin.save_procedure("guarded", GUARDED_SOURCE), "OK")
+    check_status("drop the guard trigger", manager.send(
+        {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "guard_trigger"}), "OK")
+
+
+def check_schedule_and_hook_bindings(manager: Conn, intruder: Conn):
+    check_status("MANAGER installs a scheduled procedure", manager.save_procedure("sched_guarded", "return 1;"), "OK")
+    check_status("and schedules it hourly", manager.send(
+        {"type": "SAVE_SCHEDULE", "databaseName": DB, "name": "guard_schedule", "procedureName": "sched_guarded",
+         "intervalMs": 3_600_000}), "OK")
+    check_bound("a schedule binding protects its procedure", intruder.save_procedure("sched_guarded", "return 2;"))
+    check_status("drop the schedule", manager.send(
+        {"type": "DELETE_SCHEDULE", "databaseName": DB, "name": "guard_schedule"}), "OK")
+
+    check_status("MANAGER installs a before hook",
+                 install_hook(manager, "guard_hook", "guarded_hook", "return null;", ["CREATED"]), "OK")
+    check_bound("a before hook binding protects its procedure", intruder.save_procedure("guarded_hook", "return 1;"))
+    drop_hook(manager, "guard_hook")
+
+
+def check_import_bindings(manager: Conn, intruder: Conn):
+    check_status("MANAGER installs a library", manager.save_procedure("guard_lib", "export const v = 'lib';"), "OK")
+    check_status("and an entry importing it", manager.save_procedure(
+        "guard_entry", "import { v } from 'procedures/guard_lib'; return v;"), "OK")
+    check_status("binds a trigger to the entry", manager.save_trigger("guard_import", ["CREATED"], "guard_entry"), "OK")
+    check_bound("the imported library is protected too", intruder.save_procedure("guard_lib", "export const v = 1;"))
+    check_status("drop the import trigger", manager.send(
+        {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "guard_import"}), "OK")
+
+    check_status("MANAGER installs a procedure importing by a computed name", manager.save_procedure(
+        "guard_dyn", "const n = 'x'; try { await import('procedures/' + n); } catch (e) {} return 1;"), "OK")
+    check_status("and binds a trigger to it", manager.save_trigger("guard_dyn_trigger", ["CREATED"], "guard_dyn"), "OK")
+    check_bound("so any procedure name counts as reached",
+                intruder.save_procedure("guard_unrelated", "return 1;"))
+    check_status("drop the computed-import trigger", manager.send(
+        {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "guard_dyn_trigger"}), "OK")
+    check_status("with nothing bound the same save is free",
+                 intruder.save_procedure("guard_unrelated", "return 1;"), "OK")
+
+
+def test_a_procedure_bound_by_another_definer_is_protected():
+    section("A procedure bound by another definer is protected")
+    with user_conn(MANAGER) as manager, user_conn(MANAGER_TWO) as intruder:
+        check_the_direct_binding_is_protected(manager, intruder)
+        check_the_privileged_may_overwrite(manager)
+        check_schedule_and_hook_bindings(manager, intruder)
+        check_import_bindings(manager, intruder)
+        check_status("MANAGER installs an unbound procedure", manager.save_procedure("guard_free", "return 1;"), "OK")
+        check_status("another MANAGE user may overwrite an unbound one",
+                     intruder.save_procedure("guard_free", "return 2;"), "OK")
+
+
+def test_a_manager_cannot_change_a_trigger_defined_by_someone_else():
+    section("A MANAGE user cannot replace or delete a trigger another user defined")
+    delete_foreign = {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "foreign_owned"}
+    with user_conn(MANAGER) as manager, user_conn(MANAGER_TWO) as intruder:
+        check_status("MANAGER installs a trigger", manager.save_trigger("foreign_owned", ["CREATED"], "greet"), "OK")
+        check_code("another MANAGE user may not replace it",
+                   intruder.save_trigger("foreign_owned", ["DELETED"], "greet"), "FORBIDDEN", "403-5")
+        check_code("nor delete it", intruder.send(delete_foreign), "FORBIDDEN", "403-5")
+        listed = manager.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": COLL})
+        stored = next((t for t in (listed.get("triggers") or []) if t.get("name") == "foreign_owned"), {})
+        check("the trigger is unchanged", stored.get("events") == ["CREATED"], f"got {stored}")
+        check_status("its definer may delete it", manager.send(delete_foreign), "OK")
+
+
 def test_a_client_cannot_forge_a_definer():
     section("A client cannot forge the coordinator's stamp")
     forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
@@ -496,6 +612,36 @@ def test_a_client_cannot_forge_a_definer():
         check_code("a forged stamp does not skip the import check",
                    manager.save_procedure("forged_import", "import { x } from 'procedures/not_there'; return x;",
                                           stampedVersion=5), "ERROR", "400-18")
+
+
+def test_procedure_source_requires_manage():
+    section("Procedure source is readable only with script MANAGE")
+    show = "import { secret } from 'procedures/lib_hidden'; return [String(secret), secret(1)].join('|');"
+    with admin_conn() as admin:
+        check_status("install a library", admin.save_procedure(
+            "lib_hidden", "export function secret(x) { return x + 1; }"), "OK")
+    with user_conn(RUNNER) as runner:
+        check_code("a READ/RUN user asking for the source is refused (403-6)",
+                   runner.send({"type": "LIST_PROCEDURES", "databaseName": DB, "includeSource": True}),
+                   "FORBIDDEN", "403-6")
+        summary = runner.send({"type": "LIST_PROCEDURES", "databaseName": DB})
+        check_status("the summary still lists for that user", summary, "OK")
+        check("the summary carries no source",
+              all("source" not in p for p in (summary.get("procedures") or [])), str(summary)[:300])
+        check_result("an imported function prints as a native stub for a RUN-only user",
+                     runner.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": show}),
+                     "function secret() { [native code] }|2")
+    with user_conn(MANAGER) as manager:
+        listed = manager.send({"type": "LIST_PROCEDURES", "databaseName": DB, "includeSource": True})
+        sources = {p.get("name"): p.get("source") for p in (listed.get("procedures") or [])}
+        check("a MANAGE user lists the source",
+              sources.get("lib_hidden") == "export function secret(x) { return x + 1; }", f"got {sources}")
+        check_result("and prints the imported function's source",
+                     manager.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": show}),
+                     "function secret(x) { return x + 1; }|2")
+    with admin_conn() as admin:
+        check_status("drop the library", admin.send({"type": "DELETE_PROCEDURE", "databaseName": DB,
+                                                     "name": "lib_hidden"}), "OK")
 
 
 def test_procedure_imports(conn: Conn):
@@ -1088,6 +1234,22 @@ def test_before_hook_no_db(conn: Conn):
     drop_hook(conn, "uses_lib")
 
 
+def test_a_before_hook_does_not_change_the_scripts_suppressed_error(conn: Conn):
+    section("Before hooks - a hook's realm never leaks into the script that triggered it")
+    check_status("install a pass-through before hook",
+                 install_hook(conn, "realm_hook", "realmhook", "export default (doc) => doc;", ["CREATED", "UPDATED"]),
+                 "OK")
+    script = ("import db from 'db';"
+              f" db.save('{DB}', '{COLL}', {{ _id: 'realm1', qty: 1 }});"
+              " try { using a = { [Symbol.dispose]() { throw new Error('a'); } },"
+              " b = { [Symbol.dispose]() { throw new Error('b'); } }; }"
+              " catch (e) { return e instanceof SuppressedError; }"
+              " return 'no error';")
+    check_result("the script's SuppressedError is still its own realm's",
+                 conn.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": script}), True)
+    drop_hook(conn, "realm_hook")
+
+
 def test_before_hook_in_transaction(conn: Conn):
     section("Before hooks - inside a transaction")
     check_status("install a normalizing hook",
@@ -1555,7 +1717,7 @@ def trigger_runs(conn: Conn, status: str = None) -> list:
     payload = {"type": "LIST_TRIGGER_RUNS"}
     if status:
         payload["status"] = status
-    return (conn.send(payload).get("runs") or [])
+    return conn.send(payload).get("runs") or []
 
 
 def dead_letters_for(conn: Conn, trigger_name: str) -> list:
@@ -1798,6 +1960,101 @@ def test_stats(conn: Conn):
           f"got {triggers}")
 
 
+def test_triggers_per_collection_are_capped(conn: Conn):
+    section("A collection holds at most triggerMaxPerCollection triggers")
+    check_status("create a collection to fill",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CAP_COLL}), "OK")
+    check_status("store a no-op procedure", conn.save_procedure("cap_noop", "return 1;"), "OK")
+    saved = [conn.save_trigger(f"cap{i}", ["CREATED"], "cap_noop", coll=CAP_COLL).get("status")
+             for i in range(TRIGGER_MAX_PER_COLLECTION)]
+    check("every trigger up to the cap is saved", saved == ["OK"] * TRIGGER_MAX_PER_COLLECTION, f"statuses {saved}")
+    check_code("one more -> 400-32", conn.save_trigger("capOver", ["CREATED"], "cap_noop", coll=CAP_COLL),
+               "ERROR", "400-32")
+    check_status("replacing an existing trigger is never refused",
+                 conn.save_trigger("cap0", ["UPDATED"], "cap_noop", coll=CAP_COLL), "OK")
+    check_status("drop the filled collection",
+                 conn.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": CAP_COLL}), "OK")
+
+
+def trigger_entry(conn: Conn, coll: str, name: str) -> dict:
+    listed = conn.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": coll})
+    return next((entry for entry in listed.get("triggers") or [] if entry.get("name") == name), {})
+
+
+def set_revoked_definer_grants(admin: Conn, source_access: bool) -> dict:
+    database_permissions = {DB: "READ_WRITE"} if source_access else {}
+    return admin.send({"type": "CHANGE_PERMISSIONS", "username": REVOKED_DEFINER,
+                       "databasePermissions": database_permissions,
+                       "collectionPermissions": {f"{DB}|{AUDIT}": "READ_WRITE"},
+                       "scriptPermissions": {DB: "MANAGE"}})
+
+
+def test_a_trigger_whose_definer_lost_collection_read_is_disabled():
+    section("A trigger whose definer loses READ on its collection is skipped and disabled")
+    with admin_conn() as admin:
+        check_status("create the source collection",
+                     admin.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REVOKE_COLL}),
+                     "OK")
+        check_status("create a definer with MANAGE", admin.send({
+            "type": "CREATE_USER", "username": REVOKED_DEFINER, "password": USER_PASSWORD, "admin": False,
+            "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}), "OK")
+        with user_conn(REVOKED_DEFINER) as definer:
+            check_status("the definer stores an auditing procedure", definer.save_procedure(
+                "revocable_audit", "import db from 'db'; import args from 'args';"
+                " db.save(db.name, '" + AUDIT + "', { _id: 'revocable-' + args.id }); return 1;"), "OK")
+            check_status("and binds a trigger to the source collection",
+                         definer.save_trigger("revocable", ["CREATED"], "revocable_audit", coll=REVOKE_COLL), "OK")
+        check_status("a write fires it", admin.save_doc({"_id": "r1"}, coll=REVOKE_COLL), "OK")
+        check("while the definer holds READ the trigger runs", await_doc(admin, "revocable-r1").get("status") == "OK",
+              "the audit row never appeared")
+        check_status("narrow the definer to the audit collection only", set_revoked_definer_grants(admin, False),
+                     "OK")
+        check_status("another write", admin.save_doc({"_id": "r2"}, coll=REVOKE_COLL), "OK")
+        disabled = bu.wait_until(lambda: trigger_entry(admin, REVOKE_COLL, "revocable").get("enabled") is False,
+                                 10.0, 0.2)
+        stored = trigger_entry(admin, REVOKE_COLL, "revocable")
+        check("the trigger is disabled", disabled, f"got {stored}")
+        check("with the reason recorded", f"READ on collection '{REVOKE_COLL}'" in str(stored.get("disabledReason")),
+              f"got {stored}")
+        check("the definer never received the document",
+              await_absent(admin, "revocable-r2").get("status") == "NOT_FOUND", "the audit row for r2 was written")
+        check_status("give the grant back", set_revoked_definer_grants(admin, True), "OK")
+        check_status("a write after the re-grant", admin.save_doc({"_id": "r3"}, coll=REVOKE_COLL), "OK")
+        check("re-granting alone does not revive the trigger",
+              await_absent(admin, "revocable-r3").get("status") == "NOT_FOUND", "the audit row for r3 was written")
+        check_status("the admin re-saves the trigger",
+                     admin.save_trigger("revocable", ["CREATED"], "revocable_audit", coll=REVOKE_COLL), "OK")
+        check("which re-enables it and clears the reason",
+              trigger_entry(admin, REVOKE_COLL, "revocable").get("enabled") is True
+              and "disabledReason" not in trigger_entry(admin, REVOKE_COLL, "revocable"),
+              f"got {trigger_entry(admin, REVOKE_COLL, 'revocable')}")
+        check_status("a write after the re-save", admin.save_doc({"_id": "r4"}, coll=REVOKE_COLL), "OK")
+        check("fires again", await_doc(admin, "revocable-r4").get("status") == "OK", "the audit row never appeared")
+        admin.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": REVOKE_COLL})
+        admin.send({"type": "DELETE_USER", "username": REVOKED_DEFINER})
+
+
+def test_dropping_a_collection_discards_its_dead_letters(conn: Conn):
+    section("Dropping a collection discards its pending and dead-lettered trigger runs")
+    check_status("create a collection whose runs will die",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DROPPED_RUNS_COLL}),
+                 "OK")
+    arrange_failing_trigger(conn, "dropping", "dropping_boom", "install a trigger whose procedure always throws",
+                            "throw new Error('dropping boom');", ["CREATED"], "dropped-doc", coll=DROPPED_RUNS_COLL)
+    check("the run is dead-lettered", len(await_dead_letters(conn, "dropping")) == 1,
+          f"runs={dead_letters_for(conn, 'dropping')!r}")
+    check_status("drop the collection",
+                 conn.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": DROPPED_RUNS_COLL}), "OK")
+    check("its dead letter is gone with it", not dead_letters_for(conn, "dropping"),
+          f"runs={dead_letters_for(conn, 'dropping')!r}")
+    check_status("re-create a collection of the same name",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DROPPED_RUNS_COLL}),
+                 "OK")
+    check("which inherits no run of the dropped one", not dead_letters_for(conn, "dropping"),
+          f"runs={dead_letters_for(conn, 'dropping')!r}")
+    remove_failing_trigger(conn, "dropping", "remove the dropping trigger", coll=DROPPED_RUNS_COLL)
+
+
 def test_cascade_deletes(conn: Conn, work_dir: str):
     section("Cascade deletes")
     db_root = os.path.join(work_dir, "db")
@@ -1871,6 +2128,7 @@ def main():
             test_procedure_validation(conn)
             test_procedure_name_case_collision(conn)
         test_permissions()
+        test_procedure_source_requires_manage()
         with admin_conn() as conn:
             test_triggers(conn)
             test_a_transaction_reports_only_its_net_effect(conn)
@@ -1890,13 +2148,17 @@ def main():
             test_before_hook_chaining(conn)
             test_before_hook_sandbox(conn)
             test_before_hook_no_db(conn)
+            test_a_before_hook_does_not_change_the_scripts_suppressed_error(conn)
             test_before_hook_in_transaction(conn)
             test_before_hook_that_shrinks_an_oversized_document(conn)
             test_before_hook_validation(conn)
             test_dry_run(conn)
             test_result_cap(conn)
         test_definer_rights()
+        test_a_procedure_bound_by_another_definer_is_protected()
         test_a_client_cannot_forge_a_definer()
+        test_a_manager_cannot_change_a_trigger_defined_by_someone_else()
+        test_a_trigger_whose_definer_lost_collection_read_is_disabled()
         with admin_conn() as conn:
             test_procedure_imports(conn)
             test_trigger_imports(conn)
@@ -1908,6 +2170,7 @@ def main():
             test_batch_mode(conn)
             test_batch_deleted_trigger_fires_once_per_transaction(conn)
             test_cascade(conn)
+            test_triggers_per_collection_are_capped(conn)
             test_stats(conn)
             test_storage_placement(work_dir)
             test_cascade_deletes(conn, work_dir)
@@ -1937,6 +2200,7 @@ def main():
             test_an_unparseable_definition_is_answered_not_dropped(conn, work_dir)
             test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
+            test_dropping_a_collection_discards_its_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)
             test_same_named_triggers_in_one_transaction_dead_letter_their_own_run(conn)
             test_a_host_call_with_too_few_arguments_dead_letters(conn)

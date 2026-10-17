@@ -16,9 +16,15 @@ public final class Globals {
     public static final String INDEX_TYPE_ARRAY = "Array";
     public static final String HASH_INDEX_KEY_PREFIX = "#";
     public static final int BUFFER_SIZE = 32768;
+    public static final int PK_LOG_MIN_DEAD_ROWS = 1024;
+    public static final int PAGE_VACUUM_DEAD_DIVISOR = 4;
+    public static final long FIELD_INDEX_LOG_MIN_BYTES = 64 * 1024;
     public static final String DB_FILE_EXTENSION = ".dat";
+    public static final String VACUUM_FILE_EXTENSION = ".vacuum";
     public static final String JSON_FILE_EXTENSION = ".json";
     public static final String INDEX_FILE_EXTENSION = ".idx";
+    public static final String INDEX_LOG_SUFFIX = "log";
+    public static final String INDEX_LOG_FILE_EXTENSION = INDEX_FILE_EXTENSION + INDEX_LOG_SUFFIX;
     public static final String SCHEMA_FILE_NAME = "schema";
     public static final String SCHEMA_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String PROCEDURES_FOLDER = ".procedures";
@@ -67,6 +73,15 @@ public final class Globals {
     public static final int GEO_HASH_MAX_PRECISION = 9;
     public static final int GEO_HASH_MAX_COVERING_CELLS = 32;
     public static final int MAX_REQUEST_NESTING_DEPTH = 128;
+    public static final int MAX_SCHEMA_EXPANDED_NODES = 100_000;
+    public static final int MAX_UNAUTHENTICATED_REQUEST_BYTES = 65536;
+    public static final int MIN_BYTES_PER_REQUEST_TOKEN = 4;
+    public static final int KEY_TABLE_SLOTS = 65_536;
+    public static final int KEY_TABLE_MAX_KEY_LENGTH = 64;
+    public static final int KEY_TABLE_PROBE_WINDOW = 8;
+    public static final int KEY_TABLE_MAX_PINNED = 16_384;
+    public static final int KEY_TABLE_PIN_HITS = 8;
+    public static final long MAX_REQUEST_SIZE_CEILING = 1_073_741_824L;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
     public static final int TLS_KEY_SIZE = 2048;
@@ -75,6 +90,7 @@ public final class Globals {
     public static final String TLS_CERT_DNAME = "lwnrdb";
     public static final String TLS_KEYSTORE_TYPE = "PKCS12";
     public static final String TLS_PROTOCOL = "TLS";
+    public static final int TLS_CLOSE_LINGER_SECONDS = 1;
     public static final String STANDALONE_NODE_ID = "local";
     public static final String CLUSTER_FOLDER = "cluster";
     public static final String CLUSTER_NODE_ID_FILE = "node.id";
@@ -82,5 +98,11 @@ public final class Globals {
     public static final String CLUSTER_SEED_SEPARATOR = ",";
     public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
     public static final String CLUSTER_ADMIN_COORDINATOR_KEY = "__admin_coordinator__";
+    public static final int CLUSTER_MIN_SECRET_LENGTH = 32;
+    public static final int CLUSTER_HANDSHAKE_MAX_LINE_BYTES = 4096;
+    public static final int CLUSTER_MAX_UNAUTHENTICATED_CONNECTIONS = 64;
+    public static final int CLUSTER_MAX_UNAUTHENTICATED_PER_ADDRESS = 8;
     public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
+    public static final long HANDSHAKE_DEADLINE_GRACE_MS = 1000L;
+    public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
 }

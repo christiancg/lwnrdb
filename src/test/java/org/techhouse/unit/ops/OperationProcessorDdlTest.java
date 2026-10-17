@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -15,9 +17,12 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -216,10 +221,17 @@ public class OperationProcessorDdlTest {
     }
 
     @Test
-    public void test_list_databases_returns_user_databases_excluding_admin() {
-        ListDatabasesRequest request = new ListDatabasesRequest();
-
-        ListDatabasesResponse response = (ListDatabasesResponse) processor.processMessage(request);
+    public void test_list_databases_returns_user_databases_excluding_admin() throws Exception {
+        AdminOperationHelper.saveUserEntry(
+                new AdminUserEntry("ddl_lister", "unused", true, new HashSet<>(), new HashMap<>(), new HashMap<>()));
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var clientId = clientTracker.registerForwardedClient("ddl_lister");
+        final ListDatabasesResponse response;
+        try {
+            response = (ListDatabasesResponse) processor.processMessage(new ListDatabasesRequest(), clientId);
+        } finally {
+            clientTracker.removeById(clientId);
+        }
 
         assertNotNull(response);
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -236,7 +248,7 @@ public class OperationProcessorDdlTest {
 
         assertNotNull(response);
         assertEquals(OperationStatus.OK, response.getStatus());
-        assertNotNull(response.getDatabases());
+        assertTrue(response.getDatabases().isEmpty(), "a request with no acting user lists nothing");
     }
 
     @Test

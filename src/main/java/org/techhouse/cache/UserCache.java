@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -17,6 +18,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
@@ -27,13 +29,16 @@ public class UserCache {
     private final UsageTracker usageTracker = IocContainer.get(UsageTracker.class);
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
+    private final FieldIndexLookups fieldLookups = new FieldIndexLookups();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
     private final UserCacheSizes sizes = new UserCacheSizes();
+    private final WholeLoads wholeLoads = new WholeLoads(() -> fs,
+            configuration.intValue(ConfigKey.TRANSIENT_LOAD_PERMITS));
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
-            final var fromDisk = fs.readWholePkIndexFile(dbName, collName);
+            final var fromDisk = wholeLoads.pkIndex(dbName, collName, bytes -> loadsAdmitted(dbName, collName, bytes));
             if (!isCachingDisabled(dbName) && rl.holdsCollectionLock(dbName, collName)) {
                 admitPkIndex(dbName, collectionIdentifier, fromDisk);
             }
@@ -62,7 +67,7 @@ public class UserCache {
             Thread.currentThread().interrupt();
         }
         if (!held) {
-            return fs.readWholePkIndexFile(dbName, collName);
+            return wholeLoads.transientPkIndex(dbName, collName);
         }
         try {
             return new ArrayList<>(shared);
@@ -71,16 +76,11 @@ public class UserCache {
         }
     }
 
-    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
-            long removedLength) {
-        final var primaryKeyIndex = pkIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
-        if (primaryKeyIndex == null) {
-            return;
-        }
-        for (final var entry : primaryKeyIndex) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
+    public void repositionAfterVacuum(VacuumedPage vacuumed) {
+        final var primaryKeyIndex = pkIndexMap
+                .get(Cache.getCollectionIdentifier(vacuumed.dbName(), vacuumed.collName()));
+        if (primaryKeyIndex != null) {
+            vacuumed.reposition(primaryKeyIndex);
         }
     }
 
@@ -102,9 +102,14 @@ public class UserCache {
         return footprintBytes() + estimatedBytes.getAsLong() <= configuration.getMaxMemoryBytes();
     }
 
+    private boolean loadsAdmitted(String dbName, String collName, long estimatedBytes) {
+        return isReservedDatabase(dbName)
+                || rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName, () -> estimatedBytes);
+    }
+
     private long footprintBytes() {
         var total = 0L;
-        for (final var resource : listCacheableResources()) {
+        for (final var resource : listCacheableResources(Measure.REMEMBERED)) {
             total += resource.estimatedSizeBytes();
         }
         return total;
@@ -114,51 +119,86 @@ public class UserCache {
     // writer): the returned entries alias the cached id sets and must be copied before releasing it.
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
-        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType), true);
+        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType), () -> wholeLoads
+                .fieldIndex(dbName, collName, fieldName, indexType, bytes -> loadsAdmitted(dbName, collName, bytes)));
     }
 
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
-        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), true);
+        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()), () -> wholeLoads
+                .hashIndex(dbName, collName, fieldName, kind, bytes -> loadsAdmitted(dbName, collName, bytes)));
     }
 
-    public <T> List<FieldIndexEntry<T>> getFieldIndexForMaintenance(String dbName, String collName, String fieldName,
-            Class<T> indexType) throws IOException {
-        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType), false);
+    public List<FieldIndexEntry<?>> residentFieldIndex(String dbName, String collName, String indexIdentifier) {
+        final var index = fieldIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
+        return index == null ? null : index.get(indexIdentifier);
     }
 
-    public List<FieldIndexEntry<String>> getHashIndexForMaintenance(String dbName, String collName, String fieldName,
-            IndexKind kind) throws IOException {
-        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), false);
+    public void admitMaintainedFieldIndex(String dbName, String collName, String indexIdentifier,
+            List<FieldIndexEntry<?>> written) {
+        if (rl.holdsCollectionLock(dbName, collName) && residentFieldIndex(dbName, collName, indexIdentifier) == null) {
+            admitFieldIndex(dbName, collName, indexIdentifier, written);
+        }
+    }
+
+    public void rememberFieldIndexBatch(String dbName, String collName, String indexIdentifier, int previousCount,
+            long deltaBytes) {
+        final var resident = residentFieldIndex(dbName, collName, indexIdentifier);
+        if (resident != null) {
+            sizes.adjustFieldIndex(Cache.getCollectionIdentifier(dbName, collName), indexIdentifier, previousCount,
+                    resident.size(), deltaBytes);
+        }
+    }
+
+    public FieldIndexLookup fieldIndexLookup(String dbName, String collName, String fieldName) {
+        return fieldLookups.get(Cache.getCollectionIdentifier(dbName, collName), fieldName);
+    }
+
+    public void admitFieldIndexLookup(String dbName, String collName, String fieldName, FieldIndexLookup lookup) {
+        if (!rl.holdsCollectionLock(dbName, collName) || isCachingDisabled(dbName)) {
+            evictFieldIndexLookup(dbName, collName, fieldName);
+            return;
+        }
+        final var resident = fieldIndexLookup(dbName, collName, fieldName);
+        if (resident == lookup
+                || shouldCache(dbName, () -> CacheSizeEstimator.estimateFieldIndexLookupSize(lookup.size()))) {
+            fieldLookups.put(Cache.getCollectionIdentifier(dbName, collName), fieldName, lookup);
+        } else {
+            evictFieldIndexLookup(dbName, collName, fieldName);
+        }
+    }
+
+    public void evictFieldIndexLookup(String dbName, String collName, String fieldName) {
+        fieldLookups.evict(Cache.getCollectionIdentifier(dbName, collName), fieldName);
     }
 
     private <T> List<FieldIndexEntry<T>> loadIndex(String dbName, String collName, String indexIdentifier,
-            IndexLoader<T> loader, boolean admit) throws IOException {
-        final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        final var index = fieldIndexMap.get(collectionIdentifier);
-        if (index == null || !index.containsKey(indexIdentifier)) {
-            final var indexEntries = loader.load();
-            if (indexEntries == null) {
-                return null;
-            }
-            if (admit && rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName,
-                    () -> CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
-                fieldIndexMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>()).put(indexIdentifier,
-                        new ArrayList<>(indexEntries));
-            }
-            return indexEntries;
+            IndexLoader<T> loader) throws IOException {
+        final var existingIndex = residentFieldIndex(dbName, collName, indexIdentifier);
+        if (existingIndex != null) {
+            @SuppressWarnings("unchecked")
+            final var typed = (List<FieldIndexEntry<T>>) (List<?>) existingIndex;
+            return typed;
         }
-        final var existingIndex = index.get(indexIdentifier);
-        if (existingIndex == null) {
-            return null;
+        final var indexEntries = loader.load();
+        if (indexEntries != null && rl.holdsCollectionLock(dbName, collName)) {
+            admitFieldIndex(dbName, collName, indexIdentifier, new ArrayList<>(indexEntries));
         }
-        @SuppressWarnings("unchecked")
-        final var typed = (List<FieldIndexEntry<T>>) (List<?>) existingIndex;
-        return typed;
+        return indexEntries;
+    }
+
+    private void admitFieldIndex(String dbName, String collName, String indexIdentifier,
+            List<FieldIndexEntry<?>> copy) {
+        if (isCachingDisabled(dbName)) {
+            return;
+        }
+        final var measured = CacheSizeEstimator.estimateFieldIndexSize(copy);
+        if (shouldCache(dbName, () -> measured)) {
+            final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+            fieldIndexMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>()).put(indexIdentifier,
+                    copy);
+            sizes.rememberFieldIndex(collectionIdentifier, indexIdentifier, measured, copy.size());
+        }
     }
 
     private interface IndexLoader<T> {
@@ -294,8 +334,6 @@ public class UserCache {
             return result;
         }
         final var pkIndex = getPkIndexAndLoadIfNecessary(dbName, collName);
-        // Detached copies: shiftPkPositionsAfterCompaction mutates position in place and could
-        // otherwise move the offset between here and the read.
         final var toRead = new ArrayList<PkIndexEntry>();
         for (var id : missingIds) {
             final var pos = Collections.binarySearch(pkIndex, id);
@@ -340,6 +378,7 @@ public class UserCache {
         removeByPrefix(pkIndexMap, prefix);
         removeByPrefix(collectionMap, prefix);
         removeByPrefix(fieldIndexMap, prefix);
+        fieldLookups.evictByPrefix(prefix);
         sizes.forgetByPrefix(prefix);
     }
 
@@ -352,6 +391,7 @@ public class UserCache {
         pkIndexMap.remove(collIdentifier);
         collectionMap.remove(collIdentifier);
         fieldIndexMap.remove(collIdentifier);
+        fieldLookups.evictCollection(collIdentifier);
         sizes.forgetCollection(collIdentifier);
     }
 
@@ -368,6 +408,10 @@ public class UserCache {
     }
 
     public void evictFieldIndex(String dbName, String collName, String indexKey) {
+        evictFieldIndexLookup(dbName, collName, CacheableResource.indexedFieldOf(indexKey));
+        if (Cache.isFieldLookupIdentifier(indexKey)) {
+            return;
+        }
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
@@ -379,9 +423,8 @@ public class UserCache {
         }
     }
 
-    // The background index writer calls this after rewriting a field's .idx files, so the next read
-    // reloads from disk instead of answering from the now-stale cached lists.
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
+        evictFieldIndexLookup(dbName, collName, fieldName);
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
@@ -395,6 +438,10 @@ public class UserCache {
     }
 
     public List<CacheableResource> listCacheableResources() {
+        return listCacheableResources(Measure.FULL);
+    }
+
+    public List<CacheableResource> listCacheableResources(Measure measure) {
         final var result = new ArrayList<CacheableResource>();
         for (var entry : pkIndexMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
@@ -415,10 +462,13 @@ public class UserCache {
             if (parts.length < 2)
                 continue;
             for (var inner : entry.getValue().entrySet()) {
-                result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(),
-                        estimateFieldIndexUnderLock(parts[0], parts[1], inner.getKey(), inner.getValue())));
+                final var bytes = measure == Measure.FULL
+                        ? estimateFieldIndexUnderLock(parts[0], parts[1], inner.getKey(), inner.getValue())
+                        : sizes.rememberedFieldIndexBytes(entry.getKey(), inner.getKey(), inner.getValue().size());
+                result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(), bytes));
             }
         }
+        fieldLookups.addResources(result);
         return result;
     }
 

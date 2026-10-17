@@ -37,6 +37,20 @@ public class LexerLiteralTest {
     }
 
     @Test
+    public void test_an_overlong_integer_literal_parses_as_a_double() {
+        assertEquals(18446744073709551616.0, ((JsNumber) Lexer.lex("0x1_0000_0000_0000_0000").getFirst()).getValue());
+        assertEquals(Math.pow(2, 70), ((JsNumber) Lexer.lex("0o" + "2" + "0".repeat(23)).getFirst()).getValue());
+        assertEquals(Math.pow(2, 64), ((JsNumber) Lexer.lex("0b1" + "0".repeat(64)).getFirst()).getValue());
+        assertEquals(9007199254740992.0, ((JsNumber) Lexer.lex("0x20000000000001").getFirst()).getValue());
+        assertEquals(Double.MAX_VALUE,
+                ((JsNumber) Lexer.lex("0x" + "F".repeat(13) + "8" + "0".repeat(242)).getFirst()).getValue());
+        assertEquals(Double.POSITIVE_INFINITY, ((JsNumber) Lexer.lex("0x1" + "0".repeat(256)).getFirst()).getValue());
+        assertEquals(Double.POSITIVE_INFINITY,
+                ((JsNumber) Lexer.lex("0x" + "F".repeat(100_000)).getFirst()).getValue());
+        assertEquals(1.0, ((JsNumber) Lexer.lex("0x" + "0".repeat(5000) + "1").getFirst()).getValue());
+    }
+
+    @Test
     public void test_lex_number_followed_by_identifier() {
         assertThrows(SyntaxErrorException.class, () -> Lexer.lex("3in"));
     }

@@ -138,6 +138,10 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
         return Objects.equals(indexedValue, candidate);
     }
 
+    public static int compareIndexedNumbers(double left, double right) {
+        return Double.compare(normalizeZero(left), normalizeZero(right));
+    }
+
     public static int compareIndexedNumbers(Number left, Number right) {
         return Double.compare(normalizeZero(left.doubleValue()), normalizeZero(right.doubleValue()));
     }

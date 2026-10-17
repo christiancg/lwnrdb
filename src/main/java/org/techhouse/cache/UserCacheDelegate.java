@@ -3,6 +3,7 @@ package org.techhouse.cache;
 import java.io.IOException;
 import java.util.List;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 
 interface UserCacheDelegate {
@@ -34,6 +35,36 @@ interface UserCacheDelegate {
 
     default void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
         userCache().evictFieldIndexAllTypes(dbName, collName, fieldName);
+    }
+
+    default List<FieldIndexEntry<?>> residentFieldIndex(String dbName, String collName, String indexIdentifier) {
+        return userCache().residentFieldIndex(dbName, collName, indexIdentifier);
+    }
+
+    default void admitMaintainedFieldIndex(String dbName, String collName, String indexIdentifier,
+            List<FieldIndexEntry<?>> written) {
+        userCache().admitMaintainedFieldIndex(dbName, collName, indexIdentifier, written);
+    }
+
+    default void rememberFieldIndexBatch(String dbName, String collName, String indexIdentifier, int previousCount,
+            long deltaBytes) {
+        userCache().rememberFieldIndexBatch(dbName, collName, indexIdentifier, previousCount, deltaBytes);
+    }
+
+    default FieldIndexLookup fieldIndexLookup(String dbName, String collName, String fieldName) {
+        return userCache().fieldIndexLookup(dbName, collName, fieldName);
+    }
+
+    default void admitFieldIndexLookup(String dbName, String collName, String fieldName, FieldIndexLookup lookup) {
+        userCache().admitFieldIndexLookup(dbName, collName, fieldName, lookup);
+    }
+
+    default void evictFieldIndexLookup(String dbName, String collName, String fieldName) {
+        userCache().evictFieldIndexLookup(dbName, collName, fieldName);
+    }
+
+    default void evictFieldIndex(String dbName, String collName, String indexIdentifier) {
+        userCache().evictFieldIndex(dbName, collName, indexIdentifier);
     }
 
     default List<CacheableResource> listCacheableResources() {

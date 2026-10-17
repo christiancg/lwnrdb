@@ -28,11 +28,11 @@ public class PkIndexRebuildTest {
     @TempDir
     File tmp;
 
-    private CompactionFixture f;
+    private StorageFixture f;
 
     @BeforeEach
     public void setUp() throws IOException {
-        f = new CompactionFixture(tmp, DB, COLL);
+        f = new StorageFixture(tmp, DB, COLL);
     }
 
     private PkRebuild rebuild() throws IOException {
@@ -96,7 +96,7 @@ public class PkIndexRebuildTest {
         rebuild();
 
         assertTrue(f.everyRowReadsItsOwnRecord(), "the stale offsets were corrected");
-        assertTrue(f.indexedRows().stream().allMatch(row -> row.getVersion() == CompactionFixture.OLD_VERSION));
+        assertTrue(f.indexedRows().stream().allMatch(row -> row.getVersion() == StorageFixture.OLD_VERSION));
     }
 
     @Test
@@ -116,7 +116,7 @@ public class PkIndexRebuildTest {
     @Test
     public void test_an_entry_with_no_record_is_dropped() throws IOException {
         f.seed(0, "a", "b");
-        f.store.indexNewPKValue(DB, COLL, "ghost", 0, 5, 0, CompactionFixture.OLD_VERSION);
+        f.store.indexNewPKValue(DB, COLL, "ghost", 0, 5, 0, StorageFixture.OLD_VERSION);
 
         final var rebuild = rebuild();
 
@@ -156,7 +156,7 @@ public class PkIndexRebuildTest {
     @Test
     public void test_refuses_an_id_repeated_within_a_page() throws IOException {
         f.seed(0, "a", "b");
-        appendRaw(0, CompactionFixture.record("a", "copy"));
+        appendRaw(0, StorageFixture.record("a", "copy"));
         assertRefusedAndUntouched("_id 'a' appears twice");
     }
 
@@ -164,7 +164,7 @@ public class PkIndexRebuildTest {
     public void test_refuses_an_id_repeated_across_pages() throws IOException {
         f.seed(0, "a");
         f.seed(1, "b");
-        appendRaw(1, CompactionFixture.record("a", "copy"));
+        appendRaw(1, StorageFixture.record("a", "copy"));
         assertRefusedAndUntouched("_id 'a' is on pages 0 and 1");
     }
 
@@ -187,18 +187,28 @@ public class PkIndexRebuildTest {
     @Test
     public void test_replace_all_writes_over_a_file_nothing_parsed_in() throws IOException {
         writeGarbagePk();
-        final var entry = new PkIndexEntry(DB, COLL, "only", 0, 10, 0, CompactionFixture.OLD_VERSION);
+        final var entry = new PkIndexEntry(DB, COLL, "only", 0, 10, 0, StorageFixture.OLD_VERSION);
 
         f.store.replaceAll(DB, COLL, List.of(entry));
 
         assertEquals(List.of(entry.toFileEntry()), rows());
     }
 
+    private WriteIntentJournal.Intent intentFor(WriteIntent item) throws IOException {
+        return f.journal.begin(DB, COLL, List.of(item));
+    }
+
+    private void blank(PkIndexEntry row) throws IOException {
+        try (var channel = java.nio.channels.FileChannel.open(f.page(row.getPage()).toPath(),
+                StandardOpenOption.WRITE)) {
+            PageHoles.blank(channel, row.getPosition(), row.getLength());
+        }
+    }
+
     @Test
-    public void test_a_leftover_delete_marker_is_completed_before_the_rebuild() throws IOException {
+    public void test_a_leftover_delete_intent_is_completed_before_the_rebuild() throws IOException {
         f.seed(0, "a", "b", "c");
-        f.begin(CompactionJournal.Kind.DELETE, "b");
-        f.shiftAndCut("b");
+        intentFor(WriteIntent.Delete.of(f.indexed("b")));
         writeGarbagePk();
 
         assertEquals(1, f.recovery.recoverPagesOf(DB, COLL));
@@ -210,50 +220,47 @@ public class PkIndexRebuildTest {
     }
 
     @Test
-    public void test_a_leftover_update_marker_restores_the_last_acknowledged_copy() throws IOException {
-        f.seed(0, "a", "b", "c");
-        final var original = f.pageText(0);
-        f.begin(CompactionJournal.Kind.UPDATE, "b");
-        f.shiftAndCut("b");
-        writeGarbagePk();
-
-        f.recovery.recoverPagesOf(DB, COLL);
-        rebuild();
-
-        assertEquals(original, f.pageText(0));
-        assertEquals(0, f.markers().length);
-        assertEquals(List.of("a", "b", "c"), f.indexedRows().stream().map(PkIndexEntry::getValue).toList());
-    }
-
-    @Test
-    public void test_a_leftover_relocate_marker_cuts_the_target_copy_and_restores_the_source() throws IOException {
+    public void test_a_leftover_replace_intent_with_its_old_copy_intact_is_undone() throws IOException {
         f.seed(0, "a", "b");
         f.seed(1, "x");
-        final var source = f.pageText(0);
-        final var target = f.pageText(1);
-        final var marker = f.begin(CompactionJournal.Kind.RELOCATE, "b");
-        f.journal.retarget(marker, 1, f.page(1).length());
+        final var b = f.indexed("b");
+        intentFor(WriteIntent.Replace.of(b, b.getPosition(), 1, f.page(1).length()));
         f.appendUpdatedCopy("b", 1);
-        f.shiftAndCut("b");
         writeGarbagePk();
 
         f.recovery.recoverPagesOf(DB, COLL);
         rebuild();
 
-        assertEquals(source, f.pageText(0));
-        assertEquals(target, f.pageText(1));
-        assertEquals(0L, f.indexed("b").getPage());
+        assertEquals(0, f.markers().length);
+        assertEquals(0L, f.indexed("b").getPage(), "the uncommitted copy on page 1 was blanked");
+        assertEquals(StorageFixture.record("b", "old-b"), f.readAt(f.indexed("b")));
     }
 
     @Test
-    public void test_only_a_marker_that_would_replay_is_reported_as_replayable() throws IOException {
-        f.seed(0, "a");
-        f.seed(1, "b");
-        f.begin(CompactionJournal.Kind.UPDATE, "a");
-        Files.writeString(f.journal.markerFile(DB, COLL, 1).toPath(), "", StandardCharsets.UTF_8);
+    public void test_a_leftover_replace_intent_whose_old_copy_is_blank_keeps_the_new_copy() throws IOException {
+        f.seed(0, "a", "b");
+        f.seed(1, "x");
+        final var b = f.indexed("b");
+        intentFor(WriteIntent.Replace.of(b, b.getPosition(), 1, f.page(1).length()));
+        f.appendUpdatedCopy("b", 1);
+        blank(b);
+        writeGarbagePk();
 
-        assertEquals(List.of(COLL + "-0" + CompactionJournal.MARKER_EXTENSION),
-                f.recovery.replayableMarkersOf(DB, COLL));
+        f.recovery.recoverPagesOf(DB, COLL);
+        rebuild();
+
+        assertEquals(1L, f.indexed("b").getPage());
+        assertEquals(StorageFixture.record("b", "new-b"), f.readAt(f.indexed("b")));
+    }
+
+    @Test
+    public void test_only_an_intent_that_would_replay_is_reported_as_replayable() throws IOException {
+        f.seed(0, "a");
+        final var kept = intentFor(new WriteIntent.Vacuum(0));
+        final var emptied = intentFor(new WriteIntent.Vacuum(0));
+        Files.writeString(emptied.file().toPath(), "", StandardCharsets.UTF_8);
+
+        assertEquals(List.of(kept.file().getName()), f.recovery.replayableMarkersOf(DB, COLL));
     }
 
     @Test
@@ -272,14 +279,15 @@ public class PkIndexRebuildTest {
     }
 
     @Test
-    public void test_a_torn_leftover_marker_is_discarded_without_touching_the_page() throws IOException {
+    public void test_a_torn_leftover_intent_is_discarded_without_touching_the_page() throws IOException {
         f.seed(0, "a");
-        final var page = f.pageText(0);
-        Files.writeString(f.journal.markerFile(DB, COLL, 0).toPath(), "torn", StandardCharsets.UTF_8);
+        final var page = f.firstPageText();
+        final var intent = intentFor(WriteIntent.Delete.of(f.indexed("a")));
+        Files.writeString(intent.file().toPath(), "torn", StandardCharsets.UTF_8);
 
         assertEquals(0, f.recovery.recoverPagesOf(DB, COLL));
 
         assertEquals(0, f.markers().length);
-        assertEquals(page, f.pageText(0));
+        assertEquals(page, f.firstPageText());
     }
 }

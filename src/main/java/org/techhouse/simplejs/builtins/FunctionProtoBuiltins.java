@@ -109,7 +109,12 @@ public final class FunctionProtoBuiltins {
     private static JsValue apply(JsValue target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
         final var thisArg = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var argArray = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
-        return invoker.call(target, thisArg, createListFromArrayLike(argArray, ops));
+        final var list = createListFromArrayLike(argArray, ops);
+        try {
+            return invoker.call(target, thisArg, list);
+        } finally {
+            InterpreterOps.release(ops, list.size() * InterpreterOps.BYTES_PER_ELEMENT);
+        }
     }
 
     private static List<JsValue> createListFromArrayLike(JsValue argArray, InterpreterOps ops) {
@@ -117,15 +122,19 @@ public final class FunctionProtoBuiltins {
             return new ArrayList<>();
         }
         if (argArray instanceof JsArray array) {
-            return new ArrayList<>(array.getElements());
+            final var elements = array.getElements();
+            InterpreterOps.chargeArrayLike(ops, elements.size());
+            return new ArrayList<>(elements);
         }
         if (!InterpreterUtils.isObjectLike(argArray) || ops == null) {
             throw new TypeErrorException("CreateListFromArrayLike called on a non-object");
         }
         final var length = JsCoercion.toNumber(ops.getMember(argArray, new JsString("length")), ops);
-        final var count = Double.isNaN(length) || length <= 0 ? 0 : (int) Math.min(length, Integer.MAX_VALUE);
-        final var list = new ArrayList<JsValue>(count);
+        final var count = Double.isNaN(length) || length <= 0 ? 0L : (long) Math.min(length, Integer.MAX_VALUE);
+        InterpreterOps.chargeArrayLike(ops, count);
+        final var list = new ArrayList<JsValue>((int) count);
         for (var i = 0; i < count; i++) {
+            InterpreterOps.pace(ops, i);
             list.add(ops.getMember(argArray, new JsString(String.valueOf(i))));
         }
         return list;

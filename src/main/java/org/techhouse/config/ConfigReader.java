@@ -1,15 +1,14 @@
 package org.techhouse.config;
 
 import java.io.BufferedReader;
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.techhouse.fs.io.TextFiles;
 import org.techhouse.log.Logger;
 
 public final class ConfigReader {
@@ -37,17 +36,15 @@ public final class ConfigReader {
     }
 
     private static Map<String, String> loadFromFile() {
-        var file = new File(
-                Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
-        if (file.exists()) {
-            try {
-                final var allLines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+        final var file = Path.of(".").toAbsolutePath().normalize().resolve(Globals.FILE_CONFIG_NAME);
+        try {
+            final var allLines = TextFiles.readLinesIfExists(file);
+            if (allLines != null) {
                 return processFromLines(allLines);
-            } catch (IOException exception) {
-                logger.error("Error while loading " + Globals.FILE_CONFIG_NAME, exception);
             }
-        } else {
             logger.warning("Could not load configs, using defaults");
+        } catch (IOException exception) {
+            logger.error("Error while loading " + Globals.FILE_CONFIG_NAME, exception);
         }
         return null;
     }

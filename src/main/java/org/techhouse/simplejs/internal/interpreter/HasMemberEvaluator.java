@@ -19,29 +19,29 @@ import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsValue;
 
 public record HasMemberEvaluator(Interpreter interp) {
-    public boolean hasMember(JsValue container, JsValue keyValue) {
+    public boolean hasMember(JsValue container, JsValue rawKey) {
+        if (!isObjectLike(container)) {
+            throw new TypeErrorException(
+                    "Cannot use 'in' operator to search for '" + JsCoercion.describe(rawKey) + "'");
+        }
+        final var keyValue = JsCoercion.toPropertyKey(rawKey, interp.ops);
         return switch (container) {
-            case JsProxy proxy -> interp.proxies.has(proxy, JsCoercion.toPropertyKey(keyValue, interp.ops));
-            case JsGlobalObject global -> global.getEnv().isDeclared(JsCoercion.toStr(keyValue));
+            case JsProxy proxy -> interp.proxies.has(proxy, keyValue);
+            case JsGlobalObject global -> global.getEnv().isDeclared(JsCoercion.toStr(keyValue, interp.ops));
             case JsObject object when keyValue instanceof JsSymbol symbol -> hasSymbolMember(object, symbol);
-            case JsObject object -> hasStringMember(object, JsCoercion.toStr(keyValue));
+            case JsObject object -> hasStringMember(object, JsCoercion.toStr(keyValue, interp.ops));
             case JsClass cls when keyValue instanceof JsSymbol symbol -> hasStaticSymbolMember(cls, symbol);
-            case JsClass cls -> hasStaticMember(cls, JsCoercion.toStr(keyValue));
+            case JsClass cls -> hasStaticMember(cls, JsCoercion.toStr(keyValue, interp.ops));
             case JsArray array when keyValue instanceof JsSymbol -> exoticHasMember(array, keyValue);
-            case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue)) || exoticHasMember(array, keyValue);
+            case JsArray array ->
+                arrayHasMember(array, JsCoercion.toStr(keyValue, interp.ops)) || exoticHasMember(array, keyValue);
             case JsArguments arguments -> exoticHasMember(arguments, keyValue);
             case JsTypedArray typed when typed.hasCanonicalNumericIndex(keyValue) -> typed.hasOwnKey(keyValue);
             case JsTypedArray typed -> indexInRange(keyValue, typed.length()) || exoticHasMember(typed, keyValue);
             case JsCallableProperties callable when keyValue instanceof JsSymbol ->
                 exoticHasMember((JsValue) callable, keyValue);
-            case JsCallableProperties callable -> callableHasMember(callable, JsCoercion.toStr(keyValue));
-            default -> {
-                if (!isObjectLike(container)) {
-                    throw new TypeErrorException(
-                            "Cannot use 'in' operator to search for '" + JsCoercion.toStr(keyValue) + "'");
-                }
-                yield exoticHasMember(container, keyValue);
-            }
+            case JsCallableProperties callable -> callableHasMember(callable, JsCoercion.toStr(keyValue, interp.ops));
+            default -> exoticHasMember(container, keyValue);
         };
     }
 
@@ -49,7 +49,7 @@ public record HasMemberEvaluator(Interpreter interp) {
         if (keyValue instanceof JsSymbol) {
             return false;
         }
-        final var key = JsCoercion.toStr(keyValue);
+        final var key = JsCoercion.toStr(keyValue, interp.ops);
         final var index = arrayIndex(key);
         return index != null && index < length;
     }
@@ -61,7 +61,7 @@ public record HasMemberEvaluator(Interpreter interp) {
                 return true;
             }
             if (!(keyValue instanceof JsSymbol)) {
-                final var key = JsCoercion.toStr(keyValue);
+                final var key = JsCoercion.toStr(keyValue, interp.ops);
                 if (table.has(key) || table.hasAccessor(key)) {
                     return true;
                 }
@@ -73,7 +73,7 @@ public record HasMemberEvaluator(Interpreter interp) {
         if (keyValue instanceof JsSymbol symbol) {
             return interp.members.chainHasSymbol(chainStart, symbol);
         }
-        return interp.members.chainHasKey(chainStart, JsCoercion.toStr(keyValue));
+        return interp.members.chainHasKey(chainStart, JsCoercion.toStr(keyValue, interp.ops));
     }
 
     public boolean callableHasMember(JsCallableProperties callable, String key) {

@@ -167,7 +167,7 @@ public record IntrinsicsPrototypes(Intrinsics intrinsics) {
     public JsObject booleanPrototype() {
         final var proto = new JsObject();
         Intrinsics.define(proto, "toString", new JsNativeFunction("toString",
-                (thisArg, _) -> new JsString(JsCoercion.toStr(requireBoolean(thisArg, "toString")))));
+                (thisArg, _) -> new JsString(JsCoercion.toStrDataOnly(requireBoolean(thisArg, "toString")))));
         Intrinsics.define(proto, "valueOf",
                 new JsNativeFunction("valueOf", (thisArg, _) -> requireBoolean(thisArg, "valueOf")));
         proto.setProto(intrinsics.objectProto);

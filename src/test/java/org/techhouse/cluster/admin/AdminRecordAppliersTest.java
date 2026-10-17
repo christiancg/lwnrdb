@@ -9,12 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.test.TestGlobals;
@@ -55,14 +58,23 @@ public class AdminRecordAppliersTest extends AdminRecordTestBase {
         assertEquals(local, tombstones().get(AdminRecordKey.database("MYDB").id()).longValue());
     }
 
+    private static void recordPendingRun(String runId) throws Exception {
+        AdminOperationHelper.saveTriggerRun(new AdminTriggerRunEntry(runId, 0L, TriggerRunLog.currentNodeId(),
+                TestGlobals.DB, TestGlobals.COLL, "audit", "mark", EventType.CREATED, false, "admin", 0,
+                System.currentTimeMillis(), List.of("watched"), List.of()));
+    }
+
     @Test
-    public void test_a_database_tombstone_from_anti_entropy_quarantines_it() {
+    public void test_a_database_tombstone_from_anti_entropy_quarantines_it() throws Exception {
+        recordPendingRun("quarantined-db-run");
         final var result = AdminRecordMerge
                 .apply(List.of(tombstone(AdminRecordKey.database(TestGlobals.DB), clock.next())), false);
 
         assertTrue(result.complete());
         assertNull(cache.getAdminDbEntry(TestGlobals.DB));
         assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+        assertTrue(TriggerRunLog.recordIdsFor("quarantined-db-run").isEmpty(),
+                "a quarantined database keeps no trigger run that could fire into a re-created one");
     }
 
     @Test
@@ -75,12 +87,15 @@ public class AdminRecordAppliersTest extends AdminRecordTestBase {
     }
 
     @Test
-    public void test_a_collection_tombstone_from_anti_entropy_quarantines_it() {
+    public void test_a_collection_tombstone_from_anti_entropy_quarantines_it() throws Exception {
+        recordPendingRun("quarantined-coll-run");
         final var result = AdminRecordMerge.apply(
                 List.of(tombstone(AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL), clock.next())), false);
 
         assertTrue(result.complete());
         assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+        assertTrue(TriggerRunLog.recordIdsFor("quarantined-coll-run").isEmpty(),
+                "a quarantined collection keeps no trigger run that could fire into a re-created one");
     }
 
     @Test

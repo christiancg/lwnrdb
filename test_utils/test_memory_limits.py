@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import random
@@ -7,10 +8,10 @@ import base_utils as bu
 from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
-PORT = 8989
+PORT = int(os.environ.get("MEMORY_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 HOT_COLL = "hot_coll"
 COLD_COLL = "cold_coll"
@@ -134,7 +135,7 @@ def test_mass_insert_with_eviction(c):
                                 "collectionName": coll, "objects": batch})
                 if r.get("status") != "OK":
                     check_status("BULK_SAVE during mass insert", r, "OK")
-                    return
+                    return None
                 if len(sample_ids[coll]) < 50:
                     sample_ids[coll].append(doc_id)
                 batch = []
@@ -174,7 +175,7 @@ def test_correctness_after_eviction(c, sample_ids: dict):
     )
 
 
-def test_hot_collection_remains_warm(c):
+def test_hot_collection_remains_warm(c: Conn):
     section("Hot-vs-cold access pattern — repeated reads on hot, occasional on cold")
 
     for _ in range(200):
@@ -217,12 +218,59 @@ def test_repeated_full_scan(c):
     )
 
 
+RESIDENT_INDEX_COLL = "resident_index_coll"
+TINY_COLL = "tiny_coll"
+RESIDENT_INDEX_DOCS = 200_000
+RESIDENT_INDEX_BATCH = 5_000
+LATENCY_SAVES = 300
+LATENCY_RATIO_BUDGET = 3.0
+LATENCY_NOISE_FLOOR_MS = 1.0
+
+
+def average_save_ms(c: Conn, prefix: str) -> float:
+    started = time.perf_counter()
+    for i in range(LATENCY_SAVES):
+        c.send({"type": "SAVE", "databaseName": "mem_db", "collectionName": TINY_COLL,
+                "object": {"_id": f"{prefix}{i}", "v": i}})
+    return (time.perf_counter() - started) * 1000.0 / LATENCY_SAVES
+
+
+def test_resident_index_does_not_slow_unrelated_saves(c: Conn):
+    section(f"A resident {RESIDENT_INDEX_DOCS}-entry field index does not slow SAVEs into an unrelated collection")
+    for coll in (TINY_COLL, RESIDENT_INDEX_COLL):
+        c.send({"type": "CREATE_COLLECTION", "databaseName": "mem_db", "collectionName": coll})
+    average_save_ms(c, "warm")
+    baseline_ms = average_save_ms(c, "base")
+    for start in range(0, RESIDENT_INDEX_DOCS, RESIDENT_INDEX_BATCH):
+        r = c.send({"type": "BULK_SAVE", "databaseName": "mem_db", "collectionName": RESIDENT_INDEX_COLL,
+                    "objects": [{"_id": f"r{i:06d}", "k": f"key-{i}"} for i in range(start, start + RESIDENT_INDEX_BATCH)]},
+                   timeout=120)
+        if r.get("status") != "OK":
+            check_status("BULK_SAVE of the indexed collection", r, "OK")
+            return
+    check_status("CREATE_INDEX on the large collection",
+                 c.send({"type": "CREATE_INDEX", "databaseName": "mem_db", "collectionName": RESIDENT_INDEX_COLL,
+                         "fieldName": "k"}, timeout=300), "OK")
+    check_status("an index-backed FILTER loads the index into the cache",
+                 c.send({"type": "AGGREGATE", "databaseName": "mem_db", "collectionName": RESIDENT_INDEX_COLL,
+                         "aggregationSteps": [bu.filter_step("k", "EQUALS", "key-12345")]}, timeout=120), "OK")
+    resident_bytes = stats(c).get("stats", {}).get("memory", {}).get("userCacheBytes", 0)
+    check(f"the {RESIDENT_INDEX_DOCS}-entry index is resident ({resident_bytes / (1024 * 1024):.1f} MB cached)",
+          resident_bytes >= RESIDENT_INDEX_DOCS * 50, "the index was not admitted, so nothing below is measured")
+    after_ms = average_save_ms(c, "after")
+    budget_ms = max(baseline_ms * LATENCY_RATIO_BUDGET, baseline_ms + LATENCY_NOISE_FLOOR_MS)
+    check(f"average SAVE latency stays within {LATENCY_RATIO_BUDGET:.0f}x the baseline "
+          f"(baseline {baseline_ms:.2f} ms, with the index resident {after_ms:.2f} ms)",
+          after_ms <= budget_ms,
+          "every admission re-measures each resident field index again")
+
+
 def test_server_still_alive(c):
     section("Liveness check after the whole run")
 
-    check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
     check_status("AUTHENTICATE still works",
           c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
 
 
 def main():
@@ -271,6 +319,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_repeated_full_scan(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_resident_index_does_not_slow_unrelated_saves(c)
 
     with Conn() as c:
         test_server_still_alive(c)

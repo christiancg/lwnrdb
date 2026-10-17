@@ -1,7 +1,7 @@
 package org.techhouse.unit.ejson.elements;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
@@ -10,143 +10,83 @@ import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class JsonNumberTest {
     @Test
-    public void test_number_constructor_sets_value_and_leaves_lexer_length_unset() {
-        Integer testValue = 12345;
-        JsonNumber jsonNumber = new JsonNumber(testValue);
-
-        assertEquals(testValue, jsonNumber.getValue());
-        assertEquals(0, jsonNumber.getStrLength());
+    public void test_every_value_is_held_as_a_double() {
+        assertEquals(Double.class, new JsonNumber(12345).getValue().getClass());
+        assertEquals(Double.class, new JsonNumber(Integer.valueOf(42)).getValue().getClass());
+        assertEquals(Double.class, new JsonNumber("42").getValue().getClass());
+        assertEquals(Double.class, new JsonNumber(7L).getValue().getClass());
+        assertEquals(12345.0, new JsonNumber(12345).doubleValue());
+        assertEquals(42.0, new JsonNumber("42").doubleValue());
     }
 
     @Test
-    public void test_number_constructor_handles_null() {
-        JsonNumber jsonNumber = new JsonNumber((Number) null);
-
-        assertNull(jsonNumber.getValue());
-        assertEquals(0, jsonNumber.getStrLength());
-    }
-
-    @Test
-    public void test_constructor_initializes_value_to_zero() {
-        JsonNumber number = new JsonNumber();
-
-        assertEquals(0, number.getValue());
-    }
-
-    @Test
-    public void test_constructor_value_remains_zero_on_multiple_calls() {
-        JsonNumber number1 = new JsonNumber();
-        JsonNumber number2 = new JsonNumber();
-        JsonNumber number3 = new JsonNumber();
-
-        assertEquals(0, number1.getValue());
-        assertEquals(0, number2.getValue());
-        assertEquals(0, number3.getValue());
-    }
-
-    @Test
-    public void test_constructor_assigns_number_value() {
-        Number inputValue = 42;
-        JsonNumber jsonNumber = new JsonNumber(inputValue);
-
-        assertEquals(inputValue, jsonNumber.getValue());
-        assertEquals(0, jsonNumber.getStrLength());
-    }
-
-    @Test
-    public void test_constructor_handles_null_input() {
-        JsonNumber jsonNumber = new JsonNumber((Number) null);
-
-        assertNull(jsonNumber.getValue());
-        assertEquals(0, jsonNumber.getStrLength());
-    }
-
-    @Test
-    public void test_integer_string_parsed_as_integer() {
-        JsonNumber jsonNumber = new JsonNumber("42");
-
-        assertEquals(Integer.class, jsonNumber.getValue().getClass());
-        assertEquals(42, jsonNumber.getValue());
-        assertEquals(2, jsonNumber.getStrLength());
-    }
-
-    @Test
-    public void test_null_input_results_in_null_value() {
-        JsonNumber jsonNumber = new JsonNumber((String) null);
-
-        assertNull(jsonNumber.getValue());
-        assertEquals(0, jsonNumber.getStrLength());
+    public void test_absent_inputs_and_the_default_are_zero() {
+        assertEquals(0.0, new JsonNumber().doubleValue());
+        assertEquals(0.0, new JsonNumber((Number) null).doubleValue());
+        assertEquals(0.0, new JsonNumber((String) null).doubleValue());
     }
 
     @Test
     public void test_valid_number_returns_integer() {
-        JsonNumber jsonNumber = new JsonNumber(42);
-
-        Integer result = jsonNumber.asInteger();
-
-        assertEquals(42, result);
-    }
-
-    @Test
-    public void test_max_integer_value() {
-        JsonNumber jsonNumber = new JsonNumber(Integer.MAX_VALUE);
-
-        Integer result = jsonNumber.asInteger();
-
-        assertEquals(Integer.MAX_VALUE, result);
+        assertEquals(42, new JsonNumber(42).asInteger());
+        assertEquals(Integer.MAX_VALUE, new JsonNumber(Integer.MAX_VALUE).asInteger());
+        assertEquals(3, new JsonNumber(3.9).asInteger());
     }
 
     @Test
     public void test_string_constructor_non_integer_value() {
-        JsonNumber num = new JsonNumber("3.14");
-        assertEquals(3.14, num.getValue().doubleValue(), 0.001);
+        assertEquals(3.14, new JsonNumber("3.14").doubleValue(), 0.001);
     }
 
     @Test
     public void test_string_constructor_keeps_large_integral_values() {
-        assertEquals(1e10, new JsonNumber("10000000000").getValue().doubleValue());
-        assertEquals(1e20, new JsonNumber("100000000000000000000").getValue().doubleValue());
-        assertEquals(1e21, new JsonNumber("1e+21").getValue().doubleValue());
-        assertEquals(-1e10, new JsonNumber("-10000000000").getValue().doubleValue());
+        assertEquals(1e10, new JsonNumber("10000000000").doubleValue());
+        assertEquals(1e20, new JsonNumber("100000000000000000000").doubleValue());
+        assertEquals(1e21, new JsonNumber("1e+21").doubleValue());
+        assertEquals(-1e10, new JsonNumber("-10000000000").doubleValue());
     }
 
     @Test
-    public void test_string_constructor_keeps_int_representation_in_range() {
-        assertEquals(42, new JsonNumber("42").getValue());
-        assertEquals(Integer.MAX_VALUE, new JsonNumber("2147483647").getValue());
-        assertEquals(-2147483647, new JsonNumber("-2147483647").getValue());
+    public void test_every_long_up_to_two_to_the_53_round_trips_exactly() {
+        for (final var value : new long[]{0L, 1L, -1L, 1_700_000_000_000L, (1L << 53) - 1, -(1L << 53) + 1, 1L << 53}) {
+            assertEquals(value, (long) new JsonNumber(value).doubleValue());
+            assertEquals(value, new JsonNumber(value).getValue().longValue());
+        }
     }
 
     @Test
     public void test_overflowing_literal_is_refused() {
         assertThrows(MalformedJsonException.class, () -> new JsonNumber("1e400"));
-    }
-
-    @Test
-    public void test_negative_overflowing_literal_is_refused() {
         assertThrows(MalformedJsonException.class, () -> new JsonNumber("-1e400"));
-    }
-
-    @Test
-    public void test_long_digit_string_overflowing_is_refused() {
         assertThrows(MalformedJsonException.class, () -> new JsonNumber("1" + "0".repeat(400)));
     }
 
     @Test
     public void test_max_double_is_accepted() {
-        assertEquals(Double.MAX_VALUE, new JsonNumber("1.7976931348623157e308").getValue().doubleValue());
+        assertEquals(Double.MAX_VALUE, new JsonNumber("1.7976931348623157e308").doubleValue());
     }
 
     @Test
-    public void test_underflowing_literal_narrows_to_zero() {
-        assertEquals(0, new JsonNumber("1e-400").getValue());
+    public void test_underflowing_literal_is_zero() {
+        assertEquals(0.0, new JsonNumber("1e-400").doubleValue());
     }
 
     @Test
-    public void test_negative_zero_and_int_bounds_keep_their_narrowing() {
-        assertEquals(0, new JsonNumber("-0.0").getValue());
-        assertEquals(0, new JsonNumber("0").getValue());
-        assertEquals(Integer.MAX_VALUE, new JsonNumber("2147483647").getValue());
-        assertEquals(-2147483648d, new JsonNumber("-2147483648").getValue().doubleValue());
+    public void test_equality_is_numeric_with_zero_and_nan_normalised() {
+        assertEquals(new JsonNumber(0.0), new JsonNumber(-0.0));
+        assertEquals(new JsonNumber(0.0).hashCode(), new JsonNumber("-0.0").hashCode());
+        assertEquals(new JsonNumber(5), new JsonNumber("5.0"));
+        assertEquals(new JsonNumber(5).hashCode(), new JsonNumber(5.0).hashCode());
+        assertEquals(new JsonNumber(Double.NaN), new JsonNumber(Double.NaN));
+        assertNotEquals(new JsonNumber(1), new JsonNumber(2));
+        assertNotEquals(new Object(), new JsonNumber(1));
+    }
+
+    @Test
+    public void test_every_spelling_of_negative_zero_parses_to_positive_zero() {
+        for (final var spelling : new String[]{"-0", "-0.0", "-0e5", "-0.000", "-1e-400"}) {
+            assertEquals(0, Double.compare(0.0, new JsonNumber(spelling).doubleValue()), spelling);
+        }
+        assertEquals(0, Double.compare(-0.0, new JsonNumber(-0.0).doubleValue()));
     }
 }

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
@@ -23,6 +24,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.JsonParser;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.values.EJsonInterop;
@@ -248,5 +250,15 @@ public class EJsonInteropTest {
         final var converted = (JsonObject) EJsonInterop.toEjson(objectWithKey("#note(1)"));
 
         assertTrue(converted.has("#note(1)"));
+    }
+
+    @Test
+    public void aParsedNegativeZeroReachesAScriptAsPositiveZero() {
+        final var utf8 = "{\"v\":-0}".getBytes(StandardCharsets.UTF_8);
+        final var parsed = JsonParser.parse(utf8, 0, utf8.length, Integer.MAX_VALUE, Integer.MAX_VALUE).asJsonObject();
+
+        final var seen = (JsNumber) EJsonInterop.fromEjson(parsed.get("v"));
+
+        assertEquals(0, Double.compare(0.0, seen.getValue()));
     }
 }

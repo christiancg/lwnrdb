@@ -1,5 +1,6 @@
 package org.techhouse.ops;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.ARRAY_TOO_LARGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.CANCELLED;
 import static org.techhouse.simplejs.host.ScriptErrorNames.EXHAUSTED_MEMORY_MESSAGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.LIMIT;
@@ -17,6 +18,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.RunScriptResponse;
@@ -52,10 +54,16 @@ public final class ScriptOperationHelper {
         if (source.getBytes(StandardCharsets.UTF_8).length > configuration.getScriptMaxSourceBytes()) {
             return new OperationResponse(OperationType.RUN_SCRIPT, ErrorCode.SCRIPT_TOO_LARGE);
         }
-        final var permit = admission.acquire(username, dbName);
-        if (permit == null) {
-            return concurrencyRefusal(OperationType.RUN_SCRIPT);
-        }
+        return switch (admit(username, dbName)) {
+            case ScriptAdmission.Refusal refusal -> concurrencyRefusal(OperationType.RUN_SCRIPT, refusal.scope());
+            case ScriptAdmission.Permit permit -> runAdmitted(permit, request, username, clientId);
+        };
+    }
+
+    private static OperationResponse runAdmitted(ScriptAdmission.Permit permit, RunScriptRequest request,
+            String username, UUID clientId) {
+        final var dbName = request.getDatabaseName();
+        final var source = request.getScript();
         try (permit) {
             final var run = registry.register(ScriptRunKind.RUN_SCRIPT, dbName, null, username, clientId);
             try {
@@ -80,8 +88,13 @@ public final class ScriptOperationHelper {
         }
     }
 
-    static OperationResponse concurrencyRefusal(OperationType type) {
-        final var scope = admission.lastRefusalScope();
+    static ScriptAdmission.Admission admit(String username, String dbName) {
+        final var privileged = username == null
+                || AuthorizationChecker.ownsOrAdministers(cache.getAdminUserEntry(username), dbName);
+        return admission.acquire(username, dbName, privileged);
+    }
+
+    static OperationResponse concurrencyRefusal(OperationType type, String scope) {
         return new OperationResponse(type,
                 ErrorCode.SCRIPT_CONCURRENCY_LIMIT.getDefaultMessage() + " (" + scope + " limit)",
                 ErrorCode.SCRIPT_CONCURRENCY_LIMIT);
@@ -164,6 +177,7 @@ public final class ScriptOperationHelper {
             case CANCELLED -> ErrorCode.SCRIPT_CANCELLED;
             case LIMIT -> ErrorCode.SCRIPT_LIMIT_EXCEEDED;
             case MEMORY -> ErrorCode.SCRIPT_MEMORY_EXCEEDED;
+            case ARRAY_TOO_LARGE -> ErrorCode.SCRIPT_ARRAY_TOO_LARGE;
             case RESULT_TOO_LARGE -> ErrorCode.SCRIPT_RESULT_TOO_LARGE;
             case PENDING_RESULT -> ErrorCode.SCRIPT_RESULT_PENDING;
             default -> ErrorCode.SCRIPT_FAILED;

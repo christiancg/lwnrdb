@@ -49,7 +49,7 @@ public class CollectionListingRepairTest {
             final var listed = new ArrayList<>(database.getCollections());
             listed.remove(TestGlobals.COLL);
             return new AdminDbEntry(database.get_id(), listed, new ArrayList<>(database.getOwners()));
-        });
+        }, AdminOperationHelper.RewriteVersion.KEEP);
     }
 
     private boolean listed() {

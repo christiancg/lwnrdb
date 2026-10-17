@@ -10,7 +10,7 @@ HOST = os.environ.get("API_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("API_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "api_test_db"
 
@@ -120,6 +120,11 @@ COLL_TYPES = "types"
 COLL_FLOWS = "flows"
 COLL_PERM = "perm_coll"
 COLL_MATH = "map_math"
+COLL_SHARED_LEFT = "shared_left"
+COLL_SHARED_RIGHT = "shared_right"
+COLL_DISTINCT = "distinct_rows"
+COLL_BUDGET = "result_budget"
+COLL_DELETES = "many_deletes"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -167,7 +172,7 @@ def test_reserved_script_runs_collection(c):
                save(c, "script_runs", {"_id": "x", "a": 1}), "ERROR", "400-1")
     check_code("BULK_SAVE into script_runs -> 400-1",
                bulk_save(c, "script_runs", [{"_id": "x"}]), "ERROR", "400-1")
-    check_code("DELETE from script_runs -> 400-1",
+    check_code("DELETE in script_runs -> 400-1",
                delete(c, "script_runs", "x"), "ERROR", "400-1")
     check_code("CREATE_COLLECTION script_runs -> 400-1",
                create_coll(c, "script_runs"), "ERROR", "400-1")
@@ -186,7 +191,7 @@ def test_reserved_script_runs_collection(c):
 def test_database_and_collection_ops(c):
     section("Database & collection operations (DDL + metadata)")
 
-    check_status("LIST_DATABASES (public, OK)", list_databases(c), "OK")
+    check_status("LIST_DATABASES (authenticated, OK)", list_databases(c), "OK")
     check("LIST_DATABASES contains api_test_db",
                DB in (list_databases(c).get("databases") or []))
 
@@ -377,6 +382,37 @@ def test_a_line_with_a_second_value_or_a_nan_point_is_refused(c):
         check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
     check_status("a finite geo point is still accepted",
                  c.send_raw(save_prefix + '{"_id":"finite_geo","p":"#geo(1,2)"}}'), "OK")
+
+
+def test_non_ascii_and_malformed_utf8_requests_round_trip(c):
+    section("Requests are parsed from their UTF-8 bytes: non-ASCII text round-trips and malformed bytes decode leniently")
+    check_status("a document with non-ASCII keys and values is saved",
+                 save(c, COLL_TYPES, {"_id": "utf8_doc", "clé": "日本語😀", "ü": {"ñ": "ç"}}), "OK")
+    found = find_by_id(c, COLL_TYPES, "utf8_doc")
+    check_field("a non-ASCII value reads back unchanged", found, "object.clé", "日本語😀")
+    check_field("a nested non-ASCII key reads back unchanged", found, "object.ü.ñ", "ç")
+    matched = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_TYPES,
+                      "aggregationSteps": [{"type": "FILTER", "operator": {
+                          "fieldOperatorType": "EQUALS", "field": "clé", "value": "日本語😀"}}]})
+    check("a filter on a non-ASCII key and value finds the document",
+          [row.get("_id") for row in matched.get("results") or []] == ["utf8_doc"], str(matched))
+    prefix = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":').encode()
+    check_status("a string holding a malformed byte is accepted",
+                 c.send_bytes(prefix + b'{"_id":"utf8_bad","v":"a\xffb"}}'), "OK")
+    check_field("the malformed byte reads back as the replacement character",
+                find_by_id(c, COLL_TYPES, "utf8_bad"), "object.v", "a\ufffdb")
+    check_client_refusal("a malformed byte outside a string is refused as an invalid command",
+                         c.send_bytes(prefix + b'{"_id":"utf8_bad2","v":\xff}}'))
+    check("nothing was stored for utf8_bad2", find_by_id(c, COLL_TYPES, "utf8_bad2").get("status") != "OK")
+    check_status("numbers past fifteen digits, negative zero and exponents are accepted",
+                 c.send_raw('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES
+                            + '","object":{"_id":"utf8_nums","a":1234567890123456,"b":-0,"c":2.5e3,"d":7}}'), "OK")
+    numbers = find_by_id(c, COLL_TYPES, "utf8_nums")
+    check_field("a sixteen-digit integer reads back exactly", numbers, "object.a", 1234567890123456)
+    check_field("negative zero reads back as zero", numbers, "object.b", 0)
+    check_field("an exponent reads back as its integral value", numbers, "object.c", 2500)
+    check_field("a small integer reads back without a fraction", numbers, "object.d", 7)
+    check_field("the connection still answers afterwards", find_by_id(c, COLL_TYPES, "t_int"), "object.v", 42)
 
 
 def nested_value(depth: int) -> str:
@@ -915,7 +951,7 @@ def test_flows(c):
     check("Bulk update reads back intact for every doc", bad == 0, detail=f"{bad}/4 stale")
 
 
-def test_operation_permissions(c):
+def test_operation_permissions(_c):
     section("Operation-level permission edges (non-overlapping with test_auth)")
 
     with Conn() as uc:
@@ -1032,6 +1068,119 @@ def test_admin_database_reads_follow_admin_writes(c):
     check_status(f"DROP_DATABASE {second}", drop_db(c, second), "OK")
 
 
+def test_join_then_map_on_a_shared_group_stays_small(c):
+    section("JOIN then MAP over one shared group copies only what the MAP writes")
+    create_coll(c, COLL_SHARED_LEFT)
+    create_coll(c, COLL_SHARED_RIGHT)
+    payload = "p" * 2_000
+    for start in range(0, 50, 10):
+        bulk_save(c, COLL_SHARED_RIGHT, [{"_id": f"r{i:03d}", "key": "shared", "payload": payload}
+                                         for i in range(start, start + 10)])
+    for start in range(0, 2000, 500):
+        bulk_save(c, COLL_SHARED_LEFT, [{"_id": f"l{i:04d}", "key": "shared"} for i in range(start, start + 500)])
+    join = {"type": "JOIN", "joinCollection": COLL_SHARED_RIGHT, "localField": "key", "remoteField": "key",
+            "asField": "j"}
+    add_x = {"type": "MAP", "operators": [{"fieldName": "x", "operator": {"type": "CONCAT", "operands": ["-x"]}}]}
+
+    r = aggregate(c, COLL_SHARED_LEFT, [join, add_x, {"type": "COUNT"}])
+    check_field("2000 rows sharing a 100KB group, then MAP, then COUNT", r, "results.0.count", 2000)
+
+    r = aggregate(c, COLL_SHARED_LEFT, [join, add_x, {"type": "LIMIT", "limit": 1}])
+    row = (r.get("results") or [{}])[0]
+    check("the mapped row keeps the whole joined group and the new field",
+          len(row.get("j") or []) == 50 and row.get("x") == "x", detail=f"keys={sorted(row)}")
+
+    check_status("the server stays healthy afterwards", list_databases(c), "OK")
+    drop_coll(c, COLL_SHARED_LEFT)
+    drop_coll(c, COLL_SHARED_RIGHT)
+
+
+def test_aggregate_output_over_budget_is_400_36(c):
+    section("An AGGREGATE that builds more than aggregateMaxResultBytes is refused with 400-36")
+    create_coll(c, COLL_BUDGET)
+    for start in range(0, 5000, 1000):
+        bulk_save(c, COLL_BUDGET, [{"_id": f"b{i:04d}"} for i in range(start, start + 1000)])
+    big_concat = {"type": "MAP", "operators": [{"fieldName": "big", "operator": {
+        "type": "CONCAT", "operands": ["-" + "a" * 800_000, "-b"]}}]}
+
+    started = time.time()
+    r = aggregate(c, COLL_BUDGET, [big_concat])
+    check_code("5000 rows of an 800KB CONCAT stop at the 256Mb budget", r, "ERROR", "400-36")
+    check("the refusal comes fast", time.time() - started < 30, detail=f"{time.time() - started:.1f}s")
+
+    r = aggregate(c, COLL_BUDGET, [big_concat, {"type": "COUNT"}])
+    check_code("a COUNT after the same MAP is refused too", r, "ERROR", "400-36")
+
+    r = aggregate(c, COLL_BUDGET, [{"type": "LIMIT", "limit": 10}, big_concat])
+    check("ten such rows still answer", r.get("status") == "OK" and len(r.get("results") or []) == 10,
+          detail=f"status={r.get('status')} code={r.get('errorCode')}")
+
+    check_status("the server stays healthy afterwards", list_databases(c), "OK")
+    drop_coll(c, COLL_BUDGET)
+
+
+def test_deletes_keep_a_large_collection_consistent(c):
+    section("Single DELETEs across a large collection drop exactly their ids")
+    create_coll(c, COLL_DELETES)
+    total = 20_000
+    for start in range(0, total, 2000):
+        bulk_save(c, COLL_DELETES, [{"_id": f"m{i:05d}", "n": i} for i in range(start, start + 2000)])
+    victims = list(range(0, total, 3))
+
+    failures = [i for i in victims if delete(c, COLL_DELETES, f"m{i:05d}").get("status") != "OK"]
+    check("every DELETE answered OK", failures == [], detail=f"failed {failures[:5]}")
+
+    survivors = total - len(victims)
+    check_field("COUNT matches the survivors", aggregate(c, COLL_DELETES, [{"type": "COUNT"}]),
+                "results.0.count", survivors)
+    check_field("a FILTER + COUNT that reads every document agrees",
+                aggregate(c, COLL_DELETES, [filter_step("n", "GREATER_THAN_EQUALS", 0), {"type": "COUNT"}]),
+                "results.0.count", survivors)
+    gone = [i for i in victims[::97] if find_by_id(c, COLL_DELETES, f"m{i:05d}").get("errorCode") != "404-2"]
+    check("a deleted id answers 404-2", gone == [], detail=f"still found {gone[:5]}")
+    kept = [i for i in range(1, total, 499) if i % 3 and find_by_id(c, COLL_DELETES, f"m{i:05d}").get("status") != "OK"]
+    check("its neighbours still answer", kept == [], detail=f"lost {kept[:5]}")
+    check_code("deleting it again answers 404-2", delete(c, COLL_DELETES, "m00000"), "NOT_FOUND", "404-2")
+    in_range = aggregate(c, COLL_DELETES, [filter_step("_id", "IN", ["m00000", "m00001", "m00002", "m00003"])])
+    check("an _id IN served by the pk index sees only the survivors",
+          ids_of(in_range) == ["m00001", "m00002"], detail=f"got {ids_of(in_range)}")
+    drop_coll(c, COLL_DELETES)
+
+
+def canonical(row):
+    return json.dumps(row, sort_keys=True)
+
+
+def test_distinct_without_field_unchanged(c):
+    section("DISTINCT without a field drops _id and keeps the first row of each body")
+    create_coll(c, COLL_DISTINCT)
+    bodies = [{"kind": f"k{i % 4}", "nested": {"v": i % 4}} for i in range(40)]
+    bulk_save(c, COLL_DISTINCT, [{"_id": f"d{i:02d}", "n": i, **body} for i, body in enumerate(bodies)])
+    bulk_save(c, COLL_DISTINCT, [{"_id": f"e{i:02d}", **body} for i, body in enumerate(bodies)])
+
+    r = aggregate(c, COLL_DISTINCT, [filter_step("n", "GREATER_THAN_EQUALS", 0),
+                                     {"type": "MAP", "operators": [{"fieldName": "n"}]}, {"type": "DISTINCT"}])
+    check_status("DISTINCT after MAP (OK)", r, "OK")
+    rows = r.get("results") or []
+    check("four distinct bodies, none carrying _id",
+          len(rows) == 4 and all("_id" not in row for row in rows), detail=f"rows={rows}")
+    expected = sorted(canonical(body) for body in bodies[:4])
+    check("the distinct bodies are the expected ones", sorted(canonical(row) for row in rows) == expected,
+          detail=f"rows={rows}")
+
+    r = aggregate(c, COLL_DISTINCT, [{"type": "SORT", "fieldName": "_id", "ascending": True},
+                                     {"type": "DISTINCT"}])
+    rows = r.get("results") or []
+    check("whole-document DISTINCT keeps every row whose body differs", len(rows) == 44, detail=f"got {len(rows)}")
+    check("DISTINCT keeps the first occurrence order",
+          [row.get("n") for row in rows[:40]] == list(range(40))
+          and [row.get("kind") for row in rows[40:]] == ["k0", "k1", "k2", "k3"], detail=f"rows={rows[38:]}")
+
+    found = find_by_id(c, COLL_DISTINCT, "d00")
+    check_field("the source document still carries its _id", found, "object._id", "d00")
+    drop_coll(c, COLL_DISTINCT)
+
+
 def main():
     bu.banner("API commands & aggregations integration suite", HOST, PORT)
 
@@ -1040,7 +1189,7 @@ def main():
         if r.get("status") != "OK":
             print(f"\n[ERROR] Cannot authenticate as admin: {r.get('message')}")
             print("        Make sure the server is running and lwnrdb.cfg has the correct")
-            print(f"        defaultAdminUsername={ADMIN_USERNAME!r} / defaultAdminPassword set.\n")
+            print(f"        defaultAdminUsername={ADMIN_USERNAME} / defaultAdminPassword={ADMIN_PASSWORD} (base_utils.PASSWORD).\n")
             sys.exit(1)
         print("\n  Setting up fixtures...")
         setup(c)
@@ -1056,11 +1205,16 @@ def main():
         test_a_malformed_document_is_refused_as_a_client_error,
         test_a_line_with_a_second_value_or_a_nan_point_is_refused,
         test_deep_nesting_is_refused_not_dropped,
+        test_non_ascii_and_malformed_utf8_requests_round_trip,
         test_filter_operators,
         test_filter_with_indexes,
         test_conjunctions,
         test_aggregation_steps,
         test_aggregation_steps_write_dotted_fields_nested,
+        test_join_then_map_on_a_shared_group_stays_small,
+        test_aggregate_output_over_budget_is_400_36,
+        test_deletes_keep_a_large_collection_consistent,
+        test_distinct_without_field_unchanged,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,
         test_every_aggregate_response_is_strict_json,

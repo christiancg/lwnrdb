@@ -12,6 +12,7 @@ import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
 import org.techhouse.ops.admin.ListenOperationHelper;
 import org.techhouse.ops.admin.ReadPathHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.admin.RunDirectoryHelper;
 import org.techhouse.ops.index.IndexOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
@@ -90,6 +91,7 @@ public class OperationProcessor {
         if (adminGuard != null) {
             return adminGuard;
         }
+        final var restamped = new RestampedRecords();
         final var response = switch (operationRequest.getType()) {
             case BULK_SAVE ->
                 processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction, actingUser);
@@ -98,10 +100,10 @@ public class OperationProcessor {
             case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest, activeTransaction);
             case DELETE -> processDeleteOperation((DeleteRequest) operationRequest, activeTransaction, actingUser);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest, clientId);
-            case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
-            case LIST_DATABASES -> processListDatabasesOperation();
+            case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest, restamped);
+            case LIST_DATABASES -> processListDatabasesOperation(actingUser);
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
-            case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest);
+            case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest, restamped);
             case LIST_COLLECTIONS -> processListCollectionsOperation((ListCollectionsRequest) operationRequest);
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
@@ -112,7 +114,7 @@ public class OperationProcessor {
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
             case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
-            case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest);
+            case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest, restamped);
             case CHANGE_PERMISSIONS ->
                 UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
             case SET_DATABASE_OWNERS -> processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest);
@@ -130,15 +132,15 @@ public class OperationProcessor {
             case LIST_TRANSACTIONS -> processListTransactions();
             case RUN_SCRIPT -> processRunScriptOperation((RunScriptRequest) operationRequest, actingUser, clientId);
             case SAVE_PROCEDURE -> processSaveProcedure((SaveProcedureRequest) operationRequest, actingUser);
-            case DELETE_PROCEDURE -> processDeleteProcedure((DeleteProcedureRequest) operationRequest);
-            case LIST_PROCEDURES -> processListProcedures((ListProceduresRequest) operationRequest);
+            case DELETE_PROCEDURE -> processDeleteProcedure((DeleteProcedureRequest) operationRequest, actingUser);
+            case LIST_PROCEDURES -> processListProcedures((ListProceduresRequest) operationRequest, actingUser);
             case CALL_PROCEDURE -> processCallProcedure((CallProcedureRequest) operationRequest, actingUser, clientId);
             case SAVE_TRIGGER -> processSaveTrigger((SaveTriggerRequest) operationRequest, actingUser);
-            case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest);
+            case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest, actingUser);
             case LIST_TRIGGERS -> processListTriggers((ListTriggersRequest) operationRequest);
             case TEST_TRIGGER -> processTestTrigger((TestTriggerRequest) operationRequest, actingUser);
             case SAVE_SCHEDULE -> processSaveSchedule((SaveScheduleRequest) operationRequest, actingUser);
-            case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest);
+            case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest, actingUser);
             case LIST_SCHEDULES -> processListSchedules((ListSchedulesRequest) operationRequest);
             case LIST_SCRIPTS -> processListScripts();
             case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
@@ -148,7 +150,7 @@ public class OperationProcessor {
             case AWAIT_FAULT -> FaultOperationHelper.await((AwaitFaultRequest) operationRequest);
             case RELEASE_FAULT -> FaultOperationHelper.release((ReleaseFaultRequest) operationRequest);
         };
-        return ClusterAdminHelper.afterAdminOp(operationRequest, response);
+        return ClusterAdminHelper.afterAdminOp(operationRequest, response, restamped);
     }
 
     private OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
@@ -205,20 +207,22 @@ public class OperationProcessor {
         return DatabaseOperationHelper.processSetDatabaseOwners(request);
     }
 
-    private OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
-        return DatabaseOperationHelper.processDropDatabaseOperation(dropDatabaseRequest);
+    private OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest,
+            RestampedRecords restamped) {
+        return DatabaseOperationHelper.processDropDatabaseOperation(dropDatabaseRequest, restamped);
     }
 
-    private OperationResponse processListDatabasesOperation() {
-        return DatabaseOperationHelper.processListDatabasesOperation();
+    private OperationResponse processListDatabasesOperation(String actingUser) {
+        return DatabaseOperationHelper.processListDatabasesOperation(actingUser);
     }
 
     private OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
         return CollectionOperationHelper.processCreateCollectionOperation(createCollectionRequest);
     }
 
-    private OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
-        return CollectionOperationHelper.processDropCollectionOperation(dropCollectionRequest);
+    private OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest,
+            RestampedRecords restamped) {
+        return CollectionOperationHelper.processDropCollectionOperation(dropCollectionRequest, restamped);
     }
 
     private OperationResponse processListCollectionsOperation(ListCollectionsRequest request) {
@@ -242,13 +246,13 @@ public class OperationProcessor {
                 () -> ProcedureOperationHelper.executeSave(request, actingUser));
     }
 
-    private OperationResponse processDeleteProcedure(DeleteProcedureRequest request) {
+    private OperationResponse processDeleteProcedure(DeleteProcedureRequest request, String actingUser) {
         return OperationResponse.respondOrError(OperationType.DELETE_PROCEDURE, ErrorCode.ERROR_DELETING_PROCEDURE,
-                () -> ProcedureOperationHelper.executeDelete(request));
+                () -> ProcedureOperationHelper.executeDelete(request, actingUser));
     }
 
-    private OperationResponse processListProcedures(ListProceduresRequest request) {
-        return ProcedureOperationHelper.executeList(request);
+    private OperationResponse processListProcedures(ListProceduresRequest request, String actingUser) {
+        return ProcedureOperationHelper.executeList(request, actingUser);
     }
 
     private OperationResponse processCallProcedure(CallProcedureRequest request, String actingUser, UUID clientId) {
@@ -262,11 +266,11 @@ public class OperationProcessor {
                 ErrorCode.ERROR_SAVING_TRIGGER, () -> TriggerOperationHelper.executeSave(request, actingUser));
     }
 
-    private OperationResponse processDeleteTrigger(DeleteTriggerRequest request) {
+    private OperationResponse processDeleteTrigger(DeleteTriggerRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_TRIGGER,
-                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request));
+                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request, actingUser));
     }
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
@@ -283,9 +287,9 @@ public class OperationProcessor {
                 () -> ScheduleOperationHelper.executeSave(request, actingUser));
     }
 
-    private OperationResponse processDeleteSchedule(DeleteScheduleRequest request) {
+    private OperationResponse processDeleteSchedule(DeleteScheduleRequest request, String actingUser) {
         return OperationResponse.respondOrError(OperationType.DELETE_SCHEDULE, ErrorCode.ERROR_DELETING_SCHEDULE,
-                () -> ScheduleOperationHelper.executeDelete(request));
+                () -> ScheduleOperationHelper.executeDelete(request, actingUser));
     }
 
     private OperationResponse processListSchedules(ListSchedulesRequest request) {

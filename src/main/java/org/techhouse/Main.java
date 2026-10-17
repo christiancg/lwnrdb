@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.function.IntConsumer;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.ScheduleExecutor;
@@ -22,6 +23,7 @@ import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.admin.AdminRecords;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.tls.TlsContextFactory;
@@ -42,6 +44,7 @@ import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
+import org.techhouse.simplejs.host.ScriptHeapGuard;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -68,6 +71,9 @@ public class Main {
     private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
     private static final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private static final Logger logger = Logger.logFor(Main.class);
+    private static final int BIND_FAILURE_STATUS = 1;
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile IntConsumer exit = System::exit;
 
     private static int getPort(String[] args) {
         if (args.length > 0) {
@@ -83,10 +89,14 @@ public class Main {
 
     public static void main(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
+        AdminPasswordGuard.refuseWeakPassword();
+        FetchPinningGuard.refuseUnpinnedFetch();
+        ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
         fs.createAdminDatabase();
-        final var recoveredDeletes = fs.recoverInterruptedCompactions();
+        final var recoveredDeletes = fs.recoverWriteIntents();
         cache.loadAdminData();
+        AdminPasswordGuard.refuseUnsetPasswordWhenBootstrapping(cache);
         seedHybridClock();
         AdminRecords.stampUnversioned();
         StartupWarnings.retainAndReportUncleanStops();
@@ -95,6 +105,7 @@ public class Main {
         PageOccupancyReconciler.scheduleIndexCleanupFor(recoveredDeletes);
         cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
+        PasswordHasher.dummyVerify("");
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
         final var startupTriggerRuns = TriggerRunRecovery.startupRunIds();
@@ -102,6 +113,7 @@ public class Main {
         // Must run after cleanupOrphanedTransactions: the records left are runs that never applied.
         TriggerRunRecovery.garbageCollect();
         TriggerRunRecovery.warnAboutStrandedRuns();
+        startTriggerRunSweepIfStandalone();
         startSchedulerIfEnabled();
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
@@ -109,17 +121,30 @@ public class Main {
         scriptRunHistory.startSweep();
         StartupWarnings.warnIfXmxExceedsMaxMemory();
         StartupWarnings.warnIfCachesExceedHeap();
-        StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
+        StartupWarnings.warnIfPlaintextClients();
+        StartupWarnings.warnIfDefaultKeystorePassword();
+        StartupWarnings.warnIfProtectiveLimitsAreOff();
+        StartupWarnings.warnIfStorageIsReadableByOthers();
         StartupWarnings.warnIfFaultInjectionEnabled();
+        StartupWarnings.warnIfClusterWithoutTls();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();
         TriggerRunRecovery.recoverLocal(startupTriggerRuns);
         final var sslServerSocketFactory = createTlsFactory();
-        final var server = new SocketServer(port, sslServerSocketFactory);
+        final var server = new SocketServer(port, config.getBindAddress(), sslServerSocketFactory);
         registerShutdownHook(server);
-        server.serve();
+        if (!server.serve()) {
+            exit.accept(BIND_FAILURE_STATUS);
+        }
+    }
+
+    private static void startTriggerRunSweepIfStandalone() {
+        if (!clusterConfig.isEnabled()) {
+            triggerExecutor.sweepPeriodically(TriggerRunRecovery::sweep,
+                    TriggerRunRecovery.STANDALONE_SWEEP_INTERVAL_MS);
+        }
     }
 
     private static void startSchedulerIfEnabled() {
@@ -144,7 +169,9 @@ public class Main {
             return;
         }
         try {
-            final var factory = clusterConfig.tlsEnabled() ? TlsContextFactory.createServerSocketFactory(config) : null;
+            final var factory = clusterConfig.tlsEnabled()
+                    ? TlsContextFactory.createClusterServerSocketFactory(config)
+                    : null;
             clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(), factory);
             clusterServer.start();
             membershipService.addListener(ownershipManager);
