@@ -89,7 +89,7 @@ public final class CollectionOperationHelper {
     private static OperationResponse register(CreateCollectionRequest createCollectionRequest) throws Exception {
         final var dbName = createCollectionRequest.getDatabaseName();
         final var collName = createCollectionRequest.getCollectionName();
-        final var result = LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)
+        final var result = !LeftoverFolders.blockedByLeftoverCollection(dbName, collName)
                 && fs.createCollectionFile(dbName, collName);
         if (!result) {
             return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);

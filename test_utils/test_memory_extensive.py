@@ -48,7 +48,7 @@ def get_pid_rss_mb(pid):
 def find_server_pid():
     try:
         out = subprocess.check_output(
-            ["pgrep", "-f", "lwnrdb-1.0-SNAPSHOT.jar"], text=True).strip()
+            ["pgrep", "-f", bu.SERVER_PROC_PATTERN], text=True).strip()
         return int(out.splitlines()[0])
     except Exception:
         return None

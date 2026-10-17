@@ -66,7 +66,7 @@ final class DatabaseRecordApplier {
     private static boolean installUnderLocks(AdminRecord record) throws Exception {
         final var dbName = record.key().dbName();
         final var local = cache.getAdminDbEntry(dbName);
-        if (local == null && !LeftoverFolders.moveAsideUnregisteredDatabase(dbName)) {
+        if (local == null && LeftoverFolders.blockedByLeftoverDatabase(dbName)) {
             return false;
         }
         fs.createDatabaseFolder(dbName);

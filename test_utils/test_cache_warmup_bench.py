@@ -96,16 +96,13 @@ def time_query(c: Conn, value):
     return dt_ms, r.get("status") == "OK"
 
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-
-
 SERVER_LOG = "/tmp/lwnrdb-bench.log"
 
 
 def kill_server():
     try:
         out = subprocess.check_output(
-            ["pgrep", "-f", "lwnrdb-1.0-SNAPSHOT.jar"], text=True).strip()
+            ["pgrep", "-f", bu.SERVER_PROC_PATTERN], text=True).strip()
         pids = [int(p) for p in out.splitlines() if p.strip()]
     except subprocess.CalledProcessError:
         return

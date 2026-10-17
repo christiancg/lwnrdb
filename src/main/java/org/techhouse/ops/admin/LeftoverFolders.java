@@ -20,21 +20,21 @@ public final class LeftoverFolders {
     private LeftoverFolders() {
     }
 
-    public static boolean moveAsideUnregisteredCollection(String dbName, String collName) {
+    public static boolean blockedByLeftoverCollection(String dbName, String collName) {
         if (cache.getAdminCollectionEntry(dbName, collName) != null
                 || !fs.folderQuarantine().holdsLeftoverCollection(dbName, collName)) {
-            return true;
+            return false;
         }
         final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, 0);
         cache.evictCollection(dbName, collName);
         pendingIndexWrites.clearCollection(dbName, collName);
         logOutcome("collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName, moved);
-        return moved;
+        return !moved;
     }
 
-    public static boolean moveAsideUnregisteredDatabase(String dbName) {
+    public static boolean blockedByLeftoverDatabase(String dbName) {
         if (cache.getAdminDbEntry(dbName) != null || !fs.folderQuarantine().holdsLeftoverDatabase(dbName)) {
-            return true;
+            return false;
         }
         final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
         cache.evictDatabase(dbName);
@@ -42,7 +42,7 @@ public final class LeftoverFolders {
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);
         logOutcome("database " + dbName, moved);
-        return moved;
+        return !moved;
     }
 
     private static void logOutcome(String what, boolean moved) {

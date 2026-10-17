@@ -87,7 +87,7 @@ final class CollectionRecordApplier {
             hybridClock.observe(incarnation);
         }
         quarantine.quarantineStaleIncarnation(dbName, collName, incarnation);
-        if (!LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)) {
+        if (LeftoverFolders.blockedByLeftoverCollection(dbName, collName)) {
             return false;
         }
         fs.createCollectionFile(dbName, collName);

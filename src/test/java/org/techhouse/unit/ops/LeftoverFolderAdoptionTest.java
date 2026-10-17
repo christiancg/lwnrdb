@@ -1,6 +1,7 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -93,7 +94,7 @@ public class LeftoverFolderAdoptionTest {
         }).when(loadingFirst).moveCollectionAside(TestGlobals.DB, COLLECTION, 0L);
         TestUtils.setPrivateField(fs, "folderQuarantine", loadingFirst);
         try {
-            assertTrue(LeftoverFolders.moveAsideUnregisteredCollection(TestGlobals.DB, COLLECTION));
+            assertFalse(LeftoverFolders.blockedByLeftoverCollection(TestGlobals.DB, COLLECTION));
         } finally {
             TestUtils.setPrivateField(fs, "folderQuarantine", original);
         }

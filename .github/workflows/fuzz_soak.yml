@@ -17,19 +17,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-          cache: maven
-      - name: Package
-        run: mvn -B --no-transfer-progress package -DskipTests
-      - name: Upload jar
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install native-image build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libz-dev
+      - name: Build native image
+        run: mvn -B --no-transfer-progress -Pnative package -DskipTests
+      - name: Upload native binary
         uses: actions/upload-artifact@v4
         with:
-          name: lwnrdb-jar
-          path: target/lwnrdb-1.0-SNAPSHOT.jar
+          name: lwnrdb-native
+          path: target/lwnrdb
           retention-days: 1
 
   soak:
@@ -37,22 +39,21 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    env:
+      LWNRDB_SERVER_BIN: ${{ github.workspace }}/target/lwnrdb
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
-        with:
-          java-version: '27'
-          distribution: 'temurin'
-          architecture: x64
-      - name: Download jar
+      - name: Download native binary
         uses: actions/download-artifact@v4
         with:
-          name: lwnrdb-jar
+          name: lwnrdb-native
           path: target
+      - name: Restore executable bit
+        run: chmod +x "$LWNRDB_SERVER_BIN"
       - name: Soak on random seeds
         env:
           MINUTES: ${{ inputs.minutes || '45' }}

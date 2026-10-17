@@ -1,0 +1,2564 @@
+{
+  "reflection": [
+    {
+      "type": "java.io.IOException",
+      "serializable": true
+    },
+    {
+      "type": "java.lang.Double"
+    },
+    {
+      "type": "java.lang.Integer"
+    },
+    {
+      "type": "java.lang.Number"
+    },
+    {
+      "type": "java.lang.Object"
+    },
+    {
+      "type": "java.lang.Record"
+    },
+    {
+      "type": "java.lang.String",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "java.time.LocalDate"
+    },
+    {
+      "type": "java.time.LocalDateTime"
+    },
+    {
+      "type": "java.time.LocalTime"
+    },
+    {
+      "type": "java.util.AbstractCollection"
+    },
+    {
+      "type": "java.util.AbstractList"
+    },
+    {
+      "type": "java.util.AbstractMap"
+    },
+    {
+      "type": "java.util.AbstractSet"
+    },
+    {
+      "type": "java.util.ArrayList"
+    },
+    {
+      "type": "java.util.HashMap"
+    },
+    {
+      "type": "java.util.HashMap$Node"
+    },
+    {
+      "type": "java.util.HashSet"
+    },
+    {
+      "type": "java.util.concurrent.ConcurrentHashMap$Node"
+    },
+    {
+      "type": "java.util.concurrent.TimeUnit",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ShutdownCoordinator",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.analyze.AnalyzeResult",
+      "fields": [
+        {
+          "name": "documentsScanned"
+        },
+        {
+          "name": "durationMillis"
+        },
+        {
+          "name": "endTime"
+        },
+        {
+          "name": "indexUsed"
+        },
+        {
+          "name": "indexesUsed"
+        },
+        {
+          "name": "locksAcquired"
+        },
+        {
+          "name": "scriptInvocations"
+        },
+        {
+          "name": "scriptMillis"
+        },
+        {
+          "name": "startTime"
+        },
+        {
+          "name": "suggestions"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.BackgroundBacklogGate",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.BackgroundTaskManager",
+      "fields": [
+        {
+          "name": "pool"
+        },
+        {
+          "name": "queue"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.PendingIndexWrites",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.ScheduleExecutor",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.ScheduleRegistry",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.TriggerExecutor",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.events.Event"
+    },
+    {
+      "type": "org.techhouse.cache.AdminCache",
+      "fields": [
+        {
+          "name": "collectionUsagePkIndex"
+        },
+        {
+          "name": "collections"
+        },
+        {
+          "name": "collectionsPkIndex"
+        },
+        {
+          "name": "databases"
+        },
+        {
+          "name": "databasesPkIndex"
+        },
+        {
+          "name": "pages"
+        },
+        {
+          "name": "pagesPkIndexes"
+        },
+        {
+          "name": "users"
+        },
+        {
+          "name": "usersPkIndex"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cache.Cache",
+      "fields": [
+        {
+          "name": "adminCache"
+        },
+        {
+          "name": "fs"
+        },
+        {
+          "name": "memoryManagement"
+        },
+        {
+          "name": "userCache"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cache.FieldIndexLookup"
+    },
+    {
+      "type": "org.techhouse.cache.FieldIndexLookup$Located"
+    },
+    {
+      "type": "org.techhouse.cache.MemoryManagement",
+      "fields": [
+        {
+          "name": "counters"
+        },
+        {
+          "name": "scheduler"
+        },
+        {
+          "name": "sweepRunning"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "runEvictionSweepSafely",
+          "parameterTypes": []
+        },
+        {
+          "name": "submitCleanupTask",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cache.UsageTracker",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cache.UserCache",
+      "fields": [
+        {
+          "name": "collectionMap"
+        },
+        {
+          "name": "fieldIndexMap"
+        },
+        {
+          "name": "fs"
+        },
+        {
+          "name": "memoryManagement"
+        },
+        {
+          "name": "pkIndexMap"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.AdminAntiEntropyService",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.AntiEntropyService",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.ClusterConfig",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.ClusterCoordinator",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.ClusterRouter",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.HybridClock",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.MetadataCachePruner",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.NodeInfo",
+      "fields": [
+        {
+          "name": "adminSyncing"
+        },
+        {
+          "name": "heartbeat"
+        },
+        {
+          "name": "host"
+        },
+        {
+          "name": "incarnation"
+        },
+        {
+          "name": "nodeId"
+        },
+        {
+          "name": "port"
+        },
+        {
+          "name": "scriptCapacity"
+        },
+        {
+          "name": "scriptLoad"
+        },
+        {
+          "name": "state"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.NodeState",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.PeerConnectionPool",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.Replicator",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.ScriptPlacement",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.ScriptRunDirectory",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.TransactionSessionReaper",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.TriggerRunDirectory",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.Tx2pcCoordinator",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.Tx2pcDirectory",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.Tx2pcRecovery",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.admin.AdminRecord",
+      "fields": [
+        {
+          "name": "body"
+        },
+        {
+          "name": "key"
+        },
+        {
+          "name": "version"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.membership.MembershipService",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.AdminSnapshotPayload",
+      "fields": [
+        {
+          "name": "records"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.AntiEntropyPayload",
+      "fields": [
+        {
+          "name": "collName"
+        },
+        {
+          "name": "dbName"
+        },
+        {
+          "name": "digest"
+        },
+        {
+          "name": "documents"
+        },
+        {
+          "name": "ids"
+        },
+        {
+          "name": "incarnation"
+        },
+        {
+          "name": "staleIncarnation"
+        },
+        {
+          "name": "summary"
+        },
+        {
+          "name": "summaryMatch"
+        },
+        {
+          "name": "versions"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ClusterMessage",
+      "fields": [
+        {
+          "name": "actingUser"
+        },
+        {
+          "name": "adminSnapshot"
+        },
+        {
+          "name": "antiEntropy"
+        },
+        {
+          "name": "cancelRunId"
+        },
+        {
+          "name": "cancelledRun"
+        },
+        {
+          "name": "correlationId"
+        },
+        {
+          "name": "errorMessage"
+        },
+        {
+          "name": "forwardBody"
+        },
+        {
+          "name": "inDoubtTransactions"
+        },
+        {
+          "name": "members"
+        },
+        {
+          "name": "replication"
+        },
+        {
+          "name": "runningScripts"
+        },
+        {
+          "name": "secret"
+        },
+        {
+          "name": "sender"
+        },
+        {
+          "name": "triggerRunDecision"
+        },
+        {
+          "name": "triggerRunId"
+        },
+        {
+          "name": "triggerRunResolved"
+        },
+        {
+          "name": "triggerRuns"
+        },
+        {
+          "name": "txContinuation"
+        },
+        {
+          "name": "txId"
+        },
+        {
+          "name": "txParticipants"
+        },
+        {
+          "name": "txReplication"
+        },
+        {
+          "name": "txSessionId"
+        },
+        {
+          "name": "txStatus"
+        },
+        {
+          "name": "type"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ClusterMessageType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.DigestEntry",
+      "fields": [
+        {
+          "name": "deleted"
+        },
+        {
+          "name": "id"
+        },
+        {
+          "name": "length"
+        },
+        {
+          "name": "nodeId"
+        },
+        {
+          "name": "version"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.InDoubtTx",
+      "fields": [
+        {
+          "name": "coordinator"
+        },
+        {
+          "name": "dtxId"
+        },
+        {
+          "name": "participants"
+        },
+        {
+          "name": "preparedAt"
+        },
+        {
+          "name": "status"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ReplicationOp",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ReplicationPayload",
+      "fields": [
+        {
+          "name": "collName"
+        },
+        {
+          "name": "dbName"
+        },
+        {
+          "name": "documents"
+        },
+        {
+          "name": "ids"
+        },
+        {
+          "name": "incarnation"
+        },
+        {
+          "name": "op"
+        },
+        {
+          "name": "versions"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.RunningScript",
+      "fields": [
+        {
+          "name": "database"
+        },
+        {
+          "name": "kind"
+        },
+        {
+          "name": "name"
+        },
+        {
+          "name": "runId"
+        },
+        {
+          "name": "startedAt"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.msg.TriggerRunRow"
+    },
+    {
+      "type": "org.techhouse.cluster.msg.TxReplicationPayload",
+      "fields": [
+        {
+          "name": "entries"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cluster.ownership.OwnershipManager",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.concurrency.ResourceLocking",
+      "fields": [
+        {
+          "name": "locks"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.config.ConfigReader"
+    },
+    {
+      "type": "org.techhouse.config.Configuration",
+      "fields": [
+        {
+          "name": "backgroundProcessingThreads"
+        },
+        {
+          "name": "filePath"
+        },
+        {
+          "name": "logPath"
+        },
+        {
+          "name": "maxConnections"
+        },
+        {
+          "name": "maxLogFiles"
+        },
+        {
+          "name": "maxMemoryBytes"
+        },
+        {
+          "name": "port"
+        },
+        {
+          "name": "tlsEnabled"
+        },
+        {
+          "name": "tlsKeystorePassword"
+        },
+        {
+          "name": "tlsKeystorePath"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.conn.ClientTracker",
+      "fields": [
+        {
+          "name": "clients"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.conn.InFlightRequests",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.conn.PreAuthSlots",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.data.CollectionScopedEntry"
+    },
+    {
+      "type": "org.techhouse.data.DbEntry"
+    },
+    {
+      "type": "org.techhouse.data.FieldIndexEntry"
+    },
+    {
+      "type": "org.techhouse.data.IndexedDbEntry",
+      "fields": [
+        {
+          "name": "eJson"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.data.JsonDocumentEntry",
+      "fields": [
+        {
+          "name": "cachedHeapBytes"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.data.PkIndexEntry"
+    },
+    {
+      "type": "org.techhouse.data.admin.AdminCollEntry"
+    },
+    {
+      "type": "org.techhouse.ejson.EJson",
+      "fields": [
+        {
+          "name": "reader"
+        },
+        {
+          "name": "writer"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonDateTime",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonGeo",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonTemporalCustom"
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonTime",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonVector",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonArray"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonBaseElement"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonCustom"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonNumber"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonObject"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonPrimitive"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonString"
+    },
+    {
+      "type": "org.techhouse.ejson.type_adapters.TypeAdapterFactory"
+    },
+    {
+      "type": "org.techhouse.fault.FaultInjector",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.fs.FileSystem",
+      "fields": [
+        {
+          "name": "dbPath"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.listen.ListenManager",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.listen.ResultHasher$ResultWrapper",
+      "fields": [
+        {
+          "name": "results"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.log.LogWriter"
+    },
+    {
+      "type": "org.techhouse.log.Logger",
+      "fields": [
+        {
+          "name": "tClass"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.CompiledProcedureCache",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.CompiledScriptCache",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.OperationProcessor",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.OperationStatus",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.OperationType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.ScriptAdmission",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.ScriptLoad",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.ScriptRunHistory",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.ScriptRunRegistry",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.auth.AuthFailureThrottle",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.auth.PasswordCheckGate",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.AggregateRequest",
+      "fields": [
+        {
+          "name": "aggregationSteps"
+        },
+        {
+          "name": "analyze"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ArmFaultRequest",
+      "fields": [
+        {
+          "name": "action"
+        },
+        {
+          "name": "match"
+        },
+        {
+          "name": "point"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.AuthenticateRequest",
+      "fields": [
+        {
+          "name": "password"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.AwaitFaultRequest",
+      "fields": [
+        {
+          "name": "point"
+        },
+        {
+          "name": "timeoutMs"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.BulkSaveRequest",
+      "fields": [
+        {
+          "name": "objects"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CallProcedureRequest",
+      "fields": [
+        {
+          "name": "args"
+        },
+        {
+          "name": "procedureName"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CancelScriptRequest",
+      "fields": [
+        {
+          "name": "runId"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ChangePermissionsRequest",
+      "fields": [
+        {
+          "name": "admin"
+        },
+        {
+          "name": "collectionPermissions"
+        },
+        {
+          "name": "databasePermissions"
+        },
+        {
+          "name": "globalPermissions"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CloseConnectionRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CommitTransactionRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateCollectionRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateDatabaseRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateIndexRequest",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateUserRequest",
+      "fields": [
+        {
+          "name": "admin"
+        },
+        {
+          "name": "collectionPermissions"
+        },
+        {
+          "name": "databasePermissions"
+        },
+        {
+          "name": "globalPermissions"
+        },
+        {
+          "name": "password"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteProcedureRequest",
+      "fields": [
+        {
+          "name": "name"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteRequest",
+      "fields": [
+        {
+          "name": "_id"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteScheduleRequest",
+      "fields": [
+        {
+          "name": "name"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteSchemaRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteTriggerRequest",
+      "fields": [
+        {
+          "name": "name"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteUserRequest",
+      "fields": [
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DropCollectionRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.DropDatabaseRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.DropIndexRequest",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.FindByIdRequest",
+      "fields": [
+        {
+          "name": "_id"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.GetDatabaseStatsRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListCollectionsRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.ListDatabasesRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListProceduresRequest",
+      "fields": [
+        {
+          "name": "includeSource"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListSchedulesRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListScriptsRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListTransactionsRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListTriggerRunsRequest",
+      "fields": [
+        {
+          "name": "status"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListTriggersRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListUsersRequest",
+      "fields": [
+        {
+          "name": "aggregationSteps"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListenRequest",
+      "fields": [
+        {
+          "name": "aggregationSteps"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.OperationRequest",
+      "fields": [
+        {
+          "name": "collectionName"
+        },
+        {
+          "name": "databaseName"
+        },
+        {
+          "name": "dirtyRead"
+        },
+        {
+          "name": "triggerDepth"
+        },
+        {
+          "name": "type"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "org.techhouse.ops.OperationType",
+            "java.lang.String",
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.PermissionsRequest",
+      "fields": [
+        {
+          "name": "admin"
+        },
+        {
+          "name": "collectionPermissions"
+        },
+        {
+          "name": "databasePermissions"
+        },
+        {
+          "name": "globalPermissions"
+        },
+        {
+          "name": "scriptPermissions"
+        },
+        {
+          "name": "username"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ReindexRequest",
+      "fields": [
+        {
+          "name": "fieldNames"
+        },
+        {
+          "name": "primaryKey"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ReleaseFaultRequest",
+      "fields": [
+        {
+          "name": "point"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ResolveTransactionRequest",
+      "fields": [
+        {
+          "name": "decision"
+        },
+        {
+          "name": "dtxId"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ResolveTriggerRunRequest",
+      "fields": [
+        {
+          "name": "decision"
+        },
+        {
+          "name": "runId"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.RollbackTransactionRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.RunScriptRequest",
+      "fields": [
+        {
+          "name": "args"
+        },
+        {
+          "name": "script"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SaveProcedureRequest",
+      "fields": [
+        {
+          "name": "name"
+        },
+        {
+          "name": "script"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SaveRequest",
+      "fields": [
+        {
+          "name": "_id"
+        },
+        {
+          "name": "object"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SaveScheduleRequest",
+      "fields": [
+        {
+          "name": "args"
+        },
+        {
+          "name": "cron"
+        },
+        {
+          "name": "description"
+        },
+        {
+          "name": "intervalMs"
+        },
+        {
+          "name": "name"
+        },
+        {
+          "name": "procedureName"
+        },
+        {
+          "name": "timeoutMs"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SaveSchemaRequest",
+      "fields": [
+        {
+          "name": "schema"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SaveTriggerRequest",
+      "fields": [
+        {
+          "name": "allowCascade"
+        },
+        {
+          "name": "events"
+        },
+        {
+          "name": "mode"
+        },
+        {
+          "name": "name"
+        },
+        {
+          "name": "procedureName"
+        },
+        {
+          "name": "timing"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SetDatabaseOwnersRequest",
+      "fields": [
+        {
+          "name": "owners"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SetPasswordRequest",
+      "fields": [
+        {
+          "name": "currentPassword"
+        },
+        {
+          "name": "newPassword"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.StartTransactionRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.StopListenRequest",
+      "fields": [
+        {
+          "name": "listenId"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.TestTriggerRequest",
+      "fields": [
+        {
+          "name": "document"
+        },
+        {
+          "name": "event"
+        },
+        {
+          "name": "name"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.VersionedDefinitionRequest",
+      "fields": [
+        {
+          "name": "enabled"
+        },
+        {
+          "name": "ifVersion"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.AggregationStepType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.BaseAggregationStep",
+      "fields": [
+        {
+          "name": "type"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "org.techhouse.ops.req.agg.AggregationStepType"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.BaseOperator",
+      "fields": [
+        {
+          "name": "type"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.ConjunctionOperatorType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.FieldOperatorType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator",
+      "fields": [
+        {
+          "name": "operands"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.BaseMidOperator",
+      "fields": [
+        {
+          "name": "type"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.CastToType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.MidOperationType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.operators.CustomOperator",
+      "fields": [
+        {
+          "name": "args"
+        },
+        {
+          "name": "customOperatorName"
+        },
+        {
+          "name": "field"
+        },
+        {
+          "name": "value"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.operators.FieldOperator",
+      "fields": [
+        {
+          "name": "field"
+        },
+        {
+          "name": "fieldOperatorType"
+        },
+        {
+          "name": "value"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.CountAggregationStep",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.DistinctAggregationStep",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.FilterAggregationStep",
+      "fields": [
+        {
+          "name": "operator"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.GroupByAggregationStep",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.JoinAggregationStep",
+      "fields": [
+        {
+          "name": "asField"
+        },
+        {
+          "name": "joinCollection"
+        },
+        {
+          "name": "localField"
+        },
+        {
+          "name": "remoteField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.LimitAggregationStep",
+      "fields": [
+        {
+          "name": "limit"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.MapAggregationStep",
+      "fields": [
+        {
+          "name": "operators"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.SkipAggregationStep",
+      "fields": [
+        {
+          "name": "skip"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.SortAggregationStep",
+      "fields": [
+        {
+          "name": "ascending"
+        },
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.AddFieldMapOperator",
+      "fields": [
+        {
+          "name": "operator"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.MapOperator",
+      "fields": [
+        {
+          "name": "condition"
+        },
+        {
+          "name": "fieldName"
+        },
+        {
+          "name": "type"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.AggregateAnalyzeResponse",
+      "fields": [
+        {
+          "name": "analyzeResult"
+        },
+        {
+          "name": "results"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.AggregateResponse",
+      "fields": [
+        {
+          "name": "results"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.BulkSaveResponse",
+      "fields": [
+        {
+          "name": "inserted"
+        },
+        {
+          "name": "updated"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.CallProcedureResponse",
+      "fields": [
+        {
+          "name": "logs"
+        },
+        {
+          "name": "logsTruncated"
+        },
+        {
+          "name": "metrics"
+        },
+        {
+          "name": "result"
+        },
+        {
+          "name": "runId"
+        },
+        {
+          "name": "stack"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.CancelScriptResponse",
+      "fields": [
+        {
+          "name": "cancelled"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.CloseConnectionResponse"
+    },
+    {
+      "type": "org.techhouse.ops.resp.DeleteResponse"
+    },
+    {
+      "type": "org.techhouse.ops.resp.FindByIdResponse",
+      "fields": [
+        {
+          "name": "object"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.GetDatabaseStatsResponse",
+      "fields": [
+        {
+          "name": "stats"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListCollectionsResponse",
+      "fields": [
+        {
+          "name": "collections"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListDatabasesResponse",
+      "fields": [
+        {
+          "name": "databases"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListProceduresResponse",
+      "fields": [
+        {
+          "name": "procedures"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListSchedulesResponse",
+      "fields": [
+        {
+          "name": "schedules"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListScriptsResponse",
+      "fields": [
+        {
+          "name": "scripts"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListTransactionsResponse",
+      "fields": [
+        {
+          "name": "transactions"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListTriggerRunsResponse",
+      "fields": [
+        {
+          "name": "runs"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListTriggersResponse",
+      "fields": [
+        {
+          "name": "triggers"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListUsersResponse",
+      "fields": [
+        {
+          "name": "users"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListenEndedResponse",
+      "fields": [
+        {
+          "name": "listenId"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListenResponse",
+      "fields": [
+        {
+          "name": "isUpdate"
+        },
+        {
+          "name": "listenId"
+        },
+        {
+          "name": "resultHash"
+        },
+        {
+          "name": "results"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.OperationResponse",
+      "fields": [
+        {
+          "name": "errorCode"
+        },
+        {
+          "name": "message"
+        },
+        {
+          "name": "status"
+        },
+        {
+          "name": "type"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "org.techhouse.ops.OperationType",
+            "org.techhouse.ops.OperationStatus",
+            "java.lang.String",
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.PrimaryKeyReindexResponse",
+      "fields": [
+        {
+          "name": "primaryKeyEntries"
+        },
+        {
+          "name": "unversionedEntries"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ReindexResponse",
+      "fields": [
+        {
+          "name": "rebuiltFields"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.ResolveTriggerRunResponse",
+      "fields": [
+        {
+          "name": "resolved"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.RunScriptResponse",
+      "fields": [
+        {
+          "name": "logs"
+        },
+        {
+          "name": "logsTruncated"
+        },
+        {
+          "name": "metrics"
+        },
+        {
+          "name": "result"
+        },
+        {
+          "name": "runId"
+        },
+        {
+          "name": "stack"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveProcedureResponse",
+      "fields": [
+        {
+          "name": "version"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveResponse",
+      "fields": [
+        {
+          "name": "_id"
+        },
+        {
+          "name": "inserted"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveScheduleResponse",
+      "fields": [
+        {
+          "name": "version"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveSchemaResponse",
+      "fields": [
+        {
+          "name": "warnings"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveTriggerResponse",
+      "fields": [
+        {
+          "name": "definer"
+        },
+        {
+          "name": "version"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.StartTransactionResponse",
+      "fields": [
+        {
+          "name": "transactionId"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.StopListenResponse"
+    },
+    {
+      "type": "org.techhouse.ops.resp.TestTriggerResponse",
+      "fields": [
+        {
+          "name": "decision"
+        },
+        {
+          "name": "document"
+        },
+        {
+          "name": "logs"
+        },
+        {
+          "name": "logsTruncated"
+        },
+        {
+          "name": "reason"
+        },
+        {
+          "name": "stack"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.simplejs.SimpleJs",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.utils.GeoPoint"
+    },
+    {
+      "type": "sun.misc.Unsafe",
+      "fields": [
+        {
+          "name": "theUnsafe"
+        }
+      ],
+      "methods": [
+        {
+          "name": "allocateInstance",
+          "parameterTypes": [
+            "java.lang.Class"
+          ]
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "glob": "META-INF/services/java.net.spi.InetAddressResolverProvider"
+    },
+    {
+      "glob": "META-INF/services/java.net.spi.URLStreamHandlerProvider"
+    },
+    {
+      "glob": "META-INF/services/java.nio.channels.spi.SelectorProvider"
+    },
+    {
+      "glob": "META-INF/services/java.time.zone.ZoneRulesProvider"
+    },
+    {
+      "glob": "default.cfg"
+    },
+    {
+      "glob": "simplejs/emoji-sequences.txt"
+    },
+    {
+      "module": "java.base",
+      "glob": "jdk/internal/icu/impl/data/icudt76b/nfc.nrm"
+    },
+    {
+      "module": "java.base",
+      "glob": "jdk/internal/icu/impl/data/icudt76b/nfkc.nrm"
+    },
+    {
+      "module": "java.base",
+      "glob": "jdk/internal/icu/impl/data/icudt76b/uprops.icu"
+    },
+    {
+      "module": "java.base",
+      "glob": "sun/net/idn/uidna.spp"
+    },
+    {
+      "module": "jdk.jfr",
+      "glob": "jdk/jfr/internal/types/metadata.bin"
+    }
+  ]
+}

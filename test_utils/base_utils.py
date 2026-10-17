@@ -29,6 +29,8 @@ USERNAME = "admin"
 PASSWORD = "Tst-Admin-9xQ2mV"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
+SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+SERVER_PROC_PATTERN = SERVER_BIN or JAR_PATH
 
 
 def configure(host: Optional[str] = None, port: Optional[int] = None,
@@ -324,6 +326,12 @@ def holds_throughout(predicate: Callable[[], object], seconds: float, interval_s
 
 
 def require_jar(jar: str = JAR_PATH) -> None:
+    if SERVER_BIN:
+        if not os.path.isfile(SERVER_BIN):
+            print(f"\n[ERROR] Native binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN). "
+                  f"Build it first: mvn -Pnative package -DskipTests\n")
+            sys.exit(1)
+        return
     if not os.path.isfile(jar):
         print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
         sys.exit(1)
@@ -414,13 +422,17 @@ def dump_log(log_path: str, tail_bytes: int = 4000) -> None:
         pass
 
 
+def server_argv(xmx: str = "512m", jar: Optional[str] = None) -> list:
+    if SERVER_BIN:
+        return [SERVER_BIN, f"-Xmx{xmx}"]
+    return ["java", f"-Xmx{xmx}", "-jar", jar or JAR_PATH]
+
+
 def start_server(work_dir: str, log_path: str, jar: Optional[str] = None,
                  xmx: str = "512m", host: Optional[str] = None,
                  port: Optional[int] = None, settle: float = 0.5):
-    jar = jar or JAR_PATH
     log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", f"-Xmx{xmx}", "-jar", jar],
-                            stdout=log, stderr=log, cwd=work_dir)
+    proc = subprocess.Popen(server_argv(xmx, jar), stdout=log, stderr=log, cwd=work_dir)
     deadline = time.time() + 60.0
     while time.time() < deadline:
         if port_open(host, port):
@@ -436,9 +448,8 @@ def start_server(work_dir: str, log_path: str, jar: Optional[str] = None,
 
 def run_until_exit(work_dir: str, log_path: str, jar: Optional[str] = None, xmx: str = "512m",
                    timeout_s: float = 30.0) -> Optional[int]:
-    jar = jar or JAR_PATH
     with open(log_path, "ab") as log:
-        proc = subprocess.Popen(["java", f"-Xmx{xmx}", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
+        proc = subprocess.Popen(server_argv(xmx, jar), stdout=log, stderr=log, cwd=work_dir)
     try:
         return proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
