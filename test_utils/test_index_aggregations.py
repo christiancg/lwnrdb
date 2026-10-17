@@ -42,6 +42,10 @@ GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
 WIDE_AND = "idxagg_wide_and"
 WIDE_AND_DOCS = int(os.environ.get("INDEX_TEST_WIDE_AND_DOCS", "20000"))
 WIDE_AND_CHILDREN = 2000
+COLLIDING_STRINGS = "idxagg_colliding_strings"
+COLLIDING_OBJECTS = "idxagg_colliding_objects"
+COLLIDING_BLOCKS = int(os.environ.get("INDEX_TEST_COLLIDING_BLOCKS", "15"))
+COLLIDING_BUDGET_S = float(os.environ.get("INDEX_TEST_COLLIDING_BUDGET_S", "3"))
 GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -1994,6 +1998,51 @@ def test_wide_and_conjunction_stays_within_memory(c):
     c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
 
 
+def colliding_strings(blocks: int) -> list:
+    strings = [""]
+    for _ in range(blocks):
+        strings = [prefix + block for prefix in strings for block in ("Aa", "BB")]
+    return strings
+
+
+def group_signature(r) -> list:
+    return sorted((repr(d.get("k")), len(d.get("group") or [])) for d in (r.get("results") or []))
+
+
+def check_colliding_groups(c: Conn, coll, values, label):
+    bulk_load(c, coll, ({"_id": f"c{i:05d}", "k": value} for i, value in enumerate(values)))
+    started = time.perf_counter()
+    build_index(c, coll, "k")
+    built_in = time.perf_counter() - started
+    check(f"{label}: CREATE_INDEX over {len(values)} colliding values took {built_in:.2f}s, under "
+          f"{COLLIDING_BUDGET_S:.0f}s", built_in < COLLIDING_BUDGET_S)
+    group_by = [{"type": "GROUP_BY", "fieldName": "k"}]
+    check(f"{label}: GROUP_BY uses the index", index_used(c, coll, group_by))
+    started = time.perf_counter()
+    indexed = agg(c, coll, group_by)
+    elapsed = time.perf_counter() - started
+    check_status(f"{label}: GROUP_BY over {len(values)} colliding values (OK)", indexed, "OK")
+    check(f"{label}: one group per value", len(indexed.get("results") or []) == len(values),
+          detail=f"groups={len(indexed.get('results') or [])}")
+    check(f"{label}: the index answers what the scan answers",
+          group_signature(indexed) == group_signature(agg(c, coll, forced_scan(group_by))))
+    check(f"{label}: GROUP_BY answered in {elapsed:.2f}s, under {COLLIDING_BUDGET_S:.0f}s",
+          elapsed < COLLIDING_BUDGET_S)
+    distinct = agg(c, coll, [{"type": "DISTINCT", "fieldName": "k"}])
+    check(f"{label}: DISTINCT agrees", len(distinct.get("results") or []) == len(values),
+          detail=f"rows={len(distinct.get('results') or [])}")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
+def test_colliding_values_group_exactly_and_fast(c: Conn):
+    section(f"GROUP_BY over {2 ** COLLIDING_BLOCKS} values sharing one hash code stays exact and fast")
+    for coll in (COLLIDING_STRINGS, COLLIDING_OBJECTS):
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    keys = colliding_strings(COLLIDING_BLOCKS)
+    check_colliding_groups(c, COLLIDING_STRINGS, keys, "strings")
+    check_colliding_groups(c, COLLIDING_OBJECTS, [{key: 1} for key in keys], "objects")
+
+
 def main():
     bu.banner("index-backed aggregation performance test suite", HOST, PORT)
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
@@ -2069,6 +2118,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_wide_and_conjunction_stays_within_memory(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_colliding_values_group_exactly_and_fast(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

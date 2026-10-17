@@ -154,9 +154,10 @@ public final class JsOperators {
         final var leftPrim = JsCoercion.toPrimitive(left, "default", ops);
         final var rightPrim = JsCoercion.toPrimitive(right, "default", ops);
         if (leftPrim instanceof JsString || rightPrim instanceof JsString) {
-            final var leftText = JsCoercion.toStr(leftPrim);
-            final var rightText = JsCoercion.toStr(rightPrim);
-            InterpreterOps.chargeChars(ops, rightText.length());
+            final var leftText = JsCoercion.toStr(leftPrim, ops);
+            final var rightText = JsCoercion.toStr(rightPrim, ops);
+            final var freshLeft = leftPrim instanceof JsString ? 0 : unchargedLength(leftPrim, leftText);
+            InterpreterOps.chargeChars(ops, freshLeft + unchargedLength(rightPrim, rightText));
             InterpreterOps.noteChars(ops, (long) leftText.length() + rightText.length());
             return new JsString(leftText + rightText);
         }
@@ -166,6 +167,10 @@ public final class JsOperators {
         }
         requireNoMixedBigInt(leftPrim, rightPrim);
         return new JsNumber(JsCoercion.toNumber(leftPrim) + JsCoercion.toNumber(rightPrim));
+    }
+
+    private static long unchargedLength(JsValue primitive, String text) {
+        return primitive instanceof JsBigInt ? 0 : text.length();
     }
 
     private static JsValue arithmetic(String operator, JsValue left, JsValue right, InterpreterOps ops) {

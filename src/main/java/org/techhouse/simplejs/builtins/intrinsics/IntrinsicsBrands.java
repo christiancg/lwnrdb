@@ -199,7 +199,7 @@ public final class IntrinsicsBrands {
     }
 
     public static TypeErrorException incompatible(String method, JsValue receiver) {
-        return new TypeErrorException(method + " called on an incompatible receiver " + JsCoercion.toStr(receiver));
+        return new TypeErrorException(method + " called on an incompatible receiver " + JsCoercion.describe(receiver));
     }
 
     private IntrinsicsBrands() {

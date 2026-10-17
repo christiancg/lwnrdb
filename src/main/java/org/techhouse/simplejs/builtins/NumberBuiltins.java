@@ -90,13 +90,13 @@ public final class NumberBuiltins {
             case JsBigInt bigInt -> bigInt;
             case JsBoolean bool -> new JsBigInt(bool.getValue() ? BigInteger.ONE : BigInteger.ZERO);
             case JsString string -> fromString(string.getValue());
-            default -> throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(value) + " to a BigInt");
+            default -> throw new TypeErrorException("Cannot convert " + JsCoercion.describe(value) + " to a BigInt");
         };
     }
 
     private static JsBigInt fromNumber(double value) {
         if (!Double.isFinite(value) || value != Math.rint(value)) {
-            throw new RangeErrorException("The number " + JsCoercion.toStr(new JsNumber(value))
+            throw new RangeErrorException("The number " + JsCoercion.describe(new JsNumber(value))
                     + " cannot be converted to a BigInt because it is not an integer");
         }
         return new JsBigInt(java.math.BigDecimal.valueOf(value).toBigIntegerExact());

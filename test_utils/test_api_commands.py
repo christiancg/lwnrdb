@@ -124,6 +124,7 @@ COLL_SHARED_LEFT = "shared_left"
 COLL_SHARED_RIGHT = "shared_right"
 COLL_DISTINCT = "distinct_rows"
 COLL_BUDGET = "result_budget"
+COLL_DELETES = "many_deletes"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -1118,6 +1119,34 @@ def test_aggregate_output_over_budget_is_400_36(c):
     drop_coll(c, COLL_BUDGET)
 
 
+def test_deletes_keep_a_large_collection_consistent(c):
+    section("Single DELETEs across a large collection drop exactly their ids")
+    create_coll(c, COLL_DELETES)
+    total = 20_000
+    for start in range(0, total, 2000):
+        bulk_save(c, COLL_DELETES, [{"_id": f"m{i:05d}", "n": i} for i in range(start, start + 2000)])
+    victims = list(range(0, total, 3))
+
+    failures = [i for i in victims if delete(c, COLL_DELETES, f"m{i:05d}").get("status") != "OK"]
+    check("every DELETE answered OK", failures == [], detail=f"failed {failures[:5]}")
+
+    survivors = total - len(victims)
+    check_field("COUNT matches the survivors", aggregate(c, COLL_DELETES, [{"type": "COUNT"}]),
+                "results.0.count", survivors)
+    check_field("a FILTER + COUNT that reads every document agrees",
+                aggregate(c, COLL_DELETES, [filter_step("n", "GREATER_THAN_EQUALS", 0), {"type": "COUNT"}]),
+                "results.0.count", survivors)
+    gone = [i for i in victims[::97] if find_by_id(c, COLL_DELETES, f"m{i:05d}").get("errorCode") != "404-2"]
+    check("a deleted id answers 404-2", gone == [], detail=f"still found {gone[:5]}")
+    kept = [i for i in range(1, total, 499) if i % 3 and find_by_id(c, COLL_DELETES, f"m{i:05d}").get("status") != "OK"]
+    check("its neighbours still answer", kept == [], detail=f"lost {kept[:5]}")
+    check_code("deleting it again answers 404-2", delete(c, COLL_DELETES, "m00000"), "NOT_FOUND", "404-2")
+    in_range = aggregate(c, COLL_DELETES, [filter_step("_id", "IN", ["m00000", "m00001", "m00002", "m00003"])])
+    check("an _id IN served by the pk index sees only the survivors",
+          ids_of(in_range) == ["m00001", "m00002"], detail=f"got {ids_of(in_range)}")
+    drop_coll(c, COLL_DELETES)
+
+
 def canonical(row):
     return json.dumps(row, sort_keys=True)
 
@@ -1184,6 +1213,7 @@ def main():
         test_aggregation_steps_write_dotted_fields_nested,
         test_join_then_map_on_a_shared_group_stays_small,
         test_aggregate_output_over_budget_is_400_36,
+        test_deletes_keep_a_large_collection_consistent,
         test_distinct_without_field_unchanged,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,

@@ -120,7 +120,7 @@ public final class IteratorZip {
                 if (keys.get(i) instanceof JsSymbol symbol) {
                     obj.setSymbol(symbol, values.get(i));
                 } else {
-                    obj.set(JsCoercion.toStr(keys.get(i)), values.get(i));
+                    obj.set(JsCoercion.toStr(keys.get(i), ops), values.get(i));
                 }
             }
             return obj;

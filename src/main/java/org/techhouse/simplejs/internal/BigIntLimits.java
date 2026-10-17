@@ -13,6 +13,7 @@ public final class BigIntLimits {
     private static final int SIGN_AND_ROUNDING_CHARS = 2;
     private static final int DIGITS_PER_GROUP = 3;
     private static final double LOG_TWO = Math.log(2);
+    private static final long TO_STRING_WORK_DIVISOR = 1L << 20;
 
     private BigIntLimits() {
     }
@@ -36,15 +37,22 @@ public final class BigIntLimits {
 
     public static void chargeText(BigInteger value, int radix, InterpreterOps ops) {
         if (value.bitLength() > FREE_BITS) {
+            paceConversion(value, ops);
             InterpreterOps.chargeChars(ops, digits(value, radix));
         }
     }
 
     public static void chargeGroupedText(BigInteger value, InterpreterOps ops) {
         if (value.bitLength() > FREE_BITS) {
+            paceConversion(value, ops);
             final var digits = digits(value, 10);
             InterpreterOps.chargeChars(ops, digits + digits / DIGITS_PER_GROUP);
         }
+    }
+
+    private static void paceConversion(BigInteger value, InterpreterOps ops) {
+        final var bits = (long) value.bitLength();
+        InterpreterOps.paceWork(ops, bits * bits / TO_STRING_WORK_DIVISOR);
     }
 
     private static long digits(BigInteger value, int radix) {

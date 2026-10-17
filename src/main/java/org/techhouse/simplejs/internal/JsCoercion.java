@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCal
 
 import java.math.BigInteger;
 import java.util.List;
+import java.util.function.Function;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
@@ -51,6 +52,7 @@ import org.techhouse.simplejs.values.JsVector;
 
 public final class JsCoercion {
     private static final int DECIMAL_RADIX = 10;
+    private static final int DESCRIBED_BIGINT_MAX_BITS = 4096;
 
     private JsCoercion() {
     }
@@ -86,21 +88,36 @@ public final class JsCoercion {
         return toNumberDataOnly(value);
     }
 
-    public static String toStr(JsValue value) {
-        return toStrDataOnly(value);
+    public static String describe(JsValue value) {
+        return toStrDataOnly(value, JsCoercion::describedBigInt);
+    }
+
+    private static String describedBigInt(BigInteger value) {
+        final var bits = value.bitLength();
+        return bits > DESCRIBED_BIGINT_MAX_BITS ? "a " + bits + "-bit BigInt" : value.toString();
+    }
+
+    private static String chargedBigInt(BigInteger value, InterpreterOps ops) {
+        BigIntLimits.chargeText(value, DECIMAL_RADIX, ops);
+        return value.toString();
     }
 
     public static String toStrDataOnly(JsValue value) {
+        return toStrDataOnly(value, BigInteger::toString);
+    }
+
+    private static String toStrDataOnly(JsValue value, Function<BigInteger, String> bigIntText) {
         return switch (value) {
             case JsString s -> s.getValue();
             case JsNumber n -> numberToString(n.getValue());
             case JsBoolean b -> Boolean.toString(b.getValue());
-            case JsBigInt b -> b.getValue().toString();
+            case JsBigInt b -> bigIntText.apply(b.getValue());
             case JsNull ignored -> "null";
             case JsUndefined ignored -> "undefined";
-            case JsArray a -> arrayToString(a);
+            case JsArray a -> arrayToString(a, bigIntText);
             case JsObject wrapper when wrapper.getPrimitive() instanceof JsSymbol s -> SymbolBuiltins.describe(s);
-            case JsObject wrapper when wrapper.getPrimitive() != null -> toStrDataOnly(wrapper.getPrimitive());
+            case JsObject wrapper when wrapper.getPrimitive() != null ->
+                toStrDataOnly(wrapper.getPrimitive(), bigIntText);
             case JsObject ignored -> "[object Object]";
             case JsFunction f -> FunctionProtoBuiltins.sourceText(f);
             case JsNativeFunction f -> FunctionProtoBuiltins.sourceText(f);
@@ -125,7 +142,7 @@ public final class JsCoercion {
             case JsDbDateTime dateTime -> dateTime.toString();
             case JsDbTime time -> time.toString();
             case JsProxy proxy when proxy.isCallable() -> FunctionProtoBuiltins.nativeFunctionForm(proxy.getTarget());
-            case JsProxy proxy -> toStrDataOnly(proxy.getTarget());
+            case JsProxy proxy -> toStrDataOnly(proxy.getTarget(), bigIntText);
             case JsArguments ignored -> "[object Arguments]";
             case JsGlobalObject ignored -> "[object global]";
             case JsTypedArray typed -> typedArrayToString(typed);
@@ -145,7 +162,7 @@ public final class JsCoercion {
     public static String toStr(JsValue value, InterpreterOps ops) {
         final var primitive = ops != null && isObject(value) ? toPrimitive(value, "string", ops) : value;
         if (primitive instanceof JsBigInt big) {
-            BigIntLimits.chargeText(big.getValue(), DECIMAL_RADIX, ops);
+            return chargedBigInt(big.getValue(), ops);
         }
         return toStrDataOnly(primitive);
     }
@@ -161,18 +178,25 @@ public final class JsCoercion {
     }
 
     public static JsValue toPrimitive(JsValue value) {
+        return toPrimitive(value, BigInteger::toString);
+    }
+
+    private static JsValue toPrimitive(JsValue value, Function<BigInteger, String> bigIntText) {
         if (value instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
             return wrapper.getPrimitive();
         }
         if (isObject(value)) {
-            return new JsString(toStrDataOnly(value));
+            return new JsString(toStrDataOnly(value, bigIntText));
         }
         return value;
     }
 
     public static JsValue toPrimitive(JsValue value, String hint, InterpreterOps ops) {
-        if (ops == null || !isObject(value) || value instanceof JsProxy) {
+        if (ops == null || !isObject(value)) {
             return toPrimitive(value);
+        }
+        if (value instanceof JsProxy) {
+            return toPrimitive(value, big -> chargedBigInt(big, ops));
         }
         final var exotic = ops.getMember(value, JsSymbol.TO_PRIMITIVE);
         if (isCallable(exotic)) {
@@ -200,7 +224,7 @@ public final class JsCoercion {
             }
         }
         if (!resolvedAny && !(value instanceof JsObject)) {
-            return new JsString(toStrDataOnly(value));
+            return new JsString(toStrDataOnly(value, big -> chargedBigInt(big, ops)));
         }
         throw new TypeErrorException("Cannot convert object to primitive value");
     }
@@ -242,7 +266,7 @@ public final class JsCoercion {
         return sb.toString();
     }
 
-    private static String arrayToString(JsArray array) {
+    private static String arrayToString(JsArray array, Function<BigInteger, String> bigIntText) {
         final var sb = new StringBuilder();
         final var elements = array.getElements();
         for (var i = 0; i < elements.size(); i++) {
@@ -251,7 +275,7 @@ public final class JsCoercion {
             }
             final var element = elements.get(i);
             if (!(element instanceof JsNull) && !(element instanceof JsUndefined)) {
-                sb.append(toStrDataOnly(element));
+                sb.append(toStrDataOnly(element, bigIntText));
             }
         }
         return sb.toString();

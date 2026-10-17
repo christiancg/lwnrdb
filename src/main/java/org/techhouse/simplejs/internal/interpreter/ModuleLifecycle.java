@@ -68,7 +68,7 @@ public record ModuleLifecycle(Interpreter interp) {
         }
         for (final var promise : interp.eventLoop.promises()) {
             if (promise.isUnhandledRejection()) {
-                sink.accept("UnhandledPromiseRejection: " + JsCoercion.toStr(promise.getResult()));
+                sink.accept("UnhandledPromiseRejection: " + JsCoercion.describe(promise.getResult()));
             }
         }
     }

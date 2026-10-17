@@ -56,15 +56,16 @@ public final class FetchBuiltins {
             promise.reject(error("fetch is not available", intrinsics));
             return promise;
         }
-        final var url = args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst());
+        final var url = args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), settlement.ops());
         final var host = FetchTarget.host(url);
         if (host == null || !HostAllowlist.allows(limits.fetchHostAllowlist(), host)) {
             promise.reject(error(HOST_NOT_ALLOWED, intrinsics));
             return promise;
         }
         final var init = args.size() > 1 && args.get(1) instanceof JsObject object ? object : null;
-        final var request = new FetchRequest(method(init), url, headers(init), body(init), limits.fetchTimeoutMillis(),
-                limits.maxResponseBytes(), HostAllowlist.listsExactly(limits.fetchHostAllowlist(), host));
+        final var request = new FetchRequest(method(init, settlement.ops()), url, headers(init, settlement.ops()),
+                body(init, settlement.ops()), limits.fetchTimeoutMillis(), limits.maxResponseBytes(),
+                HostAllowlist.listsExactly(limits.fetchHostAllowlist(), host));
         if (inFlight.incrementAndGet() > limits.fetchMaxConcurrent()) {
             inFlight.decrementAndGet();
             promise.reject(error("fetch: too many concurrent requests", intrinsics));
@@ -179,26 +180,26 @@ public final class FetchBuiltins {
         return object;
     }
 
-    private static String method(JsObject init) {
+    private static String method(JsObject init, InterpreterOps ops) {
         if (init != null && init.has("method")) {
-            return JsCoercion.toStr(init.get("method")).toUpperCase(Locale.ROOT);
+            return JsCoercion.toStr(init.get("method"), ops).toUpperCase(Locale.ROOT);
         }
         return "GET";
     }
 
-    private static Map<String, String> headers(JsObject init) {
+    private static Map<String, String> headers(JsObject init, InterpreterOps ops) {
         final var headers = new LinkedHashMap<String, String>();
         if (init != null && init.get("headers") instanceof JsObject object) {
             for (final var key : object.keys()) {
-                headers.put(key, JsCoercion.toStr(object.get(key)));
+                headers.put(key, JsCoercion.toStr(object.get(key), ops));
             }
         }
         return headers;
     }
 
-    private static String body(JsObject init) {
+    private static String body(JsObject init, InterpreterOps ops) {
         if (init != null && init.has("body") && !(init.get("body") instanceof JsUndefined)) {
-            return JsCoercion.toStr(init.get("body"));
+            return JsCoercion.toStr(init.get("body"), ops);
         }
         return null;
     }

@@ -1,4 +1,4 @@
-package org.techhouse.ops;
+package org.techhouse.utils;
 
 import java.security.SecureRandom;
 import java.util.Objects;
@@ -8,14 +8,14 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-final class SaltedKey {
+public final class SaltedKey {
     private static final long SEED = seedFrom(new SecureRandom());
     private static final long MULTIPLIER = 0x9E3779B97F4A7C15L;
     private static final int ARRAY_STEP = 31;
     private final JsonBaseElement element;
     private final int hash;
 
-    SaltedKey(JsonBaseElement element) {
+    public SaltedKey(JsonBaseElement element) {
         this.element = element;
         this.hash = Long.hashCode(saltedHash(element));
     }
@@ -24,11 +24,11 @@ final class SaltedKey {
         return random.nextLong();
     }
 
-    JsonBaseElement element() {
+    public JsonBaseElement element() {
         return element;
     }
 
-    static int memberHash(String key, JsonBaseElement value) {
+    public static int memberHash(String key, JsonBaseElement value) {
         return Long.hashCode(mix(stringHash(key) ^ saltedHash(value)));
     }
 

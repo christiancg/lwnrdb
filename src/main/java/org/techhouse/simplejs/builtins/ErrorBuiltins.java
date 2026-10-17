@@ -67,8 +67,8 @@ public final class ErrorBuiltins {
         if (!(thisArg instanceof JsObject error) || !error.isErrorData()) {
             return JsUndefined.getInstance();
         }
-        final var name = error.has("name") ? JsCoercion.toStr(error.get("name")) : "Error";
-        final var message = error.has("message") ? JsCoercion.toStr(error.get("message")) : "";
+        final var name = error.has("name") ? JsCoercion.describe(error.get("name")) : "Error";
+        final var message = error.has("message") ? JsCoercion.describe(error.get("message")) : "";
         return new JsString(name + ": " + message + renderFrames(error.getErrorStack()));
     }
 

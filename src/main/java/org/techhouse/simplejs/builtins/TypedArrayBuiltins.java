@@ -190,7 +190,7 @@ public final class TypedArrayBuiltins {
         requireConstructor(constructor);
         final var mapFn = arg(args, 1);
         if (!(mapFn instanceof JsUndefined) && !InterpreterUtils.isCallable(mapFn)) {
-            throw new TypeErrorException(JsCoercion.toStr(mapFn) + " is not a function");
+            throw new TypeErrorException(JsCoercion.describe(mapFn) + " is not a function");
         }
         final var items = sourceItems(arg(args, 0), iterableToList, ops);
         final var mapThis = arg(args, 2);
@@ -219,7 +219,7 @@ public final class TypedArrayBuiltins {
 
     public static void requireConstructor(JsValue constructor) {
         if (!InterpreterUtils.isConstructor(constructor)) {
-            throw new TypeErrorException(JsCoercion.toStr(constructor) + " is not a constructor");
+            throw new TypeErrorException(JsCoercion.describe(constructor) + " is not a constructor");
         }
     }
 

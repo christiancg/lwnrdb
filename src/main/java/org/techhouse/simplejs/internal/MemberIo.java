@@ -36,7 +36,7 @@ final class MemberIo {
         if (keyValue instanceof JsSymbol symbol) {
             return interpreter.members.getSymbolMember(target, symbol);
         }
-        return interpreter.members.getMember(target, JsCoercion.toStr(keyValue), receiver);
+        return interpreter.members.getMember(target, JsCoercion.toStr(keyValue, interpreter.ops), receiver);
     }
 
     JsValue getMember(JsValue target, String key) {

@@ -54,7 +54,7 @@ public final class ConsoleBuiltins {
             return;
         }
         if (!(value instanceof JsArray array)) {
-            line.append(JsCoercion.toStr(value));
+            line.append(JsCoercion.describe(value));
             return;
         }
         if (enclosing.size() >= NativeDepth.MAX || !enclosing.add(array)) {

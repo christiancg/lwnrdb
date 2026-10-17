@@ -245,7 +245,7 @@ public final class TypedArrayMutation {
     public static JsValue setFromArrayLike(JsTypedArray receiver, JsValue source, double offset, int targetLength,
             InterpreterOps ops) {
         if (source instanceof JsUndefined || source instanceof JsNull) {
-            throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(source) + " to an object");
+            throw new TypeErrorException("Cannot convert " + JsCoercion.describe(source) + " to an object");
         }
         final var sourceLength = arrayLikeLength(source, ops);
         if (Double.isInfinite(offset) || sourceLength + offset > targetLength) {

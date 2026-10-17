@@ -310,8 +310,8 @@ public final class BindingEvaluator {
 
     private void destructureObject(ObjectPattern pattern, JsValue value, Environment env, LeafBinder leaf) {
         if (isNullish(value)) {
-            throw new TypeErrorException(
-                    "Cannot destructure '" + JsCoercion.toStr(value) + "' as it is " + JsCoercion.toStr(value) + ".");
+            throw new TypeErrorException("Cannot destructure '" + JsCoercion.describe(value) + "' as it is "
+                    + JsCoercion.describe(value) + ".");
         }
         final var taken = new ArrayList<JsValue>();
         for (final var member : pattern.getProperties()) {

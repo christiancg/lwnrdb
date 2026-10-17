@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.utils.SaltedKey;
 
 final class SaltedElementSet extends AbstractSet<JsonBaseElement> {
     private final Set<SaltedKey> keys = new HashSet<>();

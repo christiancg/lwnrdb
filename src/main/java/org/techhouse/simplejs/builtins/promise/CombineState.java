@@ -101,7 +101,7 @@ public final class CombineState {
             if (key instanceof JsSymbol symbol) {
                 result.setSymbol(symbol, values.get(i));
             } else {
-                result.set(JsCoercion.toStr(key), values.get(i));
+                result.set(JsCoercion.toStr(key, ctx.ops()), values.get(i));
             }
         }
         return result;

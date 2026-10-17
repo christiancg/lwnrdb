@@ -9,13 +9,16 @@ final class MapResultBudget {
     }
 
     void charge(CharSequence text) {
-        final var textBytes = EntrySizeGuard.utf8Length(text);
-        bytes += textBytes;
+        charge(EntrySizeGuard.utf8Length(text));
+    }
+
+    void charge(long addedBytes) {
+        bytes += addedBytes;
         if (EntrySizeGuard.exceedsMaxEntrySize(bytes)) {
             throw new AggregateLimitException(ErrorCode.MAP_RESULT_TOO_LARGE);
         }
         if (context != null) {
-            context.chargeResult(textBytes);
+            context.chargeResult(addedBytes);
         }
     }
 }

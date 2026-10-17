@@ -72,7 +72,7 @@ public final class ModuleEvaluator {
                     () -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args())));
             case "db" -> builtin(interp.cacheBuiltinModule("builtin:db", this::createDbModule));
             case ModuleReferences.SCRIPT_MODULE -> builtin(interp.cacheBuiltinModule("builtin:script",
-                    () -> ScriptModule.create(this::importText, host.limits(), interp.intrinsics())));
+                    () -> ScriptModule.create(this::importText, host.limits(), interp.intrinsics(), interp.ops())));
             default -> new ResolvedBinding(resolveHostModule(source, coroutine), true);
         };
     }
@@ -150,7 +150,7 @@ public final class ModuleEvaluator {
     public JsValue evalImportExpression(ImportExpression expression, Environment env) {
         final var promise = new JsPromise(eventLoop);
         try {
-            final var specifier = JsCoercion.toStr(interp.eval(expression.getSource(), env));
+            final var specifier = JsCoercion.toStr(interp.eval(expression.getSource(), env), interp.ops());
             promise.resolve(moduleNamespace(specifier, env.resolveCoroutine()));
         } catch (JsThrowException error) {
             promise.reject(error.getValue());

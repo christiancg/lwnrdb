@@ -110,7 +110,6 @@ public final class SaveOperationHelper {
             savedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
                     pendingGeneration,
                     () -> fs.updateFromCollection(entry, idxEntry, encodedLine, placement, primaryKeyIndex));
-            primaryKeyIndex.remove(idxEntry);
             cache.updatePageSizeForUpdateInMemory(dbName, collName, savedPkIndexEntry.getPage(),
                     savedPkIndexEntry.getLength() - previousLength);
             eventType = EventType.UPDATED;
@@ -121,11 +120,11 @@ public final class SaveOperationHelper {
                     pendingGeneration, () -> fs.insertIntoCollection(entry, encodedLine));
             cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(), savedPkIndexEntry.getLength());
         }
-        int insertAt = Collections.binarySearch(primaryKeyIndex, savedPkIndexEntry.getValue());
-        if (insertAt < 0) {
-            insertAt = -(insertAt + 1);
+        if (eventType == EventType.UPDATED) {
+            replaceRow(primaryKeyIndex, savedPkIndexEntry);
+        } else {
+            insertRow(primaryKeyIndex, savedPkIndexEntry);
         }
-        primaryKeyIndex.add(insertAt, savedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
         submit(new EntityEvent(eventType, dbName, collName, entry, CollectionIncarnation.current(dbName, collName),
                 pendingGeneration), saveRequest.isBackgroundFollowOn());
@@ -340,6 +339,15 @@ public final class SaveOperationHelper {
         return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex, null, false);
     }
 
+    private static void replaceRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row) {
+        primaryKeyIndex.set(Collections.binarySearch(primaryKeyIndex, row.getValue()), row);
+    }
+
+    private static void insertRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row) {
+        final var found = Collections.binarySearch(primaryKeyIndex, row.getValue());
+        primaryKeyIndex.add(found < 0 ? -(found + 1) : found, row);
+    }
+
     private static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
             PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex, byte[] encodedLine, boolean followOn)
             throws Exception {
@@ -352,17 +360,12 @@ public final class SaveOperationHelper {
         final var relocatedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName,
                 List.of(entry.get_id()), deleteGeneration,
                 () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex));
-        primaryKeyIndex.remove(idxEntry);
         cache.evictEntry(dbName, collName, entry.get_id());
         submit(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
                 CollectionIncarnation.current(dbName, collName), deleteGeneration), followOn);
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
                 relocatedPkIndexEntry.getLength());
-        int insertAt = Collections.binarySearch(primaryKeyIndex, relocatedPkIndexEntry.getValue());
-        if (insertAt < 0) {
-            insertAt = -(insertAt + 1);
-        }
-        primaryKeyIndex.add(insertAt, relocatedPkIndexEntry);
+        replaceRow(primaryKeyIndex, relocatedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
         final var createGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
         submit(new EntityEvent(EventType.CREATED, dbName, collName, entry,

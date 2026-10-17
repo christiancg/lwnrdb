@@ -193,7 +193,8 @@ public final class InterpreterUtils {
         return switch (key.getType()) {
             case IDENTIFIER -> ((Identifier) key).getName();
             case STRING_LITERAL -> ((StringLiteral) key).getValue();
-            case NUMBER_LITERAL -> JsCoercion.toStr(new JsNumber(((NumberLiteral) key).getValue().doubleValue()));
+            case NUMBER_LITERAL ->
+                JsCoercion.toStrDataOnly(new JsNumber(((NumberLiteral) key).getValue().doubleValue()));
             default -> throw new UnsupportedNodeException(key.getType().name());
         };
     }
@@ -226,7 +227,7 @@ public final class InterpreterUtils {
             }
             return chars;
         }
-        throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
+        throw new TypeErrorException(JsCoercion.describe(value) + " is not iterable");
     }
 
     public static List<JsValue> arrayLikeElements(JsValue value, InterpreterOps ops, boolean fromEnd) {
@@ -337,7 +338,7 @@ public final class InterpreterUtils {
 
     public static TypeErrorException cannotReadProperties(JsValue target, String key) {
         return new TypeErrorException(
-                "Cannot read properties of " + JsCoercion.toStr(target) + " (reading '" + key + "')");
+                "Cannot read properties of " + JsCoercion.describe(target) + " (reading '" + key + "')");
     }
 
     public static JsValue stepResult(Coroutine.StepResult step) {

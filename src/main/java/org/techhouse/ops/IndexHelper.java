@@ -32,6 +32,7 @@ import org.techhouse.ops.index.FieldIndexBatch;
 import org.techhouse.ops.index.IndexEntryReader;
 import org.techhouse.ops.index.IndexValueCodec;
 import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.SaltedKey;
 
 public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -84,11 +85,11 @@ public class IndexHelper {
         fs.dropIndex(dbName, collName, fieldName);
         final var coll = cache.getWholeCollection(dbName, collName);
         final var entriesToBeIndexed = coll.values().stream().map(DbEntry::getData)
-                .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName))
-                .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, fieldName)));
+                .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).collect(Collectors
+                        .groupingBy(jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, fieldName))));
         final Map<Class<?>, List<FieldIndexEntry<?>>> indexes = entriesToBeIndexed.entrySet().stream()
                 .map(jsonElementListEntry -> {
-                    final var key = jsonElementListEntry.getKey();
+                    final var key = jsonElementListEntry.getKey().element();
                     final var ids = jsonElementListEntry.getValue().stream()
                             .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue())
                             .collect(Collectors.toSet());
@@ -124,11 +125,11 @@ public class IndexHelper {
     }
 
     private static void writeHashIndexes(String dbName, String collName, String fieldName,
-            Map<JsonBaseElement, List<JsonObject>> grouped) {
+            Map<SaltedKey, List<JsonObject>> grouped) {
         final var objectIds = new LinkedHashMap<String, Set<String>>();
         final var arrayIds = new LinkedHashMap<String, Set<String>>();
         for (var groupedEntry : grouped.entrySet()) {
-            final var key = groupedEntry.getKey();
+            final var key = groupedEntry.getKey().element();
             if (!key.isJsonObject() && !key.isJsonArray()) {
                 continue;
             }

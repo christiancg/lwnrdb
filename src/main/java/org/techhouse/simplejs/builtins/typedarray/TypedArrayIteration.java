@@ -276,7 +276,7 @@ public final class TypedArrayIteration {
             }
             final var element = receiver.getElement(i);
             if (!(element instanceof JsUndefined)) {
-                sb.append(JsCoercion.toStr(element));
+                sb.append(JsCoercion.toStr(element, ops));
             }
             InterpreterOps.chargeChars(ops, sb.length() - charged);
             charged = sb.length();

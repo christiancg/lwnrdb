@@ -334,7 +334,7 @@ receiver is an array), the array-like a Proxy `ownKeys` trap returns (refused pa
 not a string or symbol), the text of `encodeURI`/`encodeURIComponent`/`escape` (counted in a
 first pass, so the output buffer is sized and charged before it is filled), and the decimal,
 radix or grouped digits of a BigInt converted to text (`toString`, `toLocaleString`, `String(x)`,
-a template substitution) once it is wider than 64 bits. A global `replace`/`replaceAll` with a
+a template substitution, `+` with a string, a property key) once it is wider than 64 bits. A global `replace`/`replaceAll` with a
 replacement string over the built-in `exec` appends each match to the output as it finds it and
 keeps no match list; a replacer function or a custom `exec` keeps the specification's two passes
 (every `exec` call before any result is read) and charges each retained match. An array-like whose `length` is
@@ -373,8 +373,13 @@ without it.
 weighted `tick(n)` checks it unconditionally. Natives whose cost grows with their input pay a
 weighted tick before or right after the work (`InterpreterOps.paceWork`, one instruction per 1024
 units): `localeCompare`, `normalize`, case mapping, `trim`, `slice`/`substring`/`substr` on large
-strings, `BigInt.prototype.toString` (by bit length squared), `crypto.hash`, `toHex`/`toBase64`
-and a regex compile. A single such call can still overrun the deadline by its own duration, never
+strings, every decimal or radix conversion of a BigInt (by bit length squared), `crypto.hash`,
+`toHex`/`toBase64` and a regex compile. The BigInt pacing lives inside `BigIntLimits.chargeText`/
+`chargeGroupedText`, so `toString()`, `toLocaleString()`, `x + ""`, a template, `String(x)` and a
+property key (`o[x]`, `x in o`) all pay it, each exactly once. A diagnostic never converts a large
+BigInt at all: error messages go through `JsCoercion.describe`, which names a BigInt over 4096 bits
+by its bit length (`a 16777214-bit BigInt is not a function`), and there is no ops-less `toStr`
+left to call. A single such call can still overrun the deadline by its own duration, never
 by more. The regex matcher charges one step for every 64 characters a simple quantifier scans or a literal or
 backreference compares, so
 a pattern that rescans a long input from every start position (`/a{1000000}/` against 999 999
@@ -968,7 +973,11 @@ There is **no `db`**, no `fetch` and no console: the aggregation already holds r
 calling thread, and with no `db` a pipeline script cannot issue an `AGGREGATE` — there is no
 recursion to bound. Memory is charged per document and released after the call, since without the
 release a million-document scan would exhaust the budget on document count alone; a `REDUCE`'s
-final accumulator is measured against `scriptMaxResultBytes`. The deadline is the *pipeline's*,
+final accumulator is measured against `scriptMaxResultBytes`. A `MAP` script's value is
+retained in the row, so it is charged as its JSON text to the same budgets a `CONCAT` pays: the
+row's `maxEntrySize` (`400-28`) and the pipeline's `aggregateMaxResultBytes` (`400-36`). Without
+that charge, each distinct script source would bring its own memory budget and a pipeline with many
+of them could retain far more than the result cap. The deadline is the *pipeline's*,
 so a query carrying several scripts cannot outlive the timeout by opening more of them. The two
 windows into a misbehaving pipeline script are `analyze` and the error itself, which names the
 failing function and line.

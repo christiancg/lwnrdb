@@ -604,6 +604,12 @@ def test_bulk_delete_and_upsert():
 
     check("deleted doc is NOT_FOUND on every node", wait_until(_gone, timeout_s=15.0))
 
+    check_code("DELETE of an id that never existed via node-0",
+               delete(nodes[0].client_port, DB, "bulk", "never-there"), "NOT_FOUND", "404-2")
+    check("only the deleted id is tombstoned, on every node",
+          wait_until(lambda: all(tombstone_ids(n, DB, "bulk") == {"b2"} for n in nodes), timeout_s=15.0),
+          f"tombstones: {[sorted(tombstone_ids(n, DB, 'bulk')) for n in nodes]}")
+
 
 def test_index_replication():
     section("Index replication (CREATE_INDEX is DDL — applied on every node)")

@@ -55,7 +55,7 @@ public record FunctionInvoker(Interpreter interp) {
             case JsFunction function -> callFunction(function, thisArg, args);
             case JsNativeFunction nativeFunction -> invokeNative(nativeFunction, thisArg, args);
             case JsObject object when object == interp.intrinsics.functionProto -> JsUndefined.getInstance();
-            default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a function");
+            default -> throw new TypeErrorException(JsCoercion.describe(callee) + " is not a function");
         };
     }
 

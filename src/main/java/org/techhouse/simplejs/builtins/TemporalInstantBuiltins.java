@@ -325,7 +325,7 @@ public final class TemporalInstantBuiltins {
         if (!(raw instanceof JsNumber number)) {
             final var str = JsCoercion.toStr(raw, ops);
             if (!"auto".equals(str)) {
-                throw new RangeErrorException(JsCoercion.toStr(raw) + " is not a number and converts to the string '"
+                throw new RangeErrorException(JsCoercion.describe(raw) + " is not a number and converts to the string '"
                         + str + "' which is not valid for fractionalSecondDigits");
             }
             return null;

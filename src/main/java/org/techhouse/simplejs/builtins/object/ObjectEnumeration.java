@@ -50,12 +50,12 @@ public final class ObjectEnumeration {
             final var rawKey = invoker.call(callback, JsUndefined.getInstance(),
                     List.of(items.get(i), new JsNumber(i)));
             final var propertyKey = toPropertyKey(rawKey, ops);
-            groupByBucket(result, propertyKey).push(items.get(i));
+            groupByBucket(result, propertyKey, ops).push(items.get(i));
         }
         return result;
     }
 
-    public static JsArray groupByBucket(JsObject result, JsValue propertyKey) {
+    public static JsArray groupByBucket(JsObject result, JsValue propertyKey, InterpreterOps ops) {
         if (propertyKey instanceof JsSymbol symbol) {
             if (result.getSymbol(symbol) instanceof JsArray existing) {
                 return existing;
@@ -64,7 +64,7 @@ public final class ObjectEnumeration {
             result.setSymbol(symbol, bucket);
             return bucket;
         }
-        final var key = JsCoercion.toStr(propertyKey);
+        final var key = JsCoercion.toStr(propertyKey, ops);
         if (result.get(key) instanceof JsArray existing) {
             return existing;
         }
@@ -274,7 +274,7 @@ public final class ObjectEnumeration {
                 final var value = ops.getMember(from, key);
                 if (!ops.setMember(to, key, value)) {
                     throw new TypeErrorException(
-                            "Cannot assign to read only property '" + JsCoercion.toStr(key) + "' of object");
+                            "Cannot assign to read only property '" + JsCoercion.describe(key) + "' of object");
                 }
             }
         }
@@ -293,7 +293,8 @@ public final class ObjectEnumeration {
         final var one = new JsString("1");
         new Iteration(ops, source).forEach(entry -> {
             if (!InterpreterUtils.isObjectLike(entry)) {
-                throw new TypeErrorException("Iterator value " + JsCoercion.toStr(entry) + " is not an entry object");
+                throw new TypeErrorException(
+                        "Iterator value " + JsCoercion.describe(entry) + " is not an entry object");
             }
             final var key = ops.getMember(entry, zero);
             final var value = ops.getMember(entry, one);
@@ -301,7 +302,7 @@ public final class ObjectEnumeration {
             if (propertyKey instanceof JsSymbol symbol) {
                 result.setSymbol(symbol, value);
             } else {
-                result.set(JsCoercion.toStr(propertyKey), value);
+                result.set(JsCoercion.toStr(propertyKey, ops), value);
             }
         });
         return result;

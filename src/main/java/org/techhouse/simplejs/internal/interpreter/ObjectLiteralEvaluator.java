@@ -50,18 +50,18 @@ final class ObjectLiteralEvaluator {
                 nameMember(property, value, evaluated,
                         keyValue instanceof JsSymbol symbol
                                 ? ClassMemberInstaller.symbolMethodName(symbol)
-                                : JsCoercion.toStr(keyValue));
+                                : JsCoercion.toStr(keyValue, interp.ops()));
                 if (accessor && keyValue instanceof JsSymbol symbol) {
                     storeSymbolAccessor(result, symbol, property.getKind(), evaluated);
                 } else if (accessor) {
-                    storeAccessor(result, JsCoercion.toStr(keyValue), property.getKind(), evaluated);
+                    storeAccessor(result, JsCoercion.toStr(keyValue, interp.ops()), property.getKind(), evaluated);
                 } else if (keyValue instanceof JsSymbol symbol) {
                     result.setSymbol(symbol, evaluated);
                     if (concise) {
                         result.setSymbolFlags(symbol, JsObject.PropertyFlags.HIDDEN);
                     }
                 } else {
-                    result.set(JsCoercion.toStr(keyValue), evaluated);
+                    result.set(JsCoercion.toStr(keyValue, interp.ops()), evaluated);
                 }
                 continue;
             }

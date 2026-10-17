@@ -26,6 +26,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.SaltedKey;
 
 public final class IndexEntryReader {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -181,7 +182,7 @@ public final class IndexEntryReader {
             String fieldName, Set<String> hashIds, ReadObserver observer) throws IOException {
         final var docs = cache.getEntriesByIds(dbName, collName, hashIds);
         observer.scanned(docs.size());
-        final var byValue = new HashMap<JsonBaseElement, FieldIndexEntry<JsonBaseElement>>();
+        final var byValue = new HashMap<SaltedKey, FieldIndexEntry<JsonBaseElement>>();
         for (var doc : docs) {
             final var data = doc.getData();
             final var value = JsonUtils.resolvePath(data, fieldName);
@@ -191,8 +192,8 @@ public final class IndexEntryReader {
             if (!value.isJsonObject() && !value.isJsonArray()) {
                 continue;
             }
-            byValue.computeIfAbsent(value, v -> {
-                final var entry = new FieldIndexEntry<>(dbName, collName, v, new HashSet<>());
+            byValue.computeIfAbsent(new SaltedKey(value), key -> {
+                final var entry = new FieldIndexEntry<>(dbName, collName, key.element(), new HashSet<>());
                 combined.add(entry);
                 return entry;
             }).getIds().add(doc.get_id());
@@ -217,9 +218,9 @@ public final class IndexEntryReader {
         for (var entry : combined) {
             entry.getIds().removeAll(pendingIds);
         }
-        final var byValue = new HashMap<JsonBaseElement, FieldIndexEntry<?>>();
+        final var byValue = new HashMap<SaltedKey, FieldIndexEntry<?>>();
         for (var entry : combined) {
-            byValue.put(IndexValueCodec.indexValueToElement(entry.getValue()), entry);
+            byValue.put(new SaltedKey(IndexValueCodec.indexValueToElement(entry.getValue())), entry);
         }
         for (var dbEntry : PendingWriteReconciler.pendingDocuments(dbName, collName, pendingIds, observer)) {
             final var data = dbEntry.getData();
@@ -231,24 +232,24 @@ public final class IndexEntryReader {
                 return false;
             }
             if (element.isJsonNull()) {
-                final var nullEntry = byValue.get(JsonNull.INSTANCE);
+                final var nullEntry = byValue.get(new SaltedKey(JsonNull.INSTANCE));
                 if (nullEntry != null) {
                     nullEntry.getIds().add(dbEntry.get_id());
                 } else {
                     final var newEntry = new FieldIndexEntry<>(dbName, collName, JsonNull.INSTANCE,
                             new HashSet<>(Set.of(dbEntry.get_id())));
                     combined.add(newEntry);
-                    byValue.put(JsonNull.INSTANCE, newEntry);
+                    byValue.put(new SaltedKey(JsonNull.INSTANCE), newEntry);
                 }
                 continue;
             }
-            final var existing = byValue.get(element);
+            final var existing = byValue.get(new SaltedKey(element));
             if (existing != null) {
                 existing.getIds().add(dbEntry.get_id());
             } else {
                 final var newEntry = scalarEntryFor(dbName, collName, element.asJsonPrimitive(), dbEntry.get_id());
                 combined.add(newEntry);
-                byValue.put(element, newEntry);
+                byValue.put(new SaltedKey(element), newEntry);
             }
         }
         combined.removeIf(entry -> entry.getIds().isEmpty());

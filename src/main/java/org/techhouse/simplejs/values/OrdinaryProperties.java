@@ -333,7 +333,7 @@ public final class OrdinaryProperties {
     }
 
     public static String keyName(JsValue key) {
-        return key instanceof JsString string ? string.getValue() : JsCoercion.toStr(key);
+        return key instanceof JsString string ? string.getValue() : JsCoercion.toStrDataOnly(key);
     }
 
     public static boolean isNotSameValue(JsValue a, JsValue b) {

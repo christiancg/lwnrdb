@@ -3,9 +3,15 @@ package org.techhouse.unit.simplejs.internal;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigInteger;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.simplejs.host.ScriptErrorNames;
+import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -15,8 +21,21 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.test.JsEval;
 
 public class JsOperatorsTest {
+    private static final String HUGE_BIGINT = "const x = (1n << 8388606n) - 1n; ";
+    private static final long TIMEOUT_MS = 500;
+    private static final Duration PROMPTLY = Duration.ofSeconds(8);
+
+    private static void assertTimesOutPromptly(String loopBody) {
+        final var result = assertTimeoutPreemptively(PROMPTLY, () -> new SimpleJs().run(
+                HUGE_BIGINT + "for (;;) { " + loopBody + " }",
+                new SimpleHostBindings(new JsonObject(), null, null, new ResourceLimits(-1, TIMEOUT_MS, -1, -1))));
+        assertTrue(result.isError(), loopBody);
+        assertEquals(ScriptErrorNames.TIMEOUT, result.getErrorName(), loopBody);
+    }
+
     private static double num(JsValue value) {
         return ((JsNumber) value).getValue();
     }
@@ -220,5 +239,32 @@ public class JsOperatorsTest {
         assertEquals(BigInteger.valueOf(-3), big(JsOperators.unary("~", wrapper)));
         assertEquals(BigInteger.valueOf(3), big(JsOperators.delta(wrapper, true)));
         assertThrows(TypeErrorException.class, () -> JsOperators.binary("+", wrapper, new JsNumber(1)));
+    }
+
+    @Test
+    public void concatenatingAHugeBigIntIsPacedAndTimesOut() {
+        assertTimesOutPromptly("const s = x + '';");
+        assertTimesOutPromptly("const s = 'a' + x;");
+    }
+
+    @Test
+    public void concatenatingASmallBigIntIsUnchanged() {
+        assertEquals("1a", ((JsString) JsOperators.binary("+", bi(1), new JsString("a"))).getValue());
+        assertEquals("a1180591620717411303424", JsEval.str("'a' + 2n ** 70n"));
+        assertEquals("1180591620717411303424a", JsEval.str("2n ** 70n + 'a'"));
+        assertEquals("true1", JsEval.str("true + '1'"));
+    }
+
+    @Test
+    public void templateAndStringOfAHugeBigIntArePaced() {
+        assertTimesOutPromptly("const s = `${x}`;");
+        assertTimesOutPromptly("const s = String(x);");
+    }
+
+    @Test
+    public void propertyKeysAndProxiedArraysOfAHugeBigIntArePaced() {
+        assertTimesOutPromptly("({})[x];");
+        assertTimesOutPromptly("x in {};");
+        assertTimesOutPromptly("new Proxy([x], {}) + '';");
     }
 }

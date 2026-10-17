@@ -1871,6 +1871,9 @@ LARGE_UPDATE_BUDGET_S = 20.0
 MEMORY_PK_COLL = "pk_rewritten_from_memory"
 MEMORY_PK_DOCS = 3000
 MEMORY_PK_OPS = 1500
+PK_ORDER_COLL = "pk_order_churn"
+PK_ORDER_DOCS = 2000
+PK_ORDER_OPS = 1500
 
 
 def sized_doc(prefix: str, i: int, value: int) -> dict:
@@ -1953,6 +1956,51 @@ def rewrite_a_pk_index_from_memory(conn: Conn) -> tuple:
             refused.append(target)
     check("every write was acknowledged", not refused, f"refused: {refused[:5]}")
     return expected, deleted
+
+
+def churn_relocations_deletes_and_inserts(conn: Conn) -> tuple:
+    section("Growing updates, deletes and inserts keep the resident pk rows sorted")
+    check_status(f"create {PK_ORDER_COLL}", conn.create_coll(PK_ORDER_COLL), "OK")
+    bulk_insert(conn, PK_ORDER_COLL, "ord", PK_ORDER_DOCS)
+    expected = {f"ord_{i:05d}": 0 for i in range(PK_ORDER_DOCS)}
+    deleted = []
+    refused = []
+    for op in range(PK_ORDER_OPS):
+        target = f"ord_{(op * 7919 + 29) % PK_ORDER_DOCS:05d}"
+        if op % 3 == 0 and target in expected:
+            response = conn.save({"_id": target, "v": op + 1, "pad": GROWTH_PAD}, coll=PK_ORDER_COLL)
+            expected[target] = op + 1
+        elif op % 3 == 1 and target in expected:
+            response = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PK_ORDER_COLL,
+                                  "_id": target})
+            del expected[target]
+            deleted.append(target)
+        else:
+            doc = sized_doc("ord", PK_ORDER_DOCS + op, 1)
+            response = conn.save(doc, coll=PK_ORDER_COLL)
+            expected[doc["_id"]] = 1
+        if response.get("status") != "OK":
+            refused.append(target)
+    check("every write was acknowledged", not refused, f"refused: {refused[:5]}")
+    written = (expected, deleted)
+    test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn, written)
+    return written
+
+
+def test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn: Conn, written: tuple):
+    section("An _id IN served by the pk index answers what a scan answers")
+    expected, deleted = written
+    sample = sorted(expected)[::7] + deleted[::5]
+    in_sample = [bu.filter_step("_id", "IN", sample)]
+    by_pk = conn.ids(PK_ORDER_COLL, in_sample)
+    by_scan = conn.ids(PK_ORDER_COLL, FULL_SCAN + in_sample)
+    check("the pk index and the scan return the same ids", by_pk == by_scan,
+          f"pk={len(by_pk)} scan={len(by_scan)} differ={sorted(set(by_pk) ^ set(by_scan))[:5]}")
+    check("and they are exactly the surviving ids of the sample",
+          by_pk == sorted(i for i in sample if i in expected), f"got {len(by_pk)}")
+    check("FIND_BY_ID answers every surviving id with its last value",
+          values_by_id_lookup(conn, PK_ORDER_COLL, sorted(expected)) == expected)
+    check("the scan returns exactly the surviving values", values_by_scan(conn, PK_ORDER_COLL) == expected)
 
 
 def test_pk_index_rewritten_from_memory_survives_restart(conn: Conn, written: tuple):
@@ -2177,6 +2225,7 @@ def main():
             test_bulk_insert_with_two_indexes_converges_quickly(conn, work_dir)
             test_updates_on_a_large_collection_stay_fast(conn)
             memory_pk_written = rewrite_a_pk_index_from_memory(conn)
+            pk_order_written = churn_relocations_deletes_and_inserts(conn)
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
             seed_a_collection_whose_page_tail_will_tear(conn)
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
@@ -2219,6 +2268,7 @@ def main():
         with admin_conn() as conn:
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_pk_index_rewritten_from_memory_survives_restart(conn, memory_pk_written)
+            test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn, pk_order_written)
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
             test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
             test_a_lost_line_end_is_restored_at_startup(conn, work_dir)

@@ -30,7 +30,7 @@ public class CollectionAndIteratorProgramTest {
             if (i > 0) {
                 sb.append(',');
             }
-            sb.append(JsCoercion.toStr(array.get(i)));
+            sb.append(JsCoercion.toStrDataOnly(array.get(i)));
         }
         return sb.toString();
     }

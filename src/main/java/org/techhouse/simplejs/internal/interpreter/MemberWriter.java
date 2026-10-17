@@ -207,9 +207,9 @@ final class MemberWriter {
             case JsRegExp regexp -> (regexp.ownProperties().has(key) || !RegexBuiltins.isSetterless(key))
                     && regexp.ownProperties().set(key, value);
             case JsNull ignored -> throw new TypeErrorException(
-                    "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+                    "Cannot set properties of " + JsCoercion.describe(target) + " (setting '" + key + "')");
             case JsUndefined ignored -> throw new TypeErrorException(
-                    "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+                    "Cannot set properties of " + JsCoercion.describe(target) + " (setting '" + key + "')");
             case JsCallableProperties callable -> {
                 if (isNonWritableMetadata(callable, key)) {
                     yield false;
@@ -313,8 +313,8 @@ final class MemberWriter {
                 && !callable.isMetadataDeleted(key);
     }
 
-    static String writeRejectionMessage(JsValue target, JsValue key) {
-        final var name = JsCoercion.toStr(key);
+    static String writeRejectionMessage(JsValue target, JsValue key, InterpreterOps ops) {
+        final var name = JsCoercion.toStr(key, ops);
         if (target instanceof JsObject object) {
             if (object.hasAccessor(name) && object.getAccessorSetter(name) == null) {
                 return "Cannot set property " + name + " of #<Object> which has only a getter";

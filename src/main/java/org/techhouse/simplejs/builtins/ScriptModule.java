@@ -21,23 +21,24 @@ public final class ScriptModule {
     private ScriptModule() {
     }
 
-    public static JsObject create(TextImporter importer, ResourceLimits limits, Intrinsics intrinsics) {
+    public static JsObject create(TextImporter importer, ResourceLimits limits, Intrinsics intrinsics,
+            InterpreterOps ops) {
         final var module = new JsObject();
         module.set("importText", JsNativeFunction.callerAware("importText",
-                (_, args, caller) -> importText(importer, limits, intrinsics, args, caller)));
+                (_, args, caller) -> importText(importer, limits, intrinsics, args, caller, ops)));
         return module;
     }
 
     private static JsValue importText(TextImporter importer, ResourceLimits limits, Intrinsics intrinsics,
-            List<JsValue> args, Coroutine caller) {
+            List<JsValue> args, Coroutine caller, InterpreterOps ops) {
         if (limits == null || !limits.textImportEnabled()) {
             throw new JsThrowException(intrinsics.makeError("Error", "Script text import is not available"));
         }
-        final var source = JsCoercion.toStr(arg(args, 0));
+        final var source = JsCoercion.toStr(arg(args, 0), ops);
         final var explicitId = arg(args, 1);
         final var moduleId = explicitId instanceof JsUndefined
                 ? "text:" + sha256(source)
-                : JsCoercion.toStr(explicitId);
+                : JsCoercion.toStr(explicitId, ops);
         return importer.importText(moduleId, source, caller);
     }
 

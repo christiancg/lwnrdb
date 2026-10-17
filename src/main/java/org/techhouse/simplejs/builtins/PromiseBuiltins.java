@@ -278,7 +278,7 @@ public final class PromiseBuiltins {
             return wrapped;
         }
         throw new TypeErrorException(
-                "Promise.prototype.then called on an incompatible receiver " + JsCoercion.toStr(receiver));
+                "Promise.prototype.then called on an incompatible receiver " + JsCoercion.describe(receiver));
     }
 
     private static boolean isPromise(JsValue value) {

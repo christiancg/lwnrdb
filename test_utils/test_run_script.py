@@ -403,6 +403,19 @@ def test_native_loops_are_budgeted(conn: Conn):
                conn.run('return "a,".repeat(2 ** 24).split(",").length;'), "ERROR", "400-12")
     check_result("ordinary BigInt arithmetic still works", conn.run("return String(2n ** 100n);"),
                  "1267650600228229401496703205376")
+    wide = "const x = 1n << 4000000n;"
+    check_result("one concatenation of a 4M-bit BigInt still answers", conn.run(wide + " return (x + '').length;"),
+                 1204120)
+    for label, body in (("x + ''", "const s = x + '';"), ("a template", "const s = `${x}`;"),
+                        ("({})[x]", "({})[x];")):
+        started = time.monotonic()
+        looped = conn.run(wide + " for (;;) { " + body + " }")
+        elapsed = time.monotonic() - started
+        check(f"converting a wide BigInt with {label} in a loop is charged and paced",
+              looped.get("status") == "ERROR" and looped.get("errorCode") in ("400-11", "400-12", "408-1"),
+              f"got {looped.get('errorCode')} msg={looped.get('message')!r}")
+        check("… and ends inside scriptTimeoutMs plus slack", elapsed < TIMEOUT_MS / 1000 + 5,
+              f"elapsed={elapsed:.1f}s")
     check_result("the server is still serving", conn.run("return [1, 2, 3].indexOf(3);"), 2)
 
 

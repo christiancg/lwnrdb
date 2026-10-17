@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ops.AggregateLimitException;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.MapOperatorHelper;
 import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -70,6 +73,42 @@ public class MapOperatorHelperScriptTest {
             final var operator = new AddFieldMapOperator("total", null,
                     new ScriptMidOperator("export default (doc) => undefined;"));
             assertNull(MapOperatorHelper.processOperator(operator, document(3, 4), context).get("total"));
+        }
+    }
+
+    @Test
+    public void test_script_value_over_max_entry_size_is_400_28() {
+        final var oversized = Configuration.getInstance().getMaxEntrySize() + 1;
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
+            final var operator = new AddFieldMapOperator("big", null,
+                    new ScriptMidOperator("export default (doc) => 'x'.repeat(" + oversized + ");"));
+            final var refused = assertThrows(AggregateLimitException.class,
+                    () -> MapOperatorHelper.processOperator(operator, document(3, 4), context));
+            assertEquals(ErrorCode.MAP_RESULT_TOO_LARGE, refused.getErrorCode());
+        }
+    }
+
+    @Test
+    public void test_script_values_count_toward_the_aggregate_result_budget() {
+        try (var context = PipelineContext.of(0L, 1000L, null)) {
+            final var operator = new AddFieldMapOperator("text", null,
+                    new ScriptMidOperator("export default (doc) => 'x'.repeat(400);"));
+            MapOperatorHelper.processOperator(operator, document(1, 1), context);
+            MapOperatorHelper.processOperator(operator, document(2, 1), context);
+            final var refused = assertThrows(AggregateLimitException.class,
+                    () -> MapOperatorHelper.processOperator(operator, document(3, 1), context));
+            assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE, refused.getErrorCode());
+        }
+    }
+
+    @Test
+    public void test_a_script_returning_nothing_charges_nothing() {
+        try (var context = PipelineContext.of(0L, 1L, null)) {
+            final var operator = new AddFieldMapOperator("nothing", null,
+                    new ScriptMidOperator("export default (doc) => undefined;"));
+            for (var i = 0; i < 3; i++) {
+                assertNull(MapOperatorHelper.processOperator(operator, document(i, 1), context).get("nothing"));
+            }
         }
     }
 

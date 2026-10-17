@@ -126,14 +126,15 @@ public final class MapOperatorHelper {
             case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
             case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap, budget);
             case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap, budget);
-            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context);
+            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context, budget);
         };
     }
 
     private static JsonObject script(ScriptMidOperator midOperator, String addFieldName, JsonObject toMap,
-            PipelineContext context) {
+            PipelineContext context, MapResultBudget budget) {
         final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
         if (value != null) {
+            budget.charge(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value));
             JsonUtils.setPath(toMap, addFieldName, value);
         }
         return toMap;

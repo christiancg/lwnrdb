@@ -212,7 +212,8 @@ A `MAP` `CONCAT` whose result grows past `maxEntrySize` (for example one that do
 ```
 
 The same `400-28` answers a `MAP` step whose `CONCAT`s and string `CAST`s add more than `maxEntrySize` bytes to one
-document in total (4 000 `CONCAT`s that each copy a 500-byte field), and a `JOIN` whose joined array for one row is
+document in total (4 000 `CONCAT`s that each copy a 500-byte field), a `SCRIPT` mid-operator whose value's JSON text
+is larger than `maxEntrySize` (`(doc) => 'x'.repeat(2000000)`), and a `JOIN` whose joined array for one row is
 larger than `maxEntrySize` (a key shared by a few thousand remote documents), indexed remote field or not:
 
 ```json
@@ -223,8 +224,9 @@ larger than `maxEntrySize` (a key shared by a few thousand remote documents), in
 {"type": "AGGREGATE", "status": "ERROR", "message": "The aggregation exceeded its time budget", "errorCode": "408-6"}
 ```
 
-A pipeline that builds more than `aggregateMaxResultBytes` (256 MB) in total → `400-36`: the strings its `MAP`s add,
-each `JOIN` row's joined array (once per row, even when rows share one array) and one byte per result row. For
+A pipeline that builds more than `aggregateMaxResultBytes` (256 MB) in total → `400-36`: the strings and `SCRIPT`
+values its `MAP`s add (a few hundred distinct script sources each returning a large string count together), each
+`JOIN` row's joined array (once per row, even when rows share one array) and one byte per result row. For
 example 300 documents each given a 1 MB `CONCAT`, or a `JOIN` that attaches the same 1 MB group to every row of a large
 collection:
 

@@ -401,7 +401,7 @@ public final class ProxyDispatch {
     private static TypeErrorException invariant(String trap, JsValue key) {
         final var name = key instanceof JsSymbol symbol
                 ? "Symbol(" + symbol.getDescription() + ")"
-                : JsCoercion.toStr(key);
+                : JsCoercion.describe(key);
         return new TypeErrorException("proxy '" + trap + "' trap violated an invariant for property " + name);
     }
 

@@ -26,8 +26,8 @@ public class JsRegExpTest {
 
     @Test
     public void test_to_string() {
-        assertEquals("/a.c/gi", JsCoercion.toStr(RegexTranslator.compile("a.c", "gi")));
-        assertEquals("/x/", JsCoercion.toStr(RegexTranslator.compile("x", "")));
+        assertEquals("/a.c/gi", JsCoercion.toStrDataOnly(RegexTranslator.compile("a.c", "gi")));
+        assertEquals("/x/", JsCoercion.toStrDataOnly(RegexTranslator.compile("x", "")));
     }
 
     @Test

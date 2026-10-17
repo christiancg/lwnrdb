@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -10,17 +11,24 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 
+import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.BeforeHookContext;
+import org.techhouse.ops.BeforeHookHelper;
 import org.techhouse.ops.BulkBeforeHooks;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
+import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 
 public class BulkBeforeHooksTest {
@@ -67,6 +75,31 @@ public class BulkBeforeHooksTest {
             assertEquals("create", created.document().get("via").asJsonString().getValue());
             assertEquals("update", updated.document().get("via").asJsonString().getValue());
         }
+    }
+
+    @Test
+    public void test_bulk_save_routes_stored_ids_to_update_hooks_and_new_ids_to_create_hooks() throws Exception {
+        final var seed = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        seed.set_id("stored");
+        seed.setObject(BeforeHookTestSupport.document("stored"));
+        assertEquals(OperationStatus.OK, IocContainer.get(OperationProcessor.class).processMessage(seed).getStatus());
+        BeforeHookTestSupport.installHook("onCreate", "oncreate", "export default (d) => ({ ...d, via: 'create' });",
+                EventType.CREATED);
+        BeforeHookTestSupport.installHook("onUpdate", "onupdate", "export default (d) => ({ ...d, via: 'update' });",
+                EventType.UPDATED);
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(BeforeHookTestSupport.document("fresh-a"), BeforeHookTestSupport.document("stored"),
+                BeforeHookTestSupport.document("fresh-z")));
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            assertNull(BeforeHookHelper.beforeBulkSave(bulk, BeforeHookTestSupport.ACTOR));
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertEquals(List.of("create", "update", "create"),
+                bulk.getObjects().stream().map(object -> object.get("via").asJsonString().getValue()).toList());
     }
 
     @Test

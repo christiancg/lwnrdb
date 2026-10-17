@@ -37,6 +37,7 @@ import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.SaltedKey;
 
 public final class AggregationOperationHelper {
     private AggregationOperationHelper() {

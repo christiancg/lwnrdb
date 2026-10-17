@@ -341,7 +341,7 @@ public final class SimpleJs {
         if (value instanceof JsObject object) {
             return new ScriptError(clamp(errorName(object), maxChars), field(object), object.getErrorStack());
         }
-        return new ScriptError("Error", JsCoercion.toStr(value));
+        return new ScriptError("Error", JsCoercion.describe(value));
     }
 
     private ScriptResult resultOf(JsonBaseElement value, ConsoleCapture capture, ResourceLimits limits) {
@@ -401,7 +401,7 @@ public final class SimpleJs {
         var current = object;
         while (current != null) {
             if (current.has("name")) {
-                return JsCoercion.toStr(current.get("name"));
+                return JsCoercion.describe(current.get("name"));
             }
             current = current.getProto() instanceof JsObject proto ? proto : null;
         }
@@ -435,7 +435,7 @@ public final class SimpleJs {
         var current = object;
         while (current != null) {
             if (current.has("message")) {
-                return JsCoercion.toStr(current.get("message"));
+                return JsCoercion.describe(current.get("message"));
             }
             current = current.getProto() instanceof JsObject proto ? proto : null;
         }
