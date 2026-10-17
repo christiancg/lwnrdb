@@ -13,6 +13,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.RequestParser;
@@ -96,7 +97,8 @@ public class UserOperationHelperScriptPermissionTest {
         final var manage = new HashMap<String, ScriptPermissionLevel>();
         manage.put("mydb", ScriptPermissionLevel.MANAGE);
         promote.setScriptPermissions(manage);
-        assertEquals(OperationStatus.OK, UserOperationHelper.processChangePermissions(promote).getStatus());
+        assertEquals(OperationStatus.OK,
+                UserOperationHelper.processChangePermissions(promote, new RestampedRecords()).getStatus());
         assertTrue(cache.getAdminUserEntry("promoted").canManageScripts("mydb"));
 
         final var demote = new ChangePermissionsRequest();
@@ -108,7 +110,8 @@ public class UserOperationHelperScriptPermissionTest {
         final var none = new HashMap<String, ScriptPermissionLevel>();
         none.put("mydb", ScriptPermissionLevel.NONE);
         demote.setScriptPermissions(none);
-        assertEquals(OperationStatus.OK, UserOperationHelper.processChangePermissions(demote).getStatus());
+        assertEquals(OperationStatus.OK,
+                UserOperationHelper.processChangePermissions(demote, new RestampedRecords()).getStatus());
         assertFalse(cache.getAdminUserEntry("promoted").canRunScripts("mydb"));
     }
 

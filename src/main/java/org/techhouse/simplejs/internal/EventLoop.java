@@ -5,10 +5,10 @@ import static org.techhouse.simplejs.host.ScriptErrorNames.TIMED_OUT_MESSAGE;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.PriorityQueue;
-import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
@@ -24,7 +24,7 @@ import org.techhouse.simplejs.values.JsPromise;
 public final class EventLoop {
     private static final long CANCEL_POLL_NANOS = 50_000_000L;
     private static final long MICROTASK_BYTES = 64L;
-    private static final long TIMER_BYTES = 96L;
+    private static final long TIMER_BYTES = 160L;
 
     private static final class Timer {
         private final long id;
@@ -33,6 +33,7 @@ public final class EventLoop {
         private final boolean repeat;
         private final long seq;
         private final Runnable callback;
+        private boolean cancelled;
 
         private Timer(long id, long dueNanos, long intervalNanos, boolean repeat, long seq, Runnable callback) {
             this.id = id;
@@ -55,7 +56,7 @@ public final class EventLoop {
     private final ArrayDeque<Runnable> microtasks = new ArrayDeque<>();
     private final PriorityQueue<Timer> timers = new PriorityQueue<>(
             Comparator.comparingLong(Timer::due).thenComparingLong(Timer::seq));
-    private final Set<Long> cancelled = new HashSet<>();
+    private final Map<Long, Timer> live = new HashMap<>();
     private final List<JsPromise> promises = new ArrayList<>();
     private final ConcurrentLinkedQueue<Runnable> asyncCompletions = new ConcurrentLinkedQueue<>();
     private final AtomicInteger pendingAsyncJobs = new AtomicInteger();
@@ -114,12 +115,17 @@ public final class EventLoop {
         final var intervalNanos = delay * 1_000_000L;
         InterpreterOps.charge(ops, TIMER_BYTES);
         final var id = nextTimerId++;
-        timers.add(new Timer(id, System.nanoTime() + intervalNanos, intervalNanos, repeat, nextSeq++, callback));
+        final var timer = new Timer(id, System.nanoTime() + intervalNanos, intervalNanos, repeat, nextSeq++, callback);
+        live.put(id, timer);
+        timers.add(timer);
         return id;
     }
 
     public void clearTimer(long id) {
-        cancelled.add(id);
+        final var timer = live.remove(id);
+        if (timer != null) {
+            timer.cancelled = true;
+        }
     }
 
     public void drain() {
@@ -170,6 +176,7 @@ public final class EventLoop {
                 timer.dueNanos = System.nanoTime() + timer.intervalNanos;
                 timers.add(timer);
             } else {
+                live.remove(timer.id);
                 InterpreterOps.release(ops, TIMER_BYTES);
             }
             try {
@@ -214,7 +221,7 @@ public final class EventLoop {
 
     private Timer pollNextLiveTimer() {
         var timer = timers.poll();
-        while (timer != null && cancelled.remove(timer.id)) {
+        while (timer != null && timer.cancelled) {
             InterpreterOps.release(ops, TIMER_BYTES);
             timer = timers.poll();
         }

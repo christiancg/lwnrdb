@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.SocketFactory;
@@ -103,6 +105,35 @@ public class ClusterHandshakeDeadlineTest {
         }
 
         assertTrue(warnings.get() <= Globals.LOG_RATE_LIMIT_PER_SECOND * 2, "warnings logged: " + warnings.get());
+    }
+
+    @Test
+    public void oversizedFrameAfterHelloIsRateLimited() throws Exception {
+        TestUtils.setPrivateField(config, "clusterSecret", "frame-secret");
+        TestUtils.setPrivateField(config, "clusterMaxFrameSize", "1Kb");
+        try {
+            final var logger = Mockito.mock(Logger.class);
+            final var warnings = new AtomicInteger();
+            Mockito.doAnswer(_ -> warnings.incrementAndGet()).when(logger).warning(Mockito.anyString());
+            final var stream = ("{\"type\":\"HELLO\",\"secret\":\"frame-secret\"}\n" + "x".repeat(8 * 1024))
+                    .getBytes(StandardCharsets.US_ASCII);
+            final var frames = Globals.LOG_RATE_LIMIT_PER_SECOND * 5;
+
+            for (var i = 0; i < frames; i++) {
+                final var socket = TestUtils.clientSocket(new ByteArrayInputStream(stream),
+                        new ByteArrayOutputStream());
+                final var handler = new ClusterConnectionHandler(socket, () -> false, () -> {
+                });
+                TestUtils.setPrivateField(handler, "logger", logger);
+                handler.run();
+            }
+
+            assertTrue(warnings.get() >= 1, "the oversized frame is still reported");
+            assertTrue(warnings.get() <= Globals.LOG_RATE_LIMIT_PER_SECOND * 2, "warnings logged: " + warnings.get());
+        } finally {
+            TestUtils.setPrivateField(config, "clusterSecret", ConfigKey.CLUSTER_SECRET.defaultValue());
+            TestUtils.setPrivateField(config, "clusterMaxFrameSize", ConfigKey.CLUSTER_MAX_FRAME_SIZE.defaultValue());
+        }
     }
 
     @Test

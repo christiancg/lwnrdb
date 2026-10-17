@@ -62,6 +62,7 @@ public class ShutdownCoordinator {
         step("stop background sweeps", () -> {
             memoryManagement.stopSweepThread();
             scriptRunHistory.stopSweep();
+            triggerExecutor.stopSweep();
             scheduleExecutor.stopTicking();
             if (clusterConfig.isEnabled()) {
                 antiEntropyService.stop(remaining(deadline));

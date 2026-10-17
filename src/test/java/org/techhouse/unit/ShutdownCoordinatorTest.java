@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -246,6 +247,20 @@ public class ShutdownCoordinatorTest {
 
         assertFalse(tickerRunningAtTriggerDrain.get(),
                 "a scheduled run firing during the trigger drain would enqueue into a draining executor");
+    }
+
+    @Test
+    public void test_the_trigger_run_sweep_stops_with_the_other_sweeps() throws Exception {
+        final var triggers = mock(TriggerExecutor.class);
+        when(triggers.drain(anyLong())).thenReturn(true);
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "triggerExecutor", triggers);
+
+        coordinator.shutdown(null, null);
+
+        final var order = inOrder(triggers);
+        order.verify(triggers).stopSweep();
+        order.verify(triggers).drain(anyLong());
     }
 
     @Test

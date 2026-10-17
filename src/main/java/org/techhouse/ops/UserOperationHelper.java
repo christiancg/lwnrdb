@@ -110,6 +110,10 @@ public class UserOperationHelper {
     }
 
     public static OperationResponse processDeleteUser(DeleteUserRequest request, RestampedRecords restamped) {
+        return revokingDefinerRights(request.getUsername(), restamped, deleteUser(request, restamped));
+    }
+
+    private static OperationResponse deleteUser(DeleteUserRequest request, RestampedRecords restamped) {
         return OperationResponse.respondOrError(OperationType.DELETE_USER, ErrorCode.ERROR_DELETING_USER,
                 () -> AdminOperationHelper.withUsersLock(() -> {
                     final var username = request.getUsername();
@@ -170,7 +174,20 @@ public class UserOperationHelper {
         return OperationResponse.ok(OperationType.SET_PASSWORD, "Password changed successfully");
     }
 
-    public static OperationResponse processChangePermissions(ChangePermissionsRequest request) {
+    public static OperationResponse processChangePermissions(ChangePermissionsRequest request,
+            RestampedRecords restamped) {
+        return revokingDefinerRights(request.getUsername(), restamped, changePermissions(request));
+    }
+
+    private static OperationResponse revokingDefinerRights(String username, RestampedRecords restamped,
+            OperationResponse response) {
+        if (response.getStatus() == OperationStatus.OK) {
+            DefinerRevocation.forDefiner(username, restamped);
+        }
+        return response;
+    }
+
+    private static OperationResponse changePermissions(ChangePermissionsRequest request) {
         return OperationResponse.respondOrError(OperationType.CHANGE_PERMISSIONS, ErrorCode.ERROR_CHANGING_PERMISSIONS,
                 () -> AdminOperationHelper.withUsersLock(() -> {
                     final var username = request.getUsername();

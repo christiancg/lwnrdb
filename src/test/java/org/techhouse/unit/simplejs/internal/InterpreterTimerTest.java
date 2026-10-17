@@ -52,6 +52,19 @@ public class InterpreterTimerTest {
     }
 
     @Test
+    public void test_clearing_an_id_before_it_is_issued_does_not_cancel_that_timer() {
+        final var out = arr("clearTimeout(1); let out = []; setTimeout(() => out.push(1), 0); out");
+        assertEquals(1, num(out, 0));
+    }
+
+    @Test
+    public void test_clearing_an_unknown_id_is_a_no_op() {
+        final var out = arr("let out = []; setTimeout(() => out.push(1), 0); clearTimeout(-5); clearTimeout(undefined);"
+                + " clearTimeout(NaN); out");
+        assertEquals(1, num(out, 0));
+    }
+
+    @Test
     public void test_ordering_promise_before_timeout() {
         final var source = """
                 let out = [];

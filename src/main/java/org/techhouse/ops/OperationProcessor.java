@@ -116,8 +116,9 @@ public class OperationProcessor {
             case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
             case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest, restamped);
             case CHANGE_PERMISSIONS ->
-                UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
-            case SET_DATABASE_OWNERS -> processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest);
+                UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest, restamped);
+            case SET_DATABASE_OWNERS ->
+                processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest, restamped);
             case LIST_USERS -> processListUsers((ListUsersRequest) operationRequest);
             case SET_PASSWORD ->
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
@@ -203,8 +204,12 @@ public class OperationProcessor {
         return DatabaseOperationHelper.processCreateDatabaseOperation(createDatabaseRequest, clientId);
     }
 
-    private OperationResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
-        return DatabaseOperationHelper.processSetDatabaseOwners(request);
+    private OperationResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request, RestampedRecords restamped) {
+        final var response = DatabaseOperationHelper.processSetDatabaseOwners(request);
+        if (response.getStatus() == OperationStatus.OK) {
+            DefinerRevocation.forDatabase(request.getDatabaseName(), restamped);
+        }
+        return response;
     }
 
     private OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest,
