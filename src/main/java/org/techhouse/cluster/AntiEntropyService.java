@@ -246,7 +246,7 @@ public class AntiEntropyService implements MembershipListener {
                     deleteIds.add(id);
                     deleteVersions.add(Long.toString(winner.version));
                 }
-            } else if (winner.source != null) {
+            } else if (winner.source() != null) {
                 final var local = localLive.get(id);
                 if (local == null || local.version() < winner.version || pullsOnTieBreak(local, winner, selfNodeId)) {
                     pullByPeer.computeIfAbsent(winner.source, ignored -> new ArrayList<>()).add(id);

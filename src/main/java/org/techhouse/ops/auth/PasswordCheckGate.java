@@ -7,9 +7,10 @@ import org.techhouse.config.Configuration;
 public final class PasswordCheckGate {
     private final Semaphore permits;
     private final int size;
+    private static final Configuration configuration = Configuration.getInstance();
 
     public PasswordCheckGate() {
-        this(Configuration.getInstance().getMaxConcurrentPasswordChecks());
+        this(configuration.getMaxConcurrentPasswordChecks());
     }
 
     public PasswordCheckGate(int configuredPermits) {

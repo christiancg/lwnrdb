@@ -16,6 +16,7 @@ import org.techhouse.ioc.IocContainer;
 
 public class PeerConnectionPool {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private final Configuration configuration = Configuration.getInstance();
     private final Map<NodeAddress, PeerConnection> connections = new ConcurrentHashMap<>();
     private final ReentrantLock lock = new ReentrantLock();
     private volatile SocketFactory socketFactory;
@@ -77,7 +78,7 @@ public class PeerConnectionPool {
                 factory = socketFactory;
                 if (factory == null) {
                     factory = clusterConfig.tlsEnabled()
-                            ? TlsContextFactory.createSocketFactory(Configuration.getInstance())
+                            ? TlsContextFactory.createSocketFactory(configuration)
                             : SocketFactory.getDefault();
                     socketFactory = factory;
                 }

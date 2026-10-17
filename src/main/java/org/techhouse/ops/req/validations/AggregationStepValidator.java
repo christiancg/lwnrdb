@@ -41,6 +41,7 @@ import org.techhouse.ops.req.agg.step.map.MapOperationType;
 
 public class AggregationStepValidator {
     private static final long MAX_NEAREST_K = Integer.MAX_VALUE / 10L;
+    private static final Configuration configuration = Configuration.getInstance();
 
     public static ValidationResult validate(BaseAggregationStep step) {
         return switch (step.getType()) {
@@ -64,13 +65,13 @@ public class AggregationStepValidator {
     }
 
     static ValidationResult validateScriptSource(String source, String what) {
-        if (!Configuration.getInstance().isScriptsEnabled()) {
+        if (!configuration.isScriptsEnabled()) {
             return ValidationResult.fail(ErrorCode.SCRIPTS_DISABLED, ErrorCode.SCRIPTS_DISABLED.getDefaultMessage());
         }
         if (source == null || source.isBlank()) {
             return ValidationResult.fail(what + " requires a non-blank script");
         }
-        final var maxBytes = Configuration.getInstance().getAggregationScriptMaxSourceBytes();
+        final var maxBytes = configuration.getAggregationScriptMaxSourceBytes();
         if (source.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
             return ValidationResult.fail(ErrorCode.SCRIPT_TOO_LARGE, ErrorCode.SCRIPT_TOO_LARGE.getDefaultMessage());
         }
@@ -285,7 +286,7 @@ public class AggregationStepValidator {
     }
 
     private static ValidationResult operandLimitRefusal(int count, String what) {
-        final var limit = Configuration.getInstance().intValue(ConfigKey.MAX_FILTER_OPERANDS);
+        final var limit = configuration.intValue(ConfigKey.MAX_FILTER_OPERANDS);
         if (limit != 0 && count > limit) {
             return ValidationResult.fail(ErrorCode.FILTER_OPERAND_LIMIT,
                     ErrorCode.FILTER_OPERAND_LIMIT.getDefaultMessage() + ": " + what + " exceed " + limit);

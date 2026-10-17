@@ -76,7 +76,7 @@ public final class EJsonInterop {
         }
 
         void chargeChars(String text) {
-            if (tally != null) {
+            if (tally() != null) {
                 InterpreterOps.chargeChars(ops, text.length());
                 tally.chars += text.length();
             }
