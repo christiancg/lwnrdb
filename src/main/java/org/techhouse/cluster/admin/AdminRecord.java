@@ -25,6 +25,10 @@ public class AdminRecord {
         return AdminRecordKey.parse(key);
     }
 
+    public String rawKey() {
+        return key;
+    }
+
     public long version() {
         return version == null ? 0L : Long.parseLong(version);
     }

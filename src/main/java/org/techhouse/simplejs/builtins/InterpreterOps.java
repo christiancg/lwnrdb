@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 import java.util.List;
+import org.techhouse.simplejs.exceptions.ScriptArrayLengthException;
 import org.techhouse.simplejs.values.JsValue;
 
 public interface InterpreterOps {
@@ -55,12 +56,36 @@ public interface InterpreterOps {
     default void release(long bytes) {
     }
 
+    default void noteAllocation(long bytes) {
+    }
+
     default void tick() {
     }
+
+    default int maxArrayLength() {
+        return -1;
+    }
+
+    default void tick(long weight) {
+    }
+
+    default void enterNested() {
+    }
+
+    default void leaveNested() {
+    }
+
+    long PACE_MASK = 0x3FF;
 
     static void tick(InterpreterOps ops) {
         if (ops != null) {
             ops.tick();
+        }
+    }
+
+    static void pace(InterpreterOps ops, long index) {
+        if (ops != null && index > 0 && (index & PACE_MASK) == 0) {
+            ops.tick(PACE_MASK + 1);
         }
     }
 
@@ -76,12 +101,40 @@ public interface InterpreterOps {
         }
     }
 
+    static void paceWork(InterpreterOps ops, long units) {
+        if (ops != null && units > PACE_MASK) {
+            ops.tick(units / (PACE_MASK + 1));
+        }
+    }
+
+    static void noteChars(InterpreterOps ops, long chars) {
+        if (ops != null) {
+            ops.noteAllocation(chars * STRING_BYTES_PER_CHAR);
+        }
+    }
+
     static void chargeChars(InterpreterOps ops, long chars) {
         charge(ops, chars * STRING_BYTES_PER_CHAR);
     }
 
     static void chargeElements(InterpreterOps ops, long count) {
         charge(ops, count * BYTES_PER_ELEMENT);
+    }
+
+    static void requireArrayLength(InterpreterOps ops, long length) {
+        if (ops == null) {
+            return;
+        }
+        final var cap = ops.maxArrayLength();
+        if (cap >= 0 && length > cap) {
+            throw new ScriptArrayLengthException(
+                    "An array-like length of " + length + " exceeds the maximum of " + cap + " elements");
+        }
+    }
+
+    static void chargeArrayLike(InterpreterOps ops, long length) {
+        requireArrayLength(ops, length);
+        chargeElements(ops, length);
     }
 
     static java.time.ZoneId timeZone(InterpreterOps ops) {

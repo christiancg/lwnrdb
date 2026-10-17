@@ -141,6 +141,23 @@ public class PageOccupancyReconcilerTest {
     }
 
     @Test
+    public void test_rows_record_live_bytes_not_the_file_length() throws Exception {
+        save("a");
+        save("b");
+        save("c");
+        final var removed = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(pk -> pk.getValue().equals("b")).findFirst().orElseThrow();
+        fs.deleteFromCollection(removed);
+        cache.removeAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+
+        assertTrue(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+
+        assertEquals(firstPageFileLength() - removed.getLength(), existingRow(0).getPageSize(),
+                "a hole is dead space: the row counts only the records the pk index names");
+        assertEquals(2, existingRow(0).getEntryCount());
+    }
+
+    @Test
     public void test_an_empty_collection_needs_nothing() throws Exception {
         assertFalse(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
     }
@@ -230,9 +247,9 @@ public class PageOccupancyReconcilerTest {
                 "an index-backed read must re-derive the adopted record before the worker indexes it");
         final var updates = queuedUpdates();
         assertEquals(1, updates.size());
-        final var adopted = updates.getFirst().getDbEntry();
-        assertEquals(ORPHAN, adopted.get_id());
-        assertEquals(adopted.byteSize(), adopted.getPreviousByteSize(),
+        final var adopted = updates.getFirst().getEntity();
+        assertEquals(ORPHAN, adopted.id());
+        assertEquals(adopted.byteSize(), adopted.previousByteSize(),
                 "the reconcile already counts the record, so its event must not move the page size again");
     }
 

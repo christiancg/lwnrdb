@@ -7,6 +7,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.orUnd
 
 import java.util.List;
 import org.techhouse.simplejs.builtins.AsyncIteratorBuiltins;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.IteratorBuiltins;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -88,8 +89,8 @@ public final class MemberEvaluator {
         asyncGenerators.observeAsyncGenerator(generator, escaped);
     }
 
-    public static String writeRejectionMessage(JsValue target, JsValue key) {
-        return MemberWriter.writeRejectionMessage(target, key);
+    public static String writeRejectionMessage(JsValue target, JsValue key, InterpreterOps ops) {
+        return MemberWriter.writeRejectionMessage(target, key, ops);
     }
 
     Chain newChain(JsValue start) {

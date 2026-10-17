@@ -2,6 +2,7 @@ package org.techhouse.ops.req;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
@@ -46,8 +47,23 @@ public final class RequestParser {
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
+        return parseRequest(message, Integer.MAX_VALUE);
+    }
+
+    public static OperationRequest parseRequest(final String message, final int maxTokens)
+            throws InvalidCommandException {
+        return parseRoot(() -> eJson.fromJson(message, JsonObject.class, Globals.MAX_REQUEST_NESTING_DEPTH, maxTokens));
+    }
+
+    public static OperationRequest parseRequest(final byte[] utf8, final int start, final int end, final int maxTokens)
+            throws InvalidCommandException {
+        return parseRoot(
+                () -> eJson.fromJson(utf8, start, end, JsonObject.class, Globals.MAX_REQUEST_NESTING_DEPTH, maxTokens));
+    }
+
+    private static OperationRequest parseRoot(final Supplier<JsonObject> rootParser) throws InvalidCommandException {
         try {
-            final var root = eJson.fromJson(message, JsonObject.class, Globals.MAX_REQUEST_NESTING_DEPTH);
+            final var root = rootParser.get();
             final var baseReq = eJson.fromJson(root, OperationRequest.class);
             return switch (baseReq.getType()) {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);

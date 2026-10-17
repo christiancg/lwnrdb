@@ -47,7 +47,7 @@ public class ScriptOperationHelperTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        setConfig("scriptsEnabled", false);
+        setConfig("scriptsEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -102,6 +102,13 @@ public class ScriptOperationHelperTest {
         final var scriptLoad = IocContainer.get(ScriptLoad.class);
         assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), run("throw new Error('nope');").getErrorCode());
         assertEquals(0, scriptLoad.current());
+    }
+
+    @Test
+    public void test_an_array_like_past_the_array_cap_returns_400_30() {
+        final var response = run("return Math.max.apply(null, { length: 2 ** 30 });");
+        assertEquals(ErrorCode.SCRIPT_ARRAY_TOO_LARGE.getCode(), response.getErrorCode());
+        assertTrue(response.getMessage().startsWith("ScriptArrayTooLargeError: "), response.getMessage());
     }
 
     @Test

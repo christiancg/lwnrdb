@@ -69,6 +69,7 @@ public class TransactionFencedResendTest {
 
     private UUID transactionWithOneSave(String coll, String id) {
         final var clientId = clientTracker.registerForwardedClient("resender");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var request = new SaveRequest(TestGlobals.DB, coll);
         request.setObject(document(id));

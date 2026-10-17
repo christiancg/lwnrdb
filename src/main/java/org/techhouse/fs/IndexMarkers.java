@@ -164,6 +164,7 @@ public final class IndexMarkers {
 
     private static void touch(File marker) throws IOException {
         if (!marker.exists()) {
+            OwnerOnly.ensureOwnerOnlyFile(marker.toPath());
             Files.writeString(marker.toPath(), Long.toString(System.currentTimeMillis()));
         }
     }
@@ -177,7 +178,8 @@ public final class IndexMarkers {
     }
 
     private File buildingFile(String dbName, String collName, String fieldName) {
-        return new File(paths.collectionFolder(dbName, collName), collName + "-" + fieldName + BUILDING_SUFFIX);
+        return new File(paths.collectionFolder(dbName, collName),
+                collName + "-" + FilePaths.embedded(fieldName) + BUILDING_SUFFIX);
     }
 
     private File dirtyFile(String dbName, String collName) {

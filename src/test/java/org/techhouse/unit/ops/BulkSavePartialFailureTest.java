@@ -1,14 +1,15 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -27,7 +29,6 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.PartialBulkSaveException;
-import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.SaveOperationHelper;
@@ -135,8 +136,8 @@ public class BulkSavePartialFailureTest {
         return taskQueue().stream().filter(BulkEntityEvent.class::isInstance).map(BulkEntityEvent.class::cast).toList();
     }
 
-    private static List<String> idsOf(List<DbEntry> entries) {
-        return entries.stream().map(DbEntry::get_id).toList();
+    private static List<String> idsOf(List<EntityRef> entries) {
+        return entries.stream().map(EntityRef::id).toList();
     }
 
     private String cachedValueOf(String id) throws Exception {
@@ -170,8 +171,8 @@ public class BulkSavePartialFailureTest {
                 () -> assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(UPDATED_ID),
                         "without the pending mark an index-backed read trusts the entry under the superseded value"),
                 () -> assertEquals(1, events.size(), "the committed update must reach background index maintenance"),
-                () -> assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdatedEntries())),
-                () -> assertEquals(List.of(), idsOf(events.getFirst().getInsertedEntries()),
+                () -> assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdated())),
+                () -> assertEquals(List.of(), idsOf(events.getFirst().getInserted()),
                         "the insert half rolled its appends back, so nothing was inserted"),
                 () -> assertEquals(List.of(UPDATED_ID),
                         cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
@@ -192,36 +193,31 @@ public class BulkSavePartialFailureTest {
 
         final var events = queuedBulkEvents();
         assertEquals(1, events.size(), "the happy path must submit exactly one bulk event");
-        assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdatedEntries()));
-        assertEquals(List.of(INSERTED_ID), idsOf(events.getFirst().getInsertedEntries()));
+        assertEquals(List.of(UPDATED_ID), idsOf(events.getFirst().getUpdated()));
+        assertEquals(List.of(INSERTED_ID), idsOf(events.getFirst().getInserted()));
         assertEquals("new", cachedValueOf(UPDATED_ID));
         assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).containsAll(Set.of(UPDATED_ID, INSERTED_ID)));
     }
 
     @Test
-    public void test_a_mid_batch_update_failure_still_publishes_the_committed_prefix() throws Exception {
+    public void test_an_update_half_that_cannot_write_one_page_commits_none_of_it() throws Exception {
         seedTheDocumentsTheBulkWillUpdate();
         blockThePageTheSecondUpdateWillTarget();
+        final var pageBefore = Files.readAllBytes(pageFile(0).toPath());
 
-        final var failure = assertThrows(PartialBulkSaveException.class,
+        final var failure = assertThrows(Exception.class,
                 () -> SaveOperationHelper.executeBulkSave(bulk(document(KEPT_ID, "new"), document(FAILING_ID, "new"))),
                 "a bulk save whose second update cannot write its page must surface the failure");
 
-        final var events = queuedBulkEvents();
         assertAll(
-                () -> assertEquals("new", cachedValueOf(KEPT_ID),
-                        "the entry updated before the failing one is durable on disk and must not be served stale"),
-                () -> assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(KEPT_ID),
-                        "without the pending mark an index-backed read trusts the entry under the superseded value"),
-                () -> assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(FAILING_ID),
-                        "the entry that never landed on disk must not be marked as a pending index write"),
-                () -> assertEquals(1, events.size(), "the committed prefix must reach background index maintenance"),
-                () -> assertEquals(List.of(KEPT_ID), idsOf(events.getFirst().getUpdatedEntries())),
-                () -> assertEquals(List.of(KEPT_ID), failure.committed().getUpdated(),
-                        "the caller fires triggers and replicates exactly what landed, so it must be told what that is"),
-                () -> assertEquals(List.of(), failure.committed().getInserted()),
-                () -> assertInstanceOf(PartialBulkUpdateException.class, failure.getCause(),
-                        "the page failure must stay visible as the cause"));
+                () -> assertFalse(failure instanceof PartialBulkSaveException,
+                        "the update half commits with one pk.idx append, so nothing landed to fire triggers for"),
+                () -> assertEquals("old", cachedValueOf(KEPT_ID), "the entry before the failing one never committed"),
+                () -> assertArrayEquals(pageBefore, Files.readAllBytes(pageFile(0).toPath()),
+                        "its appended copy is cut back"),
+                () -> assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(KEPT_ID)),
+                () -> assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(FAILING_ID)),
+                () -> assertTrue(queuedBulkEvents().stream().allMatch(event -> event.getUpdated().isEmpty())));
     }
 
     @Test
@@ -239,17 +235,16 @@ public class BulkSavePartialFailureTest {
     }
 
     @Test
-    public void test_a_mid_batch_update_failure_applies_the_size_delta_of_its_committed_prefix() throws Exception {
+    public void test_a_failed_update_half_leaves_the_in_memory_size_alone() throws Exception {
         seedTheDocumentsTheBulkWillUpdate();
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, pageFile(0).length());
         blockThePageTheSecondUpdateWillTarget();
 
-        assertThrows(PartialBulkSaveException.class, () -> SaveOperationHelper.executeBulkSave(
+        assertThrows(Exception.class, () -> SaveOperationHelper.executeBulkSave(
                 bulk(document(KEPT_ID, "a value long enough to grow the page"), document(FAILING_ID, "new"))));
 
         final var inMemorySize = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                 .filter(p -> p.getPage() == 0).mapToLong(AdminPageEntry::getPageSize).sum();
-        assertEquals(pageFile(0).length(), inMemorySize,
-                "the committed growth must reach the in-memory page size before any later placement");
+        assertEquals(pageFile(0).length(), inMemorySize, "nothing committed, so no page size moved");
     }
 }

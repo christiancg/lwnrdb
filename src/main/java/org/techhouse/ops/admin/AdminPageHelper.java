@@ -1,10 +1,11 @@
 package org.techhouse.ops.admin;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -14,9 +15,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
-import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.FileSystem;
-import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -25,6 +24,7 @@ public final class AdminPageHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final Logger logger = Logger.logFor(AdminPageHelper.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private AdminPageHelper() {
     }
@@ -45,24 +45,22 @@ public final class AdminPageHelper {
     }
 
     private static void lockAdminPageCollection(String dbName, String collName) throws InterruptedException {
-        locks.lock(Globals.ADMIN_PAGES_DB_NAME,
-                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName));
+        locks.lock(Globals.ADMIN_PAGES_DB_NAME, AdminPageEntry.pagesCollectionName(dbName, collName));
     }
 
     private static void releaseAdminPageCollection(String dbName, String collName) {
-        locks.release(Globals.ADMIN_PAGES_DB_NAME,
-                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName));
+        locks.release(Globals.ADMIN_PAGES_DB_NAME, AdminPageEntry.pagesCollectionName(dbName, collName));
     }
 
-    public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted,
+    public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<EntityRef> inserted,
             long incarnation) throws IOException, InterruptedException {
         baseUpdateEntryCount(dbName, collName, type, inserted, type == EventType.CREATED, type == EventType.UPDATED,
                 incarnation);
     }
 
-    public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry,
+    public static void updateEntryCount(String dbName, String collName, EventType type, EntityRef entity,
             long incarnation) throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, type, List.of(dbEntry), type == EventType.CREATED,
+        baseUpdateEntryCount(dbName, collName, type, List.of(entity), type == EventType.CREATED,
                 type == EventType.UPDATED, incarnation);
     }
 
@@ -80,11 +78,12 @@ public final class AdminPageHelper {
     public static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
             final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated)
             throws InterruptedException, IOException {
-        baseUpdateEntryCount(dbName, collName, type, insertedOrDeleted, skipMemoryDeltaForCreated, false, 0L);
+        baseUpdateEntryCount(dbName, collName, type, EntityRef.allOf(insertedOrDeleted), skipMemoryDeltaForCreated,
+                false, 0L);
     }
 
     private static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
-            final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated,
+            final List<EntityRef> insertedOrDeleted, final boolean skipMemoryDeltaForCreated,
             final boolean skipMemoryDeltaForUpdated, final long incarnation) throws InterruptedException, IOException {
         if (insertedOrDeleted.isEmpty()) {
             return;
@@ -98,9 +97,9 @@ public final class AdminPageHelper {
                     && !CollectionIncarnation.isCurrent(dbName, collName, incarnation)) {
                 return;
             }
-            final var pagesPerCollectionName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+            final var pagesPerCollectionName = AdminPageEntry.pagesCollectionName(dbName, collName);
             fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
-            final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(DbEntry::getPage));
+            final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(EntityRef::page));
             final var existingPageEntries = cache.getAdminPageEntries(dbName, collName);
             final var workingPageEntries = existingPageEntries != null
                     ? new ArrayList<>(existingPageEntries)
@@ -110,9 +109,9 @@ public final class AdminPageHelper {
             for (var groupedEntry : grouped.entrySet()) {
                 final var page = groupedEntry.getKey();
                 final var groupEntries = groupedEntry.getValue();
-                final var sumBytes = groupEntries.stream().mapToLong(DbEntry::byteSize).sum();
+                final var sumBytes = groupEntries.stream().mapToLong(EntityRef::byteSize).sum();
                 final var deltaBytes = switch (type) {
-                    case UPDATED -> sumBytes - groupEntries.stream().mapToLong(DbEntry::getPreviousByteSize).sum();
+                    case UPDATED -> sumBytes - groupEntries.stream().mapToLong(EntityRef::previousByteSize).sum();
                     case CREATED -> sumBytes;
                     case DELETED -> -sumBytes;
                 };
@@ -152,13 +151,13 @@ public final class AdminPageHelper {
 
     private static void insertAdminPages(String pagesPerCollectionName, List<AdminPageEntry> newPages)
             throws IOException {
-        final var pendingPageBytes = new HashMap<Long, Long>();
-        for (var p : newPages) {
-            final var size = p.byteSize();
-            final var target = cache.selectPageForInsert(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, size,
-                    pendingPageBytes);
-            p.setStoragePage(target);
-            pendingPageBytes.merge(target, (long) size, Long::sum);
+        final var sizes = new int[newPages.size()];
+        for (var index = 0; index < sizes.length; index++) {
+            sizes[index] = newPages.get(index).byteSize();
+        }
+        final var targets = cache.selectPagesForInsert(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, sizes);
+        for (var index = 0; index < sizes.length; index++) {
+            newPages.get(index).setStoragePage(targets[index]);
         }
         final var inserted = fs.bulkInsertIntoCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, newPages,
                 AdminPageEntry::getStoragePage);
@@ -224,16 +223,9 @@ public final class AdminPageHelper {
             indexedEntriesToUpdate.add(indexedEntry);
         }
         if (!indexedEntriesToUpdate.isEmpty()) {
-            try {
-                final var bulkResult = fs.bulkUpdateFromCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName,
-                        indexedEntriesToUpdate);
-                applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, bulkResult.updated(),
-                        bulkResult.compactions());
-            } catch (PartialBulkUpdateException e) {
-                final var partial = e.getPartialResult();
-                applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, partial.updated(), partial.compactions());
-                throw e;
-            }
+            final var updated = fs.bulkUpdateFromCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName,
+                    indexedEntriesToUpdate, pkIdxList, null);
+            applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, updated);
         }
         if (!firstTouchPages.isEmpty()) {
             insertAdminPages(pagesPerCollectionName, firstTouchPages);
@@ -241,8 +233,7 @@ public final class AdminPageHelper {
     }
 
     private static void applyBulkUpdateResult(String pagesPerCollectionName, List<PkIndexEntry> pkIdxList,
-            List<IndexedDbEntry> updated, List<PkCompaction> compactions) {
-        compactions.forEach(cache::shiftPkPositionsAfterCompaction);
+            List<IndexedDbEntry> updated) {
         for (var ie : updated) {
             pkIdxList.removeIf(pk -> pk.getValue().equals(ie.get_id()));
             pkIdxList.add(ie.getIndex());
@@ -254,7 +245,7 @@ public final class AdminPageHelper {
             throws IOException, InterruptedException {
         lockAdminPageCollection(dbName, collName);
         try {
-            final var pagesPerCollectionName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+            final var pagesPerCollectionName = AdminPageEntry.pagesCollectionName(dbName, collName);
             fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
             final var existing = cache.getAdminPageEntries(dbName, collName);
             final var deltas = new ArrayList<PageDelta>();
@@ -285,13 +276,13 @@ public final class AdminPageHelper {
     }
 
     public static void createPageCollections(String dbName, String collName) throws IOException {
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        final var pagesCollName = AdminPageEntry.pagesCollectionName(dbName, collName);
         deletePageCollections(dbName, collName);
         fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
     }
 
     public static void deletePageCollections(String dbName, String collName) {
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        final var pagesCollName = AdminPageEntry.pagesCollectionName(dbName, collName);
         final var exclusive = lockAdminPagesForDrop(dbName, collName);
         try {
             if (sharesPageFolder(dbName, collName)) {
@@ -309,13 +300,12 @@ public final class AdminPageHelper {
     }
 
     private static boolean sharesPageFolder(String dbName, String collName) {
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        final var pagesCollName = AdminPageEntry.pagesCollectionName(dbName, collName);
         for (final var dbEntry : cache.getAllAdminDbEntries()) {
             final var collections = dbEntry.getCollections();
             for (final var otherColl : collections == null ? List.<String>of() : collections) {
                 final var isSelf = dbEntry.get_id().equals(dbName) && otherColl.equals(collName);
-                if (!isSelf && String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbEntry.get_id(), otherColl)
-                        .equals(pagesCollName)) {
+                if (!isSelf && AdminPageEntry.pagesCollectionName(dbEntry.get_id(), otherColl).equals(pagesCollName)) {
                     return true;
                 }
             }
@@ -328,7 +318,11 @@ public final class AdminPageHelper {
         final var pkIdxList = cache.getAdminPagePkIndexes(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         final var ownRows = pkIdxList.stream().filter(pk -> pk.getValue().startsWith(ownPrefix)).toList();
         for (final var row : ownRows) {
-            cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(row));
+            try {
+                fs.deleteFromCollection(row);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
             pkIdxList.remove(row);
             trackInMemoryAdminPageRemoval(pagesCollName, row);
         }
@@ -346,8 +340,7 @@ public final class AdminPageHelper {
     private static boolean lockAdminPagesForDrop(String dbName, String collName) {
         try {
             final var acquired = locks.tryLockWrite(Globals.ADMIN_PAGES_DB_NAME,
-                    String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName),
-                    Configuration.getInstance().getTransactionLockTimeoutMs());
+                    AdminPageEntry.pagesCollectionName(dbName, collName), configuration.getTransactionLockTimeoutMs());
             if (!acquired) {
                 logger.warning("Dropping the page metadata of " + dbName + "|" + collName + " without its"
                         + " admin_pages lock: the background page writer may re-create rows for a collection"

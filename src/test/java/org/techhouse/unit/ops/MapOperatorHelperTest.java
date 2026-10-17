@@ -15,13 +15,16 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ops.AggregateLimitException;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.MapOperatorHelper;
-import org.techhouse.ops.PipelineScriptContext;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
+import org.techhouse.ops.req.agg.mid_operators.ScriptMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.operators.ScriptOperator;
@@ -388,7 +391,7 @@ public class MapOperatorHelperTest {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("existingField", 5);
 
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             ScriptOperator condition = new ScriptOperator("export default (doc) => 1 / 0;");
             RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
 
@@ -404,13 +407,33 @@ public class MapOperatorHelperTest {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("existingField", 5);
 
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             ScriptOperator condition = new ScriptOperator("export default (doc) => 0 / 0;");
             RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
 
             JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject, context);
 
             assertTrue(result.has("existingField"), "NaN is falsy in JavaScript");
+        }
+    }
+
+    @Test
+    public void test_a_map_script_shared_string_result_is_refused_without_materializing() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("_id", "x");
+
+        try (var context = PipelineContext.of(0L, 1_000_000L, null)) {
+            final var midOperator = new ScriptMidOperator(
+                    "export default (doc) => Array(10000).fill('x'.repeat(1000000));");
+            final var operator = new AddFieldMapOperator("big", null, midOperator);
+
+            final var start = System.nanoTime();
+            final var failure = assertThrows(AggregateLimitException.class,
+                    () -> MapOperatorHelper.processOperator(operator, jsonObject, context));
+            final var elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+            assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE, failure.getErrorCode());
+            assertTrue(elapsedMs < 5000, "the pre-gate must not materialize the value, took " + elapsedMs + "ms");
         }
     }
 }

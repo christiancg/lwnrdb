@@ -129,7 +129,7 @@ public class AggregationSortBoundedTest {
     public void test_mixed_type_sort_field_keeps_a_total_order() throws IOException {
         insert("m1", new JsonString("beta"));
         insertNumber("m2", 7);
-        insert("m3", new JsonBoolean(true));
+        insert("m3", JsonBoolean.of(true));
         insert("m4", new JsonString("alpha"));
         insertNumber("m5", 2);
         insert("m6", null);

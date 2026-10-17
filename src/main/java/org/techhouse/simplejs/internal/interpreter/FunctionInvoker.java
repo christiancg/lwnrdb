@@ -8,6 +8,7 @@ import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.ScriptLimitException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Completion;
@@ -54,16 +55,20 @@ public record FunctionInvoker(Interpreter interp) {
             case JsFunction function -> callFunction(function, thisArg, args);
             case JsNativeFunction nativeFunction -> invokeNative(nativeFunction, thisArg, args);
             case JsObject object when object == interp.intrinsics.functionProto -> JsUndefined.getInstance();
-            default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a function");
+            default -> throw new TypeErrorException(JsCoercion.describe(callee) + " is not a function");
         };
     }
 
     public JsValue invokeNative(JsNativeFunction nativeFunction, JsValue thisArg, List<JsValue> args) {
+        interp.ops.enterNested();
         interp.callStack.push(nativeFunction.getName(), CallStack.NATIVE_MODULE);
         try {
-            return nativeFunction.invoke(thisArg, args);
+            return nativeFunction.invokeFromCaller(thisArg, args, interp.runningCoroutine());
+        } catch (SimpleJsRuntimeException error) {
+            throw interp.callStack.stamp(error);
         } finally {
             interp.callStack.pop();
+            interp.ops.leaveNested();
         }
     }
 
@@ -113,23 +118,20 @@ public record FunctionInvoker(Interpreter interp) {
                 return isObjectLike(result) ? result : activation.resolveThis();
             }
             return result;
+        } catch (SimpleJsRuntimeException error) {
+            throw interp.callStack.stamp(error);
         } finally {
             interp.callStack.pop();
             interp.depth--;
         }
     }
 
-    public JsValue runPlainFunction(JsFunction function, Environment activation) {
-        final var saved = interp.currentCoroutine.get();
-        interp.currentCoroutine.remove();
+    private JsValue runPlainFunction(JsFunction function, Environment activation) {
+        final var outer = interp.swapRunningCoroutine(null);
         try {
             return runFunctionBody(function, activation);
         } finally {
-            if (saved != null) {
-                interp.currentCoroutine.set(saved);
-            } else {
-                interp.currentCoroutine.remove();
-            }
+            interp.swapRunningCoroutine(outer);
         }
     }
 
@@ -153,6 +155,7 @@ public record FunctionInvoker(Interpreter interp) {
             return activation;
         }
         final var bodyEnv = activation.functionChild();
+        bodyEnv.defineCoroutine(activation.resolveCoroutine());
         for (final var name : VarHoisting.varNames(body.getBody())) {
             if (bodyEnv.hasLocal(name)) {
                 continue;
@@ -176,13 +179,11 @@ public record FunctionInvoker(Interpreter interp) {
 
     public JsValue makeGenerator(JsFunction function, Environment activation) {
         final var coroutine = new Coroutine();
-        interp.coroutines.add(coroutine);
+        interp.registerCoroutine(coroutine);
         coroutine.markGenerator();
         ownStackSegment(coroutine, function);
-        coroutine.prime(() -> {
-            interp.currentCoroutine.set(coroutine);
-            return runFunctionBody(function, activation);
-        });
+        activation.defineCoroutine(coroutine);
+        coroutine.prime(() -> runFunctionBody(function, activation));
         final var generator = new JsGenerator(coroutine);
         final var proto = function.getPrototype();
         generator.setProto(proto instanceof JsObject object ? object : interp.intrinsics.iteratorProto);
@@ -192,11 +193,11 @@ public record FunctionInvoker(Interpreter interp) {
     public JsValue runAsync(JsFunction function, Environment activation, List<JsValue> args) {
         final var promise = new JsPromise(interp.eventLoop);
         final var coroutine = new Coroutine();
-        interp.coroutines.add(coroutine);
+        interp.registerCoroutine(coroutine);
         coroutine.markAsync();
         ownStackSegment(coroutine, function);
+        activation.defineCoroutine(coroutine);
         coroutine.startAsync(() -> {
-            interp.currentCoroutine.set(coroutine);
             try {
                 interp.binding.bindParams(function.getParams(), args, activation);
                 promise.resolve(runFunctionBody(function, activation));
@@ -211,35 +212,40 @@ public record FunctionInvoker(Interpreter interp) {
 
     public JsValue makeAsyncGenerator(JsFunction function, Environment activation) {
         final var coroutine = new Coroutine();
-        interp.coroutines.add(coroutine);
+        interp.registerCoroutine(coroutine);
         final var generator = new JsAsyncGenerator(coroutine);
         coroutine.markAsync();
         coroutine.markGenerator();
         ownStackSegment(coroutine, function);
         coroutine.setResumeObserver(escaped -> interp.members.observeAsyncGenerator(generator, escaped));
-        coroutine.prime(() -> {
-            interp.currentCoroutine.set(coroutine);
-            return runFunctionBody(function, activation);
-        });
+        activation.defineCoroutine(coroutine);
+        coroutine.prime(() -> runFunctionBody(function, activation));
         final var proto = function.getPrototype();
         generator.setProto(proto instanceof JsObject object ? object : interp.intrinsics.asyncIteratorProto);
         return generator;
     }
 
     public void ownStackSegment(Coroutine coroutine, JsFunction function) {
-        final var segment = interp.callStack.segmentFor(function.getName(), function.getModuleName());
+        runsAs(coroutine, interp.callStack.segmentFor(function.getName(), function.getModuleName()));
+    }
+
+    public void runsAs(Coroutine coroutine, CallStack.Segment segment) {
         coroutine.setAroundResume(resume -> {
-            final var saved = interp.callStack.swap(segment);
+            final var saved = segment == null ? null : interp.callStack.swap(segment);
+            final var resumer = interp.swapRunningCoroutine(coroutine);
             try {
                 resume.run();
             } finally {
-                interp.callStack.swap(saved);
+                interp.swapRunningCoroutine(resumer);
+                if (segment != null) {
+                    interp.callStack.swap(saved);
+                }
             }
         });
     }
 
     public JsValue evalYield(YieldExpression yield, Environment env) {
-        final var coroutine = interp.currentCoroutine.get();
+        final var coroutine = env.resolveCoroutine();
         if (coroutine == null || !coroutine.isYieldAllowed()) {
             throw new SyntaxErrorException("yield is only valid inside a generator");
         }
@@ -253,7 +259,7 @@ public record FunctionInvoker(Interpreter interp) {
     }
 
     public JsValue evalAwait(AwaitExpression await, Environment env) {
-        final var coroutine = interp.currentCoroutine.get();
+        final var coroutine = env.resolveCoroutine();
         if (coroutine == null || !coroutine.isAsync()) {
             throw new SyntaxErrorException("await is only valid inside an async function");
         }

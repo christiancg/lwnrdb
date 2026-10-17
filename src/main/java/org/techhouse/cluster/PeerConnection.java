@@ -1,9 +1,7 @@
 package org.techhouse.cluster;
 
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -12,6 +10,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.cluster.msg.ClusterMessage;
+import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.conn.BoundedLineReader;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -19,6 +19,7 @@ import org.techhouse.log.Logger;
 public class PeerConnection {
     private final Logger logger = Logger.logFor(PeerConnection.class);
     private final EJson eJson = IocContainer.get(EJson.class);
+    private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final ClusterRpc rpc = new ClusterRpc();
     private final Socket socket;
     private final BufferedWriter writer;
@@ -28,15 +29,34 @@ public class PeerConnection {
 
     public PeerConnection(Socket socket) throws IOException {
         this.socket = socket;
-        this.writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
-        final var reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+        try {
+            this.writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+            socket.setSoTimeout((int) Math.min(clusterConfig.replicationAckTimeoutMs(), Integer.MAX_VALUE));
+            write(PeerRequest.message(ClusterMessageType.HELLO));
+        } catch (IOException e) {
+            socket.close();
+            throw e;
+        }
+        final var reader = new BoundedLineReader(socket.getInputStream(), socket::setSoTimeout);
         this.readerThread = Thread.ofVirtual().name("cluster-peer-reader").start(() -> readLoop(reader));
     }
 
-    private void readLoop(BufferedReader reader) {
+    private void write(ClusterMessage message) throws IOException {
+        writerLock.lock();
         try {
+            writer.write(eJson.toJson(message));
+            writer.newLine();
+            writer.flush();
+        } finally {
+            writerLock.unlock();
+        }
+    }
+
+    private void readLoop(BoundedLineReader reader) {
+        try {
+            final var maxFrameBytes = clusterConfig.maxFrameBytes();
             String line;
-            while (!closed && (line = reader.readLine()) != null) {
+            while (!closed && (line = reader.readLine(maxFrameBytes)) != null) {
                 if (line.isBlank()) {
                     continue;
                 }
@@ -59,16 +79,11 @@ public class PeerConnection {
         final var correlationId = rpc.newCorrelationId();
         message.setCorrelationId(correlationId);
         final var future = rpc.register(correlationId);
-        writerLock.lock();
         try {
-            writer.write(eJson.toJson(message));
-            writer.newLine();
-            writer.flush();
+            write(message);
         } catch (IOException e) {
             rpc.fail(correlationId, e);
             throw e;
-        } finally {
-            writerLock.unlock();
         }
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);

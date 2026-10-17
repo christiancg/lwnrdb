@@ -8,22 +8,36 @@ public final class RegexMatcher {
     private final String input;
     private final boolean unicode;
     private final RxNode root;
+    private static final int INITIAL_REACHED_ENDS = 16;
+    private static final int SCAN_STEP_MASK = 0x3F;
+    private static final int CAPTURE_SLOTS_PER_STEP = 64;
+    private static final int COMPARED_CHARS_PER_STEP = 64;
+    private final RegexStepBudget budget;
+    private final int resetSteps;
     private int[] starts;
     private int[] ends;
     private int matchEnd;
 
-    private RegexMatcher(RegexProgram program, String input) {
+    private RegexMatcher(RegexProgram program, String input, RegexStepBudget budget) {
         this.input = input;
+        this.budget = budget;
         this.unicode = program.unicode();
         this.root = program.root();
         this.starts = new int[program.groupCount() + 1];
         this.ends = new int[program.groupCount() + 1];
+        this.resetSteps = 1 + 2 * (program.groupCount() + 1) / CAPTURE_SLOTS_PER_STEP;
     }
 
     public static RegexMatch exec(RegexProgram program, String input, int fromIndex, boolean sticky) {
-        final var engine = new RegexMatcher(program, input);
+        return exec(program, input, fromIndex, sticky, RegexStepBudget.UNLIMITED);
+    }
+
+    public static RegexMatch exec(RegexProgram program, String input, int fromIndex, boolean sticky,
+            RegexStepBudget budget) {
+        final var engine = new RegexMatcher(program, input, budget);
         var start = Math.max(fromIndex, 0);
         while (start <= input.length()) {
+            budget.steps(engine.resetSteps);
             engine.resetCaptures();
             if (engine.tryMatchAt(start)) {
                 return engine.buildResult(start);
@@ -58,6 +72,7 @@ public final class RegexMatcher {
     }
 
     private boolean match(RxNode node, int pos, int dir, Cont k) {
+        budget.step();
         if (isSimple(node)) {
             final var next = tryConsumeSimple(node, pos, dir);
             return next >= 0 && k.run(next);
@@ -94,6 +109,7 @@ public final class RegexMatcher {
         var i = index;
         var p = pos;
         while ((dir > 0 ? i < terms.size() : i >= 0) && isSimple(terms.get(i))) {
+            budget.step();
             final var next = tryConsumeSimple(terms.get(i), p, dir);
             if (next < 0) {
                 return false;
@@ -151,34 +167,39 @@ public final class RegexMatcher {
 
     private boolean matchSimpleQuantifier(RxNode atom, int min, int max, boolean greedy, int pos, int dir, Cont k) {
         final var maxCount = max == RxNode.Quantifier.UNBOUNDED ? Integer.MAX_VALUE : max;
-        final var reachedEnds = new java.util.ArrayList<Integer>();
-        reachedEnds.add(pos);
+        var reachedEnds = new int[INITIAL_REACHED_ENDS];
+        reachedEnds[0] = pos;
+        var reached = 0;
         var p = pos;
-        while (reachedEnds.size() - 1 < maxCount) {
-            final var count = reachedEnds.size() - 1;
-            final var next = tryConsumeSimple(atom, p, dir);
-            if (next < 0) {
-                break;
+        while (reached < maxCount) {
+            if (reached > 0 && (reached & SCAN_STEP_MASK) == 0) {
+                budget.step();
             }
-            if (count >= min && next == p) {
+            final var next = tryConsumeSimple(atom, p, dir);
+            if (next < 0 || reached >= min && next == p) {
                 break;
             }
             p = next;
-            reachedEnds.add(p);
+            reached++;
+            if (reached == reachedEnds.length) {
+                reachedEnds = java.util.Arrays.copyOf(reachedEnds, reachedEnds.length * 2);
+            }
+            reachedEnds[reached] = p;
         }
-        final var reached = reachedEnds.size() - 1;
         if (reached < min) {
             return false;
         }
         if (greedy) {
             for (var count = reached; count >= min; count--) {
-                if (k.run(reachedEnds.get(count))) {
+                budget.step();
+                if (k.run(reachedEnds[count])) {
                     return true;
                 }
             }
         } else {
             for (var count = min; count <= reached; count++) {
-                if (k.run(reachedEnds.get(count))) {
+                budget.step();
+                if (k.run(reachedEnds[count])) {
                     return true;
                 }
             }
@@ -310,35 +331,37 @@ public final class RegexMatcher {
     }
 
     private int matchLiteralText(String text, int pos, int dir, boolean ignoreCase, boolean textUnicode) {
-        final var len = text.length();
-        if (dir > 0) {
-            if (pos + len > input.length()) {
-                return -1;
-            }
-            for (var i = 0; i < len; i++) {
-                if (charIsNotEqual(text.charAt(i), input.charAt(pos + i), ignoreCase, textUnicode)) {
-                    return -1;
-                }
-            }
-            return pos + len;
-        }
-        if (pos - len < 0) {
-            return -1;
-        }
-        for (var i = 0; i < len; i++) {
-            if (charIsNotEqual(text.charAt(i), input.charAt(pos - len + i), ignoreCase, textUnicode)) {
-                return -1;
-            }
-        }
-        return pos - len;
+        return matchRegion(text, 0, text.length(), pos, dir, ignoreCase, textUnicode);
     }
 
-    private static boolean charIsNotEqual(char a, char b, boolean ignoreCase, boolean unicode) {
+    private int matchRegion(String source, int offset, int len, int pos, int dir, boolean ignoreCase,
+            boolean textUnicode) {
+        final var at = dir > 0 ? pos : pos - len;
+        if (at < 0 || at + len > input.length()) {
+            return -1;
+        }
+        budget.steps(len / COMPARED_CHARS_PER_STEP);
+        if (!regionEquals(source, offset, at, len, ignoreCase, textUnicode)) {
+            return -1;
+        }
+        return dir > 0 ? pos + len : at;
+    }
+
+    private boolean regionEquals(String source, int offset, int at, int len, boolean ignoreCase, boolean textUnicode) {
+        if (!ignoreCase) {
+            return input.regionMatches(at, source, offset, len);
+        }
+        for (var i = 0; i < len; i++) {
+            if (differIgnoringCase(source.charAt(offset + i), input.charAt(at + i), textUnicode)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean differIgnoringCase(char a, char b, boolean unicode) {
         if (a == b) {
             return false;
-        }
-        if (!ignoreCase) {
-            return true;
         }
         for (final var equivalent : CaseFold.equivalents(a, unicode)) {
             if (equivalent == b) {
@@ -371,7 +394,7 @@ public final class RegexMatcher {
     private int consumeBackreference(RxNode.Backreference ref, int pos, int dir) {
         for (final var groupNumber : ref.groupNumbers()) {
             if (starts[groupNumber] >= 0) {
-                return matchLiteralText(input.substring(starts[groupNumber], ends[groupNumber]), pos, dir,
+                return matchRegion(input, starts[groupNumber], ends[groupNumber] - starts[groupNumber], pos, dir,
                         ref.ignoreCase(), ref.unicode());
             }
         }

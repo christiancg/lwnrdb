@@ -81,7 +81,8 @@ public class DbCursorTest {
     private static ResourceLimits limits(long memory, int batchSize, int maxBatchSize) {
         return new ResourceLimits(-1, -1, -1, true, false, List.of(), -1, -1, false, false,
                 ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.DEFAULT_MAX_LOG_LINES,
-                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, memory, -1, batchSize, maxBatchSize);
+                ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, memory, -1, batchSize, maxBatchSize, 8,
+                ResourceLimits.UNLIMITED_ARRAY_LENGTH);
     }
 
     private static ScriptResult run(PagingDatabase database, String source, ResourceLimits limits) {

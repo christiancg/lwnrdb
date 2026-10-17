@@ -92,39 +92,15 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_update_index_files_with_insert_and_remove() throws IOException {
+    public void test_an_index_log_append_that_empties_the_type_deletes_the_file() throws IOException {
         String fieldName = "testField";
+        fs.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, Map.of(Double.class,
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123.0, new HashSet<>(Set.of("a"))))));
 
-        Set<String> ids1 = new HashSet<>(Arrays.asList("id1", "id2"));
-        Set<String> ids2 = new HashSet<>(Arrays.asList("id3", "id4"));
-
-        FieldIndexEntry<String> insertEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", ids1);
-        FieldIndexEntry<String> removeEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", ids2);
-
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, insertEntry, removeEntry);
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
-                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
-        String fileContent = Files.readString(indexFile.toPath());
-
-        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2")
-                || fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1"));
-        assertFalse(fileContent.contains("value2" + Globals.ID_SEPARATOR + "id3" + Globals.ID_SEPARATOR + "id4")
-                || fileContent.contains("value2" + Globals.ID_SEPARATOR + "id4" + Globals.ID_SEPARATOR + "id3"));
-    }
-
-    @Test
-    public void test_update_index_files_with_empty_ids_remove() throws IOException {
-
-        String fieldName = "testField";
-
-        Set<String> emptyIds = new HashSet<>();
-        FieldIndexEntry<Integer> removeEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123, emptyIds);
-
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, removeEntry);
+        fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number", List.of(), List.of());
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
-
         assertFalse(indexFile.exists(),
                 "an index left with no entries is deleted, not kept as an empty file another type's lookup"
                         + " would still count");
@@ -372,7 +348,7 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_update_returns_index_entry_and_compaction() throws IOException {
+    public void test_update_returns_the_appended_index_entry() throws IOException {
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -381,17 +357,14 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
         entry2.set_id("2");
         final var pk1 = fs.insertIntoCollection(entry1);
         fs.insertIntoCollection(entry2);
-        data.get("name").asJsonString().setValue("updated");
+        data.addProperty("name", "updated");
         final var updatedEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         updatedEntry.set_id("1");
 
-        // Updating entry "1" (not the last one) relocates it to the end, so a survivor moves.
         final var result = fs.updateFromCollection(updatedEntry, pk1);
 
-        assertNotNull(result.indexEntry());
-        assertEquals("1", result.indexEntry().getValue());
-        assertNotNull(result.compaction());
-        assertEquals(pk1.getPosition(), result.compaction().removedPosition());
-        assertEquals(pk1.getLength(), result.compaction().removedLength());
+        assertNotNull(result);
+        assertEquals("1", result.getValue());
+        assertTrue(result.getPosition() > pk1.getPosition(), "the new copy is appended, nothing moves");
     }
 }

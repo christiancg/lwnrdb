@@ -96,7 +96,7 @@ public class ScriptCancellationIntegrationTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
         IocContainer.get(ScheduleRegistry.class).clear();

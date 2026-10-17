@@ -6,6 +6,7 @@ import org.techhouse.ops.OperationType;
 public class SaveRequest extends OperationRequest {
     public String _id;
     public JsonObject object;
+    private transient boolean backgroundFollowOn;
 
     public SaveRequest(String databaseName, String collectionName) {
         super(OperationType.SAVE, databaseName, collectionName);
@@ -25,5 +26,13 @@ public class SaveRequest extends OperationRequest {
 
     public void setObject(JsonObject object) {
         this.object = object;
+    }
+
+    public boolean isBackgroundFollowOn() {
+        return backgroundFollowOn;
+    }
+
+    public void setBackgroundFollowOn(boolean backgroundFollowOn) {
+        this.backgroundFollowOn = backgroundFollowOn;
     }
 }

@@ -51,7 +51,7 @@ final class DeleteEvaluator {
                 return JsBoolean.TRUE;
             }
             throw new TypeErrorException(
-                    "Cannot convert undefined or null to object in a delete of " + JsCoercion.toStr(keyValue));
+                    "Cannot convert undefined or null to object in a delete of " + JsCoercion.describe(keyValue));
         }
         if (keyValue instanceof JsSymbol symbol) {
             return deleteSymbolMember(target, symbol);

@@ -10,7 +10,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.MapOperatorHelper;
-import org.techhouse.ops.PipelineScriptContext;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
@@ -73,7 +73,7 @@ public class MapOperatorHelperPathTest {
 
     @Test
     public void test_a_script_result_with_a_dotted_name_writes_nested() {
-        try (var context = new PipelineScriptContext()) {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
             final var operator = new AddFieldMapOperator("a.doubled", null,
                     new ScriptMidOperator("export default (doc) => doc.a.b * 2;"));
             final var result = MapOperatorHelper.processOperator(operator, document(), context);

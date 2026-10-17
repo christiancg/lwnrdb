@@ -32,7 +32,9 @@ RUN --mount=type=cache,target=/root/.m2 \
 # (glibc + loader) ships in the distroless base. Dereference the versioned
 # library into a stable name so the runtime COPY doesn't depend on the exact
 # zlib build in the base image.
-RUN cp -L /lib64/libz.so.1 /tmp/libz.so.1
+RUN cp -L /lib64/libz.so.1 /tmp/libz.so.1 \
+ && mkdir -p /out/app/db /out/app/logs /out/app/certs \
+ && cp target/lwnrdb /out/app/lwnrdb
 
 # ---- Runtime stage: minimal glibc base ----
 # distroless/base provides glibc + the loader and nothing else (no shell, no
@@ -41,18 +43,20 @@ RUN cp -L /lib64/libz.so.1 /tmp/libz.so.1
 # the build stage below. (Alpine/musl is intentionally not used here: a glibc
 # native image cannot run against musl; that would require a static musl build
 # with its own toolchain.)
-FROM gcr.io/distroless/base-debian12
+FROM gcr.io/distroless/base-debian12:nonroot
 
 ARG PORT=8989
 ENV PORT=${PORT}
 # Where the copied libz.so.1 lives; ensure the loader searches it.
 ENV LD_LIBRARY_PATH=/usr/lib
 
+COPY --from=build /tmp/libz.so.1 /usr/lib/libz.so.1
+COPY --from=build --chown=nonroot:nonroot /out/app /app
+COPY --chown=nonroot:nonroot lwnrdb.cfg /app/
+
 WORKDIR /app
 
-COPY --from=build /app/target/lwnrdb ./lwnrdb
-COPY --from=build /tmp/libz.so.1 /usr/lib/libz.so.1
-COPY lwnrdb.cfg ./
+USER nonroot
 
 VOLUME /app/db
 VOLUME /app/logs

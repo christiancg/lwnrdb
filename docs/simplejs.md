@@ -43,11 +43,16 @@ Three things are deliberately left open, none of them engine work:
 
 1. **`scriptMaxMemoryBytes` is a bulk-allocation budget, not a live-heap cap.** A script that
    allocates a small object per instruction is bounded only by `scriptInstructionBudget`, so the
-   two must be sized together (see *Sandbox and resource limits*).
+   two must be sized together (see *Sandbox and resource limits*). The process-wide backstop for
+   what the budget cannot see is `scriptHeapCeilingPercent`.
 2. **Outbound `fetch` ships on, with its allowlist at `*`** — a capability behind a default-off
-   flag is one nobody discovers, but the shipped posture hands a script the server's network
-   position. `Main.warnIfScriptFetchEnabled` says so at every startup; operators are expected
-   to narrow it.
+   flag is one nobody discovers. `*` means any **public** host: loopback, private, link-local
+   (the 169.254.169.254 metadata endpoint), CGNAT, unique-local and the other non-public ranges
+   are refused unless the exact host is listed, so the shipped posture no longer hands a script
+   the server's position *inside* the network — but it still lets any script make the server
+   call any public host. `StartupWarnings.warnIfScriptFetchEnabled` says so at every startup,
+   and raises a SECURITY WARNING when an exact entry re-opens `localhost` or a literal private
+   address; operators are expected to narrow it.
 3. **npm packages are a non-goal**, not a pending phase. Resolution is the smaller half: a real
    package (`mysql2` is the worked example) needs raw TCP sockets, `Buffer`, `stream`,
    `EventEmitter` and asymmetric crypto — i.e. a Node runtime, which is the boundary this
@@ -93,7 +98,7 @@ Two things bound what it does *not* do: [Known gaps and divergences](#known-gaps
 | `elements/` | Token types. `JsBaseElement` is an abstract base with a `JsType` enum resolved by one `internalGetType` switch; concrete tokens are small immutable classes, with `JsNull`/`JsUndefined`/`JsEOF` as singletons. `SourcePosition` holds a token's offset/length/line/column **parallel** to the token stream, so the singletons keep their identity. |
 | `nodes/` | AST nodes, mirroring the `elements/` convention (a `NodeType` enum + `Expression`/`Statement` marker subclasses). Nodes carry their source position and, for function-like productions, their verbatim source text. |
 | `internal/` | `Lexer`, `Parser`, `Interpreter` — each a `final` class with a public static entry point over encapsulated state — plus the runtime helpers `Environment`, `Completion`, `JsCoercion`, `JsOperators`, `Coroutine`, `EventLoop` and `RegexTranslator`. Each of the three delegates to its own sub-package. `internal/lexer/` holds the scanners (`LexerTables`, `CharClasses`, `StringLexer`, `NumberLexer`, `IdentifierLexer`, `TemplateLexer`, `RegexLiteralLexer` plus the `Lexed`/`EscapeResult`/`BraceContext` carriers). `internal/parser/` is an abstract chain over `TokenStream` — `GrammarPredicates` -> `ParserContext` (the cursor plus the 14 grammar-context flags, and the abstract seams the layers call upward through) -> `LoopProductions` -> `StatementProductions` -> `ModuleProductions` -> `BindingProductions` -> `ExpressionProductions` -> `ClassProductions` -> `LiteralProductions` -> `ParserProductions` — because the productions are mutually recursive over one moving cursor, which no split into free functions survives. `Interpreter` itself is a facade: its own dispatch, member I/O, function construction and run accounting live beside it in `EvalDispatch`, `MemberIo`, `FunctionFactory` and `RunLifecycle`, with `Session`/`ModuleResult` as the run's result types, and the facade keeps a delegating seam for each so callers still go through `Interpreter`. `internal/interpreter/` holds the evaluator collaborators: `ExpressionEvaluator` (+ `ObjectLiteralEvaluator`, `AssignmentEvaluator`, `DeleteEvaluator`), `StatementEvaluator` (+ `LoopEvaluator`, `ForInEnumeration`, `LoopAction`), `ClassEvaluator` (+ `ClassMemberInstaller`, `ClassConstruction`, `SuperAccess`, `StaticEntry`), `MemberEvaluator` + `MemberWriter`/`BuiltinMemberLookup`/`AsyncGeneratorDriver`, `BindingEvaluator`, `ModuleEvaluator`/`ModuleLifecycle`, `FunctionInvoker`, `ConstructEvaluator`, `HasMemberEvaluator`, `PrivateMemberEvaluator`, `MemberAccessEvaluator`, `Iteration`, `ProxyDispatch`, `ModuleRegistry`, `CallStack`, `InterpreterUtils`. A collaborator is reached through the class that owns the state it mutates, never constructed by a caller. `internal/regex/` is the regex engine, whose parser is the same kind of chain (`RegexCursor` -> `EscapeReader` -> `CharacterClassParser` -> `SetClassParser` -> `RegexProductions`), and `internal/temporal/` the calendar/duration infrastructure plus the shared `TimeUnits`/`TemporalLimits` tables. |
-| `values/` | The runtime value model: `JsValue` + `JsNumber`/`JsString`/`JsBoolean`/`JsBigInt`/`JsUndefined`/`JsNull`/`JsSymbol` (primitives) and `JsObject`/`JsArray`/`JsFunction`/`JsNativeFunction`/`JsClass`/`JsPromise`/`JsGenerator`/`JsAsyncGenerator`/`JsMap`/`JsSet`/`JsDate`/`JsRegExp`/`JsProxy`/`JsArguments`/`JsGlobalObject`, the binary trio `JsArrayBuffer`/`JsTypedArray`/`JsDataView`, the eight `JsTemporal*` types and the four EJson bridges `JsGeo`/`JsVector`/`JsDbDateTime`/`JsDbTime`. A dedicated model rather than EJson, so `undefined`/`null` and JS coercion stay faithful. `EJsonInterop` converts in both directions. |
+| `values/` | The runtime value model: `JsValue` + `JsNumber`/`JsString`/`JsBoolean`/`JsBigInt`/`JsUndefined`/`JsNull`/`JsSymbol` (primitives) and `JsObject`/`JsArray`/`JsFunction`/`JsNativeFunction`/`JsClass`/`JsPromise`/`JsGenerator`/`JsAsyncGenerator`/`JsMap`/`JsSet`/`JsDate`/`JsRegExp`/`JsProxy`/`JsArguments`/`JsGlobalObject`, the binary trio `JsArrayBuffer`/`JsTypedArray`/`JsDataView`, the eight `JsTemporal*` types and the four EJson bridges `JsGeo`/`JsVector`/`JsDbDateTime`/`JsDbTime`. A dedicated model rather than EJson, so `undefined`/`null` and JS coercion stay faithful. `EJsonInterop` converts in both directions; the object keys it hands to EJson come from the shared `ejson/internal/KeyTable`, so a script that saves many documents with the same field names stores one string per name, not one per document. |
 | `builtins/` | The standard library, installed by `GlobalScope.install`, one class per family (`ObjectBuiltins`, `ArrayBuiltins`, `StringBuiltins`, …). A family that outgrew one file keeps its entry point here and moves its internals into a sub-package: `builtins/array/`, `builtins/typedarray/`, `builtins/iterator/`, `builtins/temporal/`, `builtins/string/`, `builtins/object/`, `builtins/regex/`, `builtins/json/`, `builtins/promise/`, `builtins/date/`, `builtins/intrinsics/`. `Intrinsics` builds the realm's prototype objects, with `IntrinsicsBrands` (brand checks), `IntrinsicsInstallers`, `IntrinsicsPrototypes` (prototype wiring) and `IntrinsicsCoercion` (`toObject`/`wrapPrimitive` and the prototype wrappers) under `builtins/intrinsics/`. `BuiltinArgs`, `NewTargetSupport` and the `builtins/temporal/` option/field readers (`TemporalOptions`, `TemporalFields`, `TemporalFieldReader`, `MonthCode`) are the shared helpers those families call instead of re-implementing. The `InterpreterOps`, `Invoker`, `IterableToList` and `TextImporter` seams are how a builtin calls back into the interpreter without depending on `internal/`. |
 | `host/` | The DB-integration seam and public entrypoint: `SimpleJs`, `HostBindings` (+ `SimpleHostBindings`, `DatabaseHostBindings`, `PipelineHostBindings`, `HookHostBindings`), `ResourceLimits`, `DatabaseAccess`/`EnforcingDatabaseAccess`, `NetworkAccess`/`JdkNetworkAccess`, `ModuleResolver`/`ProcedureModuleResolver`, `CancellationToken`, `ConsoleCapture`, `ScriptResult`/`ScriptRunMetrics`. |
 | `exceptions/` | Lexer/parser errors; interpreter errors extending `SimpleJsRuntimeException` (`ReferenceErrorException`, `TypeErrorException`, …) plus `JsThrowException`; and `ScriptAbortException` with its `ScriptTimeoutException`/`ScriptLimitException`/`ScriptCancelledException` subclasses, which extend `RuntimeException` directly so user `try`/`catch` cannot intercept them. |
@@ -211,6 +216,17 @@ Negation order matters and follows the spec — a property escape negates before
 because a real backtracking engine is exposed to blowups `java.util.regex`'s optimizations hide:
 alternation is a loop rather than a Java frame per branch (a `\p{RGI_Emoji}` class compiles to
 thousands of alternatives), and failed `(position, min, max)` repeat attempts are memoized.
+Neither stops a nested quantifier such as `(x+x+)+y` from backtracking exponentially, so the
+matcher also takes a `RegexStepBudget`, a callback charged once per start position, once per
+`match` call, once per simple term a sequence consumes, once per candidate count a simple quantifier
+backtracks through, and once per 64 characters a literal or a backreference compares (the compare
+runs in place over the input, with no substring copy). The 4-argument
+`RegexMatcher.exec` is unlimited and is for trusted patterns only; every caller that runs an
+untrusted pattern or input passes a budget. `RegExp` in scripts passes one that calls
+`InterpreterOps.tick()` every 64 steps (see *Sandbox and resource limits*), and the JSON Schema
+validator passes its per-document evaluation budget (`schemaValidationBudget`, refused with
+`400-23`). The budget throws its caller's own exception through the continuations; the matcher
+holds no state beyond one `exec`, so nothing needs unwinding.
 
 Unicode property escapes resolve a name to a `CodePointSet` using `java.util.regex.Pattern` as a
 one-time per-property **oracle** (compiled once, every code point tested, cached) — never as the
@@ -219,7 +235,7 @@ and are expanded from `src/main/resources/simplejs/emoji-sequences.txt`, which i
 pinned to Unicode 17.0. This is why the build JDK is pinned to exactly one version: the UCD comes
 from the JDK, and two JDK versions would make `\p{…}` answer differently on two nodes of one
 cluster. That version is **25, carrying Unicode 16.0**, because the shipped artifact is the GraalVM
-native image and GraalVM has no JDK 26 release. So the two data sources sit one version apart —
+native image and GraalVM has no JDK 26 or 27 release. So the two data sources sit one version apart —
 properties *of strings* come from our own 17.0 file, single-code-point properties from the JDK's
 16.0 data — and the eight `language/identifiers/*-unicode-17.0.0*` cases are excluded for that
 reason (`config/test262-exclusions.txt`).
@@ -275,6 +291,16 @@ is enforced per call. Breaching any of them throws a `ScriptAbortException`, whi
 `try`/`catch` cannot intercept and which skips `finally` and `using` disposal — so a script
 cannot trap its own timeout in a `finally { while (true) {} }`.
 
+Regex matching is inside that boundary too. A single `RegExp.prototype.exec` (and so `test`,
+`match`, `matchAll`, `replace`, `split` and `search`, which all reach it) used to be one Java call
+that never returned control to the interpreter, so a catastrophic pattern ran past
+`scriptTimeoutMs`, the instruction budget and cancellation alike. `RegexExec.builtinExec` now hands
+the matcher a budget that ticks once every 64 matcher steps, so the budget, the deadline and the
+cancellation token all reach inside one `exec`, and a runaway pattern ends with `400-11`, `408-1`
+or `408-2` like any runaway loop. The side effect: regex work counts against
+`scriptInstructionBudget` (and the before-hook, pipeline and trigger budgets) at one instruction
+per 64 matcher steps. Regex semantics are unchanged.
+
 The **allocation budget** (`scriptMaxMemoryBytes`) is a per-run cumulative total of the
 allocations proportional to a script-supplied length or to input size — a `repeat` result, a
 dense array, a typed array, a `join`, a `JSON` payload, a `structuredClone` node — and of what
@@ -290,14 +316,139 @@ while `s = s + s` — the case `tick()` cannot see — has a delta equal to the 
 `OutOfMemoryError`/`StackOverflowError` are caught at the `SimpleJs.run` boundary as a last
 resort and reported as `ScriptMemoryError`.
 
-Per-run budgets bound **one** run; `ops/ScriptAdmission` bounds their sum. It caps
+Outputs a script keeps by construction are charged in full: every piece `split` produces, every
+node `JSON.stringify` and the host-bound result conversion build (released once the text or the
+host value exists, so the charge is a peak guard), every element `flat` writes, the text of a
+`fetch` response, and `toHex`/`toBase64` output. A `RegExp` compiled at run time charges its parse
+for the duration of the parse, and the process-wide program cache keeps only patterns of at most
+4096 characters, evicting least recently used ones past one million cached source characters.
+Every native step that allocates in proportion to a script-supplied length charges before it
+allocates, computing the size in `long` so it cannot wrap to zero: growing an array through
+`length` or an index write past its end (or `Object.defineProperty` on either), the argument list
+`apply`, `Reflect.apply` and `Reflect.construct` build (credited back when the call returns),
+`Vector.from`, every `Iterator.prototype.windows` copy, `ArrayBuffer.prototype.slice` (including
+`slice(-Infinity)`), the boxed copies typed-array `sort`, `toSorted`, `toReversed` and `set` make,
+`String.raw`, the indentation and per-occurrence string text `JSON.stringify` renders (at its
+escaped width, so a string of control characters is charged six characters per character), the
+worst-case expansion of `normalize` (held only while it runs), every value `JSON.parse` builds
+(32 bytes per node, as for any array element), the holes a builtin pads when it writes past the
+dense end of an array (`fill`, `copyWithin`, `splice` and every other `ArrayLike` write, the
+`CreateDataProperty` writes of `map`, `concat`, `Array.from` and friends, and a `Reflect.set` whose
+receiver is an array), the array-like a Proxy `ownKeys` trap returns (refused past
+`scriptMaxArrayLength`, then charged and paced as it is copied, stopping at the first key that is
+not a string or symbol), the text of `encodeURI`/`encodeURIComponent`/`escape` (counted in a
+first pass, so the output buffer is sized and charged before it is filled), and the decimal,
+radix or grouped digits of a BigInt converted to text (`toString`, `toLocaleString`, `String(x)`,
+a template substitution, `+` with a string, a property key) once it is wider than 64 bits. A global `replace`/`replaceAll` with a
+replacement string over the built-in `exec` appends each match to the output as it finds it and
+keeps no match list; a replacer function or a custom `exec` keeps the specification's two passes
+(every `exec` call before any result is read) and charges each retained match. An array-like whose `length` is
+above **`scriptMaxArrayLength`** (default 16 777 216) is refused before anything is allocated, as
+an untrappable `ScriptArrayTooLargeError` (`400-30`): `apply`/`Reflect.apply`/`Reflect.construct`
+argument lists, `Vector.from` and `Array.fromAsync`. The event loop also ticks once per microtask,
+so a promise chain that never yields to a timer (`Array.fromAsync` over a huge array-like) still
+meets the deadline. A `db.*` write payload is charged for every string and key occurrence it
+contains, not once per distinct string, so an object that shares one large string across many
+fields is refused on the memory budget before it reaches the collection lock; the charge is
+credited back once the payload is converted.
+
+`BigInt` parsing refuses more than `BigIntLimits.MAX_PARSE_DIGITS` (65 536) digits with a
+`RangeError` (the JDK's decimal parse is quadratic); a longer non-decimal `Number("0x…")` literal
+and a longer `parseInt` digit run evaluate to `Infinity` (or the value of the digits left after
+leading zeros) without being parsed. Every promise (96 bytes) and every generator or `async`
+function coroutine (2Kb) is charged when it is created, since the run keeps them until it ends;
+a queued microtask (64 bytes) and a pending timer (96 bytes) are charged while they wait and
+released when they run or are cleared, so a backlog is bounded without taxing a long `await`
+loop. Spreading an array charges the slots its storage does not back, so `[...a]` over
+`a.length = 2 ** 32 - 1` fails on the budget instead of materialising four billion holes.
+
+What the static model still cannot see — many retained copies of a large string (`big + i`,
+`big.slice(1)`), a heap full of suspended coroutines — is caught by the **heap ceiling**
+(`scriptHeapCeilingPercent`, default `75`, `host/ScriptHeapGuard`). Every charge of at least
+64Kb, every string result of at least 32K characters and every 16 384th instruction check the
+JVM's used heap against that percentage of its maximum; past it, and if the live set measured
+after the last garbage collection is above half the ceiling (so a heap merely full of garbage is
+not mistaken for retention), the script is stopped with `ScriptMemoryError`. Charging every copy
+instead would make the accumulate-and-slice idioms the delta charge exists for quadratic. The
+server switches the ceiling on at startup (`Main` calls `ScriptHeapGuard.setCeilingPercent`); the
+engine itself reads no configuration, so SimpleJS embedded on its own (the test262 worker) runs
+without it.
+
+**Deadline granularity.** `tick()` checks the wall clock every 64 instructions, and every
+weighted `tick(n)` checks it unconditionally. Natives whose cost grows with their input pay a
+weighted tick before or right after the work (`InterpreterOps.paceWork`, one instruction per 1024
+units): `localeCompare`, `normalize`, case mapping, `trim`, `slice`/`substring`/`substr` on large
+strings, every decimal or radix conversion of a BigInt (by bit length squared), `crypto.hash`,
+`toHex`/`toBase64` and a regex compile. The BigInt pacing lives inside `BigIntLimits.chargeText`/
+`chargeGroupedText`, so `toString()`, `toLocaleString()`, `x + ""`, a template, `String(x)` and a
+property key (`o[x]`, `x in o`) all pay it, each exactly once. A diagnostic never converts a large
+BigInt at all: error messages go through `JsCoercion.describe`, which names a BigInt over 4096 bits
+by its bit length (`a 16777214-bit BigInt is not a function`), and there is no ops-less `toStr`
+left to call. A single such call can still overrun the deadline by its own duration, never
+by more. The regex matcher charges one step for every 64 characters a simple quantifier scans or a literal or
+backreference compares, so
+a pattern that rescans a long input from every start position (`/a{1000000}/` against 999 999
+`a`s) runs into the budget instead of spending minutes between deadline samples. A literal string
+search (`indexOf`, `lastIndexOf`, `includes`, `split`, `replace`, `replaceAll`) whose worst case
+exceeds 2^24 character comparisons runs as a linear-time KMP scan (`string/StringSearch`) that
+ticks every 1024 characters, so a 4M-character haystack and a 4K-character near-miss needle
+cannot hold the thread for minutes between deadline samples; smaller searches keep the JDK's
+intrinsic. For-in and `Object.keys`/`values`/`entries` over an array walk only its populated
+indices (`JsArray.populatedIndices`), so a sparse `length` near 2^32 costs nothing.
+
+**Coroutine teardown.** At the end of a run every suspended generator or `async` function is
+cancelled once; its `finally` blocks run as the language requires, but a `yield` or `await`
+reached after the cancellation throws immediately instead of suspending, so `finally { yield }`
+can no longer park a virtual thread (and the whole realm it references) forever. A coroutine that
+such a `finally` starts is registered while the teardown walks the list and is cancelled in the
+same pass. Per-realm engine state (the `parseInt`/`parseFloat` functions shared with `Number`, the
+iterator-helper prototypes, the stepping state of built-in iterators) lives on the realm's own
+objects (`JsObject` internal slot), never in a static map, so a finished run's realm is
+unreachable once its result is converted. A parser
+`StackOverflowError` on a deeply nested source is answered as a syntax error (`400-9` for
+`RUN_SCRIPT`, `400-13` for `SAVE_PROCEDURE`) without logging a stack trace.
+
+**Native loops and recursion.** Work a builtin does in Java, not in interpreted code, is charged
+to the same machinery. A native loop over an array-like paces through `ArrayLike.has`/`get`/
+`delete`: every 1024th index calls `InterpreterOps.tick(1024)`, which takes a whole block from the
+instruction budget and checks the cancellation token and the deadline on every call — so a sparse
+`new Array(2 ** 32 - 1).indexOf(x)` ends with `400-11` (or `408-1`/`408-2`) instead of scanning
+four billion holes, while a scan shorter than 1024 elements costs nothing extra. A loop that
+bypasses `ArrayLike` (the typed-array scans, `fill`, `copyWithin`, `join`) calls
+`InterpreterOps.pace` itself. Native recursion over script data — `JSON.parse` and its reviver,
+`JSON.stringify`, `structuredClone`, `flat`, `join`/`String()` of nested arrays — is bounded by
+`NativeDepth.MAX = 256` levels, and every native call counts one level, so native-to-native
+recursion through `toString`/`toJSON` is bounded without touching each builtin; past it a
+**catchable** `RangeError: Maximum nesting depth exceeded` is thrown (256 levels fit a
+virtual-thread stack under the deepest `scriptMaxDepth` call stack; a test pins it). A `db.*`
+call (and each `db.cursor` batch) also needs `NativeDepth.DB_CALL_RESERVE` (32) levels of headroom
+and is refused with that same `RangeError` before it touches a lock, because a stack overflow inside
+a host lock acquire or release would leave the lock held for every other caller. BigInt
+results are sized **before** they are computed (`internal/BigIntLimits`): a result over 2^24 bits
+(2 MiB) throws a catchable `RangeError: Maximum BigInt size exceeded`, a result above 64 bits is
+charged to `scriptMaxMemoryBytes`, and an exponent or shift count beyond `int` is that same
+RangeError rather than an internal error. That covers every operator, not only the growing ones:
+`~`, unary `-`, `/`, `%`, `&`, `|`, `^`, `>>`, `++` and `--` keep their operand's size, so each is
+sized as its widest operand plus one bit, the same estimate as `+`. A `JSON.stringify` replacer
+array is de-duplicated through an insertion-ordered set and paces its build loop, so 300 000 keys
+cost one pass instead of a quadratic scan that ignored the deadline. Finally, an `Error` raised on a coroutine thread (every
+script body, generator and async function runs on one) is relayed to the driver and rethrown
+before any generator or promise observer sees it, so a `StackOverflowError` deep inside an async
+function ends the run as `400-12` instead of hanging it with its admission permit held.
+
+Per-run budgets bound **one** run; `ops/ScriptAdmission` bounds their sum. It first takes this
+caller's `maxConcurrentScriptsPerUser` (default 4) and this database's
+`maxConcurrentScriptsPerDatabase` (default 8) slice, without waiting, and only then caps
 client-initiated runs at `maxConcurrentScripts` (admitting after a bounded `scriptQueueWaitMs`
-wait, else `503-6`), then takes this caller's `maxConcurrentScriptsPerUser` and this database's
-`maxConcurrentScriptsPerDatabase` slice — the inner two without waiting, since a tenant already
-at its ceiling should be told at once rather than occupy a node-wide permit while it queues. The
-returned `Permit` records which pools it took, so an inner refusal releases the outer one.
-Triggers, hooks and schedules are exempt: they are already bounded by their own worker pools, and
-a trigger refused for want of a permit would be a *dropped* trigger, not a retried one. The
+wait, else `503-6`): a tenant already at its ceiling is told at once instead of queueing for a
+node-wide permit it could not use. The returned `Permit` records which pools it took, so a
+node-wide refusal releases the slices. Triggers and schedules take the two slices as their
+definer (`acquireSlices`), not the node-wide permit: they are already bounded by their own worker
+pools, but without the slices one tenant's automation could hold every interpreter its users'
+scripts compete for. A trigger refused a slice is re-queued after a backoff without consuming an
+attempt (dead-lettered only once `triggerRunRetentionMs` has passed since it fired), so it is
+delayed, never dropped; a scheduled run refused one skips that occurrence. Before hooks stay
+exempt — they run inline under the write lock, where a refusal would be a failed write. The
 node-wide ceiling on concurrent interpreters is therefore
 `maxConcurrentScripts + triggerThreads + scheduleThreads`, and that sum times
 `scriptMaxMemoryBytes` is the worst-case script heap to size `-Xmx` against — additive with
@@ -308,6 +459,31 @@ bare `*`; an **empty** list denies everything even with the switch on), a respon
 timeout, and runs off the interpreter thread as an `EventLoop` async job. It reaches
 `RUN_SCRIPT`, `CALL_PROCEDURE`, triggers and schedules, and deliberately not pipeline scripts or
 before-write hooks, which hold collection locks where a blocking egress call is a stall.
+
+- **One parser.** The host the allowlist checks and the host connected to both come from
+  `URI.getHost()` (`host/FetchTarget`); only `http`/`https` URLs with a host are accepted, anything
+  else is "fetch: host not allowed".
+- **Public addresses only, checked where it connects.** `JdkNetworkAccess` resolves the host once,
+  requires every address to pass `PublicAddressPolicy` (no loopback, private, link-local, CGNAT,
+  multicast, reserved, unique-local, or IPv6 form embedding such an IPv4 — mapped, compatible,
+  NAT64, 6to4) and pins exactly those addresses in `PinnedResolution` for the duration of the
+  request. `PinningResolverProvider`, a JDK `InetAddressResolverProvider` registered through
+  `META-INF/services`, answers the `HttpClient`'s own lookup from the pin, so a DNS answer that
+  changes between the check and the connect (rebinding) cannot redirect it; unpinned names
+  delegate to the JDK's built-in resolver, so cluster and peer resolution are unchanged. The
+  Host header, SNI and certificate checks still use the URL's host. Only an **exact** allowlist
+  entry equal to the host (`10.0.0.5`, `localhost`) lets it reach a private address; `*` and
+  `*.example.com` never do. Redirects are never followed (the client's policy is `NEVER`).
+- **Bounded body.** The body is read as a stream and abandoned the moment it passes
+  `scriptFetchMaxResponseBytes` (or at once when `Content-Length` already says so), counted in
+  bytes, so an endless response cannot exhaust the heap.
+- **Bounded concurrency.** One run may have at most `scriptFetchMaxConcurrent` (default 8) fetches
+  in flight; one more rejects with "fetch: too many concurrent requests" until an earlier one
+  settles.
+- **No connect detail.** Every network failure other than a timeout, a blocked host or an
+  oversized body rejects with the bare "fetch failed"; the cause goes to the server log, so a
+  script cannot use error text to scan ports. A fast refusal and a timeout still differ in
+  timing for hosts the allowlist permits.
 
 `strictScriptGoal` selects the spec's Script goal. It defaults to `false`, which is what the
 database host uses — the result contract deliberately allows a top-level `return`, and
@@ -335,7 +511,13 @@ throwing import could farm indefinitely. Nesting is capped by `ResourceLimits.ma
 Three built-ins are seeded into the registry: `args` (the request payload), `db` (the
 `DatabaseAccess` surface) and `script` (`importText(source[, moduleId])`, which runs a **string**
 as a module, content-addressing its id by SHA-256; gated off by default behind
-`scriptTextImportEnabled`). A default import of a built-in binds the built-in object itself,
+`scriptTextImportEnabled`). Top-level `await` inside imported text works wherever `importText` is called. Called from
+an async function or module code — directly, through `.call`/`.apply`/`bind`/`Reflect.apply`, or as a callback a
+builtin invokes synchronously (`map`, `Array.from`, a getter, a `Proxy`) — it suspends that caller, the coroutine the
+interpreter is running. With no async caller (a plain function, a generator, a `.then` handler, a timer callback)
+the text is evaluated in a coroutine of its own and the event loop is driven until it finishes, so other queued
+jobs can run before `importText` returns; text that awaits something that never settles throws `Error: Module '…'
+awaited something that never settled` instead of hanging. A default import of a built-in binds the built-in object itself,
 while a default import of a real module binds its `default` export — `ModuleEvaluator` tags each
 resolution accordingly. Only `export`ed bindings are importable, which is the one trap worth
 knowing: a procedure written for `CALL_PROCEDURE` with a top-level `return` imports as
@@ -344,11 +526,19 @@ knowing: a procedure written for `CALL_PROCEDURE` with a top-level `return` impo
 Everything else is the host's decision through `host/ModuleResolver`. The database host resolves
 **`procedures/<name>`** (`ProcedureModuleResolver`, gated by `scriptProcedureImportEnabled`,
 default on), so a library *is* a stored procedure — managed by the operations that already exist,
-with nothing new persisted or replicated. The namespace is flat and scope-restricted (a `/` in
-the name is refused; only the run's own database is searched), a missing or disabled procedure
+with nothing new persisted or replicated. The namespace is flat and scope-restricted (the name
+must pass the wire's procedure-name rule, `NameValidations.isValidProcedureName`: 3-64 letters,
+digits, `_` or `-`, so `/`, `..`, `\`, NUL and over-long names never reach the file layer; only
+the run's own database is searched), a missing or disabled procedure
 answers `Cannot find module`, and the module id carries the procedure's version so a
 `CompiledProcedureCache` entry can be reused across runs. Authority is the **importer's**:
-importing widens what code is reachable, never what it may do. `SAVE_PROCEDURE` walks the
+importing widens what code is reachable, never what it may do. Reading the code is a separate
+right: when the run's user lacks script `MANAGE` on the database (and is neither its owner nor an
+admin), `EnforcingDatabaseAccess.mayReadProcedureSource` is false and the resolver answers
+`ResolvedModule.withHiddenSource`, which `ModuleEvaluator` parses with
+`Parser.parseWithoutSourceText` (no spans, never the shared cached parse), so `toString()` of an
+imported function or class is the `NativeFunction` stub — the same rule `LIST_PROCEDURES`
+applies to `includeSource`. `SAVE_PROCEDURE` walks the
 compiled program's static specifiers and refuses an unresolvable `procedures/` target with
 `400-18`, so a typo reaches whoever installs the procedure — which means install order matters.
 
@@ -361,6 +551,11 @@ database other than the run's scope. Opening DDL to scripts would put `CREATE_IN
 `DROP_COLLECTION` behind a trigger's definer rights and would race the admin coordinator's DDL
 serialization; a migration is a client driving DDL over the wire and calling a script for the
 data half.
+
+`db.listDatabases()` answers the run's scope without a request when the run is scoped. An unscoped
+run (an ad-hoc `RUN_SCRIPT`) dispatches `LIST_DATABASES` as its acting user, so it gets the same
+filtered answer the wire gives that user: every database for an admin, otherwise only the databases
+the user owns or holds a database, collection or script grant on.
 
 **Failure contract**: every method throws a catchable JS `Error` (built with the script's own
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
@@ -490,10 +685,16 @@ the wrong index family, though, and one `REINDEX` of the collection moves it int
 
   Frames are return addresses kept by `internal/interpreter/CallStack` (pushed and popped beside
   the existing depth counter, so already bounded by `scriptMaxDepth`), with line and column
-  written per statement from positions the parser stamps. The trace is captured **when the error
-  is constructed**, not when it is reported — the JS error object is built at the catch site,
-  after every frame has unwound — through an `InheritableThreadLocal` so a coroutine's virtual
-  thread sees it. Each coroutine swaps in its own stack segment per resumption, so a suspended
+  written per statement from positions the parser stamps. The trace is captured **where the error
+  is raised**, not when it is reported — the JS error object is built at the catch site, after
+  every frame has unwound. A JS `Error` object takes its frames when it is constructed, from the
+  stack supplier its realm's `Intrinsics` holds; an engine exception (`TypeError`, `RangeError`,
+  …) is stamped by `CallStack.stamp` at the first frame boundary it crosses — the statement
+  dispatch, a native or JS call before its frame pops, or a top-level session entry — so the
+  innermost boundary records the frames the throw saw, before any JS `catch` or `finally` in that
+  frame runs. Nothing is thread-scoped: the interpreter's own stack object is reached directly, so
+  a coroutine's virtual thread and a nested interpreter each see their own frames. Each coroutine
+  swaps in its own stack segment per resumption, so a suspended
   generator's frame does not appear in its consumer's trace, and a frame is labelled with the
   module the function was *written* in. Sandbox aborts deliberately capture nothing: a timeout is
   not a program error.
@@ -535,13 +736,18 @@ runtime state lives in the per-run `Interpreter`/`Environment`/`Intrinsics`.
 `scriptPermissions` is a per-database `ScriptPermissionLevel` — `NONE`/`RUN`/`MANAGE`, where
 `MANAGE` additionally allows installing procedures, triggers and schedules; admins and database
 owners have an implicit `MANAGE`. A legacy boolean reads as `RUN`/`NONE`. For a trigger,
-`MANAGE` is bounded by the collection: a `collectionPermissions` entry that does not grant
-`READ_WRITE` on that collection refuses `SAVE_TRIGGER`, `DELETE_TRIGGER` and `TEST_TRIGGER` there,
-because a before hook rewrites or vetoes every write to it.
+`MANAGE` is bounded by the collection: `SAVE_TRIGGER`, `DELETE_TRIGGER` and `TEST_TRIGGER` also
+need `READ_WRITE` on that collection — through an explicit `collectionPermissions` entry when one
+exists (the entry alone decides), otherwise through the database grant — and answer `403-1`
+without it. An after trigger receives every document written to its collection and a before hook
+rewrites or vetoes every write there, so `MANAGE` with only `READ` (or no data grant at all) must
+not install one. Procedures and schedules consult no collection: a schedule binds none and receives
+no document — it runs its procedure with the `args` its installer chose, and every `db.*` call that
+procedure makes is authorized again against the definer's own grants.
 
 **Errors** map to: `403-2` scripting disabled, `404-4` unknown database, `400-10` source too
 large, `400-9` threw or would not parse, `400-11` budget/depth, `400-12` memory, `400-15` result
-too large, `400-20` pending result, `408-1` timeout, `408-2` cancelled, `409-6` inside an open
+too large, `400-20` pending result, `400-30` an array-like past `scriptMaxArrayLength`, `408-1` timeout, `408-2` cancelled, `409-6` inside an open
 client transaction. Console output and a stack ride along on every outcome.
 
 ### Triggers
@@ -553,15 +759,43 @@ lock and decide whether the write happens at all.
 Both are installed with a **definer**, and an after trigger runs under **definer rights** rather
 than the writer's. That is load-bearing: under invoker rights an audit trigger's effect would
 depend on who wrote, and would fail for exactly the low-privilege users most worth auditing —
-as a WARN in a log the writer never sees. The escalation is bounded by the fact that only an
-admin, owner or `MANAGE` user can install one. Two consequences: a definer who no longer exists
+as a WARN in a log the writer never sees. Two consequences: a definer who no longer exists
 **disables** the trigger (falling back to the writer would silently reinstate invoker rights, and
 falling back to an admin would let *deleting* a user widen a trigger's authority), and a definer
-whose permissions are later reduced silently narrows it.
+whose permissions are later reduced narrows it. `ops/DefinerAuthority` re-checks the definer every
+time an after trigger or a schedule fires — a recovery replay and a `RESOLVE_TRIGGER_RUN` replay
+included, since both go through the same dispatch: an after trigger needs script `RUN` on the
+database and `READ` on its collection (the documents it is handed are that collection's), a
+schedule needs `RUN`. A definer that is gone or lacks them skips the run and **disables** the
+definition with a stored `disabledReason`, so a later re-grant (or a re-created user of the same
+name) does not silently revive it; its owner re-saves it. The disable is a definition write, so it
+is made only where definitions are decided — a standalone node, or the cluster's admin coordinator
+with quorum and a completed admin sync, which replicates it like any other definition change. Any
+other node still skips every run and leaves the definition as it is. Before hooks are not
+re-checked: a hook has no `db` and no `fetch`, so it can hand nothing to its definer.
 
 The definer is always the saving user: no request field can name another one, so a client cannot
 install a trigger that runs as someone else. Peers never derive it either — they receive the
 coordinator's definition file, definer included, as a versioned admin record.
+
+Limiting who may *install* a trigger is not enough. A trigger, before hook or schedule names its
+procedure, and the procedure is looked up **by name when it fires**, so whoever can change that
+procedure — or any procedure it imports — changes what runs with the definer's authority.
+While such a binding exists, `SAVE_PROCEDURE` (disabling with `enabled:false` included) and
+`DELETE_PROCEDURE` of a procedure it reaches answer `403-4` for anyone but the binding's definer, a
+database owner or an admin; an unbound procedure, or one bound only by the caller, stays freely
+editable. Reach is the transitive import closure, computed lexically from each procedure's source:
+static `import`/`export … from` and a dynamic `import('procedures/x')` with a literal specifier
+name exact procedures, while a dynamic import with a computed specifier, or any import of the
+`script` module (whose `importText` runs arbitrary module text), makes the procedure able to import
+*any* procedure in the database — so while a foreign definer's binding reaches one, every name
+counts as reached, existing or new. A disabled procedure still counts, because its definer or an
+owner may re-enable it. The check runs in the handler under the database's procedures lock — the
+lock `SAVE_TRIGGER` and `SAVE_SCHEDULE` also take, so no binding can appear between the check and
+the write — and therefore on the cluster's admin coordinator; peers install the result without
+re-checking. Not covered, because no foreign authority changes hands: deleting another user's
+trigger or schedule (a denial of service at worst), and replacing another user's trigger by name,
+which makes the replacer its definer.
 
 **An after trigger runs exactly once, not at least once.** Before an event is queued,
 `TriggerRunLog` persists a pending-run record in `admin/trigger_runs`; `TriggerDispatcher` then
@@ -645,7 +879,15 @@ once per replica. Enqueueing is one map lookup and a queue offer, so it is safe 
 lock. `bckg_ops/TriggerExecutor` runs them on **its own** bounded queue and workers, deliberately
 not the background index queue: a trigger runs arbitrary user code, and sharing that queue would
 let one slow trigger stall field-index maintenance for every collection. On overflow the oldest
-queued run is dead-lettered and counted. Cascades carry `triggerDepth + 1` on the request itself — a field,
+queued run is dead-lettered and counted. The queue is bounded by count (`triggerQueueSize`) and by
+bytes (`triggerQueueMaxBytes`): a queued `CREATED`/`UPDATED` event keeps only its ids and re-reads
+the documents when it runs (a retry always did), so only a `DELETED` event's snapshot, which has
+nothing to re-read, takes real space. Dropping a collection or database discards its queued events
+and every pending or dead-lettered run record, so a same-name collection created later never
+receives the dropped one's documents. A standalone node garbage-collects stranded and expired
+dead-lettered runs every minute, not only at startup; a cluster node already does it in its
+transaction recovery sweep. A collection holds at most `triggerMaxPerCollection` triggers
+(`400-32`). Cascades carry `triggerDepth + 1` on the request itself — a field,
 not a `ThreadLocal`, so the bound survives a cluster forward — zeroed for client requests;
 `allowCascade` defaults to false.
 
@@ -714,6 +956,11 @@ permitted. `bckg_ops/ScheduleExecutor` owns the ticker plus its own queue and wo
 anything this node does not own or that is still running. A run still waiting in that queue when its
 schedule is deleted, disabled or changed is skipped: the dispatcher runs it only while it is still the
 registered entry, so an acknowledged `DELETE_SCHEDULE` never fires a stale definition afterwards.
+A run takes its definer's admission slices and is skipped (recorded as `SKIPPED`) when they are
+full. `intervalMs` may not be below `scheduleMinIntervalMs` (`400-35`), and a stored or replicated
+definition below it fires at that minimum; one user may define at most `scheduleMaxTotalPerUser`
+schedules across every database (`400-33`), counted from the registry under one lock so two
+databases' saves cannot both take the last slot.
 
 ### Pipeline scripts
 
@@ -731,7 +978,11 @@ There is **no `db`**, no `fetch` and no console: the aggregation already holds r
 calling thread, and with no `db` a pipeline script cannot issue an `AGGREGATE` — there is no
 recursion to bound. Memory is charged per document and released after the call, since without the
 release a million-document scan would exhaust the budget on document count alone; a `REDUCE`'s
-final accumulator is measured against `scriptMaxResultBytes`. The deadline is the *pipeline's*,
+final accumulator is measured against `scriptMaxResultBytes`. A `MAP` script's value is
+retained in the row, so it is charged as its JSON text to the same budgets a `CONCAT` pays: the
+row's `maxEntrySize` (`400-28`) and the pipeline's `aggregateMaxResultBytes` (`400-36`). Without
+that charge, each distinct script source would bring its own memory budget and a pipeline with many
+of them could retain far more than the result cap. The deadline is the *pipeline's*,
 so a query carrying several scripts cannot outlive the timeout by opening more of them. The two
 windows into a misbehaving pipeline script are `analyze` and the error itself, which names the
 failing function and line.
@@ -741,6 +992,11 @@ failing function and line.
 Unless `scriptRunHistoryEnabled` is off, a finished run is recorded in the reserved `script_runs`
 collection **of the database it ran against**, so an operator asks what ran, what it cost and why
 it failed with an ordinary `AGGREGATE` under ordinary permissions instead of grepping the log.
+Those permissions are the database's: every user with `READ` on the database can read every row,
+including the error text, stack and (with `scriptRunHistoryIncludeLogs`) console output of runs
+by other users and of triggers and schedules that run with a definer's wider authority. Scripts
+must therefore never log or throw secrets — a token read from another collection, a `fetch`
+credential — because the history publishes them to every reader of the database.
 The collection is created **lazily** on the first row (creating it with the database would change
 `LIST_COLLECTIONS` for every database that never runs a script), is refused to client mutation
 while staying open to reads/`CREATE_INDEX`/`REINDEX`, and is skipped by trigger dispatch and
@@ -769,7 +1025,11 @@ collection's owner; a transactional write registers each foreign owner as a part
 `db.transaction` spans owners through the same 2PC the wire protocol uses.
 `ops/resp/ResponseParser` rebuilds a typed response from the owner's JSON through each subclass's
 public constructor, and `aggregate` forwards the caller's own pipeline JSON so a polymorphic
-`CUSTOM` (geo/vector) operator survives the trip.
+`CUSTOM` (geo/vector) operator survives the trip. The owner re-validates every forwarded request
+and re-checks the script user's permission against its own copy of the users, so a grant made a
+moment before the script ran may answer one `403-1` on an owner that has not applied it yet.
+Script-run history writes to `script_runs` carry no user and skip that check (their names are still
+validated).
 
 **Where the run itself lands** is chosen by `cluster/ScriptPlacement` (gated by
 `scriptRoutingEnabled`, default on): it samples two eligible members and takes the one with the
@@ -789,18 +1049,19 @@ influence any of them.
 | Group | Keys |
 |---|---|
 | Enable | `scriptsEnabled`, `triggersEnabled`, `schedulesEnabled` |
-| Sandbox | `scriptInstructionBudget`, `scriptTimeoutMs`, `scriptMaxDepth`, `scriptMaxMemoryBytes`, `scriptMaxSourceBytes`, `scriptMaxResultBytes` |
+| Sandbox | `scriptInstructionBudget`, `scriptTimeoutMs`, `scriptMaxDepth`, `scriptMaxMemoryBytes`, `scriptMaxSourceBytes`, `scriptMaxResultBytes`, `scriptMaxArrayLength` |
 | Logs | `scriptMaxLogLines`, `scriptMaxLogLineChars` |
 | Imports | `scriptProcedureImportEnabled` (on), `scriptTextImportEnabled` (off) |
 | Cursors | `scriptCursorBatchSize`, `scriptCursorMaxBatchSize` |
-| Egress | `scriptFetchEnabled` (on), `scriptFetchAllowlist` (`*`), `scriptFetchTimeoutMs`, `scriptFetchMaxResponseBytes` |
+| Egress | `scriptFetchEnabled` (on), `scriptFetchAllowlist` (`*`, public hosts only), `scriptFetchTimeoutMs`, `scriptFetchMaxResponseBytes`, `scriptFetchMaxConcurrent` (8) |
 | Admission | `maxConcurrentScripts`, `scriptQueueWaitMs`, `maxConcurrentScriptsPerUser`, `maxConcurrentScriptsPerDatabase` |
-| Caching | `procedureCacheSize` (compiled procedures and parsed ad-hoc scripts), `metadataCacheMaxBytes`, `metadataCacheMaxEntries` |
+| Caching | `procedureCacheSize` and `procedureCacheMaxBytes` (compiled procedures and parsed ad-hoc scripts, bounded by entries and by estimated heap; compiled outside the cache lock), `metadataCacheMaxBytes`, `metadataCacheMaxEntries` |
+| Procedures | `maxProceduresPerDatabase` |
 | Locale | `scriptTimeZone` (UTC), `scriptLocale` (en-US) |
-| Triggers | `triggerThreads`, `triggerQueueSize`, `triggerTimeoutMs`, `triggerMaxDepth`, `triggerRunLogEnabled`, `triggerRunRetentionMs`, `triggerMaxAttempts`, `triggerRetryBackoffMs`, `triggerRetryMaxBackoffMs`, `triggerDeadLetterRetentionMs` |
+| Triggers | `triggerThreads`, `triggerQueueSize`, `triggerQueueMaxBytes`, `triggerMaxPerCollection`, `triggerTimeoutMs`, `triggerMaxDepth`, `triggerRunLogEnabled`, `triggerRunRetentionMs`, `triggerMaxAttempts`, `triggerRetryBackoffMs`, `triggerRetryMaxBackoffMs`, `triggerDeadLetterRetentionMs` |
 | Metadata caches | `metadataCacheMaxBytes` (procedure sources, schemas, schedule definitions), `metadataCacheMaxEntries` (trigger lists, negative lookups) |
 | Before hooks | `beforeHookInstructionBudget`, `beforeHookTimeoutMs` |
-| Schedules | `scheduleThreads`, `scheduleQueueSize`, `scheduleTickMs`, `scheduleRefreshMs`, `scheduleTimeoutMs`, `scheduleMaxPerDatabase` |
+| Schedules | `scheduleThreads`, `scheduleQueueSize`, `scheduleTickMs`, `scheduleRefreshMs`, `scheduleTimeoutMs`, `scheduleMaxPerDatabase`, `scheduleMaxTotalPerUser`, `scheduleMinIntervalMs` |
 | Pipeline scripts | `aggregationScriptInstructionBudget`, `aggregationScriptTimeoutMs`, `aggregationScriptMaxSourceBytes` |
 | History | `scriptRunHistoryEnabled`, `scriptRunHistoryKinds`, `scriptRunHistoryRetentionMs`, `scriptRunHistoryIncludeLogs`, `scriptRunHistoryMaxErrorChars` |
 | Cluster | `scriptRoutingEnabled`, `scriptLocalityWeight` |
@@ -821,6 +1082,7 @@ procedure/trigger/schedule code.
 | Property escapes do not match the UCD exhaustively | `built-ins/RegExp/property-escapes/generated/` scores 66.31% (311/469) — a genuine per-code-point gap between our resolution of a property name and the exhaustive set the corpus asserts. Property data is the build JDK's (Unicode 16.0 on the pinned JDK 25 floor), so a future JDK will move these escapes with it. |
 | `scriptMaxMemoryBytes` does not bound O(1)-per-instruction allocation | By design — see *Sandbox and resource limits*. Sizing it against `scriptInstructionBudget` is the operator's job. |
 | `localeCompare`/`toLocaleString` honour a locale but only part of `options` | The subset `java.text` can express without `Intl`: `sensitivity` maps onto `Collator`'s three strengths, and `usage`/`numeric`/`caseFirst`/`ignorePunctuation` are validated but not honoured. |
+| A locale argument resolves to the closest locale the JDK ships, keeping only language, script and region | The JDK's locale-provider caches are static and never evicted, so a script naming a fresh tag per call (`'en-x-' + i`) used to grow the server heap for good and starve every tenant's scripts of the heap ceiling. `LocaleResolver` validates the tag (`Locale.Builder`; an ill-formed tag is a `RangeError`, as are `und` and a private-use-only tag), drops extensions and private-use subtags, and looks the language-script-region range up in `Locale.getAvailableLocales()` without ever building a `Locale` from the request. `'en-x-foo'` formats as `en`, `'en-US-u-nu-thai'` as plain `en-US`, and a language the JDK does not know falls back to `scriptLocale`. |
 | `Temporal` fixed offsets beyond ±18:00 are unsupported | `java.time.ZoneOffset` hard-caps there and `ZoneRules` is `final` with no factory past it; supporting it would mean reimplementing every zone computation against a hand-rolled abstraction, for an offset magnitude no real IANA zone uses. Ten test262 cases are excluded by exact path. |
 
 ## Deliberately unimplemented ES2026 features

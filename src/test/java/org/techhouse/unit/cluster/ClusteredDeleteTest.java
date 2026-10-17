@@ -23,8 +23,10 @@ import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
@@ -223,6 +225,21 @@ public class ClusteredDeleteTest {
         final var tombstones = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, tombstones.size());
         assertTrue(tombstones.containsKey("present"));
+    }
+
+    @Test
+    public void test_one_reservation_tombstones_only_the_present_ids() throws Exception {
+        save();
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            IocContainer.get(ClusterCoordinator.class).reserveDelete(TestGlobals.DB, TestGlobals.COLL,
+                    List.of("absent-before", ID, "absent-after"));
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertEquals(Set.of(ID), fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).keySet());
     }
 
     @Test

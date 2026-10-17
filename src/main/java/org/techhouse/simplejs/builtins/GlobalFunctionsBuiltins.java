@@ -42,6 +42,9 @@ public final class GlobalFunctionsBuiltins {
     private static final String ESCAPE_UNESCAPED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
             + "@*_+-./";
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+    private static final int PERCENT_ESCAPE_WIDTH = 3;
+    private static final int UNICODE_ESCAPE_WIDTH = 6;
+    private static final int MAX_BUILDER_CAPACITY = Integer.MAX_VALUE - 8;
 
     private GlobalFunctionsBuiltins() {
     }
@@ -49,14 +52,14 @@ public final class GlobalFunctionsBuiltins {
     public static void install(Environment global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops,
             Intrinsics intrinsics) {
         define(global, "encodeURI", new JsNativeFunction("encodeURI",
-                (_, args) -> charged(encode(str(args, ops), URI_UNESCAPED + URI_RESERVED, intrinsics), ops)));
+                (_, args) -> encode(str(args, ops), URI_UNESCAPED + URI_RESERVED, intrinsics, ops)));
         define(global, "encodeURIComponent", new JsNativeFunction("encodeURIComponent",
-                (_, args) -> charged(encode(str(args, ops), URI_UNESCAPED, intrinsics), ops)));
+                (_, args) -> encode(str(args, ops), URI_UNESCAPED, intrinsics, ops)));
         define(global, "decodeURI",
                 new JsNativeFunction("decodeURI", (_, args) -> charged(decode(str(args, ops), true, intrinsics), ops)));
         define(global, "decodeURIComponent", new JsNativeFunction("decodeURIComponent",
                 (_, args) -> charged(decode(str(args, ops), false, intrinsics), ops)));
-        define(global, "escape", new JsNativeFunction("escape", (_, args) -> charged(escape(str(args, ops)), ops)));
+        define(global, "escape", new JsNativeFunction("escape", (_, args) -> escape(str(args, ops), ops)));
         define(global, "unescape",
                 new JsNativeFunction("unescape", (_, args) -> charged(unescape(str(args, ops)), ops)));
         define(global, "structuredClone",
@@ -73,8 +76,8 @@ public final class GlobalFunctionsBuiltins {
         }));
     }
 
-    private static String encode(String input, String unescaped, Intrinsics intrinsics) {
-        final var out = new StringBuilder();
+    private static JsString encode(String input, String unescaped, Intrinsics intrinsics, InterpreterOps ops) {
+        final var out = presized(encodedLength(input, unescaped), ops);
         var i = 0;
         while (i < input.length()) {
             final var cp = input.codePointAt(i);
@@ -89,7 +92,37 @@ public final class GlobalFunctionsBuiltins {
             }
             i += Character.charCount(cp);
         }
-        return out.toString();
+        return new JsString(out.toString());
+    }
+
+    private static long encodedLength(String input, String unescaped) {
+        var length = 0L;
+        var i = 0;
+        while (i < input.length()) {
+            final var cp = input.codePointAt(i);
+            if (cp < 128 && unescaped.indexOf((char) cp) >= 0) {
+                length++;
+            } else {
+                length += (long) PERCENT_ESCAPE_WIDTH * utf8Length(cp);
+            }
+            i += Character.charCount(cp);
+        }
+        return length;
+    }
+
+    private static int utf8Length(int cp) {
+        if (cp < 0x80) {
+            return 1;
+        }
+        if (cp < 0x800) {
+            return 2;
+        }
+        return cp < 0x10000 ? 3 : 4;
+    }
+
+    private static StringBuilder presized(long length, InterpreterOps ops) {
+        InterpreterOps.chargeChars(ops, length);
+        return new StringBuilder((int) Math.min(length, MAX_BUILDER_CAPACITY));
     }
 
     private static String decode(String input, boolean preserveReserved, Intrinsics intrinsics) {
@@ -191,8 +224,8 @@ public final class GlobalFunctionsBuiltins {
         return new JsString(text);
     }
 
-    private static String escape(String input) {
-        final var out = new StringBuilder();
+    private static JsString escape(String input, InterpreterOps ops) {
+        final var out = presized(escapedLength(input), ops);
         for (var i = 0; i < input.length(); i++) {
             final var c = input.charAt(i);
             if (c < 256 && ESCAPE_UNESCAPED.indexOf(c) >= 0) {
@@ -204,7 +237,20 @@ public final class GlobalFunctionsBuiltins {
                         .append(HEX[c & 0xF]);
             }
         }
-        return out.toString();
+        return new JsString(out.toString());
+    }
+
+    private static long escapedLength(String input) {
+        var length = 0L;
+        for (var i = 0; i < input.length(); i++) {
+            final var c = input.charAt(i);
+            if (c < 256 && ESCAPE_UNESCAPED.indexOf(c) >= 0) {
+                length++;
+            } else {
+                length += c < 256 ? PERCENT_ESCAPE_WIDTH : UNICODE_ESCAPE_WIDTH;
+            }
+        }
+        return length;
     }
 
     private static String unescape(String input) {
@@ -265,8 +311,17 @@ public final class GlobalFunctionsBuiltins {
             case JsProxy ignored -> throw dataCloneError(value);
             default -> {
                 final var existing = seen.get(value);
-                return Objects.requireNonNullElseGet(existing, () -> cloneStructured(value, seen, ops));
+                return Objects.requireNonNullElseGet(existing, () -> cloneNested(value, seen, ops));
             }
+        }
+    }
+
+    private static JsValue cloneNested(JsValue value, Map<JsValue, JsValue> seen, InterpreterOps ops) {
+        NativeDepth.enter(ops);
+        try {
+            return cloneStructured(value, seen, ops);
+        } finally {
+            NativeDepth.leave(ops);
         }
     }
 

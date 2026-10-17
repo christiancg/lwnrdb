@@ -2,8 +2,8 @@ package org.techhouse.unit.listen;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.BufferedWriter;
-import java.io.StringWriter;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -16,12 +16,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.listen.ListenProcessorThread;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -32,12 +38,13 @@ public class ListenDeliveryTest {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private ListenManager manager;
     private UUID clientId;
-    private StringWriter pushed;
+    private ByteArrayOutputStream pushed;
 
     @BeforeAll
     static void setUpAll() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
+        TestUtils.createTestJoinCollection();
         AdminOperationHelper.saveUserEntry(
                 new AdminUserEntry(LISTENER, "unused", true, new HashSet<>(), new HashMap<>(), new HashMap<>()));
     }
@@ -52,8 +59,8 @@ public class ListenDeliveryTest {
     void setUp() {
         manager = new ListenManager();
         clientId = clientTracker.registerForwardedClient(LISTENER);
-        pushed = new StringWriter();
-        clientTracker.registerWriter(clientId, new BufferedWriter(pushed));
+        pushed = new ByteArrayOutputStream();
+        clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(pushed));
     }
 
     @AfterEach
@@ -62,7 +69,11 @@ public class ListenDeliveryTest {
     }
 
     private static AggregateRequest dirtyRequest() {
-        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        return dirtyRequest(TestGlobals.COLL);
+    }
+
+    private static AggregateRequest dirtyRequest(String collection) {
+        final var request = new AggregateRequest(TestGlobals.DB, collection);
         request.setAggregationSteps(List.of());
         request.setDirtyRead(true);
         return request;
@@ -94,7 +105,8 @@ public class ListenDeliveryTest {
 
         drainOnce(listenId);
 
-        assertEquals("", pushed.toString(), "nothing may reach the client before its LISTEN response");
+        assertEquals("", pushed.toString(StandardCharsets.UTF_8),
+                "nothing may reach the client before its LISTEN response");
         assertEquals(STALE_HASH, manager.getRegistration(listenId).lastHash().get());
         assertNotNull(manager.getRegistration(listenId));
     }
@@ -119,7 +131,7 @@ public class ListenDeliveryTest {
         drain(managerQueue());
 
         assertEquals(ResultHasher.hash(List.of(), false), manager.getRegistration(listenId).lastHash().get());
-        final var frames = pushed.toString().lines().toList();
+        final var frames = pushed.toString(StandardCharsets.UTF_8).lines().toList();
         assertEquals(1, frames.size(), "the write landing before delivery is pushed exactly once");
         assertTrue(frames.getFirst().contains(listenId.toString()));
     }
@@ -129,5 +141,27 @@ public class ListenDeliveryTest {
         manager.markDelivered(UUID.randomUUID());
 
         assertTrue(managerQueue().isEmpty());
+    }
+
+    @Test
+    public void listenPushUsesBytes() throws Exception {
+        final var document = new JsonObject();
+        document.addProperty("_id", "cjk");
+        document.addProperty("text", "界面 ünïcødé 😀");
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.JOIN_COLL);
+        save.set_id("cjk");
+        save.setObject(document);
+        SaveOperationHelper.executeSave(save);
+        final var request = dirtyRequest(TestGlobals.JOIN_COLL);
+        final var listenId = manager.register(clientId, request, STALE_HASH);
+
+        manager.markDelivered(listenId);
+        drain(managerQueue());
+
+        final var results = AggregationOperationHelper.processAggregation(request);
+        final var frame = IocContainer.get(EJson.class)
+                .toJson(new ListenResponse(listenId.toString(), results, ResultHasher.hash(results, false), true));
+        assertTrue(frame.contains("界面"), frame);
+        assertArrayEquals((frame + System.lineSeparator()).getBytes(StandardCharsets.UTF_8), pushed.toByteArray());
     }
 }

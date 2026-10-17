@@ -24,7 +24,7 @@ import org.techhouse.simplejs.values.JsValue;
 public class ScriptModuleTest {
     private final List<String> imported = new ArrayList<>();
 
-    private final TextImporter recorder = (moduleId, source) -> {
+    private final TextImporter recorder = (moduleId, source, _) -> {
         imported.add(moduleId + "|" + source);
         return new JsString(moduleId);
     };
@@ -41,14 +41,14 @@ public class ScriptModuleTest {
 
     @Test
     public void test_module_shape() {
-        final var module = ScriptModule.create(recorder, enabled(), null);
+        final var module = ScriptModule.create(recorder, enabled(), null, null);
         assertEquals(List.of("importText"), List.copyOf(module.keys()));
         assertInstanceOf(JsNativeFunction.class, module.get("importText"));
     }
 
     @Test
     public void test_default_module_id_is_content_addressed() {
-        final var module = ScriptModule.create(recorder, enabled(), null);
+        final var module = ScriptModule.create(recorder, enabled(), null, null);
         call(module, new JsString("export default 1;"));
         call(module, new JsString("export default 1;"));
         call(module, new JsString("export default 2;"));
@@ -60,7 +60,7 @@ public class ScriptModuleTest {
 
     @Test
     public void test_explicit_module_id() {
-        final var module = ScriptModule.create(recorder, enabled(), null);
+        final var module = ScriptModule.create(recorder, enabled(), null, null);
         final var result = call(module, new JsString("export default 1;"), new JsString("mine"));
         assertEquals("mine|export default 1;", imported.getFirst());
         assertEquals("mine", ((JsString) result).getValue());
@@ -68,7 +68,7 @@ public class ScriptModuleTest {
 
     @Test
     public void test_arguments_are_coerced() {
-        final var module = ScriptModule.create(recorder, enabled(), null);
+        final var module = ScriptModule.create(recorder, enabled(), null, null);
         call(module);
         call(module, new JsNumber(1), new JsNumber(2));
         assertTrue(imported.getFirst().endsWith("|undefined"));
@@ -78,7 +78,7 @@ public class ScriptModuleTest {
     @Test
     public void test_disabled_by_default() {
         final var intrinsics = new Intrinsics(null, null, null, null);
-        final var module = ScriptModule.create(recorder, ResourceLimits.unlimited(), intrinsics);
+        final var module = ScriptModule.create(recorder, ResourceLimits.unlimited(), intrinsics, null);
         final var thrown = assertThrows(JsThrowException.class, () -> call(module, new JsString("export default 1;")));
         assertEquals("Script text import is not available",
                 ((JsString) ((JsObject) thrown.getValue()).get("message")).getValue());
@@ -88,7 +88,7 @@ public class ScriptModuleTest {
     @Test
     public void test_null_limits_is_disabled() {
         final var intrinsics = new Intrinsics(null, null, null, null);
-        final var module = ScriptModule.create(recorder, null, intrinsics);
+        final var module = ScriptModule.create(recorder, null, intrinsics, null);
         assertThrows(JsThrowException.class, () -> call(module, new JsString("export default 1;")));
         assertTrue(imported.isEmpty());
     }

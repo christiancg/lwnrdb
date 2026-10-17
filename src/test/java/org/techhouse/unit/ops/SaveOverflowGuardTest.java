@@ -13,14 +13,17 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
@@ -210,9 +213,9 @@ public class SaveOverflowGuardTest {
                 .mapToLong(AdminPageEntry::getPageSize).sum();
     }
 
-    private static long fileSizeOfPageZero() throws Exception {
-        return Files.size(new File(collectionFolder(),
-                TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + 0L + Globals.DB_FILE_EXTENSION).toPath());
+    private static long liveBytesOfPageZero() throws Exception {
+        return IocContainer.get(FileSystem.class).readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(row -> row.getPage() == 0L).mapToLong(PkIndexEntry::getLength).sum();
     }
 
     @Test
@@ -241,10 +244,10 @@ public class SaveOverflowGuardTest {
     public void test_a_bulk_update_moves_the_in_memory_size_with_the_file() throws Exception {
         seedOnePage();
         bulkSave(resizedSeeds(SEED_PAYLOAD + GROWTH));
-        assertEquals(fileSizeOfPageZero(), inMemorySizeOfPageZero(), "after a growth");
+        assertEquals(liveBytesOfPageZero(), inMemorySizeOfPageZero(), "after a growth");
 
         bulkSave(resizedSeeds(1));
-        assertEquals(fileSizeOfPageZero(), inMemorySizeOfPageZero(), "after a shrink");
+        assertEquals(liveBytesOfPageZero(), inMemorySizeOfPageZero(), "after a shrink");
     }
 
     @Test
@@ -257,8 +260,8 @@ public class SaveOverflowGuardTest {
         updated.setPage(0);
         updated.setPreviousByteSize(updated.byteSize() - GROWTH);
 
-        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.UPDATED, List.of(updated),
-                0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.UPDATED,
+                List.of(EntityRef.of(updated)), 0L);
 
         assertEquals(sizeAfterTheWrite, inMemorySizeOfPageZero());
     }
@@ -279,7 +282,7 @@ public class SaveOverflowGuardTest {
     }
 
     private static String[] markers() {
-        final var found = collectionFolder().list((_, name) -> name.endsWith(".compacting"));
+        final var found = collectionFolder().list((_, name) -> name.endsWith(".intent"));
         return found == null ? new String[0] : found;
     }
 

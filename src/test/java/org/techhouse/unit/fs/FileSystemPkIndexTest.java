@@ -41,7 +41,7 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_delete_returns_compaction() throws IOException {
+    public void test_a_delete_moves_no_other_record() throws IOException {
         final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
@@ -50,20 +50,16 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
         final var entry2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         entry2.set_id("2");
         final var pk1 = fileSystem.insertIntoCollection(entry1);
-        fileSystem.insertIntoCollection(entry2);
+        final var pk2 = fileSystem.insertIntoCollection(entry2);
 
-        final var compaction = fileSystem.deleteFromCollection(pk1);
+        fileSystem.deleteFromCollection(pk1);
 
-        assertNotNull(compaction);
-        assertEquals(TestGlobals.DB, compaction.dbName());
-        assertEquals(TestGlobals.COLL, compaction.collName());
-        assertEquals(pk1.getPage(), compaction.page());
-        assertEquals(pk1.getPosition(), compaction.removedPosition());
-        assertEquals(pk1.getLength(), compaction.removedLength());
+        final var rows = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(List.of(pk2.toFileEntry()), rows.stream().map(PkIndexEntry::toFileEntry).toList());
     }
 
     @Test
-    public void test_delete_last_entry_returns_null_compaction() throws IOException {
+    public void test_deleting_the_last_entry_leaves_an_empty_index() throws IOException {
         final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
@@ -71,12 +67,13 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
         entry.set_id("1");
         final var pk = fileSystem.insertIntoCollection(entry);
 
-        assertNull(fileSystem.deleteFromCollection(pk));
+        fileSystem.deleteFromCollection(pk);
+
+        assertTrue(fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).isEmpty());
     }
 
-    // The stale-position fix: the caller must apply the returned compaction to keep survivors consistent.
     @Test
-    public void test_sequential_deletes_applying_compaction_no_crash() throws Exception {
+    public void test_sequential_deletes_never_move_a_survivor() throws Exception {
         final var fileSystem = fs;
         final var data = new JsonObject();
         data.addProperty("name", "test");
@@ -87,23 +84,11 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
             pks.add(fileSystem.insertIntoCollection(e));
         }
 
-        applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(0)));
-        assertDoesNotThrow(() -> applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(1))));
+        fileSystem.deleteFromCollection(pks.get(0));
+        assertDoesNotThrow(() -> fileSystem.deleteFromCollection(pks.get(1)));
 
         final var survivor = fileSystem.getById(pks.get(2));
         assertEquals("test", survivor.getData().get("name").asJsonString().getValue());
-    }
-
-    // Mirrors Cache.shiftPkPositionsAfterCompaction for the in-test PkIndexEntry list.
-    private static void applyCompaction(List<PkIndexEntry> pks, org.techhouse.fs.PkCompaction compaction) {
-        if (compaction == null) {
-            return;
-        }
-        for (final var pk : pks) {
-            if (pk.getPage() == compaction.page() && pk.getPosition() > compaction.removedPosition()) {
-                pk.setPosition(pk.getPosition() - compaction.removedLength());
-            }
-        }
     }
 
     @Test
@@ -120,7 +105,7 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_single_update_same_page_shifts_only_later_position() throws Exception {
+    public void test_single_update_same_page_moves_no_other_record() throws Exception {
         FileSystem fs = FileSystemTestBase.freshFs();
         final var idxA = FileSystemTestBase.insertOnPage(fs, "a", 0);
         final var idxB = FileSystemTestBase.insertOnPage(fs, "b", 0);
@@ -132,8 +117,7 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
 
         final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         final var bDisk = disk.stream().filter(p -> p.getValue().equals("b")).findFirst().orElseThrow();
-        assertEquals(bPosBefore - idxA.getLength(), bDisk.getPosition(),
-                "'b' shifts toward the start by 'a's old length after 'a' is relocated");
+        assertEquals(bPosBefore, bDisk.getPosition(), "'a' is appended and blanked, so 'b' never moves");
         assertEquals("short", fs.getById(bDisk).getData().get("v").asJsonString().getValue());
         assertEquals("updated-longer-value-for-a", FileSystemTestBase.readValueFromDisk(fs, "a"));
     }
@@ -379,7 +363,7 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
                 StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
         final var corruptedBytes = Files.readAllBytes(pkIndexFile().toPath());
 
-        assertThrows(RuntimeException.class, () -> fs.deleteFromCollection(good1Index));
+        assertThrows(IOException.class, () -> fs.deleteFromCollection(good1Index));
 
         final var afterBytes = Files.readAllBytes(pkIndexFile().toPath());
         assertArrayEquals(corruptedBytes, afterBytes,
@@ -399,7 +383,6 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
         final var diskLines = Files.readAllLines(pkIndexFile().toPath());
         assertTrue(diskLines.stream().noneMatch(l -> l.contains("not a valid")),
                 "the malformed pk index line should have been removed");
-        assertEquals(1, diskLines.stream().filter(l -> !l.isEmpty()).count());
 
         final var remaining = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, remaining.size());

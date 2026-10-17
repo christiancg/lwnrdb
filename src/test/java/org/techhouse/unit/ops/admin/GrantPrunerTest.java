@@ -23,6 +23,8 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
+import org.techhouse.ops.admin.GrantRewrite;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
@@ -81,7 +83,7 @@ public class GrantPrunerTest {
         assertTrue(allowedToFind(bob()));
 
         final var response = DatabaseOperationHelper
-                .processDropDatabaseOperation(new DropDatabaseRequest(TestGlobals.DB));
+                .processDropDatabaseOperation(new DropDatabaseRequest(TestGlobals.DB), new RestampedRecords());
 
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(Map.of(OTHER_DB, PermissionLevel.READ), bob().getDatabasePermissions());
@@ -91,7 +93,8 @@ public class GrantPrunerTest {
 
     @Test
     public void test_a_recreated_database_does_not_revive_the_old_grants() throws Exception {
-        DatabaseOperationHelper.processDropDatabaseOperation(new DropDatabaseRequest(TestGlobals.DB));
+        DatabaseOperationHelper.processDropDatabaseOperation(new DropDatabaseRequest(TestGlobals.DB),
+                new RestampedRecords());
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB, new java.util.ArrayList<>(),
                 new java.util.ArrayList<>(List.of("someoneelse"))));
         AdminOperationHelper
@@ -104,8 +107,8 @@ public class GrantPrunerTest {
 
     @Test
     public void test_dropping_a_collection_removes_only_its_collection_grant() {
-        final var response = CollectionOperationHelper
-                .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL));
+        final var response = CollectionOperationHelper.processDropCollectionOperation(
+                new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL), new RestampedRecords());
 
         assertEquals(OperationStatus.OK, response.getStatus());
         assertFalse(bob().getCollectionPermissions().containsKey(TestGlobals.DB + "|" + TestGlobals.COLL));
@@ -119,14 +122,54 @@ public class GrantPrunerTest {
         TestUtils.createTestJoinCollection();
         final var before = bob();
 
-        CollectionOperationHelper
-                .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, TestGlobals.JOIN_COLL));
+        CollectionOperationHelper.processDropCollectionOperation(
+                new DropCollectionRequest(TestGlobals.DB, TestGlobals.JOIN_COLL), new RestampedRecords());
         CollectionOperationHelper
                 .processCreateCollectionOperation(new CreateCollectionRequest(TestGlobals.DB, "unrelatedcollection"));
-        CollectionOperationHelper
-                .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, "unrelatedcollection"));
+        CollectionOperationHelper.processDropCollectionOperation(
+                new DropCollectionRequest(TestGlobals.DB, "unrelatedcollection"), new RestampedRecords());
 
         assertEquals(before.getDatabasePermissions(), bob().getDatabasePermissions());
+    }
+
+    private long bobVersion() {
+        return AdminOperationHelper.versionOf(cache.getPkIndexAdminUserEntry(BOB));
+    }
+
+    @Test
+    public void test_a_coordinator_drop_writes_the_pruned_grant_at_a_new_version() {
+        final var before = bobVersion();
+
+        CollectionOperationHelper.processDropCollectionOperation(
+                new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL), new RestampedRecords());
+
+        assertFalse(bob().getCollectionPermissions().containsKey(TestGlobals.DB + "|" + TestGlobals.COLL));
+        assertTrue(bobVersion() > before, "the coordinator's prune must outrank the grant a lagging node kept");
+    }
+
+    @Test
+    public void test_a_replicated_drop_prunes_at_the_version_the_user_already_had() {
+        final var before = bobVersion();
+
+        final var response = CollectionOperationHelper.dropCollection(TestGlobals.DB, TestGlobals.COLL, true,
+                GrantRewrite.KEEP);
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertFalse(bob().getCollectionPermissions().containsKey(TestGlobals.DB + "|" + TestGlobals.COLL));
+        assertEquals(before, bobVersion());
+    }
+
+    @Test
+    public void test_a_coordinator_user_delete_writes_the_owner_strip_at_a_new_version() throws Exception {
+        makeCarolOwnerOfTheTestDatabase();
+        final var before = AdminOperationHelper.versionOf(cache.getPkIndexAdminDbEntry(TestGlobals.DB));
+        final var request = new DeleteUserRequest();
+        request.setUsername(CAROL);
+
+        UserOperationHelper.processDeleteUser(request, new RestampedRecords());
+
+        assertEquals(List.of(), cache.getAdminDbEntry(TestGlobals.DB).getOwners());
+        assertTrue(AdminOperationHelper.versionOf(cache.getPkIndexAdminDbEntry(TestGlobals.DB)) > before);
     }
 
     private void makeCarolOwnerOfTheTestDatabase() throws Exception {
@@ -140,7 +183,7 @@ public class GrantPrunerTest {
         final var request = new DeleteUserRequest();
         request.setUsername(CAROL);
 
-        UserOperationHelper.processDeleteUser(request);
+        UserOperationHelper.processDeleteUser(request, new RestampedRecords());
 
         assertEquals(List.of(), cache.getAdminDbEntry(TestGlobals.DB).getOwners());
     }
@@ -150,7 +193,7 @@ public class GrantPrunerTest {
         makeCarolOwnerOfTheTestDatabase();
         final var request = new DeleteUserRequest();
         request.setUsername(CAROL);
-        UserOperationHelper.processDeleteUser(request);
+        UserOperationHelper.processDeleteUser(request, new RestampedRecords());
 
         AdminOperationHelper.saveUserEntry(
                 new AdminUserEntry(CAROL, "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>()));
@@ -165,7 +208,7 @@ public class GrantPrunerTest {
         makeCarolOwnerOfTheTestDatabase();
         final var delete = new DeleteUserRequest();
         delete.setUsername(CAROL);
-        UserOperationHelper.processDeleteUser(delete);
+        UserOperationHelper.processDeleteUser(delete, new RestampedRecords());
         final var setOwners = new SetDatabaseOwnersRequest(TestGlobals.DB);
         setOwners.setOwners(List.of(BOB));
 
@@ -183,7 +226,7 @@ public class GrantPrunerTest {
         final var request = new DeleteUserRequest();
         request.setUsername(CAROL);
 
-        UserOperationHelper.processDeleteUser(request);
+        UserOperationHelper.processDeleteUser(request, new RestampedRecords());
 
         assertEquals(List.of(BOB), cache.getAdminDbEntry(TestGlobals.DB).getOwners());
     }

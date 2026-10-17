@@ -14,10 +14,19 @@ public final class BraceContext {
     public static final Set<String> HEADER_KEYWORDS = Set.of("if", "for", "while", "switch", "catch");
 
     public final Deque<Boolean> open = new ArrayDeque<>();
+    public final int templateDepth;
     public int bodyNesting = -1;
     public boolean bodyIsStatement;
     public boolean closedBlock;
     public boolean closedHeader;
+
+    public BraceContext() {
+        this(0);
+    }
+
+    public BraceContext(int templateDepth) {
+        this.templateDepth = templateDepth;
+    }
 
     public void observe(JsBaseElement token, JsBaseElement previous) {
         if (token.getType() == JsType.KEYWORD) {

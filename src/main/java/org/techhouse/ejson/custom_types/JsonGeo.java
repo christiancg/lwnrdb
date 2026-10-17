@@ -101,13 +101,34 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     }
 
     public static boolean containsNonFinitePoint(JsonBaseElement element) {
-        return switch (element) {
-            case JsonGeo geo -> !geo.isFinitePoint();
-            case JsonObject object ->
-                object.entrySet().stream().anyMatch(member -> containsNonFinitePoint(member.getValue()));
-            case JsonArray array -> array.asList().stream().anyMatch(JsonGeo::containsNonFinitePoint);
-            default -> false;
-        };
+        switch (element) {
+            case JsonGeo geo -> {
+                return !geo.isFinitePoint();
+            }
+            case JsonObject object -> {
+                for (var index = 0; index < object.size(); index++) {
+                    if (containsNonFinitePoint(object.valueAt(index))) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            case JsonArray array -> {
+                for (var index = 0; index < array.size(); index++) {
+                    if (containsNonFinitePoint(array.get(index))) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            default -> {
+                return false;
+            }
+        }
+    }
+
+    public String cachedGeoHash() {
+        return orderHash;
     }
 
     public String geoHash() {
@@ -137,7 +158,7 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     private boolean applyDistance(Map<String, JsonBaseElement> args) {
         final var target = toGeoPoint(args.get("value"));
         final var comparator = GeoDistanceComparator.valueOf(args.get("comparator").asJsonString().getValue());
-        final var threshold = args.get("distance").asJsonNumber().getValue().doubleValue();
+        final var threshold = args.get("distance").asJsonNumber().doubleValue();
         final var distance = GeoUtils.haversineMeters(customValue, target);
         return switch (comparator) {
             case SMALLER_THAN -> distance < threshold;

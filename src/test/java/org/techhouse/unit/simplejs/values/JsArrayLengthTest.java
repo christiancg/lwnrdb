@@ -8,8 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Objects;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -94,7 +98,7 @@ public class JsArrayLengthTest {
 
     // ArraySetLength ( A, Desc ) steps 3-4: Desc.[[Value]]'s toString is invoked to compute the new
     // length (no valueOf on the object, so ToPrimitive falls through to it) through the ops-aware
-    // coercion Object.defineProperty threads into JsArray via withLengthCoercionOps.
+    // coercion Object.defineProperty hands to JsArray.defineOwnProperty as its InterpreterOps argument.
     @Test
     public void test_length_value_object_with_only_tostring_is_coerced_through_ops() {
         assertEquals(2,
@@ -425,5 +429,16 @@ public class JsArrayLengthTest {
         assertEquals(3, num("class A extends Array {} new A(1, 2, 3).length"));
         assertEquals(0, num("Array.prototype.length"));
         assertEquals(4, num("class A extends Array {} const a = new A(1, 2, 3); a.push(4); a.length"));
+    }
+
+    @Test
+    public void aLengthDefineInsideValueOfIsChargedOnce() {
+        final var source = "const arr = []; const writer = { __proto__: {}, write() { super[159999] = 1; } };"
+                + " const length = { valueOf() { writer.write.call(arr); return 0; } };"
+                + " Object.defineProperty([], 'length', { value: length }); return arr.length;";
+        final var result = new SimpleJs().run(source, new SimpleHostBindings(new JsonObject(), null, null,
+                new ResourceLimits(-1, 30_000L, 200, 8L * 1024 * 1024)));
+        assertFalse(result.isError(), result.getErrorName() + ": " + result.getErrorMessage());
+        assertEquals(160_000, result.getValue().asJsonNumber().getValue().intValue());
     }
 }

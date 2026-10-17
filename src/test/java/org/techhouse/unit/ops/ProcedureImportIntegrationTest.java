@@ -107,7 +107,7 @@ public class ProcedureImportIntegrationTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
@@ -304,11 +304,11 @@ public class ProcedureImportIntegrationTest {
     public void test_mutual_import_is_circular() throws Exception {
         // A save refuses an import that does not resolve yet, so the pair is built dependency-first and
         // the cycle closed by updating the second one afterwards.
-        save(TestGlobals.DB, "b", "export function b() { return 1; }");
-        save(TestGlobals.DB, "a", "import { b } from \"procedures/b\"; export function a() { return b(); }");
-        save(TestGlobals.DB, "b", "import { a } from \"procedures/a\"; export function b() { return a(); }");
+        save(TestGlobals.DB, "mut_b", "export function b() { return 1; }");
+        save(TestGlobals.DB, "mut_a", "import { b } from \"procedures/mut_b\"; export function a() { return b(); }");
+        save(TestGlobals.DB, "mut_b", "import { a } from \"procedures/mut_a\"; export function b() { return a(); }");
         final var response = run("""
-                import { a } from "procedures/a";
+                import { a } from "procedures/mut_a";
                 return a();
                 """);
         assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), response.getErrorCode());

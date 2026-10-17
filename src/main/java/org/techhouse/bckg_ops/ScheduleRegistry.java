@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.ScheduleDefinition;
@@ -130,6 +131,16 @@ public class ScheduleRegistry {
         return entries.size();
     }
 
+    public int countDefinedBy(String definer) {
+        var count = 0;
+        for (final var entry : entries.values()) {
+            if (definer.equals(entry.getDefinition().getDefiner())) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     public long nextRunAfter(Entry entry, long from) {
         if (entry.getCron() == null) {
             return nextIntervalRun(entry, from);
@@ -144,8 +155,9 @@ public class ScheduleRegistry {
         return next.toInstant().toEpochMilli();
     }
 
-    private static long nextIntervalRun(Entry entry, long from) {
-        final var interval = Math.max(1L, entry.getDefinition().getIntervalMs());
+    private long nextIntervalRun(Entry entry, long from) {
+        final var interval = Math.max(configuration.longValue(ConfigKey.SCHEDULE_MIN_INTERVAL_MS),
+                entry.getDefinition().getIntervalMs());
         final var scheduled = entry.getNextRunAt();
         if (scheduled <= 0 || scheduled > from) {
             return from + interval;

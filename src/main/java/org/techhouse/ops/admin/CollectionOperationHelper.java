@@ -2,8 +2,11 @@ package org.techhouse.ops.admin;
 
 import java.util.List;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.fs.FileSystem;
@@ -16,6 +19,7 @@ import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
@@ -29,6 +33,8 @@ public final class CollectionOperationHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final Configuration configuration = Configuration.getInstance();
     private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
             .get(org.techhouse.cluster.HybridClock.class);
 
@@ -67,6 +73,13 @@ public final class CollectionOperationHelper {
                 return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.NAME_COLLIDES_ON_DISK,
                         colliding);
             }
+            final var maxCollections = configuration.intValue(ConfigKey.MAX_COLLECTIONS_PER_DATABASE);
+            if (isNotRegistered(dbName, createCollectionRequest.getCollectionName())
+                    && cache.getCollectionNamesForDatabase(dbName).size() >= maxCollections) {
+                return new OperationResponse(OperationType.CREATE_COLLECTION,
+                        ErrorCode.TOO_MANY_COLLECTIONS_FOR_DATABASE.getDefaultMessage() + " (" + maxCollections + ")",
+                        ErrorCode.TOO_MANY_COLLECTIONS_FOR_DATABASE);
+            }
             return register(createCollectionRequest);
         } finally {
             locks.release(dbName, Globals.COLLECTION_NAMES_LOCK);
@@ -95,10 +108,11 @@ public final class CollectionOperationHelper {
         return cache.getAdminCollectionEntry(dbName, collName) == null;
     }
 
-    public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
+    public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest,
+            RestampedRecords restamped) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
-        final var dropped = dropCollection(dbName, collName, false);
+        final var dropped = dropCollection(dbName, collName, false, new GrantRewrite.Restamp(restamped));
         if (dropped.getStatus() == OperationStatus.OK) {
             return OperationResponse.respondOrError(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION,
                     () -> {
@@ -109,7 +123,8 @@ public final class CollectionOperationHelper {
         return dropped;
     }
 
-    public static OperationResponse dropCollection(String dbName, String collName, boolean bounded) {
+    public static OperationResponse dropCollection(String dbName, String collName, boolean bounded,
+            GrantRewrite grantRewrite) {
         final var lockBudget = OperationLocks.lockBudgetMillis(bounded);
         boolean dropSucceeded = false;
         boolean namesLocked = false;
@@ -131,7 +146,9 @@ public final class CollectionOperationHelper {
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
-                GrantPruner.forDroppedCollection(dbName, collName);
+                triggerExecutor.discardQueuedFor(dbName, collName);
+                TriggerRunLog.discardAllFor(dbName, collName);
+                GrantPruner.forDroppedCollection(dbName, collName, grantRewrite);
                 dropSucceeded = true;
                 return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");
             }

@@ -163,7 +163,7 @@ final class AssignmentEvaluator {
 
     void assignMember(JsValue target, JsValue key, JsValue value) {
         if (!interp.setMemberByKey(target, key, value)) {
-            throw new TypeErrorException(MemberEvaluator.writeRejectionMessage(target, key));
+            throw new TypeErrorException(MemberEvaluator.writeRejectionMessage(target, key, interp.ops()));
         }
     }
 }

@@ -10,7 +10,9 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.SchemaPatternCaps;
 import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminStamp;
 
 final class DefinitionRecordApplier {
     private static final Logger logger = Logger.logFor(DefinitionRecordApplier.class);
@@ -34,7 +36,13 @@ final class DefinitionRecordApplier {
         final var json = eJson.toJson(record.body());
         return underLock(key, () -> {
             switch (key.kind()) {
-                case SCHEMA -> fs.writeCollectionSchema(key.dbName(), key.name(), json);
+                case SCHEMA -> {
+                    fs.writeCollectionSchema(key.dbName(), key.name(), json);
+                    SchemaPatternCaps.warnWhenOver(
+                            "Stored the replicated schema of "
+                                    + Cache.getCollectionIdentifier(key.dbName(), key.name()),
+                            AdminStamp.unwrappedSchema(record.body()));
+                }
                 case TRIGGERS -> fs.writeTriggers(key.dbName(), key.name(), json);
                 case PROCEDURE -> fs.writeProcedure(key.dbName(), key.name(), json);
                 default -> fs.writeSchedule(key.dbName(), key.name(), json);

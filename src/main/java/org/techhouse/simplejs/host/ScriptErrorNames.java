@@ -7,6 +7,7 @@ public final class ScriptErrorNames {
     public static final String LIMIT = "ScriptLimitError";
     public static final String RESULT_TOO_LARGE = "ScriptResultTooLargeError";
     public static final String PENDING_RESULT = "ScriptPendingResultError";
+    public static final String ARRAY_TOO_LARGE = "ScriptArrayTooLargeError";
 
     public static final String EXHAUSTED_MEMORY_MESSAGE = "Script exhausted available memory";
     public static final String TIMED_OUT_MESSAGE = "Script exceeded its time limit";

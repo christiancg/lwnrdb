@@ -214,8 +214,8 @@ public record IntrinsicsInstallers(Intrinsics intrinsics) {
     public JsValue disposeAsyncMethod(JsValue receiver, String name, EventLoop eventLoop) {
         try {
             final var stack = requireStack(receiver, name);
-            final var method = DisposableStackBuiltins.getMethod(stack, name, intrinsics.ops, intrinsics.invoker,
-                    eventLoop, true);
+            final var method = DisposableStackBuiltins.getMethod(stack, name, intrinsics, intrinsics.invoker, eventLoop,
+                    true);
             if (method != null) {
                 return method;
             }

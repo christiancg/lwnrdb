@@ -11,7 +11,7 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "stream_db"
 COLL = "stream_coll"
@@ -82,7 +82,7 @@ def email_for(v: int) -> str:
     return f"user{v}@example.com"
 
 
-def setup_fixtures(c):
+def setup_fixtures(c: Conn):
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": JOIN_COLL})
@@ -257,8 +257,8 @@ def test_blocking_steps_still_work(c):
 
 def test_server_still_alive(c):
     section("Liveness check after the whole run")
-    check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
     check_status("AUTHENTICATE still works", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
 
 
 def main():

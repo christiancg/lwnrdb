@@ -27,6 +27,10 @@ interface AdminCacheDelegate {
         return adminCache().selectPageForInsert(dbName, collName, entryByteSize);
     }
 
+    default long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
+        return adminCache().selectPagesForInsert(dbName, collName, entryByteSizes);
+    }
+
     default PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
         return adminCache().getPkIndexAdminDbEntry(dbName);
     }
@@ -73,6 +77,10 @@ interface AdminCacheDelegate {
 
     default void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
         adminCache().updatePageSizeInMemory(dbName, collName, page, bytesDelta);
+    }
+
+    default void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta, int addedEntries) {
+        adminCache().updatePageSizeInMemory(dbName, collName, page, bytesDelta, addedEntries);
     }
 
     default void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {

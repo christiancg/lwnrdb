@@ -50,11 +50,11 @@
             <!-- The regex engine resolves \p{...} against the JDK's own Unicode data, so the build JDK
                  decides what those escapes match, and every node of a cluster has to agree. The rule pins
                  exactly one version rather than a "26 or newer" floor because the shipped artifact is
-                 the GraalVM native image and GraalVM has no JDK 26 release: its newest build is still
+                 the GraalVM native image and GraalVM has no JDK 26 or 27 release: its newest build is still
                  JDK 25 (Unicode 16.0). The cost is measured - the eight
                  language/identifiers/*-unicode-17.0.0* test262 cases are excluded in
                  config/test262-exclusions.txt for exactly this reason. Raise both this rule and the
-                 compiler release when GraalVM ships a JDK 26 build. -->
+                 compiler release when GraalVM ships a newer JDK build. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
@@ -110,6 +110,7 @@
                             <excludes>
                                 <exclude>**/config/ConfigReaderTest.java</exclude>
                                 <exclude>**/config/ConfigurationTest.java</exclude>
+                                <exclude>**/perf/AllocationBudgetTest.java</exclude>
                             </excludes>
                         </configuration>
                     </execution>
@@ -123,6 +124,18 @@
                             <includes>
                                 <include>**/config/ConfigReaderTest.java</include>
                                 <include>**/config/ConfigurationTest.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>tests-that-measure-allocation</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <forkCount>1</forkCount>
+                            <includes>
+                                <include>**/perf/AllocationBudgetTest.java</include>
                             </includes>
                         </configuration>
                     </execution>
@@ -209,6 +222,7 @@
                         <ruleset>${project.basedir}/config/pmd-ruleset.xml</ruleset>
                     </rulesets>
                     <includeTests>true</includeTests>
+                    <targetJdk>26</targetJdk>
                     <minimumTokens>310</minimumTokens>
                     <printFailingErrors>true</printFailingErrors>
                     <failOnViolation>true</failOnViolation>

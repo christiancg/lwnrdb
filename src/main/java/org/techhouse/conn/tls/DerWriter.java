@@ -17,10 +17,13 @@ public final class DerWriter {
     static final int TAG_OID = 0x06;
     static final int TAG_UTF8_STRING = 0x0C;
     static final int TAG_UTC_TIME = 0x17;
+    static final int TAG_GENERALIZED_TIME = 0x18;
     static final int TAG_SEQUENCE = 0x30;
     static final int TAG_SET = 0x31;
 
     private static final DateTimeFormatter UTC_TIME_FORMAT = DateTimeFormatter.ofPattern("yyMMddHHmmss'Z'",
+            Locale.ROOT);
+    private static final DateTimeFormatter GENERALIZED_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss'Z'",
             Locale.ROOT);
 
     private DerWriter() {
@@ -84,6 +87,11 @@ public final class DerWriter {
     public static byte[] utcTime(Instant instant) {
         final var text = ZonedDateTime.ofInstant(instant, ZoneOffset.UTC).format(UTC_TIME_FORMAT);
         return tlv(TAG_UTC_TIME, text.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    public static byte[] generalizedTime(Instant instant) {
+        final var text = ZonedDateTime.ofInstant(instant, ZoneOffset.UTC).format(GENERALIZED_TIME_FORMAT);
+        return tlv(TAG_GENERALIZED_TIME, text.getBytes(StandardCharsets.US_ASCII));
     }
 
     public static byte[] explicit(int tagNumber, byte[] content) {

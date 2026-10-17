@@ -5,7 +5,19 @@
       "serializable": true
     },
     {
+      "type": "java.lang.Double"
+    },
+    {
       "type": "java.lang.Integer"
+    },
+    {
+      "type": "java.lang.Number"
+    },
+    {
+      "type": "java.lang.Object"
+    },
+    {
+      "type": "java.lang.Record"
     },
     {
       "type": "java.lang.String",
@@ -15,6 +27,42 @@
           "parameterTypes": []
         }
       ]
+    },
+    {
+      "type": "java.time.LocalDate"
+    },
+    {
+      "type": "java.time.LocalDateTime"
+    },
+    {
+      "type": "java.time.LocalTime"
+    },
+    {
+      "type": "java.util.AbstractCollection"
+    },
+    {
+      "type": "java.util.AbstractList"
+    },
+    {
+      "type": "java.util.AbstractMap"
+    },
+    {
+      "type": "java.util.AbstractSet"
+    },
+    {
+      "type": "java.util.ArrayList"
+    },
+    {
+      "type": "java.util.HashMap"
+    },
+    {
+      "type": "java.util.HashMap$Node"
+    },
+    {
+      "type": "java.util.HashSet"
+    },
+    {
+      "type": "java.util.concurrent.ConcurrentHashMap$Node"
     },
     {
       "type": "java.util.concurrent.TimeUnit",
@@ -68,6 +116,15 @@
         },
         {
           "name": "suggestions"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.BackgroundBacklogGate",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
         }
       ]
     },
@@ -187,6 +244,12 @@
           "parameterTypes": []
         }
       ]
+    },
+    {
+      "type": "org.techhouse.cache.FieldIndexLookup"
+    },
+    {
+      "type": "org.techhouse.cache.FieldIndexLookup$Located"
     },
     {
       "type": "org.techhouse.cache.MemoryManagement",
@@ -851,12 +914,41 @@
       ]
     },
     {
+      "type": "org.techhouse.conn.PreAuthSlots",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.data.CollectionScopedEntry"
+    },
+    {
+      "type": "org.techhouse.data.DbEntry"
+    },
+    {
+      "type": "org.techhouse.data.FieldIndexEntry"
+    },
+    {
       "type": "org.techhouse.data.IndexedDbEntry",
       "fields": [
         {
           "name": "eJson"
         }
       ]
+    },
+    {
+      "type": "org.techhouse.data.JsonDocumentEntry",
+      "fields": [
+        {
+          "name": "cachedHeapBytes"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.data.PkIndexEntry"
     },
     {
       "type": "org.techhouse.data.admin.AdminCollEntry"
@@ -909,6 +1001,9 @@
       ]
     },
     {
+      "type": "org.techhouse.ejson.custom_types.JsonTemporalCustom"
+    },
+    {
       "type": "org.techhouse.ejson.custom_types.JsonTime",
       "methods": [
         {
@@ -939,7 +1034,16 @@
       ]
     },
     {
+      "type": "org.techhouse.ejson.elements.JsonArray"
+    },
+    {
       "type": "org.techhouse.ejson.elements.JsonBaseElement"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonCustom"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonNumber"
     },
     {
       "type": "org.techhouse.ejson.elements.JsonObject"
@@ -1082,6 +1186,24 @@
     },
     {
       "type": "org.techhouse.ops.ScriptRunRegistry",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.auth.AuthFailureThrottle",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.auth.PasswordCheckGate",
       "methods": [
         {
           "name": "<init>",
@@ -1827,6 +1949,14 @@
       ]
     },
     {
+      "type": "org.techhouse.ops.req.agg.BaseOperator",
+      "fields": [
+        {
+          "name": "type"
+        }
+      ]
+    },
+    {
       "type": "org.techhouse.ops.req.agg.ConjunctionOperatorType",
       "methods": [
         {
@@ -1845,6 +1975,22 @@
           "parameterTypes": [
             "java.lang.String"
           ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator",
+      "fields": [
+        {
+          "name": "operands"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.BaseMidOperator",
+      "fields": [
+        {
+          "name": "type"
         }
       ]
     },
@@ -1871,6 +2017,37 @@
       ]
     },
     {
+      "type": "org.techhouse.ops.req.agg.operators.CustomOperator",
+      "fields": [
+        {
+          "name": "args"
+        },
+        {
+          "name": "customOperatorName"
+        },
+        {
+          "name": "field"
+        },
+        {
+          "name": "value"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.operators.FieldOperator",
+      "fields": [
+        {
+          "name": "field"
+        },
+        {
+          "name": "fieldOperatorType"
+        },
+        {
+          "name": "value"
+        }
+      ]
+    },
+    {
       "type": "org.techhouse.ops.req.agg.step.CountAggregationStep",
       "methods": [
         {
@@ -1884,6 +2061,14 @@
       "fields": [
         {
           "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.FilterAggregationStep",
+      "fields": [
+        {
+          "name": "operator"
         }
       ]
     },
@@ -1921,6 +2106,14 @@
       ]
     },
     {
+      "type": "org.techhouse.ops.req.agg.step.MapAggregationStep",
+      "fields": [
+        {
+          "name": "operators"
+        }
+      ]
+    },
+    {
       "type": "org.techhouse.ops.req.agg.step.SkipAggregationStep",
       "fields": [
         {
@@ -1936,6 +2129,28 @@
         },
         {
           "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.AddFieldMapOperator",
+      "fields": [
+        {
+          "name": "operator"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.MapOperator",
+      "fields": [
+        {
+          "name": "condition"
+        },
+        {
+          "name": "fieldName"
+        },
+        {
+          "name": "type"
         }
       ]
     },
@@ -2285,6 +2500,9 @@
           "parameterTypes": []
         }
       ]
+    },
+    {
+      "type": "org.techhouse.utils.GeoPoint"
     },
     {
       "type": "sun.misc.Unsafe",

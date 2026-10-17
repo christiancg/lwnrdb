@@ -38,10 +38,10 @@ public class EJsonInteropEstimatedBytesTest {
     public void test_estimates_array_as_sum_of_elements() {
         final var array = new JsonArray();
         array.add(new JsonNumber(1));
-        array.add(new JsonBoolean(true));
+        array.add(JsonBoolean.of(true));
         array.add(JsonNull.INSTANCE);
         final var expected = EJsonInterop.estimatedBytes(new JsonArray())
-                + EJsonInterop.estimatedBytes(new JsonNumber(1)) + EJsonInterop.estimatedBytes(new JsonBoolean(true))
+                + EJsonInterop.estimatedBytes(new JsonNumber(1)) + EJsonInterop.estimatedBytes(JsonBoolean.of(true))
                 + EJsonInterop.estimatedBytes(JsonNull.INSTANCE);
         assertEquals(expected, EJsonInterop.estimatedBytes(array));
     }

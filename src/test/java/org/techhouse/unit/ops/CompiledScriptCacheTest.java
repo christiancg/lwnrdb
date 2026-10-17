@@ -5,13 +5,25 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.CompiledScriptCache;
+import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.test.TestUtils;
 
 public class CompiledScriptCacheTest {
@@ -25,12 +37,74 @@ public class CompiledScriptCacheTest {
     @AfterAll
     static void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
+        TestUtils.setPrivateField(configuration, "procedureCacheMaxBytes",
+                ConfigKey.PROCEDURE_CACHE_MAX_BYTES.defaultValue());
         TestUtils.standardTearDown();
     }
 
     @BeforeEach
     void resetSize() throws Exception {
         TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
+        TestUtils.setPrivateField(configuration, "procedureCacheMaxBytes",
+                ConfigKey.PROCEDURE_CACHE_MAX_BYTES.defaultValue());
+    }
+
+    private static String sourceOfLength(int index, int length) {
+        final var prefix = "return " + index + ";";
+        return prefix + " ".repeat(length - prefix.length());
+    }
+
+    @Test
+    public void test_the_cache_is_bounded_by_bytes_not_count() throws Exception {
+        TestUtils.setPrivateField(configuration, "procedureCacheMaxBytes", String.valueOf(25 * 100 * 3));
+        final var cache = new CompiledScriptCache();
+        final var oldest = cache.get(sourceOfLength(0, 100));
+        for (var i = 1; i < 6; i++) {
+            cache.get(sourceOfLength(i, 100));
+        }
+        assertEquals(3, cache.size());
+        assertTrue(cache.weightedBytes() <= 25 * 100 * 3);
+        assertNotSame(oldest, cache.get(sourceOfLength(0, 100)));
+    }
+
+    @Test
+    public void test_a_program_larger_than_the_byte_budget_is_compiled_but_not_kept() throws Exception {
+        TestUtils.setPrivateField(configuration, "procedureCacheMaxBytes", String.valueOf(25 * 50));
+        final var cache = new CompiledScriptCache();
+        final var large = cache.get(sourceOfLength(1, 100));
+        assertNotNull(large.compiled());
+        assertEquals(0, cache.size());
+        assertEquals(0, cache.weightedBytes());
+        cache.get(sourceOfLength(2, 40));
+        assertEquals(1, cache.size());
+    }
+
+    @Test
+    public void test_compilation_happens_outside_the_lock() throws Exception {
+        final var cache = new CompiledScriptCache();
+        final var real = IocContainer.get(SimpleJs.class);
+        final var stalled = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var blocking = mock(SimpleJs.class);
+        when(blocking.compile(anyString(), anyBoolean())).thenAnswer(invocation -> {
+            final String source = invocation.getArgument(0);
+            if (source.startsWith("return 'slow'")) {
+                stalled.countDown();
+                release.await();
+            }
+            return real.compile(source, false);
+        });
+        TestUtils.setPrivateField(cache, "simpleJs", blocking);
+        final var slow = Thread.ofVirtual().start(() -> cache.get("return 'slow';"));
+        try {
+            assertTrue(stalled.await(10, TimeUnit.SECONDS));
+            assertTimeoutPreemptively(Duration.ofSeconds(10),
+                    () -> assertNotNull(cache.get("return 'fast';").compiled()));
+        } finally {
+            release.countDown();
+            slow.join();
+        }
+        assertEquals(2, cache.size());
     }
 
     @Test

@@ -22,6 +22,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -93,7 +94,11 @@ public abstract class FilterResolutionSupport {
     }
 
     protected Set<String> matched(FieldOperator op) throws IOException {
-        return FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+        return matched(op, PipelineContext.withoutScripts());
+    }
+
+    protected Set<String> matched(FieldOperator op, PipelineContext context) throws IOException {
+        return FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL, context)
                 .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).collect(Collectors.toSet());
     }
 

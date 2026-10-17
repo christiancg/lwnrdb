@@ -1,6 +1,5 @@
 package org.techhouse.data;
 
-import java.io.BufferedWriter;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashSet;
@@ -8,19 +7,25 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import org.techhouse.conn.OutboundQueue;
 
 public class Client {
     private final String address;
     private final LocalDateTime connectionTime = LocalDateTime.now();
     private LocalDateTime lastCommandTime;
     private String authenticatedUsername;
-    private volatile BufferedWriter writer;
+    private volatile OutboundQueue outbound;
     private final ReentrantLock writerLock = new ReentrantLock();
     private volatile Transaction activeTransaction;
     private volatile boolean hasLocalSlice;
+    private volatile boolean remoteSliceFenced;
+    private final AtomicReference<TransactionReap> transactionReaped = new AtomicReference<>();
     private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
     private final Map<String, Set<String>> transactionWriteHolders = new ConcurrentHashMap<>();
+    private final AtomicInteger failedAuthentications = new AtomicInteger();
 
     public Client(String address) {
         this.address = address;
@@ -28,6 +33,10 @@ public class Client {
 
     public String getAddress() {
         return address;
+    }
+
+    public int incrementFailedAuthentications() {
+        return failedAuthentications.incrementAndGet();
     }
 
     public LocalDateTime getConnectionTime() {
@@ -50,12 +59,12 @@ public class Client {
         this.authenticatedUsername = authenticatedUsername;
     }
 
-    public BufferedWriter getWriter() {
-        return writer;
+    public OutboundQueue getOutbound() {
+        return outbound;
     }
 
-    public void setWriter(BufferedWriter writer) {
-        this.writer = writer;
+    public void setOutbound(OutboundQueue outbound) {
+        this.outbound = outbound;
     }
 
     public ReentrantLock getWriterLock() {
@@ -76,6 +85,26 @@ public class Client {
 
     public void markLocalSlice() {
         this.hasLocalSlice = true;
+    }
+
+    public boolean hasFencedRemoteSlice() {
+        return remoteSliceFenced;
+    }
+
+    public void markRemoteSliceFenced() {
+        this.remoteSliceFenced = true;
+    }
+
+    public enum TransactionReap {
+        IDLE, MAX_AGE
+    }
+
+    public void markTransactionReaped(TransactionReap reason) {
+        transactionReaped.set(reason);
+    }
+
+    public TransactionReap consumeTransactionReaped() {
+        return transactionReaped.getAndSet(null);
     }
 
     public Set<String> getTransactionParticipants() {
@@ -100,6 +129,7 @@ public class Client {
 
     public void clearTransactionState() {
         hasLocalSlice = false;
+        remoteSliceFenced = false;
         transactionParticipants.clear();
         transactionWriteHolders.clear();
     }

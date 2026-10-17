@@ -20,6 +20,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -111,7 +112,7 @@ abstract class VersionedReplaySupport {
     protected void applyPrefix(List<String> opIds, int count) throws Exception {
         final var ops = new ArrayList<>(AdminOperationHelper.readTransactionOps(opIds));
         ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
-        final var applier = new VersionedApply();
+        final var applier = new VersionedApply(IocContainer.get(ListenManager.class));
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
         try {
             for (final var op : ops.subList(0, count)) {

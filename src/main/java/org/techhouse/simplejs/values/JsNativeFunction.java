@@ -2,12 +2,13 @@ package org.techhouse.simplejs.values;
 
 import java.util.List;
 import java.util.function.BiFunction;
+import org.techhouse.simplejs.internal.Coroutine;
 
 public final class JsNativeFunction extends JsValue implements JsCallableProperties {
-    private static final ThreadLocal<JsValue> NEW_TARGET = new ThreadLocal<>();
-
     private final String name;
     private final BiFunction<JsValue, List<JsValue>, JsValue> implementation;
+    private final NativeConstructor constructorImplementation;
+    private final CallerAwareFunction callerAwareImplementation;
     private final CallableMetadata metadata = new CallableMetadata();
     private JsValue boundTarget;
     private List<JsValue> boundArgs;
@@ -17,8 +18,23 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
     private boolean constructor;
 
     public JsNativeFunction(String name, BiFunction<JsValue, List<JsValue>, JsValue> implementation) {
+        this(name, implementation, null, null);
+    }
+
+    public JsNativeFunction(String name, NativeConstructor constructorImplementation) {
+        this(name, null, constructorImplementation, null);
+    }
+
+    private JsNativeFunction(String name, BiFunction<JsValue, List<JsValue>, JsValue> implementation,
+            NativeConstructor constructorImplementation, CallerAwareFunction callerAwareImplementation) {
         this.name = name;
         this.implementation = implementation;
+        this.constructorImplementation = constructorImplementation;
+        this.callerAwareImplementation = callerAwareImplementation;
+    }
+
+    public static JsNativeFunction callerAware(String name, CallerAwareFunction implementation) {
+        return new JsNativeFunction(name, null, null, implementation);
     }
 
     public boolean isConstructor() {
@@ -70,35 +86,25 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
         return boundArgs;
     }
 
-    public static JsValue currentNewTarget() {
-        return NEW_TARGET.get();
-    }
-
     public JsValue invoke(JsValue thisArg, List<JsValue> args) {
-        final var previous = NEW_TARGET.get();
-        if (previous == null) {
-            return implementation.apply(thisArg, args);
-        }
-        NEW_TARGET.remove();
-        try {
-            return implementation.apply(thisArg, args);
-        } finally {
-            NEW_TARGET.set(previous);
-        }
+        return invoke(thisArg, args, JsUndefined.getInstance());
     }
 
     public JsValue invoke(JsValue thisArg, List<JsValue> args, JsValue newTarget) {
-        final var previous = NEW_TARGET.get();
-        NEW_TARGET.set(newTarget);
-        try {
-            return implementation.apply(thisArg, args);
-        } finally {
-            if (previous == null) {
-                NEW_TARGET.remove();
-            } else {
-                NEW_TARGET.set(previous);
-            }
+        if (constructorImplementation != null) {
+            return constructorImplementation.construct(thisArg, args, newTarget);
         }
+        if (callerAwareImplementation != null) {
+            return callerAwareImplementation.call(thisArg, args, null);
+        }
+        return implementation.apply(thisArg, args);
+    }
+
+    public JsValue invokeFromCaller(JsValue thisArg, List<JsValue> args, Coroutine caller) {
+        if (callerAwareImplementation != null) {
+            return callerAwareImplementation.call(thisArg, args, caller);
+        }
+        return invoke(thisArg, args);
     }
 
     @Override

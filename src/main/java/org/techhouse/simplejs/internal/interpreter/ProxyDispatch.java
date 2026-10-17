@@ -298,22 +298,29 @@ public final class ProxyDispatch {
         }
         final var keys = new ArrayList<JsValue>();
         if (result instanceof JsArray array) {
-            keys.addAll(array.getElements());
-        } else {
-            final var length = JsCoercion.toNumber(ops.getMember(result, new JsString("length")), ops);
-            if (length > MAX_LIST_LENGTH) {
-                throw new TypeErrorException("proxy [[OwnPropertyKeys]] result length exceeds the supported maximum");
+            for (final var key : array.getElements()) {
+                keys.add(requirePropertyKey(key));
             }
-            for (var i = 0; i < (int) Math.max(0, Double.isNaN(length) ? 0 : length); i++) {
-                keys.add(ops.getMember(result, new JsString(Integer.toString(i))));
-            }
+            return keys;
         }
-        for (final var key : keys) {
-            if (!(key instanceof JsString) && !(key instanceof JsSymbol)) {
-                throw new TypeErrorException("proxy [[OwnPropertyKeys]] must return only string and symbol keys");
-            }
+        final var length = JsCoercion.toNumber(ops.getMember(result, new JsString("length")), ops);
+        if (length > MAX_LIST_LENGTH) {
+            throw new TypeErrorException("proxy [[OwnPropertyKeys]] result length exceeds the supported maximum");
+        }
+        final var count = (int) Math.max(0, Double.isNaN(length) ? 0 : length);
+        InterpreterOps.chargeArrayLike(ops, count);
+        for (var i = 0; i < count; i++) {
+            InterpreterOps.pace(ops, i);
+            keys.add(requirePropertyKey(ops.getMember(result, new JsString(Integer.toString(i)))));
         }
         return keys;
+    }
+
+    private static JsValue requirePropertyKey(JsValue key) {
+        if (!(key instanceof JsString) && !(key instanceof JsSymbol)) {
+            throw new TypeErrorException("proxy [[OwnPropertyKeys]] must return only string and symbol keys");
+        }
+        return key;
     }
 
     private static Object identity(JsValue key) {
@@ -394,7 +401,7 @@ public final class ProxyDispatch {
     private static TypeErrorException invariant(String trap, JsValue key) {
         final var name = key instanceof JsSymbol symbol
                 ? "Symbol(" + symbol.getDescription() + ")"
-                : JsCoercion.toStr(key);
+                : JsCoercion.describe(key);
         return new TypeErrorException("proxy '" + trap + "' trap violated an invariant for property " + name);
     }
 

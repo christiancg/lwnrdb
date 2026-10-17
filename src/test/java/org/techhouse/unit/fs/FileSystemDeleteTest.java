@@ -54,7 +54,7 @@ public class FileSystemDeleteTest extends FileSystemTestBase {
     }
 
     @Test
-    public void test_delete_entry_shifts_remaining_entries() throws IOException {
+    public void test_delete_entry_leaves_a_hole_and_keeps_the_rest_in_place() throws IOException {
         final var fileSystem = fs;
 
         final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
@@ -68,18 +68,17 @@ public class FileSystemDeleteTest extends FileSystemTestBase {
         DbEntry entry2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         entry2.set_id("2");
 
-        fileSystem.insertIntoCollection(entry1);
+        final PkIndexEntry entryToDelete = fileSystem.insertIntoCollection(entry1);
         fileSystem.insertIntoCollection(entry2);
-
-        PkIndexEntry entryToDelete = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 25, 0);
 
         fileSystem.deleteFromCollection(entryToDelete);
 
         try (RandomAccessFile reader = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             byte[] content = new byte[(int) reader.length()];
             reader.readFully(content);
-            assertEquals(entry2.toFileEntry(),
-                    new String(content, StandardCharsets.UTF_8).replace(Globals.NEWLINE, ""));
+            final var hole = " ".repeat((int) entryToDelete.getLength() - Globals.NEWLINE.length());
+            assertEquals(hole + Globals.NEWLINE + entry2.toFileEntry() + Globals.NEWLINE,
+                    new String(content, StandardCharsets.UTF_8));
         }
 
         assertTrue(file.delete());

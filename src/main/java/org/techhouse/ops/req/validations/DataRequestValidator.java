@@ -35,7 +35,7 @@ public final class DataRequestValidator {
         if (request.getObject() == null) {
             return ValidationResult.fail("SAVE request requires an object");
         }
-        if (request.get_id() != null && !request.get_id().matches(NameValidations.ID_PATTERN)) {
+        if (request.get_id() != null && !NameValidations.isId(request.get_id())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return validateDocument(request.getObject());
@@ -59,7 +59,7 @@ public final class DataRequestValidator {
         if (!(element instanceof JsonString jsonString)) {
             return ValidationResult.fail("_id must be a string");
         }
-        if (!jsonString.getValue().matches(NameValidations.ID_PATTERN)) {
+        if (!NameValidations.isId(jsonString.getValue())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
@@ -90,7 +90,7 @@ public final class DataRequestValidator {
         if (request.get_id() == null) {
             return ValidationResult.fail("FIND_BY_ID request requires an _id");
         }
-        if (!request.get_id().matches(NameValidations.ID_PATTERN)) {
+        if (!NameValidations.isId(request.get_id())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
@@ -104,7 +104,7 @@ public final class DataRequestValidator {
         if (request.get_id() == null) {
             return ValidationResult.fail("DELETE request requires an _id");
         }
-        if (!request.get_id().matches(NameValidations.ID_PATTERN)) {
+        if (!NameValidations.isId(request.get_id())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();

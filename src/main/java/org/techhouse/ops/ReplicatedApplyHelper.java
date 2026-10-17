@@ -4,7 +4,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.HybridClock;
+import org.techhouse.cluster.PeerNames;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -12,7 +14,9 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.DirtySink;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.listen.NotificationBatch;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -25,6 +29,7 @@ public final class ReplicatedApplyHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final Logger logger = Logger.logFor(ReplicatedApplyHelper.class);
 
@@ -32,7 +37,8 @@ public final class ReplicatedApplyHelper {
     }
 
     public static boolean apply(ReplicationPayload payload, long timeoutMillis) {
-        if (payload == null || payload.getOp() == null) {
+        if (payload == null || payload.getOp() == null
+                || !PeerNames.collection(payload.getDbName(), payload.getCollName())) {
             return false;
         }
         final var dbName = payload.getDbName();
@@ -61,6 +67,17 @@ public final class ReplicatedApplyHelper {
     }
 
     static boolean applyLocked(ReplicationPayload payload) throws Exception {
+        return applyWithin(payload, listenManager);
+    }
+
+    static boolean applyLocked(ReplicationPayload payload, NotificationBatch transactionBatch) throws Exception {
+        return applyWithin(payload, transactionBatch);
+    }
+
+    private static boolean applyWithin(ReplicationPayload payload, DirtySink outer) throws Exception {
+        if (!versionsWithinSkew(payload)) {
+            return false;
+        }
         if (belongsToAnotherIncarnation(payload)) {
             logger.warning("Refusing a replicated " + payload.getOp() + " to " + payload.getDbName() + "|"
                     + payload.getCollName() + ": it belongs to incarnation " + payload.incarnationValue()
@@ -68,15 +85,12 @@ public final class ReplicatedApplyHelper {
                     + CollectionIncarnation.current(payload.getDbName(), payload.getCollName()));
             return false;
         }
-        listenManager
-                .deferNotifications(List.of(Cache.getCollectionIdentifier(payload.getDbName(), payload.getCollName())));
-        try {
+        try (var batch = listenManager.openBatch(outer,
+                List.of(Cache.getCollectionIdentifier(payload.getDbName(), payload.getCollName())))) {
             return switch (payload.getOp()) {
-                case UPSERT -> applyUpsert(payload);
-                case DELETE -> applyDelete(payload);
+                case UPSERT -> applyUpsert(payload, batch);
+                case DELETE -> applyDelete(payload, batch);
             };
-        } finally {
-            listenManager.flushDeferredNotifications();
         }
     }
 
@@ -85,7 +99,7 @@ public final class ReplicatedApplyHelper {
         return stamped != 0L && !CollectionIncarnation.isCurrent(payload.getDbName(), payload.getCollName(), stamped);
     }
 
-    private static boolean applyUpsert(ReplicationPayload payload) throws Exception {
+    private static boolean applyUpsert(ReplicationPayload payload, DirtySink sink) throws Exception {
         final var documents = payload.getDocuments();
         final var versions = payload.getVersions();
         final var acceptedDocuments = new ArrayList<JsonObject>();
@@ -111,7 +125,22 @@ public final class ReplicatedApplyHelper {
         }
         final var request = new BulkSaveRequest(payload.getDbName(), payload.getCollName());
         request.setObjects(acceptedDocuments);
-        return SaveOperationHelper.executeBulkSave(request, acceptedVersions) instanceof BulkSaveResponse;
+        return SaveOperationHelper.executeBulkSave(request, acceptedVersions, sink) instanceof BulkSaveResponse;
+    }
+
+    public static boolean versionsWithinSkew(ReplicationPayload payload) {
+        if (payload.getVersions() == null) {
+            return true;
+        }
+        for (final var raw : payload.getVersions()) {
+            if (raw != null && !hybridClock.withinSkew(Long.parseLong(raw), clusterConfig.maxClockSkewMs())) {
+                logger.warning("Refusing a replicated " + payload.getOp() + " to " + payload.getDbName() + "|"
+                        + payload.getCollName() + ": its version " + raw
+                        + " is more than clusterMaxClockSkewMs ahead of this node's clock");
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isSupersededLocally(String dbName, String collName, JsonObject document, long version,
@@ -143,7 +172,7 @@ public final class ReplicatedApplyHelper {
         return raw == null ? null : Long.valueOf(raw);
     }
 
-    private static boolean applyDelete(ReplicationPayload payload) throws Exception {
+    private static boolean applyDelete(ReplicationPayload payload, DirtySink sink) throws Exception {
         final var ids = payload.getIds();
         final var versions = payload.getVersions();
         for (var i = 0; i < ids.size(); i++) {
@@ -161,7 +190,7 @@ public final class ReplicatedApplyHelper {
             final var request = new DeleteRequest(payload.getDbName(), payload.getCollName());
             request.set_id(id);
             // A missing id (ENTRY_NOT_FOUND) is treated as already-applied: the end state (absent) matches.
-            DeleteOperationHelper.executeDelete(request);
+            DeleteOperationHelper.executeDelete(request, sink);
         }
         return true;
     }

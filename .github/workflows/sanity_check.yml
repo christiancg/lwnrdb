@@ -5,6 +5,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------------
   # Build once: compile, unit tests, coverage + all quality gates, then build the
@@ -12,7 +15,7 @@ jobs:
   # don't have to rebuild. This is the long pole; everything below runs in
   # parallel against the native binary.
   #
-  # JDK 25, not 26: GraalVM has no JDK 26 release, and the regex engine resolves
+  # JDK 25, not 27: GraalVM has no JDK 26 or 27 release, and the regex engine resolves
   # \p{...} against the build JDK's Unicode data - see the enforcer rule in pom.xml.
   # ---------------------------------------------------------------------------
   build:
@@ -132,6 +135,16 @@ jobs:
             run: |
               python3 test_utils/test_tls.py
 
+          - name: connection-limits
+            start_server: false
+            run: |
+              python3 test_utils/test_connection_limits.py
+
+          - name: metadata-limits
+            start_server: false
+            run: |
+              python3 test_utils/test_metadata_limits.py
+
           - name: clustering-replication
             start_server: false
             run: |
@@ -217,7 +230,7 @@ jobs:
         # upload/download-artifact does not preserve the exec bit.
         run: chmod +x "$LWNRDB_SERVER_BIN"
       - name: Set admin credentials for integration tests
-        run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' lwnrdb.cfg
+        run: echo "defaultAdminPassword=Tst-Admin-9xQ2mV" >> lwnrdb.cfg
       - name: Start server
         if: ${{ matrix.start_server }}
         run: |

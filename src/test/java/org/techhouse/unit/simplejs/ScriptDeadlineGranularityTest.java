@@ -14,7 +14,7 @@ public class ScriptDeadlineGranularityTest {
 
     private static ResourceLimits withTimeout(long timeoutMs) {
         return new ResourceLimits(-1L, timeoutMs, -1, true, false, List.of(), -1, -1, false, false, 16, 1000, 1000, -1L,
-                -1, -1, -1);
+                -1, -1, -1, 8, -1);
     }
 
     private static SimpleHostBindings host(long timeoutMs) {
@@ -62,7 +62,7 @@ public class ScriptDeadlineGranularityTest {
     public void test_the_instruction_budget_stays_exact() {
         final var result = simpleJs.run(simpleJs.compile("let i = 0; while (true) { i++; }", false),
                 new SimpleHostBindings(new JsonObject(), null, null, new ResourceLimits(500L, -1L, -1, true, false,
-                        List.of(), -1, -1, false, false, 16, 1000, 1000, -1L, -1, -1, -1)));
+                        List.of(), -1, -1, false, false, 16, 1000, 1000, -1L, -1, -1, -1, 8, -1)));
 
         assertTrue(result.isError());
         assertEquals("ScriptLimitError", result.getErrorName(), "the instruction budget must stay exact, not sampled");

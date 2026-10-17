@@ -3,6 +3,7 @@ package org.techhouse.cluster.admin;
 import java.util.List;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -13,6 +14,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.admin.CollectionIncarnation;
 
 final class AdminQuarantine {
@@ -24,6 +26,7 @@ final class AdminQuarantine {
     private final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
 
     void quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation) throws Exception {
         final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
@@ -46,6 +49,8 @@ final class AdminQuarantine {
         final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, incarnation);
         cache.evictCollection(dbName, collName);
         pendingIndexWrites.clearCollection(dbName, collName);
+        triggerExecutor.discardQueuedFor(dbName, collName);
+        TriggerRunLog.discardAllFor(dbName, collName);
         return moved;
     }
 
@@ -110,6 +115,8 @@ final class AdminQuarantine {
                 pendingIndexWrites.clearDatabase(dbName);
                 compiledProcedures.invalidateDatabase(dbName);
                 scheduleRegistry.removeDatabase(dbName);
+                triggerExecutor.discardQueuedFor(dbName, null);
+                TriggerRunLog.discardAllFor(dbName, null);
                 logger.warning("Quarantined database " + dbName + ": the cluster dropped it while this node held it."
                         + " Its documents were " + movedOrLeft(moved) + " and it no longer serves reads or writes"
                         + " until an operator reinstates or removes it.");

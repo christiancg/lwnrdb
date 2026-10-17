@@ -25,8 +25,10 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.SchemaPatternCaps;
 import org.techhouse.ops.admin.AdminStamp;
 
 public class AdminCache {
@@ -60,8 +62,8 @@ public class AdminCache {
     private final BoundedLruCache<ScheduleDefinition> schedules = new BoundedLruCache<>(Integer.MAX_VALUE,
             configuration.getMetadataCacheMaxBytes() / 3,
             definition -> (long) eJson.toJson(definition.toJsonObject()).length() * 2L);
-    private final BoundedLruCache<Boolean> metadataMisses = new BoundedLruCache<>(
-            configuration.getMetadataCacheMaxEntries(), 0L, _ -> 1L);
+    private final PartitionedMissCache metadataMisses = new PartitionedMissCache(
+            configuration.getMetadataCacheMaxEntries());
     private final DefinitionCache<JsonObject> schemaCache = new DefinitionCache<>(() -> collectionSchemas,
             () -> metadataMisses, SCHEMA_MISS_PREFIX, this::loadSchemaUncached);
     private final DefinitionCache<ProcedureDefinition> procedureCache = new DefinitionCache<>(() -> procedures,
@@ -145,6 +147,10 @@ public class AdminCache {
         pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta);
     }
 
+    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta, int addedEntries) {
+        pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta, addedEntries);
+    }
+
     public void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
         pageCache.updatePageSizeForUpdateInMemory(dbName, collName, page, bytesDelta);
     }
@@ -153,16 +159,10 @@ public class AdminCache {
         return pageCache.getAdminPagePkIndexes(dbName, collName);
     }
 
-    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
-            long removedLength) {
-        final Collection<PkIndexEntry> entries = Globals.ADMIN_DB_NAME.equals(dbName)
-                ? adminCollectionPkIndex(collName)
-                : pageCache.pkIndexesForPagesCollection(collName);
-        for (final var entry : entries) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
-        }
+    public void repositionAfterVacuum(VacuumedPage vacuumed) {
+        vacuumed.reposition(Globals.ADMIN_DB_NAME.equals(vacuumed.dbName())
+                ? adminCollectionPkIndex(vacuumed.collName())
+                : pageCache.pkIndexesForPagesCollection(vacuumed.collName()));
     }
 
     private Collection<PkIndexEntry> adminCollectionPkIndex(String collName) {
@@ -185,9 +185,8 @@ public class AdminCache {
         return pageCache.selectPageForInsert(dbName, collName, entryByteSize);
     }
 
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
-            Map<Long, Long> pendingBytesByPage) {
-        return pageCache.selectPageForInsert(dbName, collName, entryByteSize, pendingBytesByPage);
+    public long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
+        return pageCache.selectPagesForInsert(dbName, collName, entryByteSizes);
     }
 
     public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
@@ -273,7 +272,10 @@ public class AdminCache {
             if (raw == null || raw.isBlank()) {
                 return null;
             }
-            return AdminStamp.unwrappedSchema(eJson.fromJson(raw, JsonObject.class));
+            final var schema = AdminStamp.unwrappedSchema(eJson.fromJson(raw, JsonObject.class));
+            SchemaPatternCaps.warnWhenOver(
+                    "Loaded the stored schema of " + Cache.getCollectionIdentifier(dbName, collName), schema);
+            return schema;
         } catch (Exception e) {
             logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());

@@ -26,6 +26,9 @@ public class Transaction {
     private final Map<String, Map<String, Long>> versions = new HashMap<>();
     private final Map<Long, Set<String>> insertedIdsByOp = new HashMap<>();
     private boolean aborted;
+    private final long startedAtNanos = System.nanoTime();
+    private int bufferedOps;
+    private long bufferedBytes;
 
     public Transaction(UUID transactionId, UUID clientId) {
         this.transactionId = transactionId;
@@ -54,6 +57,19 @@ public class Transaction {
 
     public UUID getClientId() {
         return clientId;
+    }
+
+    public long ageMillis() {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
+    }
+
+    public boolean wouldExceed(int ops, long bytes, int maxOps, long maxBytes) {
+        return maxOps != 0 && bufferedOps + (long) ops > maxOps || bufferedBytes + bytes > maxBytes;
+    }
+
+    public void accountBuffered(int ops, long bytes) {
+        bufferedOps += ops;
+        bufferedBytes += bytes;
     }
 
     public int nextSeq() {

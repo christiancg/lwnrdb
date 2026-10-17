@@ -51,7 +51,7 @@ public final class TypedArrayMutation {
         if (comparator != null && !InterpreterUtils.isCallable(comparator)) {
             throw new TypeErrorException("The comparison function must be either a function or undefined");
         }
-        final var items = new ArrayList<>(elements(validate(receiver)));
+        final var items = elements(validate(receiver), ops);
         if (comparator == null) {
             items.sort(TypedArrayMutation::compareNumeric);
         } else {
@@ -72,7 +72,7 @@ public final class TypedArrayMutation {
     }
 
     public static JsValue toReversed(JsTypedArray receiver, InterpreterOps ops) {
-        final var items = new ArrayList<>(elements(receiver));
+        final var items = elements(receiver, ops);
         java.util.Collections.reverse(items);
         return fromItems(receiver.kind(), items, ops);
     }
@@ -87,6 +87,7 @@ public final class TypedArrayMutation {
         }
         final var result = allocate(receiver.kind(), length, ops);
         for (var i = 0; i < length; i++) {
+            InterpreterOps.pace(ops, i);
             result.setElement(i, i == index ? replacement : receiver.getElement(i));
         }
         return result;
@@ -107,7 +108,9 @@ public final class TypedArrayMutation {
                 args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0, ops) : length, length);
         validate(receiver);
         final var slice = new ArrayList<JsValue>();
+        InterpreterOps.chargeElements(ops, Math.max(end - start, 0));
         for (var i = start; i < end; i++) {
+            InterpreterOps.pace(ops, i);
             slice.add(receiver.getElement(i));
         }
         final var live = receiver.length();
@@ -218,21 +221,21 @@ public final class TypedArrayMutation {
         validate(receiver);
         final var targetLength = receiver.length();
         if (source instanceof JsTypedArray typed) {
-            return setFromTypedArray(receiver, typed, offsetValue, targetLength);
+            return setFromTypedArray(receiver, typed, offsetValue, targetLength, ops);
         }
         return setFromArrayLike(receiver, source, offsetValue, targetLength, ops);
     }
 
-    public static JsValue setFromTypedArray(JsTypedArray receiver, JsTypedArray source, double offset,
-            int targetLength) {
+    public static JsValue setFromTypedArray(JsTypedArray receiver, JsTypedArray source, double offset, int targetLength,
+            InterpreterOps ops) {
         validate(source);
         if (isBigIntKind(receiver.kind()) != isBigIntKind(source.kind())) {
             throw new TypeErrorException("Cannot mix BigInt and other types in a typed array set");
         }
-        final var items = elements(source);
-        if (offset + items.size() > targetLength) {
+        if (offset + source.length() > targetLength) {
             throw new RangeErrorException("Source is too large");
         }
+        final var items = elements(source, ops);
         for (var i = 0; i < items.size(); i++) {
             receiver.setElement((int) offset + i, items.get(i));
         }
@@ -242,13 +245,14 @@ public final class TypedArrayMutation {
     public static JsValue setFromArrayLike(JsTypedArray receiver, JsValue source, double offset, int targetLength,
             InterpreterOps ops) {
         if (source instanceof JsUndefined || source instanceof JsNull) {
-            throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(source) + " to an object");
+            throw new TypeErrorException("Cannot convert " + JsCoercion.describe(source) + " to an object");
         }
         final var sourceLength = arrayLikeLength(source, ops);
         if (Double.isInfinite(offset) || sourceLength + offset > targetLength) {
             throw new RangeErrorException("Source is too large");
         }
         for (var i = 0; i < sourceLength; i++) {
+            InterpreterOps.pace(ops, i);
             final var value = ops == null
                     ? JsUndefined.getInstance()
                     : ops.getMember(source, new JsString(Integer.toString(i)));
@@ -284,6 +288,7 @@ public final class TypedArrayMutation {
         validate(receiver);
         final var live = Math.min(end, receiver.length());
         for (var i = start; i < live; i++) {
+            InterpreterOps.pace(ops, i);
             receiver.setElement(i, value);
         }
         return receiver;

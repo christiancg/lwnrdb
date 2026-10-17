@@ -2,6 +2,7 @@ package org.techhouse.ejson.type_adapters.impl;
 
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
@@ -13,7 +14,7 @@ public class JsonCustomTypeAdapter implements TypeAdapter<JsonCustom<?>> {
     }
 
     @Override
-    public void toJson(JsonCustom<?> value, StringBuilder out) {
+    public void toJson(JsonCustom<?> value, JsonOut out) {
         TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value, out);
     }
 

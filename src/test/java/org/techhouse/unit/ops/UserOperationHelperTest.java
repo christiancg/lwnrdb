@@ -18,6 +18,7 @@ import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
@@ -108,7 +109,7 @@ public class UserOperationHelperTest {
 
         final var deleteReq = new DeleteUserRequest();
         deleteReq.setUsername("userToDelete");
-        final var resp = UserOperationHelper.processDeleteUser(deleteReq);
+        final var resp = UserOperationHelper.processDeleteUser(deleteReq, new RestampedRecords());
         assertEquals(OperationStatus.OK, resp.getStatus());
         assertNull(cache.getAdminUserEntry("userToDelete"));
     }
@@ -117,7 +118,7 @@ public class UserOperationHelperTest {
     public void test_delete_user_not_found() {
         final var req = new DeleteUserRequest();
         req.setUsername("nonexistent");
-        final var resp = UserOperationHelper.processDeleteUser(req);
+        final var resp = UserOperationHelper.processDeleteUser(req, new RestampedRecords());
         assertEquals(OperationStatus.NOT_FOUND, resp.getStatus());
     }
 
@@ -247,7 +248,8 @@ public class UserOperationHelperTest {
         try {
             final var deleteReq = new DeleteUserRequest();
             deleteReq.setUsername("sessionUser");
-            assertEquals(OperationStatus.OK, UserOperationHelper.processDeleteUser(deleteReq).getStatus());
+            assertEquals(OperationStatus.OK,
+                    UserOperationHelper.processDeleteUser(deleteReq, new RestampedRecords()).getStatus());
             UserOperationHelper.processCreateUser(createReq);
 
             assertNull(clientTracker.getAuthenticatedUsername(clientId),

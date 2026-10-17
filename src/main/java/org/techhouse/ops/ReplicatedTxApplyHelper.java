@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.util.stream.Collectors;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.PeerNames;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ioc.IocContainer;
@@ -17,7 +18,8 @@ public final class ReplicatedTxApplyHelper {
     }
 
     public static boolean apply(TxReplicationPayload payload, long timeoutMillis) {
-        if (payload == null || payload.getEntries().isEmpty()) {
+        if (payload == null || payload.getEntries().isEmpty() || payload.getEntries().stream()
+                .anyMatch(entry -> entry == null || !PeerNames.collection(entry.getDbName(), entry.getCollName()))) {
             return false;
         }
         final var collIds = payload.getEntries().stream()
@@ -34,21 +36,21 @@ public final class ReplicatedTxApplyHelper {
     private static boolean applyUnderWriteLocks(TxReplicationPayload payload, java.util.Set<String> collIds,
             long timeoutMillis) throws Exception {
         final ResourceLocking.LockedAction<Boolean> applyEntries = () -> {
+            if (!payload.getEntries().stream().allMatch(ReplicatedApplyHelper::versionsWithinSkew)) {
+                return false;
+            }
             if (payload.getEntries().stream().anyMatch(ReplicatedApplyHelper::belongsToAnotherIncarnation)) {
                 logger.warning("Refusing a replicated transaction batch: one of its collections was dropped and"
                         + " re-created since the batch was built");
                 return false;
             }
-            listenManager.deferNotifications(collIds);
-            try {
+            try (var batch = listenManager.openBatch(collIds)) {
                 for (final var entry : payload.getEntries()) {
-                    if (!ReplicatedApplyHelper.applyLocked(entry)) {
+                    if (!ReplicatedApplyHelper.applyLocked(entry, batch)) {
                         return false;
                     }
                 }
                 return true;
-            } finally {
-                listenManager.flushDeferredNotifications();
             }
         };
         return locks.withWriteLocks(collIds, timeoutMillis, applyEntries);

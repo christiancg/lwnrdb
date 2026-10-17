@@ -32,15 +32,15 @@ public class FilterComparisonOperatorTest {
     @Test
     public void test_boolean_comparison_operators() {
         JsonObject testObj = new JsonObject();
-        testObj.add("boolField", new JsonBoolean(true));
+        testObj.add("boolField", JsonBoolean.of(true));
 
-        JsonBaseElement value = new JsonBoolean(true);
+        JsonBaseElement value = JsonBoolean.of(true);
         FieldOperator operator = new FieldOperator(FieldOperatorType.EQUALS, "boolField", value);
         BiPredicate<JsonObject, String> tester = FilterOperatorHelper.getTester(operator, FieldOperatorType.EQUALS);
 
         assertTrue(tester.test(testObj, "boolField"));
 
-        operator = new FieldOperator(FieldOperatorType.NOT_EQUALS, "boolField", new JsonBoolean(false));
+        operator = new FieldOperator(FieldOperatorType.NOT_EQUALS, "boolField", JsonBoolean.of(false));
         tester = FilterOperatorHelper.getTester(operator, FieldOperatorType.NOT_EQUALS);
 
         assertTrue(tester.test(testObj, "boolField"));
@@ -107,8 +107,8 @@ public class FilterComparisonOperatorTest {
     @Test
     public void test_boolean_greater_than_returns_false() {
         JsonObject obj = new JsonObject();
-        obj.add("flag", new JsonBoolean(true));
-        FieldOperator op = new FieldOperator(FieldOperatorType.GREATER_THAN, "flag", new JsonBoolean(true));
+        obj.add("flag", JsonBoolean.of(true));
+        FieldOperator op = new FieldOperator(FieldOperatorType.GREATER_THAN, "flag", JsonBoolean.of(true));
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN).test(obj, "flag"));
     }
 

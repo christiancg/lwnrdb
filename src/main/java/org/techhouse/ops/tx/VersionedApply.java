@@ -12,6 +12,7 @@ import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.DirtySink;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.DeleteOperationHelper;
 import org.techhouse.ops.OperationStatus;
@@ -61,6 +62,11 @@ public final class VersionedApply {
 
     private final Map<String, Map<String, Long>> tombstonesByCollection = new HashMap<>();
     private final Map<String, ApplyOutcome> outcomes = new HashMap<>();
+    private final DirtySink sink;
+
+    public VersionedApply(DirtySink sink) {
+        this.sink = sink;
+    }
 
     public Map<String, ApplyOutcome> outcomes() {
         return outcomes;
@@ -91,7 +97,7 @@ public final class VersionedApply {
         final var request = new SaveRequest(dbName, collName);
         request.setObject(object);
         request.set_id(id);
-        requireApplied(AdminTransactionEntry.OP_TYPE_SAVE, SaveOperationHelper.executeSave(request, version));
+        requireApplied(AdminTransactionEntry.OP_TYPE_SAVE, SaveOperationHelper.executeSave(request, version, sink));
     }
 
     private void applyBulkSave(AdminTransactionEntry op) throws Exception {
@@ -114,7 +120,8 @@ public final class VersionedApply {
         }
         final var request = new BulkSaveRequest(dbName, collName);
         request.setObjects(objects);
-        requireApplied(AdminTransactionEntry.OP_TYPE_BULK_SAVE, SaveOperationHelper.executeBulkSave(request, versions));
+        requireApplied(AdminTransactionEntry.OP_TYPE_BULK_SAVE,
+                SaveOperationHelper.executeBulkSave(request, versions, sink));
     }
 
     private void applyDelete(String dbName, String collName, String id, long version) throws Exception {
@@ -125,7 +132,7 @@ public final class VersionedApply {
         }
         final var request = new DeleteRequest(dbName, collName);
         request.set_id(id);
-        DeleteOperationHelper.executeDelete(request);
+        DeleteOperationHelper.executeDelete(request, sink);
     }
 
     private ApplyOutcome record(String dbName, String collName, String id, ApplyOutcome outcome) {

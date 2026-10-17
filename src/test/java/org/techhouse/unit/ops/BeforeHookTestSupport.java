@@ -42,7 +42,7 @@ final class BeforeHookTestSupport {
 
     static void tearDownAll() throws Exception {
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

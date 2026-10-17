@@ -24,7 +24,8 @@ public final class ClusterWriteHelper {
     }
 
     public static OperationResponse guard(OperationType type, String dbName, String collName) {
-        return errorFor(type, coordinator.guardWrite(dbName, collName));
+        final var refusal = errorFor(type, coordinator.guardWrite(dbName, collName));
+        return refusal != null ? refusal : CollectionReadinessGuard.precheck(type, dbName, collName);
     }
 
     private static OperationResponse errorFor(OperationType type, WriteGuard guard) {

@@ -1,5 +1,8 @@
 import os
+import re
 import sys
+import time
+from typing import Callable
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_status, section
@@ -8,7 +11,7 @@ HOST = os.environ.get("API_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("API_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "schema_test_db"
 COLL = "people"
@@ -182,6 +185,176 @@ def test_pattern_uses_ecma_semantics(c):
                save_schema(c, COLL, {"type": "object", "patternProperties": {"(?i)^a": {}}}), "ERROR", "400-8")
 
 
+HOSTILE = "x" * 800 + "!"
+REDOS_SCHEMA = {"type": "object", "properties": {"name": {"type": "string", "pattern": "(x+x+)+y"}}}
+BUDGET_DEADLINE_S = 15
+
+
+def diamond_chain(depth):
+    defs = {f"d{i}": {"allOf": [{"$ref": f"#/$defs/d{i + 1}"}, {"$ref": f"#/$defs/d{i + 1}"}]} for i in range(depth)}
+    defs[f"d{depth}"] = {"type": "object"}
+    return {"$ref": "#/$defs/d0", "$defs": defs}
+
+
+def timed(call: Callable[[], dict]):
+    started = time.monotonic()
+    response = call()
+    return response, time.monotonic() - started
+
+
+def test_pattern_redos_is_refused_within_a_deadline(c):
+    section("A catastrophic pattern is refused by the validation budget")
+    check_status("save a schema with a catastrophic pattern", save_schema(c, COLL, REDOS_SCHEMA), "OK")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "redos", "name": HOSTILE}))
+    check_code("the hostile document is refused with 400-23", resp, "ERROR", "400-23")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check("the refused document was not persisted", find_by_id(c, COLL, "redos").get("status") == "NOT_FOUND")
+    check_status("a cheap matching document still saves", save(c, COLL, {"_id": "cheap", "name": "xxy"}), "OK")
+
+
+def test_pattern_properties_redos_is_refused(c):
+    section("A catastrophic patternProperties key is refused by the validation budget")
+    check_status("save a patternProperties schema",
+                 save_schema(c, COLL, {"type": "object", "patternProperties": {"(x+x+)+y": {"type": "number"}}}), "OK")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "redos-key", HOSTILE: 1}))
+    check_code("the hostile key is refused with 400-23", resp, "ERROR", "400-23")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+
+
+def test_bulk_save_with_one_redos_document_is_atomic(c):
+    section("BULK_SAVE with one document over the budget writes nothing")
+    save_schema(c, COLL, REDOS_SCHEMA)
+    resp = bulk_save(c, COLL, [{"_id": "bulk-cheap", "name": "xxy"}, {"_id": "bulk-redos", "name": HOSTILE}])
+    check_code("the batch is refused with 400-23", resp, "ERROR", "400-23")
+    check("no document from the batch was persisted",
+          all(find_by_id(c, COLL, _id).get("status") == "NOT_FOUND" for _id in ("bulk-cheap", "bulk-redos")))
+
+
+def test_transactional_save_answers_400_23(c):
+    section("A transactional save over the budget answers 400-23 and the transaction stays usable")
+    save_schema(c, COLL, REDOS_SCHEMA)
+    check_status("start a transaction", c.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("the hostile save is refused", save(c, COLL, {"_id": "tx-redos", "name": HOSTILE}), "ERROR", "400-23")
+    check_status("a cheap save in the same transaction is buffered",
+                 save(c, COLL, {"_id": "tx-cheap", "name": "xxy"}), "OK")
+    check_status("commit", c.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("the cheap document committed", find_by_id(c, COLL, "tx-cheap").get("status") == "OK")
+    check("the hostile one did not", find_by_id(c, COLL, "tx-redos").get("status") == "NOT_FOUND")
+
+
+def test_large_unique_items_is_fast_or_budgeted(c):
+    section("uniqueItems over a large array answers quickly")
+    check_status("save a uniqueItems schema", save_schema(c, COLL, {
+        "type": "object", "properties": {"tags": {"type": "array", "uniqueItems": True}}}), "OK")
+    distinct = list(range(20000))
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "unique-big", "tags": distinct}))
+    check("20000 distinct items are accepted or refused by the budget",
+          resp.get("status") == "OK" or resp.get("errorCode") == "400-23", f"got {resp}")
+    check("inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "unique-dup", "tags": distinct[:-1] + [0]}))
+    check("a duplicate among 20000 items is refused",
+          resp.get("errorCode") in ("400-7", "400-23"), f"got {resp.get('errorCode')}")
+    check("inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check("the duplicated document was not persisted",
+          find_by_id(c, COLL, "unique-dup").get("status") == "NOT_FOUND")
+
+
+def test_the_reported_error_list_is_capped(c):
+    section("A document failing many times reports at most 100 errors")
+    check_status("save an items schema", save_schema(c, COLL, {
+        "type": "object", "properties": {"tags": {"type": "array", "items": {"type": "number"}}}}), "OK")
+    resp = save(c, COLL, {"_id": "many-errors", "tags": ["s"] * 500})
+    check_code("the document is refused", resp, "ERROR", "400-7")
+    check("the message names how many errors were left out", re.search(r"\.\.\. and \d+ more", resp.get("message") or "") is not None,
+          f"message tail={(resp.get('message') or '')[-80:]!r}")
+
+
+def test_complex_ref_chain_save_schema_is_refused(c):
+    section("SAVE_SCHEMA refuses a $ref diamond that expands past the node limit")
+    resp, elapsed = timed(lambda: save_schema(c, COLL, diamond_chain(28)))
+    check_code("a 28-level allOf diamond is refused with 400-24", resp, "ERROR", "400-24")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check_status("nothing was stored: an unconstrained save passes", save(c, COLL, {"_id": "free", "any": 1}), "OK")
+
+
+def test_diamond_chain_under_limit_is_accepted_and_bounded(c):
+    section("A $ref diamond under the node limit is accepted and validates in bounded time")
+    check_status("a 12-level diamond is accepted", save_schema(c, COLL, diamond_chain(12)), "OK")
+    resp, elapsed = timed(lambda: save(c, COLL, {"_id": "diamond", "name": "d"}))
+    check("a save against it answers OK or 400-23", resp.get("status") == "OK" or resp.get("errorCode") == "400-23",
+          f"got {resp.get('status')} {resp.get('errorCode')}")
+    check("and answers inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+
+
+def test_an_oversized_pattern_is_refused_at_save(c):
+    section("SAVE_SCHEMA refuses a regular expression longer than schemaMaxPatternLength")
+    check_code("a 4097-character pattern is refused with 400-31",
+               save_schema(c, COLL, {"type": "object", "properties": {"p": {"pattern": "a" * 4097}}}), "ERROR", "400-31")
+    check_code("so is a 4097-character patternProperties key nested in $defs",
+               save_schema(c, COLL, {"$defs": {"d": {"patternProperties": {"b" * 4097: {}}}}}), "ERROR", "400-31")
+    check_status("nothing was stored: an unconstrained save passes", save(c, COLL, {"_id": "free-pattern", "p": 1}), "OK")
+    check_status("a 4096-character pattern is accepted",
+                 save_schema(c, COLL, {"type": "object", "properties": {"p": {"pattern": "a" * 4096}}}), "OK")
+
+
+BACKREFERENCE_DEADLINE_S = 3
+
+
+def test_backreference_pattern_is_cut_by_budget_quickly(c):
+    section("A backreference pattern pays for every character it compares")
+    check_status("save a schema with a backreference pattern",
+                 save_schema(c, COLL, {"type": "object", "properties": {"name": {"pattern": "(a*)\\1b"}}}), "OK")
+    try:
+        resp, elapsed = timed(lambda: save(c, COLL, {"_id": "backref", "name": "a" * 100_000}))
+    except OSError as failure:
+        resp, elapsed = {"status": "ERROR", "message": str(failure)}, float("inf")
+    check_code("a SAVE of 100 000 'a's is refused with 400-23", resp, "ERROR", "400-23")
+    check(f"and refused within {BACKREFERENCE_DEADLINE_S}s", elapsed < BACKREFERENCE_DEADLINE_S,
+          f"elapsed={elapsed:.1f}s")
+    check("the refused document was not persisted", find_by_id(c, COLL, "backref").get("status") == "NOT_FOUND")
+    check_status("a short matching value still saves", save(c, COLL, {"_id": "backref-ok", "name": "aab"}), "OK")
+
+
+MAX_SCHEMA_PATTERNS = 256
+
+
+def many_patterns_schema(count):
+    properties = {f"p{i}": {"pattern": f"^many-{i}$"} for i in range(count - 1)}
+    return {"type": "object", "properties": properties, "patternProperties": {"^extra-[0-9]+$": {}}}
+
+
+def test_too_many_patterns_is_400_39(c):
+    section("SAVE_SCHEMA refuses a schema with more regular expressions than schemaMaxPatterns")
+    resp, elapsed = timed(lambda: save_schema(c, COLL, many_patterns_schema(MAX_SCHEMA_PATTERNS + 1)))
+    check_code(f"{MAX_SCHEMA_PATTERNS + 1} patterns (one a patternProperties key) are refused with 400-39",
+               resp, "ERROR", "400-39")
+    check("and refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check_code("an invalid regex among too many is still answered 400-39, before any is compiled",
+               save_schema(c, COLL, {"type": "object", "properties": {
+                   **many_patterns_schema(MAX_SCHEMA_PATTERNS + 1)["properties"], "bad": {"pattern": "(unclosed"}}}),
+               "ERROR", "400-39")
+    check_status("nothing was stored: an unconstrained save passes", save(c, COLL, {"_id": "free-many", "p0": 1}), "OK")
+    check_status(f"exactly {MAX_SCHEMA_PATTERNS} patterns are accepted",
+                 save_schema(c, COLL, many_patterns_schema(MAX_SCHEMA_PATTERNS)), "OK")
+    check_code("and enforced", save(c, COLL, {"_id": "many-bad", "p3": "nope"}), "ERROR", "400-7")
+
+
+def test_bulk_save_shares_one_budget(c):
+    section("A BULK_SAVE spends one validation budget across all its documents")
+    check_status("save a schema whose pattern costs millions of steps to reject",
+                 save_schema(c, COLL, {"type": "object", "properties": {"name": {"not": {"pattern": "(x+x+)+y"}}}}),
+                 "OK")
+    costly = "x" * 90 + "!"
+    check_status("one costly document fits the budget on its own", save(c, COLL, {"_id": "costly-1", "name": costly}),
+                 "OK")
+    resp, elapsed = timed(lambda: bulk_save(c, COLL, [{"_id": "costly-2", "name": costly},
+                                                      {"_id": "costly-3", "name": costly}]))
+    check_code("two of them in one BULK_SAVE exhaust it -> 400-23", resp, "ERROR", "400-23")
+    check("and are refused inside the deadline", elapsed < BUDGET_DEADLINE_S, f"elapsed={elapsed:.1f}s")
+    check("nothing of the batch was written",
+          all(find_by_id(c, COLL, _id).get("status") == "NOT_FOUND" for _id in ("costly-2", "costly-3")))
+
+
 def test_invalid_schema_rejected(c):
     section("Invalid schema rejected")
     check_code("schema with a bad keyword value is rejected",
@@ -298,7 +471,7 @@ def main():
 
     with Conn() as c:
         if c.authenticate().get("status") != "OK":
-            print("Could not authenticate as admin. Check lwnrdb.cfg defaultAdminUsername/defaultAdminPassword.")
+            print(f"Could not authenticate as admin. Check lwnrdb.cfg defaultAdminUsername/defaultAdminPassword={bu.PASSWORD}.")
             sys.exit(1)
         setup(c)
 
@@ -309,6 +482,18 @@ def main():
         test_multiple_of_rejects_a_tiny_non_multiple,
         test_multiple_of_is_exact_for_huge_values,
         test_pattern_uses_ecma_semantics,
+        test_pattern_redos_is_refused_within_a_deadline,
+        test_pattern_properties_redos_is_refused,
+        test_bulk_save_with_one_redos_document_is_atomic,
+        test_transactional_save_answers_400_23,
+        test_large_unique_items_is_fast_or_budgeted,
+        test_the_reported_error_list_is_capped,
+        test_complex_ref_chain_save_schema_is_refused,
+        test_diamond_chain_under_limit_is_accepted_and_bounded,
+        test_an_oversized_pattern_is_refused_at_save,
+        test_backreference_pattern_is_cut_by_budget_quickly,
+        test_too_many_patterns_is_400_39,
+        test_bulk_save_shares_one_budget,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,
         test_ref_targets_are_checked,

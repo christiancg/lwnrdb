@@ -60,7 +60,7 @@ public class ScriptAdmissionE2ETest {
     static void stopServer() throws Exception {
         server.stopAccepting();
         serverThread.join(10_000L);
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

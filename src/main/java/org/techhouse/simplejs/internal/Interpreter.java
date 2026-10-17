@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Intrinsics;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.host.CancellationToken;
 import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.host.SimpleHostBindings;
@@ -25,7 +26,6 @@ import org.techhouse.simplejs.internal.interpreter.ModuleLifecycle;
 import org.techhouse.simplejs.internal.interpreter.ModuleRegistry;
 import org.techhouse.simplejs.internal.interpreter.PrivateMemberEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ProxyDispatch;
-import org.techhouse.simplejs.internal.interpreter.StackCapture;
 import org.techhouse.simplejs.internal.interpreter.StatementEvaluator;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
@@ -53,12 +53,14 @@ public final class Interpreter {
             Map<String, JsValue> namedExports) {
     }
 
+    private static final long COROUTINE_BYTES = 2048L;
+
     public final EventLoop eventLoop = new EventLoop();
-    public final ThreadLocal<Coroutine> currentCoroutine = new ThreadLocal<>();
     public final List<Coroutine> coroutines = new ArrayList<>();
     public final InterpreterOps ops = new InterpreterOpsBridge(this);
     public final ProxyDispatch proxies = new ProxyDispatch(ops);
-    public final Intrinsics intrinsics = new Intrinsics(this::callValue, ops, eventLoop, this::driveAsyncGenerator);
+    public final Intrinsics intrinsics = new Intrinsics(this::callValue, ops, eventLoop, this::driveAsyncGenerator,
+            this::captureStack);
     public final MemberEvaluator members = new MemberEvaluator(this, eventLoop, proxies);
     public final BindingEvaluator binding = new BindingEvaluator(this, members);
     public final ClassEvaluator classes = new ClassEvaluator(this);
@@ -78,6 +80,7 @@ public final class Interpreter {
     public final long deadlineNanos;
     public final CancellationToken cancellation;
     public int depth;
+    public int nativeDepth;
     public int moduleDepth;
     public final CallStack callStack = new CallStack();
     public Environment globalEnv;
@@ -149,8 +152,8 @@ public final class Interpreter {
         return memberAccess.memberKey(member, env);
     }
 
-    public JsValue importModule(String moduleId, String displayName, Supplier<Program> parser) {
-        return moduleLifecycle.importModule(moduleId, displayName, parser);
+    public JsValue importModule(String moduleId, String displayName, Supplier<Program> parser, Coroutine coroutine) {
+        return moduleLifecycle.importModule(moduleId, displayName, parser, coroutine);
     }
 
     public JsValue cacheBuiltinModule(String moduleId, Supplier<JsValue> factory) {
@@ -270,33 +273,42 @@ public final class Interpreter {
     }
 
     <T> T runModule(Program program, ResultFinisher<T> finisher, RunMetrics metrics) {
-        StackCapture.install(callStack);
         try {
             final var outcome = moduleLifecycle.evaluateTopLevelModule(program);
             final var finished = finisher.finish(outcome, ops);
             eventLoop.drain(deadlineNanos);
             moduleLifecycle.reportUnhandledRejections();
             return finished;
+        } catch (SimpleJsRuntimeException error) {
+            throw callStack.stamp(error);
         } finally {
             if (metrics != null) {
                 metrics.fill(this);
             }
             lifecycle.cancelPendingCoroutines();
-            StackCapture.uninstall(callStack);
         }
+    }
+
+    private ProgramOutcome evaluateStamped(Program program) {
+        try {
+            return evaluateTopLevelModule(program);
+        } catch (SimpleJsRuntimeException error) {
+            throw callStack.stamp(error);
+        }
+    }
+
+    private List<String> captureStack() {
+        return callStack.capture(CallStack.MAX_FRAMES);
     }
 
     public static Session open(Program program, HostBindings host) {
         final var interpreter = new Interpreter(host);
-        StackCapture.install(interpreter.callStack);
         try {
-            return new Session(interpreter, interpreter.evaluateTopLevelModule(program));
+            return new Session(interpreter, interpreter.evaluateStamped(program));
         } catch (RuntimeException | Error failure) {
             interpreter.reportUnhandledRejections();
             interpreter.cancelPendingCoroutines();
             throw failure;
-        } finally {
-            StackCapture.uninstall(interpreter.callStack);
         }
     }
 
@@ -330,10 +342,6 @@ public final class Interpreter {
 
     public MemberEvaluator members() {
         return members;
-    }
-
-    public Coroutine currentCoroutine() {
-        return currentCoroutine.get();
     }
 
     private JsValue driveAsyncGenerator(JsAsyncGenerator generator, MemberEvaluator.AsyncStep step, JsValue argument) {
@@ -412,6 +420,10 @@ public final class Interpreter {
         lifecycle.tick();
     }
 
+    public void tick(long weight) {
+        lifecycle.tick(weight);
+    }
+
     public void checkDeadline() {
         lifecycle.checkDeadline();
     }
@@ -422,6 +434,27 @@ public final class Interpreter {
 
     public void release(long bytes) {
         lifecycle.release(bytes);
+    }
+
+    public void noteAllocation(long bytes) {
+        lifecycle.noteAllocation(bytes);
+    }
+
+    private Coroutine runningCoroutine;
+
+    public Coroutine runningCoroutine() {
+        return runningCoroutine;
+    }
+
+    public Coroutine swapRunningCoroutine(Coroutine next) {
+        final var previous = runningCoroutine;
+        runningCoroutine = next;
+        return previous;
+    }
+
+    public void registerCoroutine(Coroutine coroutine) {
+        lifecycle.charge(COROUTINE_BYTES);
+        coroutines.add(coroutine);
     }
 
     public void cancelPendingCoroutines() {

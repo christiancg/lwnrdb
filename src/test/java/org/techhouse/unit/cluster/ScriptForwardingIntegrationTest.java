@@ -80,8 +80,8 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         final var error = assertThrows(JsThrowException.class,
                 () -> db.bulkSave(TestGlobals.DB, coll, List.of(doc("routed-write"))));
         final var message = ((JsObject) error.getValue()).get("message");
-        assertTrue(JsCoercion.toStr(message).contains("unreachable"),
-                "expected an OWNER_UNREACHABLE message, got: " + JsCoercion.toStr(message));
+        assertTrue(JsCoercion.toStrDataOnly(message).contains("unreachable"),
+                "expected an OWNER_UNREACHABLE message, got: " + JsCoercion.toStrDataOnly(message));
     }
 
     @Test
@@ -159,7 +159,7 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         operator.add("field", new JsonString("location"));
         operator.add("value", new JsonGeo("#geo(40.0,-74.0)"));
         operator.add("comparator", new JsonString("SMALLER_THAN"));
-        operator.add("distance", new JsonNumber((double) 1000));
+        operator.add("distance", new JsonNumber(1000));
         final var step = new JsonObject();
         step.add("type", new JsonString("FILTER"));
         step.add("operator", operator);

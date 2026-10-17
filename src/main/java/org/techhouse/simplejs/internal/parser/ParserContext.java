@@ -48,6 +48,19 @@ abstract class ParserContext extends GrammarPredicates {
     protected final boolean strictScriptGoal;
     protected boolean inFunctionBody;
     protected boolean inNonArrowFunction;
+    protected static final int MAX_NESTING = 200;
+    private int nesting;
+
+    protected final void enterNesting() {
+        if (nesting >= MAX_NESTING) {
+            throw new SyntaxErrorException("The script nests more than " + MAX_NESTING + " levels deep");
+        }
+        nesting++;
+    }
+
+    protected final void leaveNesting() {
+        nesting--;
+    }
 
     protected abstract Expression parsePrimary();
 

@@ -19,7 +19,9 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.GrantPruner;
+import org.techhouse.ops.admin.GrantRewrite;
 import org.techhouse.ops.admin.LeftoverFolders;
+import org.techhouse.ops.req.validations.NameValidations;
 
 final class CollectionRecordApplier {
     private static final Logger logger = Logger.logFor(CollectionRecordApplier.class);
@@ -128,6 +130,27 @@ final class CollectionRecordApplier {
         removed.forEach(field -> fs.indexMarkers().clear(dbName, collName, field));
     }
 
+    static boolean indexFieldsAreValid(AdminRecord record) {
+        final AdminCollEntry entry;
+        try {
+            entry = AdminCollEntry.fromJsonObject(record.body());
+        } catch (RuntimeException unreadable) {
+            return true;
+        }
+        final var indexes = entry.getIndexes();
+        return indexes == null || indexes.stream().allMatch(NameValidations::isIndexFieldName);
+    }
+
+    static boolean incarnationWithinSkew(AdminRecord record) {
+        final long incarnation;
+        try {
+            incarnation = AdminCollEntry.fromJsonObject(record.body()).getIncarnation();
+        } catch (RuntimeException unreadable) {
+            return true;
+        }
+        return incarnation == 0 || hybridClock.withinSkew(incarnation, clusterConfig.maxClockSkewMs());
+    }
+
     static AdminRecordKey caseVariantOf(String dbName, String collName) {
         final var sibling = OnDiskNameRegistry.collidingCollection(dbName, collName);
         if (sibling == null || cache.getAdminCollectionEntry(dbName, sibling) == null) {
@@ -141,12 +164,13 @@ final class CollectionRecordApplier {
             return true;
         }
         if (live) {
-            return CollectionOperationHelper.dropCollection(dbName, collName, true).getStatus() == OperationStatus.OK;
+            return CollectionOperationHelper.dropCollection(dbName, collName, true, GrantRewrite.KEEP)
+                    .getStatus() == OperationStatus.OK;
         }
         if (!quarantine.dropCollection(dbName, collName, clusterConfig.replicationAckTimeoutMs())) {
             return false;
         }
-        GrantPruner.forDroppedCollection(dbName, collName);
+        GrantPruner.forDroppedCollection(dbName, collName, GrantRewrite.KEEP);
         return true;
     }
 

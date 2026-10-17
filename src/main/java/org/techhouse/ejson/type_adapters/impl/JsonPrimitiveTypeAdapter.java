@@ -2,6 +2,7 @@ package org.techhouse.ejson.type_adapters.impl;
 
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonPrimitive;
+import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
@@ -13,7 +14,7 @@ public class JsonPrimitiveTypeAdapter implements TypeAdapter<JsonPrimitive<?>> {
     }
 
     @Override
-    public void toJson(JsonPrimitive<?> value, StringBuilder out) {
+    public void toJson(JsonPrimitive<?> value, JsonOut out) {
         if (value == null) {
             out.append("null");
         } else {

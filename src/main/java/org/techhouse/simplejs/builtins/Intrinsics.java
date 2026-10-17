@@ -33,6 +33,7 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands;
 import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsCoercion;
 import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsInstallers;
@@ -94,6 +95,7 @@ public final class Intrinsics {
 
     public final Invoker invoker;
     public final InterpreterOps ops;
+    private final Supplier<List<String>> stack;
 
     public final JsObject objectProto = new JsObject();
     public final JsObject functionProto;
@@ -162,8 +164,14 @@ public final class Intrinsics {
     public final IntrinsicsCoercion coercion = new IntrinsicsCoercion(this);
 
     public Intrinsics(Invoker invoker, InterpreterOps ops, EventLoop eventLoop, GeneratorBuiltins.AsyncDriver driver) {
+        this(invoker, ops, eventLoop, driver, List::of);
+    }
+
+    public Intrinsics(Invoker invoker, InterpreterOps ops, EventLoop eventLoop, GeneratorBuiltins.AsyncDriver driver,
+            Supplier<List<String>> stack) {
         this.invoker = invoker;
         this.ops = ops;
+        this.stack = stack;
         promiseProto = coercion.prototypeOf(PromiseBuiltins.PROTO_NAMES, "Promise.prototype",
                 (receiver, name) -> PromiseBuiltins.getMethod(receiver, name, eventLoop, invoker, this));
         iteratorProto = coercion.prototypeOf(GeneratorBuiltins.PROTO_NAMES, "Generator.prototype",
@@ -287,15 +295,15 @@ public final class Intrinsics {
                     (receiver, key) -> Uint8Base64.uint8Method(requireUint8(receiver, key), key, ops)));
         }
         disposableStackProto = coercion.prototypeOf(DisposableStackBuiltins.NAMES, "DisposableStack.prototype",
-                (receiver, name) -> DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, ops, invoker,
+                (receiver, name) -> DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, this, invoker,
                         eventLoop, false));
         DisposableStackBuiltins.installAccessors(disposableStackProto, false);
         asyncDisposableStackProto = coercion.prototypeOf(DisposableStackBuiltins.ASYNC_NAMES,
                 "AsyncDisposableStack.prototype",
                 (receiver, name) -> "disposeAsync".equals(name)
                         ? installers.disposeAsyncMethod(receiver, name, eventLoop)
-                        : DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, ops, invoker, eventLoop,
-                                true));
+                        : DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, this, invoker,
+                                eventLoop, true));
         DisposableStackBuiltins.installAccessors(asyncDisposableStackProto, true);
         prototypes.installObjectPrototype();
         prototypes.installErrorPrototypes();
@@ -407,7 +415,11 @@ public final class Intrinsics {
     }
 
     public JsObject makeError(String name, String message) {
-        return ErrorBuiltins.makeError(name, message, errorProto(name));
+        return ErrorBuiltins.makeError(name, message, errorProto(name), captureStack());
+    }
+
+    public List<String> captureStack() {
+        return stack.get();
     }
 
     public JsString requireStringValue(JsValue receiver, String method) {

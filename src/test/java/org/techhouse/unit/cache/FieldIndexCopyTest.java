@@ -8,6 +8,7 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -51,7 +52,8 @@ public class FieldIndexCopyTest {
 
     @Test
     public void test_a_consumer_snapshot_survives_a_concurrent_index_rewrite() throws IOException {
-        final var snapshot = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD);
+        final var snapshot = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD,
+                ReadObserver.NONE);
         assertNotNull(snapshot);
         final var before = idsOf(snapshot, 0d);
         assertEquals(Set.of("d0", "d2", "d4"), before);
@@ -69,8 +71,10 @@ public class FieldIndexCopyTest {
 
     @Test
     public void test_two_consumer_snapshots_do_not_share_id_sets() throws IOException {
-        final var first = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD);
-        final var second = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD);
+        final var first = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD,
+                ReadObserver.NONE);
+        final var second = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD,
+                ReadObserver.NONE);
         assertNotNull(first);
         assertNotNull(second);
 
@@ -87,7 +91,8 @@ public class FieldIndexCopyTest {
         cached.forEach(entry -> entry.getIds().remove("d0"));
         cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, FIELD);
 
-        final var reloaded = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD);
+        final var reloaded = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, FIELD,
+                ReadObserver.NONE);
 
         assertNotNull(reloaded);
         assertTrue(idsOf(reloaded, 0d).contains("d0"), "eviction must send the next read back to the .idx files");

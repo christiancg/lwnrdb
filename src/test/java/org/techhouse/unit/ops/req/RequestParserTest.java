@@ -270,4 +270,14 @@ public class RequestParserTest {
                 + "\"object\":{\"_id\":\"a1\",\"v\":1.7976931348623157e308}}";
         assertEquals(OperationType.SAVE, RequestParser.parseRequest(message).getType());
     }
+
+    @Test
+    public void test_parse_request_with_a_budget_wraps_the_refusal_as_an_invalid_command() {
+        final var message = "{\"type\":\"LIST_DATABASES\",\"x\":[" + "1,".repeat(50) + "1]}";
+
+        final var refusal = assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(message, 20));
+
+        assertEquals("The command is not valid", refusal.getMessage());
+        assertEquals(OperationType.LIST_DATABASES, RequestParser.parseRequest(message, 1_000).getType());
+    }
 }

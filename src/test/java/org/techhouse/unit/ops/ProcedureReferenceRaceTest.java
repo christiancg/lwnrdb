@@ -58,7 +58,7 @@ public class ProcedureReferenceRaceTest {
     public void tearDown() throws Exception {
         holder.close();
         registry.clear();
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
@@ -104,7 +104,7 @@ public class ProcedureReferenceRaceTest {
                 .getStatus());
 
         final var deleted = ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE));
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE), ACTOR);
 
         assertEquals(ErrorCode.INVALID_TRIGGER.getCode(), deleted.getErrorCode());
     }
@@ -115,7 +115,7 @@ public class ProcedureReferenceRaceTest {
                 new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "audit", List.of("CREATED"), PROCEDURE), ACTOR)
                 .getStatus());
 
-        ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "Recalc"));
+        ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "Recalc"), ACTOR);
 
         assertNotNull(fs.readProcedure(TestGlobals.DB, PROCEDURE), "the referenced procedure's file is kept");
         assertNotNull(cache.getProcedure(TestGlobals.DB, PROCEDURE));
@@ -131,8 +131,8 @@ public class ProcedureReferenceRaceTest {
     }
 
     private void deleteProcedureWhileHoldingTheLock() throws Exception {
-        final var deleted = holder.run(
-                () -> ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE)));
+        final var deleted = holder.run(() -> ProcedureOperationHelper
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE), ACTOR));
         assertEquals(OperationStatus.OK, deleted.getStatus());
     }
 

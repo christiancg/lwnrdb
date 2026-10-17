@@ -11,7 +11,7 @@ from base_utils import check, check_code, check_field, check_result, check_statu
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCRIPT_TEST_PORT", "8995"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "script_test_db"
 OTHER_DB = "script_other_db"
@@ -24,17 +24,22 @@ INSTRUCTION_BUDGET = 2_000_000
 TIMEOUT_MS = 5_000
 MAX_DEPTH = 64
 MAX_SOURCE_BYTES = 8 * 1024
+COMPILED_CACHE_MAX_BYTES = "100Kb"
 MAX_LOG_LINES = 5
 MAX_LOG_LINE_CHARS = 200
 MAX_MEMORY_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 64 * 1024
+MAX_ARRAY_LENGTH = 50_000
 CURSOR_BATCH_SIZE = 100
 CURSOR_MAX_BATCH_SIZE = 500
+MAX_PROCEDURES_PER_DATABASE = 40
+PROCEDURE_CAP_DB = "script_proc_cap_db"
 
 BIG_COLL = "big"
 EMPTY_COLL = "empty"
 BIG_DOCS = 300
 BIG_PAYLOAD_CHARS = 8 * 1024
+SHIPPED_TIMEOUT_MS = 5_000
 
 
 def check_failed_script(label: str, response: dict, expected_code: str, message_contains: str = ""):
@@ -74,7 +79,8 @@ admin_conn = Conn.authenticated
 def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled: bool = True,
                  history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE", history_enabled: bool = True,
                  fetch_enabled: bool = False, fetch_allowlist: str = "", fetch_timeout_ms: int = 5000,
-                 fetch_max_response_bytes: str = "1Mb"):
+                 fetch_max_response_bytes: str = "1Mb", fetch_max_concurrent: int = 8,
+                 text_import_enabled: bool = False):
     bu.write_config(work_dir, PORT,
                     scriptsEnabled=scripts_enabled,
                     scriptInstructionBudget=INSTRUCTION_BUDGET,
@@ -85,9 +91,10 @@ def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled
                     scriptMaxLogLineChars=MAX_LOG_LINE_CHARS,
                     scriptMaxMemoryBytes=MAX_MEMORY_BYTES,
                     scriptMaxResultBytes=MAX_RESULT_BYTES,
+                    scriptMaxArrayLength=MAX_ARRAY_LENGTH,
                     scriptCursorBatchSize=CURSOR_BATCH_SIZE,
                     scriptCursorMaxBatchSize=CURSOR_MAX_BATCH_SIZE,
-                    scriptTextImportEnabled=False,
+                    scriptTextImportEnabled=text_import_enabled,
                     scriptProcedureImportEnabled=procedure_imports_enabled,
                     scriptTimeZone="UTC",
                     scriptLocale="en-US",
@@ -99,7 +106,10 @@ def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled
                     scriptFetchEnabled=fetch_enabled,
                     scriptFetchAllowlist=fetch_allowlist,
                     scriptFetchTimeoutMs=fetch_timeout_ms,
-                    scriptFetchMaxResponseBytes=fetch_max_response_bytes)
+                    scriptFetchMaxResponseBytes=fetch_max_response_bytes,
+                    scriptFetchMaxConcurrent=fetch_max_concurrent,
+                    procedureCacheMaxBytes=COMPILED_CACHE_MAX_BYTES,
+                    maxProceduresPerDatabase=MAX_PROCEDURES_PER_DATABASE)
 
 
 class FetchFixture:
@@ -108,6 +118,7 @@ class FetchFixture:
         self.requests = []
         handler_requests = self.requests
 
+        # noinspection PyPep8Naming
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_):
                 pass
@@ -129,8 +140,22 @@ class FetchFixture:
                 elif self.path == "/slow":
                     time.sleep(3.0)
                     self._respond(200, "late")
+                elif self.path == "/endless":
+                    self._endless()
                 else:
                     self._respond(404, "no")
+
+            def _endless(self):
+                self.send_response(200)
+                self.send_header("content-type", "text/plain")
+                self.end_headers()
+                chunk = b"x" * 4096
+                try:
+                    while True:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except OSError:
+                    pass
 
             def do_POST(self):
                 handler_requests.append(self.path)
@@ -155,7 +180,7 @@ def setup_data(conn: Conn):
     section("Setup")
     for db in (DB, OTHER_DB):
         conn.send({"type": "DROP_DATABASE", "databaseName": db})
-        check_status(f"create database {db}", conn.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
+        check_status(f"CREATE_DATABASE {db}", conn.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
     for coll in (COLL, COLL2, BIG_COLL, EMPTY_COLL):
         check_status(f"create collection {coll}",
                      conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
@@ -184,6 +209,9 @@ def test_basics(conn: Conn):
     check_result("named exports", conn.run("export const a = 1;\nexport const b = 'two';"),
                  {"a": 1, "b": "two"})
     check_result("no value at all is JSON null", conn.run("const unused = 1;"), None)
+    check_result("a hex literal past 2^63 is a number, not a lexer crash",
+                 conn.run("return [0x1_0000_0000_0000_0000 === 2 ** 64, 0b1" + "0" * 70 + " === 2 ** 70];"),
+                 [True, True])
     check_result("returned promise is awaited",
                  conn.run("return (async () => { await null; return 'awaited'; })();"), "awaited")
     check_result("objects and arrays round-trip",
@@ -263,6 +291,13 @@ def test_compiled_script_cache(conn: Conn):
     entries = ((stats.get("stats") or {}).get("scripts") or {}).get("compiledCacheEntries")
     check("the cache reports its entry count", isinstance(entries, (int, float)) and entries >= 1,
           f"compiledCacheEntries={entries!r}")
+    oversized = "let s = 0;\n" + "s += 1;\n" * 900 + "return s;"
+    for attempt in range(2):
+        check_result(f"a program past procedureCacheMaxBytes still runs (run {attempt + 1})", conn.run(oversized), 900)
+    stats = conn.send({"type": "GET_DATABASE_STATS"})
+    after = ((stats.get("stats") or {}).get("scripts") or {}).get("compiledCacheEntries")
+    check("but it is not kept in the compiled cache", after == entries,
+          f"compiledCacheEntries before={entries!r} after={after!r}")
 
 
 def test_console_output(conn: Conn):
@@ -319,6 +354,236 @@ def test_sandbox_limits(conn: Conn):
                  conn.run('let s = "";\nfor (let i = 0; i < 20000; i++) s += "x";\nreturn s.length;'), 20000)
     check_code("a runaway getter hits the instruction budget",
                conn.run("return { get n() { while (true) {} } };"), "ERROR", "400-11")
+    started = time.monotonic()
+    redos = conn.run("return /(x+x+)+y/.test('x'.repeat(800) + '!');")
+    elapsed = time.monotonic() - started
+    check("a catastrophic RegExp ends with the instruction budget or the deadline",
+          redos.get("status") == "ERROR" and redos.get("errorCode") in ("400-11", "408-1"),
+          f"got {redos.get('errorCode')} msg={redos.get('message')!r}")
+    check("and inside scriptTimeoutMs plus slack", elapsed < TIMEOUT_MS / 1000 + 5, f"elapsed={elapsed:.1f}s")
+    check_result("a benign RegExp still matches", conn.run("return /a(b+)c/.exec('xabbbc')[1];"), "bbb")
+
+
+def test_native_recursion_is_an_error_not_a_hang(conn: Conn):
+    section("Native recursion over script data is bounded")
+    nest = "let a = [];\nfor (let i = 0; i < 20000; i++) { a = [a]; }\n"
+    cases = [
+        ("JSON.parse of 20000 nested arrays", "return JSON.parse('['.repeat(20000) + ']'.repeat(20000)).length;"),
+        ("String() of nested arrays", nest + "return String(a).length;"),
+        ("flat(Infinity) of nested arrays", nest + "return a.flat(Infinity).length;"),
+        ("structuredClone of nested arrays", nest + "return structuredClone(a).length;"),
+        ("JSON.stringify of nested arrays", nest + "return JSON.stringify(a).length;"),
+    ]
+    for label, script in cases:
+        check_failed_script(f"{label} is a RangeError, not a hang", conn.run(script), "400-9",
+                            "Maximum nesting depth exceeded")
+    check_result("the RangeError is catchable",
+                 conn.run(nest + "try { JSON.stringify(a); } catch (e) { return e.name; }"), "RangeError")
+    check_result("250 levels of JSON still parse",
+                 conn.run("let d = 0;\nfor (let x = JSON.parse('['.repeat(250) + ']'.repeat(250)); "
+                          "Array.isArray(x); x = x[0]) d++;\nreturn d;"), 250)
+    for _ in range(20):
+        conn.run(cases[3][1])
+    check_result("capacity is intact after more hostile runs than maxConcurrentScripts", conn.run("return 7;"), 7)
+
+
+def test_native_loops_are_budgeted(conn: Conn):
+    section("Native loops and BigInt are budgeted")
+    started = time.time()
+    check_code("a sparse 4-billion scan exhausts the instruction budget",
+               conn.run("return new Array(2 ** 32 - 1).indexOf(1);"), "ERROR", "400-11")
+    check("… quickly", time.time() - started < 5, f"took {time.time() - started:.2f}s")
+    check_code("an array-like of 2^53 - 1 exhausts it too",
+               conn.run("return Array.prototype.includes.call({ length: 2 ** 53 - 1 }, 1);"), "ERROR", "400-11")
+    check_failed_script("a huge BigInt power is a RangeError", conn.run("return String(3n ** 100000000n).length;"),
+                        "400-9", "Maximum BigInt size exceeded")
+    check_failed_script("a huge BigInt shift too", conn.run("return String(1n << (2n ** 40n)).length;"),
+                        "400-9", "Maximum BigInt size exceeded")
+    check_code("splitting a 32M-char string exceeds the memory budget",
+               conn.run('return "a,".repeat(2 ** 24).split(",").length;'), "ERROR", "400-12")
+    check_result("ordinary BigInt arithmetic still works", conn.run("return String(2n ** 100n);"),
+                 "1267650600228229401496703205376")
+    wide = "const x = 1n << 4000000n;"
+    check_result("one concatenation of a 4M-bit BigInt still answers", conn.run(wide + " return (x + '').length;"),
+                 1204120)
+    for label, body in (("x + ''", "const s = x + '';"), ("a template", "const s = `${x}`;"),
+                        ("({})[x]", "({})[x];")):
+        started = time.monotonic()
+        looped = conn.run(wide + " for (;;) { " + body + " }")
+        elapsed = time.monotonic() - started
+        check(f"converting a wide BigInt with {label} in a loop is charged and paced",
+              looped.get("status") == "ERROR" and looped.get("errorCode") in ("400-11", "400-12", "408-1"),
+              f"got {looped.get('errorCode')} msg={looped.get('message')!r}")
+        check("… and ends inside scriptTimeoutMs plus slack", elapsed < TIMEOUT_MS / 1000 + 5,
+              f"elapsed={elapsed:.1f}s")
+    check_result("the server is still serving", conn.run("return [1, 2, 3].indexOf(3);"), 2)
+
+
+def test_unbudgeted_native_work_is_bounded(conn: Conn):
+    section("Native work that used to escape the budgets is bounded")
+    check_failed_script("a BigInt parse past 65536 digits is a RangeError",
+                        conn.run("return BigInt('9'.repeat(70000)).toString().length;"), "400-9")
+    check_result("a BigInt parse at 65536 digits still works",
+                 conn.run("return BigInt('9'.repeat(65536)).toString().length;"), 65536)
+    started = time.monotonic()
+    compare = conn.run("const s = 'x'.repeat(1 << 18), t = s + 'y'; while (true) { s.localeCompare(t); }")
+    elapsed = time.monotonic() - started
+    check("a localeCompare loop over large strings ends with the instruction budget or the deadline",
+          compare.get("status") == "ERROR" and compare.get("errorCode") in ("400-11", "408-1"),
+          f"got {compare.get('errorCode')} msg={compare.get('message')!r}")
+    check("and inside scriptTimeoutMs plus slack", elapsed < TIMEOUT_MS / 1000 + 5, f"elapsed={elapsed:.1f}s")
+    dag = "let a = [1]; for (let i = 0; i < 40; i++) { a = [a, a]; }"
+    check_code("stringifying a shared-reference DAG exceeds the memory budget",
+               conn.run(dag + " return JSON.stringify(a).length;"), "ERROR", "400-12")
+    check_code("returning a shared-reference DAG exceeds the memory budget",
+               conn.run(dag + " return a;"), "ERROR", "400-12")
+    started = time.monotonic()
+    check_result("a generator that yields in finally does not park the run",
+                 conn.run("function* g() { try { yield 1; } finally { yield 99; } }"
+                          " const it = g(); it.next(); return 7;"), 7)
+    check("… and it returns promptly", time.monotonic() - started < 5,
+          f"took {time.monotonic() - started:.2f}s")
+    check_result("the server is still serving", conn.run("return 1 + 1;"), 2)
+    for attempt in range(3):
+        check_failed_script(f"source nested past the parser limit is a SyntaxError (run {attempt + 1})",
+                            conn.run("return " + "(" * 400 + "1" + ")" * 400 + ";"), "400-9", "levels deep")
+    check_result("nesting well inside the limit still runs",
+                 conn.run("return " + "(" * 100 + "1" + ")" * 100 + ";"), 1)
+
+
+def test_native_work_hardened_after_the_third_audit(conn: Conn):
+    section("Sparse enumeration, string search, parseInt, promises and error text are bounded")
+    sparse = "const a = []; a.length = 2 ** 32 - 1; a[5] = 'five';"
+    started = time.monotonic()
+    check_result("for-in over a 4-billion sparse length visits only the populated index",
+                 conn.run(sparse + " const keys = []; for (const k in a) keys.push(k); return keys;"), ["5"])
+    check_result("Object.keys over it does too", conn.run(sparse + " return Object.keys(a);"), ["5"])
+    check("… and both return promptly", time.monotonic() - started < 5, f"took {time.monotonic() - started:.2f}s")
+    check_code("spreading it exceeds the memory budget", conn.run(sparse + " return [...a].length;"), "ERROR", "400-12")
+    check_result("parseInt of a 1M-digit run is Infinity without a quadratic parse",
+                 conn.run("return parseInt('9'.repeat(1000000)) === Infinity;"), True)
+    started = time.monotonic()
+    search = conn.run("const s = 'a'.repeat(1 << 20), t = 'a'.repeat(1 << 10) + 'b'; while (true) { s.indexOf(t); }")
+    elapsed = time.monotonic() - started
+    check("a worst-case indexOf loop ends with the instruction budget or the deadline",
+          search.get("status") == "ERROR" and search.get("errorCode") in ("400-11", "408-1"),
+          f"got {search.get('errorCode')} msg={search.get('message')!r}")
+    check("and inside scriptTimeoutMs plus slack", elapsed < TIMEOUT_MS / 1000 + 5, f"elapsed={elapsed:.1f}s")
+    check_result("a worst-case indexOf still answers correctly",
+                 conn.run("const s = 'a'.repeat(1 << 20) + 'b', t = 'a'.repeat(64) + 'b'; return s.indexOf(t);"),
+                 (1 << 20) - 64)
+    check_code("a flood of promises exceeds the memory budget",
+               conn.run("for (let i = 0; i < 100000; i++) { Promise.resolve(i); } return 1;"), "ERROR", "400-12")
+    check_result("a generator finalizer that starts another generator does not break cleanup",
+                 conn.run("function* inner() { yield 1; yield 2; }"
+                          " function* outer() { try { yield 1; } finally { inner().next(); } }"
+                          " const o = outer(); o.next(); return 'done';"), "done")
+    huge = conn.run("throw new Error('x'.repeat(100000));")
+    message = huge.get("message") or ""
+    check("a huge error message is clipped to scriptMaxLogLineChars",
+          huge.get("errorCode") == "400-9" and message == "Error: " + "x" * MAX_LOG_LINE_CHARS,
+          f"got {huge.get('errorCode')} with a {len(message)}-char message")
+    check_result("the server is still serving", conn.run("return 1 + 1;"), 2)
+
+
+def test_allocations_are_charged_before_they_happen(conn: Conn):
+    section("Allocations proportional to a script-supplied length are charged first")
+    check_failed_script("an array-like past scriptMaxArrayLength handed to apply is refused",
+                        conn.run(f"return Math.max.apply(null, {{ length: {MAX_ARRAY_LENGTH + 1} }});"),
+                        "400-30", "ScriptArrayTooLargeError")
+    check_result("an array-like at the cap still applies",
+                 conn.run("return (function () { return arguments.length; })"
+                          f".apply(null, {{ length: {MAX_ARRAY_LENGTH} }});"), MAX_ARRAY_LENGTH)
+    check_code("the refusal cannot be caught",
+               conn.run("try { Reflect.apply(Math.max, null, { length: 2 ** 30 }); } catch (e) { return 'caught'; }"),
+               "ERROR", "400-30")
+    check_code("Array.fromAsync over a huge array-like is refused",
+               conn.run("return (await Array.fromAsync({ length: 2 ** 40 })).length;"), "ERROR", "400-30")
+    check_code("Vector.from over a huge array-like is refused",
+               conn.run("return Vector.from({ length: 2 ** 30 }).toString();"), "ERROR", "400-30")
+    check_code("growing an array through its length exceeds the memory budget",
+               conn.run("const a = []; a.length = 1 << 22; return a.length;"), "ERROR", "400-12")
+    check_code("writing far past an array's end exceeds it too",
+               conn.run("const a = []; a[(1 << 22) - 1] = 1; return a.length;"), "ERROR", "400-12")
+    check_code("ArrayBuffer.slice(-Infinity) is charged for the bytes it copies",
+               conn.run("const b = new ArrayBuffer(1 << 20); const kept = [];"
+                        " for (let i = 0; i < 8; i++) { kept.push(b.slice(-Infinity)); } return kept.length;"),
+               "ERROR", "400-12")
+    check_code("a typed-array sort is charged for its boxed copy",
+               conn.run("const t = new Uint8Array(1 << 20); t.sort(); return 1;"), "ERROR", "400-12")
+    check_code("normalize is charged for its worst-case expansion",
+               conn.run("return '\\uFDFA'.repeat(1 << 17).normalize('NFKC').length;"), "ERROR", "400-12")
+    check_code("an indented JSON.stringify is charged for its indentation",
+               conn.run("let o = new Array(20000).fill(1); for (let i = 0; i < 200; i++) { o = [o]; }"
+                        " return JSON.stringify(o, null, 10).length;"), "ERROR", "400-12")
+    check_code("a db.save payload sharing one string is charged per occurrence",
+               conn.run('import db from "db";\n'
+                        "const s = 'x'.repeat(1 << 16); const doc = { _id: 'dag' };\n"
+                        "for (let i = 0; i < 40; i++) { doc['f' + i] = s; }\n"
+                        f'db.save(db.name, "{COLL}", doc);'), "ERROR", "400-12")
+    check_result("… and nothing was written",
+                 conn.run(f'import db from "db";\nreturn db.findById(db.name, "{COLL}", "dag") === null;'), True)
+    check_result("saves inside the budget are credited back, so a loop of them still runs",
+                 conn.run('import db from "db";\n'
+                          "const s = 'x'.repeat(50000);\n"
+                          f'for (let i = 0; i < 20; i++) {{ db.save(db.name, "{COLL}", {{ _id: "loop", body: s }}); }}\n'
+                          'return "saved";'), "saved")
+    check_result("the server is still serving", conn.run("return [1, 2, 3].length;"), 3)
+
+
+def timed_run(conn: Conn, script: str):
+    started = time.time()
+    response = conn.run(script)
+    return response, time.time() - started
+
+
+def check_refused_in_time(label: str, response: dict, elapsed: float, codes=("400-12", "408-1")):
+    check(label, response.get("status") == "ERROR" and response.get("errorCode") in codes,
+          f"expected one of {codes}, got {response.get('errorCode')} msg={response.get('message')!r}")
+    check(f"… within scriptTimeoutMs + 2s", elapsed < SHIPPED_TIMEOUT_MS / 1000 + 2, f"took {elapsed:.2f}s")
+
+
+def test_private_use_locale_tags_do_not_grow_the_heap(conn: Conn):
+    section("Locale tags resolve to an available locale, so a loop of private-use tags leaks nothing")
+    for _ in range(3):
+        looped, elapsed = timed_run(conn, "for (let i = 0; ; i++) { (1.5).toLocaleString('en-x-' + i.toString(36)); }")
+        check_refused_in_time("a loop of distinct en-x-* tags ends at the run's own budget", looped, elapsed,
+                              ("400-11", "408-1"))
+    check_result("a busy script afterwards is not refused by the heap ceiling",
+                 conn.run("let n = 0; for (let i = 0; i < 100000; i++) { n += i % 7; } return n;"), 299995)
+    check_result("a private-use tag formats as its base locale",
+                 conn.run("return (1234.5).toLocaleString('de-DE-x-abc');"), "1.234,5")
+    check_result("an unknown language falls back to the script locale",
+                 conn.run("return (1234.5).toLocaleString('qqq');"), "1,234.5")
+    check_failed_script("an ill-formed tag is a RangeError",
+                        conn.run("return (1).toLocaleString('en_US@@');"), "400-9", "RangeError")
+
+
+def test_script_charging_gaps_at_shipped_limits(conn: Conn):
+    section("Script memory and deadline bypasses at the shipped limits")
+    big_int, elapsed = timed_run(conn, "const x = 1n << (2n ** 23n); const kept = [];"
+                                       " for (let i = 0; i < 100; i++) { kept.push(~x); } return kept.length;")
+    check_refused_in_time("retaining BigInt ~x is charged", big_int, elapsed, ("400-12",))
+    text, elapsed = timed_run(conn, "const x = 1n << (2n ** 16n); const kept = [];"
+                                    " for (let i = 0; i < 3000; i++) { kept.push(String(x)); } return kept.length;")
+    check_refused_in_time("retaining String(bigint) is charged", text, elapsed, ("400-12",))
+    fill, elapsed = timed_run(conn, "const a = []; a[2 ** 24] = 1; a.fill(1, 2 ** 24 - 1, 2 ** 24); return a.length;")
+    check_refused_in_time("fill into a sparse tail is charged for the holes it pads", fill, elapsed, ("400-12",))
+    parsed, elapsed = timed_run(conn, "return JSON.parse('[' + '[],'.repeat(3200000) + '[]]').length;")
+    check_refused_in_time("JSON.parse is charged per node", parsed, elapsed)
+    own_keys, elapsed = timed_run(conn, "return Reflect.ownKeys(new Proxy({}, {"
+                                        " ownKeys: () => ({ length: 2 ** 31 - 1 }) })).length;")
+    check_refused_in_time("a Proxy ownKeys array-like is refused before it is copied", own_keys, elapsed,
+                          ("400-12", "400-30", "408-1"))
+    replacer, elapsed = timed_run(conn, "const keys = Array.from({ length: 300000 }, (_, i) => 'k' + i);"
+                                        " return JSON.stringify({ k7: 7 }, keys);")
+    check_result("a JSON.stringify replacer of 300000 keys answers", replacer, '{"k7":7}')
+    check("… well inside the deadline", elapsed < SHIPPED_TIMEOUT_MS / 1000, f"took {elapsed:.2f}s")
+    check_result("a global replace does not keep every match alive",
+                 conn.run("return 'a'.repeat(2500000).replace(/a/g, 'b').length;"), 2500000)
+    encoded, elapsed = timed_run(conn, "return encodeURIComponent('é'.repeat(6000000)).length;")
+    check_refused_in_time("encodeURIComponent past the budget is refused", encoded, elapsed)
+    check_result("the server is still serving", conn.run("return [1, 2, 3].length;"), 3)
 
 
 def test_run_metrics(conn: Conn):
@@ -460,7 +725,7 @@ def test_fetch_unavailable(conn: Conn):
 
 
 def test_fetch(conn: Conn, base_url: str, fixture):
-    section("Outbound fetch")
+    section("Outbound fetch (test_fetch_exact_entry_overrides_block: 127.0.0.1 is listed exactly)")
     fixture.requests.clear()
 
     got = conn.run(f"const res = await fetch('{base_url}/hello');\n"
@@ -491,6 +756,54 @@ def test_fetch(conn: Conn, base_url: str, fixture):
                  "OK")
     called = conn.send({"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "fetcher"})
     check("a stored procedure may fetch", called.get("result") == "hello", f"got {called}")
+
+
+def test_fetch_errors_do_not_leak_connect_details(conn: Conn):
+    section("fetch reports no connect detail")
+    refused = conn.run("return fetch('http://127.0.0.1:1/x').then(r => r.status);")
+    check_failed_script("a refused connection is the bare fetch failed", refused, "400-9", "fetch failed")
+    message = refused.get("message") or ""
+    check("… without the cause or the port", "refused" not in message.lower() and ":1" not in message,
+          f"message={message!r}")
+    caught = conn.run("try { await fetch('http://127.0.0.1:1/x'); return 'reached'; }\n"
+                      "catch (e) { return e.name + ':' + e.message; }")
+    check_result("… and the TypeError is catchable", caught, "TypeError:fetch failed")
+
+
+def test_fetch_response_cap_streaming(conn: Conn, base_url: str):
+    section("fetch stops reading a body at the cap")
+    started = time.time()
+    endless = conn.run(f"return fetch('{base_url}/endless').then(r => r.text().then(t => t.length));")
+    elapsed = time.time() - started
+    check_failed_script("an endless body fails as oversized", endless, "400-9", "exceeds maximum size")
+    check("… within the fetch timeout", elapsed < 1.5, f"took {elapsed:.2f}s")
+    check_result("the server is still serving", conn.run("return 1;"), 1)
+
+
+def test_fetch_concurrency_cap(conn: Conn, base_url: str):
+    section("fetch in-flight cap per run")
+    settled = conn.run(f"const all = [1, 2, 3].map(() => fetch('{base_url}/slow'));\n"
+                       "const outcomes = await Promise.allSettled(all);\n"
+                       "return outcomes.map(o => o.status === 'rejected' ? o.reason.message : 'ok');")
+    reasons = settled.get("result") or []
+    check("exactly one of three concurrent fetches is over the cap of 2",
+          reasons.count("fetch: too many concurrent requests") == 1, f"got {settled}")
+    check_result("a later fetch is admitted once the earlier ones settled",
+                 conn.run(f"return (await fetch('{base_url}/hello')).status;"), 200)
+
+
+def test_fetch_blocks_private_ranges_under_wildcard(conn: Conn, base_url: str, fixture, server_port: int):
+    section("fetch under '*' reaches only public hosts")
+    fixture.requests.clear()
+    fixture_port = base_url.rsplit(":", 1)[1]
+    targets = [f"{base_url}/hello", "http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/",
+               "http://[::1]:1/", f"http://localhost:{fixture_port}/hello", f"https://2130706433:{fixture_port}/hello",
+               f"http://127.0.0.1:{server_port}/", "http://[::ffff:127.0.0.1]:1/", "http://100.64.0.1/",
+               "file:///etc/passwd"]
+    for target in targets:
+        refused = conn.run(f"return fetch('{target}').then(r => r.status);")
+        check_failed_script(f"{target} is refused", refused, "400-9", "host not allowed")
+    check("… and none of them reached the fixture", fixture.requests == [], f"requests={fixture.requests!r}")
 
 
 def test_locale_arguments(conn: Conn):
@@ -946,7 +1259,7 @@ def test_capabilities(conn: Conn):
                  conn.run("return crypto.hash('sha256', 'abc');"),
                  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     check_result("fetch is unavailable by default",
-                 conn.run("try { await fetch('http://example.com'); return 'fetched'; }\n"
+                 conn.run("try { await fetch('https://example.com'); return 'fetched'; }\n"
                           "catch (e) { return e.message; }"), "fetch is not available")
     check_result("text import is disabled by default",
                  conn.run("import script from 'script';\n"
@@ -959,6 +1272,29 @@ def test_capabilities(conn: Conn):
                  conn.run("return new Date(0).getHours();"), 0)
     check_result("the configured locale is used",
                  conn.run("return (1234.5).toLocaleString();"), "1,234.5")
+
+
+TEXT_IMPORT_CALLS = {
+    "a direct call": "script.importText(TEXT)",
+    ".call": "script.importText.call(script, TEXT)",
+    ".apply": "script.importText.apply(script, [TEXT])",
+    "Reflect.apply": "Reflect.apply(script.importText, script, [TEXT])",
+    "a bound function": "script.importText.bind(script)(TEXT)",
+    "Array.prototype.map": "[TEXT].map(script.importText)[0]",
+    "a plain function": "(function () { return script.importText(TEXT); })()",
+    "a .then handler": "(await Promise.resolve(TEXT).then(script.importText))",
+    "a timer callback": "(await new Promise(done => setTimeout(t => done(script.importText(t)), 0, TEXT)))",
+}
+
+
+def test_text_import_awaits_through_indirect_calls(conn: Conn):
+    section("Module imports — top-level await in imported text, however importText is called")
+    for label, call in TEXT_IMPORT_CALLS.items():
+        script = ("import script from 'script';\n"
+                  "const TEXT = 'export default await Promise.resolve(9);';\n"
+                  f"async function viaAsync() {{ return ({call}).default; }}\n"
+                  f"return [({call}).default, await viaAsync()];")
+        check_result(f"through {label}, at top level and inside an async function", conn.run(script), [9, 9])
 
 
 def test_procedure_imports(conn: Conn):
@@ -1012,6 +1348,17 @@ def test_procedure_imports(conn: Conn):
     check_result("a traversal attempt is refused",
                  conn.run("try { await import('procedures/../lib_money'); return 'resolved'; }\n"
                           "catch (e) { return e.message; }"), "Cannot find module 'procedures/../lib_money'")
+    check_failed_script("test_procedure_import_rejects_traversal_names: a static import of procedures/..",
+                        conn.run("import x from 'procedures/..';\nreturn x;"),
+                        "400-9", "Cannot find module 'procedures/..'")
+    check_failed_script("… a backslash name",
+                        conn.run("import x from 'procedures/a\\\\b';\nreturn x;"),
+                        "400-9", "Cannot find module 'procedures/a\\b'")
+    for name in (".", "ab", "x" * 65, "lib_money\\u0000"):
+        check_result(f"… and the name {name[:12]!r} is not resolved either",
+                     conn.run(f"try {{ await import('procedures/{name}'); return 'resolved'; }}\n"
+                              "catch (e) { return e.message.startsWith('Cannot find module') ? 'refused' : e.message; }"),
+                     "refused")
     check_failed_script("a static import of an unknown procedure fails the run",
                         conn.run("import { x } from 'procedures/nope';\nreturn x;"),
                         "400-9", "Cannot find module 'procedures/nope'")
@@ -1530,6 +1877,26 @@ def test_permissions(conn: Conn):
           f"scriptPermissions={listed.get('scriptPermissions')!r}")
 
 
+def test_procedures_per_database_are_capped(conn: Conn):
+    section("A database holds at most maxProceduresPerDatabase procedures")
+    conn.send({"type": "DROP_DATABASE", "databaseName": PROCEDURE_CAP_DB})
+    check_status("create a database to fill",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": PROCEDURE_CAP_DB}), "OK")
+    saved = [conn.save_procedure(f"proc{i}", f"return {i};", db=PROCEDURE_CAP_DB).get("status")
+             for i in range(MAX_PROCEDURES_PER_DATABASE)]
+    check("every procedure up to the cap is saved", saved == ["OK"] * MAX_PROCEDURES_PER_DATABASE,
+          f"statuses {saved}")
+    check_code("one more -> 400-34",
+               conn.save_procedure("oneTooMany", "return 0;", db=PROCEDURE_CAP_DB), "ERROR", "400-34")
+    check_status("replacing an existing procedure is never refused",
+                 conn.save_procedure("proc0", "return 'replaced';", db=PROCEDURE_CAP_DB), "OK")
+    check_status("deleting one frees a slot",
+                 conn.send({"type": "DELETE_PROCEDURE", "databaseName": PROCEDURE_CAP_DB, "name": "proc1"}), "OK")
+    check_status("so a new one fits again",
+                 conn.save_procedure("oneTooMany", "return 0;", db=PROCEDURE_CAP_DB), "OK")
+    conn.send({"type": "DROP_DATABASE", "databaseName": PROCEDURE_CAP_DB})
+
+
 def test_admin_is_unrestricted(conn: Conn):
     section("Admins")
     check_result("an admin needs no grant", conn.run("return 'admin ran';"), "admin ran")
@@ -1602,6 +1969,10 @@ def main():
             test_compiled_script_cache(conn)
             test_console_output(conn)
             test_sandbox_limits(conn)
+            test_native_recursion_is_an_error_not_a_hang(conn)
+            test_native_loops_are_budgeted(conn)
+            test_unbudgeted_native_work_is_bounded(conn)
+            test_native_work_hardened_after_the_third_audit(conn)
             test_run_metrics(conn)
             test_history_kinds(conn)
             test_a_script_cannot_mutate_the_run_history(conn)
@@ -1631,6 +2002,18 @@ def main():
             test_cursor(conn)
             test_permissions(conn)
             test_admin_is_unrestricted(conn)
+            test_allocations_are_charged_before_they_happen(conn)
+            test_procedures_per_database_are_capped(conn)
+
+        bu.stop_server(proc)
+        proc = None
+
+        bu.write_config(work_dir, PORT, scriptsEnabled=True, scriptTimeZone="UTC", scriptLocale="en-US")
+        print(f"\n  Restarting server (shipped script limits, -Xmx1g) on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path, xmx="1g")
+        with admin_conn() as conn:
+            test_private_use_locale_tags_do_not_grow_the_heap(conn)
+            test_script_charging_gaps_at_shipped_limits(conn)
 
         bu.stop_server(proc)
         proc = None
@@ -1643,15 +2026,37 @@ def main():
 
         bu.stop_server(proc)
         proc = None
+
+        write_config(work_dir, scripts_enabled=True, text_import_enabled=True)
+        print(f"\n  Restarting server (text import enabled) on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_text_import_awaits_through_indirect_calls(conn)
+
+        bu.stop_server(proc)
+        proc = None
         fixture = FetchFixture()
         try:
             write_config(work_dir, scripts_enabled=True, history_kinds="RUN_SCRIPT", fetch_enabled=True,
-                         fetch_allowlist="127.0.0.1", fetch_timeout_ms=1000, fetch_max_response_bytes="1Kb")
+                         fetch_allowlist="127.0.0.1", fetch_timeout_ms=1000, fetch_max_response_bytes="1Kb",
+                         fetch_max_concurrent=2)
             print(f"\n  Restarting server (fetch enabled) on {HOST}:{PORT} ...")
             proc = bu.start_server(work_dir, log_path)
             with admin_conn() as conn:
                 test_history_kinds_enabled(conn)
                 test_fetch(conn, fixture.base_url, fixture)
+                test_fetch_errors_do_not_leak_connect_details(conn)
+                test_fetch_response_cap_streaming(conn, fixture.base_url)
+                test_fetch_concurrency_cap(conn, fixture.base_url)
+
+            bu.stop_server(proc)
+            proc = None
+            write_config(work_dir, scripts_enabled=True, fetch_enabled=True, fetch_allowlist="*",
+                         fetch_timeout_ms=1000)
+            print(f"\n  Restarting server (fetch allowlist '*') on {HOST}:{PORT} ...")
+            proc = bu.start_server(work_dir, log_path)
+            with admin_conn() as conn:
+                test_fetch_blocks_private_ranges_under_wildcard(conn, fixture.base_url, fixture, PORT)
         finally:
             fixture.stop()
 

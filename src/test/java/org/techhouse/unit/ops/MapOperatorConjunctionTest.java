@@ -49,8 +49,8 @@ public class MapOperatorConjunctionTest {
         jsonObject.addProperty("field1", true);
         jsonObject.addProperty("field2", false);
 
-        FieldOperator fieldOperator1 = new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonBoolean(true));
-        FieldOperator fieldOperator2 = new FieldOperator(FieldOperatorType.EQUALS, "field2", new JsonBoolean(false));
+        FieldOperator fieldOperator1 = new FieldOperator(FieldOperatorType.EQUALS, "field1", JsonBoolean.of(true));
+        FieldOperator fieldOperator2 = new FieldOperator(FieldOperatorType.EQUALS, "field2", JsonBoolean.of(false));
         List<BaseOperator> operators = List.of(fieldOperator1, fieldOperator2);
 
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.AND, operators);
@@ -131,8 +131,8 @@ public class MapOperatorConjunctionTest {
 
     private static ConjunctionOperator conjunctionOf(ConjunctionOperatorType type) {
         final List<BaseOperator> leaves = List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonBoolean(true)),
-                new FieldOperator(FieldOperatorType.EQUALS, "field2", new JsonBoolean(true)));
+                new FieldOperator(FieldOperatorType.EQUALS, "field1", JsonBoolean.of(true)),
+                new FieldOperator(FieldOperatorType.EQUALS, "field2", JsonBoolean.of(true)));
         return new ConjunctionOperator(type, leaves);
     }
 
@@ -168,7 +168,7 @@ public class MapOperatorConjunctionTest {
     @Test
     public void test_nested_nor_inside_an_and_condition_is_evaluated() {
         final List<BaseOperator> nested = List.of(conjunctionOf(ConjunctionOperatorType.NOR),
-                new FieldOperator(FieldOperatorType.EQUALS, "field3", new JsonBoolean(true)));
+                new FieldOperator(FieldOperatorType.EQUALS, "field3", JsonBoolean.of(true)));
         final var outer = new ConjunctionOperator(ConjunctionOperatorType.AND, nested);
 
         assertTrue(conditionApplied(outer, documentWith(false, false, true)),

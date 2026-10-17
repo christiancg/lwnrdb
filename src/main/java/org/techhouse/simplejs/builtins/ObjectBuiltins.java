@@ -64,14 +64,14 @@ public final class ObjectBuiltins {
         object.setProperty("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
             if (!ops.setPrototypeOf(first(args), argAt(args, 1))) {
                 throw new TypeErrorException("Object.setPrototypeOf: trap returned falsish for property '"
-                        + JsCoercion.toStr(argAt(args, 1)) + "'");
+                        + JsCoercion.describe(argAt(args, 1)) + "'");
             }
             return first(args);
         }));
         object.setProperty("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> {
             if (!ops.defineProperty(first(args), argAt(args, 1), argAt(args, 2))) {
                 throw new TypeErrorException("Object.defineProperty: trap returned falsish for property '"
-                        + JsCoercion.toStr(argAt(args, 1)) + "'");
+                        + JsCoercion.describe(argAt(args, 1)) + "'");
             }
             return first(args);
         }));

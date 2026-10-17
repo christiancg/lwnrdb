@@ -267,8 +267,9 @@ public class AdminPageLeftoverRowsTest {
         return row.getPageSize();
     }
 
-    private long databasesPageFileLength() throws Exception {
-        return fs.pageFileLengths(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME).get(0L);
+    private long databasesPageLiveBytes() throws Exception {
+        return fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME).stream()
+                .filter(row -> row.getPage() == 0L).mapToLong(PkIndexEntry::getLength).sum();
     }
 
     @Test
@@ -279,12 +280,12 @@ public class AdminPageLeftoverRowsTest {
             AdminOperationHelper
                     .saveCollectionEntry(new AdminCollEntry(DROPPED_DB, "collection-with-a-long-name-" + i));
         }
-        assertEquals(databasesPageFileLength(), recordedDatabasesPageSize(),
-                "the page row must agree with the file before the drop, or this test covers nothing");
+        assertEquals(databasesPageLiveBytes(), recordedDatabasesPageSize(),
+                "the page row must agree with the live bytes before the drop, or this test covers nothing");
 
         AdminOperationHelper.deleteDatabaseEntry(DROPPED_DB);
 
-        assertEquals(databasesPageFileLength(), recordedDatabasesPageSize(),
+        assertEquals(databasesPageLiveBytes(), recordedDatabasesPageSize(),
                 "the erased row is the one left after its collections were unregistered, not the longer original");
     }
 

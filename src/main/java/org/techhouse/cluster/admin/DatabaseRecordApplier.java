@@ -15,6 +15,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
 import org.techhouse.ops.admin.GrantPruner;
+import org.techhouse.ops.admin.GrantRewrite;
 import org.techhouse.ops.admin.LeftoverFolders;
 
 final class DatabaseRecordApplier {
@@ -90,12 +91,13 @@ final class DatabaseRecordApplier {
             return true;
         }
         if (live) {
-            return DatabaseOperationHelper.dropDatabase(dbName, true).getStatus() == OperationStatus.OK;
+            return DatabaseOperationHelper.dropDatabase(dbName, true, GrantRewrite.KEEP)
+                    .getStatus() == OperationStatus.OK;
         }
         if (!quarantine.dropDatabase(dbName, clusterConfig.replicationAckTimeoutMs())) {
             return false;
         }
-        GrantPruner.forDroppedDatabase(dbName);
+        GrantPruner.forDroppedDatabase(dbName, GrantRewrite.KEEP);
         return true;
     }
 

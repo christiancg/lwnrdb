@@ -21,6 +21,8 @@ import org.techhouse.test.TestUtils;
 
 public class MessageProcessorShutdownTest {
     private static final String SHUTTING_DOWN = "503-13";
+    private static final String AUTHENTICATE = "{\"type\":\"AUTHENTICATE\",\"username\":\"someone\","
+            + "\"password\":\"secret123\"}";
 
     @BeforeEach
     void setUp() throws Exception {
@@ -91,7 +93,7 @@ public class MessageProcessorShutdownTest {
     public void test_requests_are_served_while_the_server_is_running() throws Exception {
         final var response = run("{\"type\":\"LIST_DATABASES\"}", () -> false);
 
-        assertTrue(response.contains("OK"), response);
+        assertTrue(response.contains("401-1"), response);
         assertFalse(response.contains(SHUTTING_DOWN), response);
     }
 
@@ -103,7 +105,7 @@ public class MessageProcessorShutdownTest {
                 .thenReturn(OperationResponse.ok(OperationType.CLOSE_CONNECTION, "closed"));
         final var out = new ByteArrayOutputStream();
         final var in = new ByteArrayInputStream(
-                "{\"type\":\"LIST_DATABASES\"}\n{\"type\":\"CLOSE_CONNECTION\"}\n".getBytes(StandardCharsets.UTF_8));
+                (AUTHENTICATE + "\n{\"type\":\"CLOSE_CONNECTION\"}\n").getBytes(StandardCharsets.UTF_8));
         final var messageProcessor = new MessageProcessor(TestUtils.clientSocket(in, out));
         TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
 
@@ -124,10 +126,10 @@ public class MessageProcessorShutdownTest {
         when(processor.processMessage(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
                 .thenAnswer(_ -> {
                     seenWhileRunning.set(inFlight.current());
-                    return OperationResponse.ok(OperationType.LIST_DATABASES, "listed");
+                    return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
                 });
         final var out = new ByteArrayOutputStream();
-        final var in = new ByteArrayInputStream("{\"type\":\"LIST_DATABASES\"}\n".getBytes(StandardCharsets.UTF_8));
+        final var in = new ByteArrayInputStream((AUTHENTICATE + "\n").getBytes(StandardCharsets.UTF_8));
         final var messageProcessor = new MessageProcessor(TestUtils.clientSocket(in, out));
         TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
 

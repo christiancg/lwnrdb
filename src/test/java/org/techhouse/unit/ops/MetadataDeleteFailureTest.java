@@ -74,7 +74,7 @@ public class MetadataDeleteFailureTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
         IocContainer.get(ScheduleRegistry.class).clear();
         TestUtils.releaseAllLocks();
@@ -171,7 +171,7 @@ public class MetadataDeleteFailureTest {
     public void test_listing_procedures_answers_an_error_when_a_definition_is_unparseable() throws Exception {
         fs.writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
 
-        final var response = ProcedureOperationHelper.executeList(new ListProceduresRequest(TestGlobals.DB));
+        final var response = ProcedureOperationHelper.executeList(new ListProceduresRequest(TestGlobals.DB), null);
 
         assertEquals(ErrorCode.ERROR_RETRIEVING.getCode(), response.getErrorCode());
     }
@@ -179,6 +179,7 @@ public class MetadataDeleteFailureTest {
     @Test
     public void test_listing_triggers_answers_an_error_when_a_trigger_file_is_unparseable() throws Exception {
         fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, UNPARSEABLE);
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
 
         final var response = TriggerOperationHelper
                 .executeList(new ListTriggersRequest(TestGlobals.DB, TestGlobals.COLL));

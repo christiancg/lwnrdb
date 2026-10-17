@@ -3,6 +3,7 @@ package org.techhouse.simplejs.host;
 import java.time.ZoneId;
 import java.util.Locale;
 import java.util.function.Consumer;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
 
@@ -35,6 +36,7 @@ public record PipelineHostBindings(ResourceLimits limits, ZoneId timeZone, Local
                 configuration.getAggregationScriptTimeoutMs(), configuration.getScriptMaxDepth(), true, false,
                 java.util.List.of(), -1, -1, false, false, ResourceLimits.DEFAULT_MAX_MODULE_DEPTH,
                 ResourceLimits.DEFAULT_MAX_LOG_LINES, ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS,
-                configuration.getScriptMaxMemoryBytes(), -1, -1, -1);
+                configuration.getScriptMaxMemoryBytes(), -1, -1, -1, ResourceLimits.DEFAULT_FETCH_MAX_CONCURRENT,
+                configuration.intValue(ConfigKey.SCRIPT_MAX_ARRAY_LENGTH));
     }
 }

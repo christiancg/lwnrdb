@@ -353,7 +353,8 @@ public class UserCacheEvictionTest {
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
         final var typeBytes = new ReflectionUtils.TypeToken<Map<String, java.util.concurrent.atomic.AtomicLong>>() {
         };
-        final var collectionBytes = TestUtils.getPrivateField(cache, "collectionBytes", typeBytes);
+        final var collectionBytes = TestUtils.getPrivateField(TestUtils.getPrivateField(cache, "sizes", Object.class),
+                "collectionBytes", typeBytes);
         final var typeField = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
         };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", typeField);

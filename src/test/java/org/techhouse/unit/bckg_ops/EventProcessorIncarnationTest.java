@@ -10,6 +10,7 @@ import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
@@ -143,9 +144,9 @@ public class EventProcessorIncarnationTest {
     @Test
     public void test_entry_count_refuses_an_incarnation_that_changed_under_the_lock() throws Exception {
         AdminOperationHelper.updateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                entryOnPage("raced", 9), DROPPED);
+                EntityRef.of(entryOnPage("raced", 9)), DROPPED);
         AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                List.of(entryOnPage("raced-bulk", 10)), DROPPED);
+                List.of(EntityRef.of(entryOnPage("raced-bulk", 10))), DROPPED);
 
         Assertions.assertNull(page(9));
         Assertions.assertNull(page(10));

@@ -11,11 +11,14 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.host.BulkSaveOutcome;
 import org.techhouse.simplejs.host.DatabaseHostBindings;
+import org.techhouse.simplejs.host.HookHostBindings;
+import org.techhouse.simplejs.host.PipelineHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
 public class DatabaseHostBindingsTest {
@@ -53,6 +56,16 @@ public class DatabaseHostBindingsTest {
         final var configuration = Configuration.getInstance();
         final var limits = DatabaseHostBindings.limitsFromConfiguration();
         assertEquals(configuration.getScriptMaxMemoryBytes(), limits.memoryBudget());
+    }
+
+    @Test
+    public void test_every_host_reads_the_array_length_cap_from_configuration() {
+        final var cap = Configuration.getInstance().intValue(ConfigKey.SCRIPT_MAX_ARRAY_LENGTH);
+        assertEquals(16_777_216, cap);
+        assertEquals(cap, DatabaseHostBindings.limitsFromConfiguration().maxArrayLength());
+        assertEquals(cap, HookHostBindings.limitsFromConfiguration().maxArrayLength());
+        assertEquals(cap, PipelineHostBindings.limitsFromConfiguration().maxArrayLength());
+        assertEquals(ResourceLimits.UNLIMITED_ARRAY_LENGTH, ResourceLimits.unlimited().maxArrayLength());
     }
 
     @Test
@@ -101,7 +114,7 @@ public class DatabaseHostBindingsTest {
                 base.maxDepth(), base.reportUnhandledRejections(), base.fetchEnabled(), base.fetchHostAllowlist(),
                 base.maxResponseBytes(), base.fetchTimeoutMillis(), base.strictScriptGoal(), base.textImportEnabled(),
                 base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget(), -1,
-                base.cursorBatchSize(), base.cursorMaxBatchSize());
+                base.cursorBatchSize(), base.cursorMaxBatchSize(), base.fetchMaxConcurrent(), base.maxArrayLength());
 
         assertTrue(rebuilt.fetchEnabled());
         assertEquals(java.util.List.of("api.example.com"), rebuilt.fetchHostAllowlist());

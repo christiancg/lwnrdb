@@ -3,6 +3,7 @@ package org.techhouse.ops.resp;
 import java.util.List;
 import org.techhouse.analyze.AnalyzeResult;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonSizeEstimator;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
@@ -32,5 +33,10 @@ public class AggregateAnalyzeResponse extends OperationResponse {
 
     public void setAnalyzeResult(AnalyzeResult analyzeResult) {
         this.analyzeResult = analyzeResult;
+    }
+
+    @Override
+    public int estimatedJsonChars() {
+        return withPayloadChars(JsonSizeEstimator.estimate(results));
     }
 }

@@ -1,7 +1,6 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.List;
@@ -47,8 +46,9 @@ public class ClusterWriteHelperTest {
     }
 
     @Test
-    public void test_guard_allows_when_clustering_disabled() {
-        assertNull(ClusterWriteHelper.guard(OperationType.SAVE, TestGlobals.DB, TestGlobals.COLL));
+    public void test_guard_refuses_an_unregistered_collection_before_any_lock_when_clustering_disabled() {
+        final var refusal = ClusterWriteHelper.guard(OperationType.SAVE, "neverCreatedDb", "neverCreatedColl");
+        assertEquals(ErrorCode.COLLECTION_NOT_FOUND.getCode(), refusal.getErrorCode());
     }
 
     @Test

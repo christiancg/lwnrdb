@@ -107,7 +107,7 @@ final class ClassConstruction {
                 instance.setFlags(key, object.getFlags(key));
             }
             if (object.isErrorData()) {
-                instance.markErrorData();
+                instance.markErrorData(object.getErrorStack());
             }
         } else {
             instance.setPrimitive(produced);
@@ -125,7 +125,7 @@ final class ClassConstruction {
         }
         for (final var entry : cls.getInstanceFields()) {
             final var field = entry.definition();
-            final var fieldScope = cls.getMethodScope().child();
+            final var fieldScope = cls.getMethodScope().functionChild();
             fieldScope.defineThis(self);
             final var value = field.getValue() == null
                     ? JsUndefined.getInstance()

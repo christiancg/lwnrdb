@@ -1303,6 +1303,20 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.data.Client$TransactionReap",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.auth.PasswordHasher$DummyCredential",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.ErrorCode",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -1324,7 +1338,18 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.req.OperationRequest$SchemaCheck",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ShutdownCoordinator",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.bckg_ops.BackgroundBacklogGate",
       "allDeclaredConstructors": true
     },
     {
@@ -1452,6 +1477,10 @@
       "allDeclaredConstructors": true
     },
     {
+      "type": "org.techhouse.conn.PreAuthSlots",
+      "allDeclaredConstructors": true
+    },
+    {
       "type": "org.techhouse.ejson.EJson",
       "allDeclaredConstructors": true
     },
@@ -1493,6 +1522,14 @@
     },
     {
       "type": "org.techhouse.ops.ScriptRunRegistry",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.auth.AuthFailureThrottle",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.auth.PasswordCheckGate",
       "allDeclaredConstructors": true
     },
     {

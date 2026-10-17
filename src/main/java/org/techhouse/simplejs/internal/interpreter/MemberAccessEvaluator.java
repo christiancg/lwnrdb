@@ -85,7 +85,7 @@ public record MemberAccessEvaluator(Interpreter interp) {
     public void requireObjectCoercible(JsValue target) {
         if (isNullish(target)) {
             throw new TypeErrorException(
-                    "Cannot read properties of " + JsCoercion.toStr(target) + " (reading a computed property)");
+                    "Cannot read properties of " + JsCoercion.describe(target) + " (reading a computed property)");
         }
     }
 
@@ -165,7 +165,7 @@ public record MemberAccessEvaluator(Interpreter interp) {
             return interp.proxies.delete(proxy, keyValue);
         }
         if (target instanceof JsArray array && !(keyValue instanceof JsSymbol)) {
-            return deleteArrayElement(array, JsCoercion.toStr(keyValue));
+            return deleteArrayElement(array, JsCoercion.toStr(keyValue, interp.ops));
         }
         return target.deleteOwnProperty(keyValue);
     }

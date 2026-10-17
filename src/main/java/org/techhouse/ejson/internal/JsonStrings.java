@@ -6,21 +6,97 @@ public final class JsonStrings {
 
     private static final char[] HEX = "0123456789abcdef".toCharArray();
     private static final char LAST_CONTROL_CHARACTER = 0x20;
+    private static final int SHORT_ESCAPE_WIDTH = 2;
+    private static final int UNICODE_ESCAPE_WIDTH = 6;
 
     public static String escape(final String value) {
         if (value == null || value.isEmpty()) {
             return value;
         }
-        final var length = value.length();
-        var start = 0;
-        while (start < length && !needsEscaping(value, start)) {
-            start++;
-        }
-        if (start == length) {
+        final var start = firstToEscape(value);
+        if (start == value.length()) {
             return value;
         }
-        final var builder = new StringBuilder(length + 8);
+        final var builder = new StringBuilder(value.length() + 8);
         builder.append(value, 0, start);
+        escapeFrom(builder, value, start);
+        return builder.toString();
+    }
+
+    public static long escapedLength(final String value) {
+        final var length = value.length();
+        long escaped = length;
+        for (var i = 0; i < length; i++) {
+            if (needsEscaping(value, i)) {
+                escaped += escapeWidth(value.charAt(i)) - 1;
+            }
+        }
+        return escaped;
+    }
+
+    private static int escapeWidth(final char c) {
+        return switch (c) {
+            case '"', '\\', '\b', '\f', '\n', '\r', '\t' -> SHORT_ESCAPE_WIDTH;
+            default -> UNICODE_ESCAPE_WIDTH;
+        };
+    }
+
+    public static void appendEscaped(final StringBuilder out, final String value) {
+        if (value == null) {
+            out.append((String) null);
+            return;
+        }
+        final var start = firstToEscape(value);
+        if (start == value.length()) {
+            out.append(value);
+            return;
+        }
+        out.append(value, 0, start);
+        escapeFrom(out, value, start);
+    }
+
+    public static void appendEscaped(final JsonOut out, final String value) {
+        if (value == null) {
+            out.append("null");
+            return;
+        }
+        final var length = value.length();
+        var runStart = 0;
+        for (var i = 0; i < length; i++) {
+            if (needsEscaping(value, i)) {
+                out.append(value, runStart, i);
+                appendEscape(out, value.charAt(i));
+                runStart = i + 1;
+            }
+        }
+        out.append(value, runStart, length);
+    }
+
+    private static void appendEscape(final JsonOut out, final char c) {
+        switch (c) {
+            case '"' -> out.append('\\').append('"');
+            case '\\' -> out.append('\\').append('\\');
+            case '\b' -> out.append('\\').append('b');
+            case '\f' -> out.append('\\').append('f');
+            case '\n' -> out.append('\\').append('n');
+            case '\r' -> out.append('\\').append('r');
+            case '\t' -> out.append('\\').append('t');
+            default -> out.append('\\').append('u').append(HEX[(c >> 12) & 0xF]).append(HEX[(c >> 8) & 0xF])
+                    .append(HEX[(c >> 4) & 0xF]).append(HEX[c & 0xF]);
+        }
+    }
+
+    private static int firstToEscape(final String value) {
+        final var length = value.length();
+        var index = 0;
+        while (index < length && !needsEscaping(value, index)) {
+            index++;
+        }
+        return index;
+    }
+
+    private static void escapeFrom(final StringBuilder builder, final String value, final int start) {
+        final var length = value.length();
         for (var i = start; i < length; i++) {
             final var c = value.charAt(i);
             switch (c) {
@@ -34,7 +110,6 @@ public final class JsonStrings {
                 default -> appendOther(builder, value, i);
             }
         }
-        return builder.toString();
     }
 
     private static void appendOther(final StringBuilder builder, final String value, final int index) {

@@ -1,7 +1,5 @@
 package org.techhouse.simplejs.builtins.iterator;
 
-import static org.techhouse.simplejs.builtins.IteratorBuiltins.HELPER_STATE;
-import static org.techhouse.simplejs.builtins.IteratorBuiltins.WRAP_STATE;
 import static org.techhouse.simplejs.builtins.IteratorBuiltins.step;
 import static org.techhouse.simplejs.builtins.IteratorBuiltins.stepOf;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
@@ -114,6 +112,12 @@ public final class IteratorPrototypes {
     public static JsObject wrapPrototype(InterpreterOps ops, JsObject iteratorProto, JsObject objectProto) {
         final var proto = new JsObject();
         proto.setProto(iteratorProto);
+        Intrinsics.defineHidden(proto, "next", wrapNext(ops));
+        Intrinsics.defineHidden(proto, "return", wrapReturn(ops, objectProto));
+        return proto;
+    }
+
+    private static JsNativeFunction wrapNext(InterpreterOps ops) {
         final var next = new JsNativeFunction("next", (thisArg, _) -> {
             final var state = requireWrap(thisArg);
             if (!isCallable(state.nextMethod)) {
@@ -122,7 +126,10 @@ public final class IteratorPrototypes {
             return ops.call(state.nextMethod, state.iterator, List.of());
         });
         next.setLength(0);
-        Intrinsics.defineHidden(proto, "next", next);
+        return next;
+    }
+
+    private static JsNativeFunction wrapReturn(InterpreterOps ops, JsObject objectProto) {
         final var close = new JsNativeFunction("return", (thisArg, _) -> {
             final var state = requireWrap(thisArg);
             final var returnFn = ops.getMember(state.iterator, new JsString("return"));
@@ -135,24 +142,21 @@ public final class IteratorPrototypes {
             return ops.call(returnFn, state.iterator, List.of());
         });
         close.setLength(0);
-        Intrinsics.defineHidden(proto, "return", close);
-        return proto;
+        return close;
     }
 
     public static HelperState requireHelper(JsValue receiver) {
-        final var state = receiver instanceof JsObject object ? HELPER_STATE.get(object) : null;
-        if (state == null) {
-            throw new TypeErrorException("Iterator Helper method called on an incompatible receiver");
+        if (receiver instanceof JsObject object && object.getInternalSlot() instanceof HelperState state) {
+            return state;
         }
-        return state;
+        throw new TypeErrorException("Iterator Helper method called on an incompatible receiver");
     }
 
     public static WrapState requireWrap(JsValue receiver) {
-        final var state = receiver instanceof JsObject object ? WRAP_STATE.get(object) : null;
-        if (state == null) {
-            throw new TypeErrorException("Iterator wrapper method called on an incompatible receiver");
+        if (receiver instanceof JsObject object && object.getInternalSlot() instanceof WrapState state) {
+            return state;
         }
-        return state;
+        throw new TypeErrorException("Iterator wrapper method called on an incompatible receiver");
     }
 
     public record WrapState(JsValue iterator, JsValue nextMethod) {

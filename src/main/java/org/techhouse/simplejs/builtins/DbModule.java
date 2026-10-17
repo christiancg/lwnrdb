@@ -6,6 +6,7 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.function.Function;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -41,26 +42,29 @@ public final class DbModule {
     public static JsObject create(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
             ResourceLimits limits) {
         final var db = new JsObject();
-        db.set("findById", new JsNativeFunction("findById", (_, args) -> findById(database, ops, args)));
-        db.set("aggregate", new JsNativeFunction("aggregate", (_, args) -> aggregate(database, ops, args)));
-        db.set("save", new JsNativeFunction("save", (_, args) -> save(database, ops, args)));
-        db.set("bulkSave", new JsNativeFunction("bulkSave", (_, args) -> bulkSave(database, ops, args)));
-        db.set("cursor", new JsNativeFunction("cursor", (_, args) -> cursor(database, ops, intrinsics, limits, args)));
-        db.set("delete", new JsNativeFunction("delete", (_, args) -> {
+        db.set("findById", hostCall("findById", ops, args -> findById(database, ops, args)));
+        db.set("aggregate", hostCall("aggregate", ops, args -> aggregate(database, ops, args)));
+        db.set("save", hostCall("save", ops, args -> save(database, ops, args)));
+        db.set("bulkSave", hostCall("bulkSave", ops, args -> bulkSave(database, ops, args)));
+        db.set("cursor", hostCall("cursor", ops, args -> cursor(database, ops, intrinsics, limits, args)));
+        db.set("delete", hostCall("delete", ops, args -> {
             database.delete(requireString(args, 0, "delete", DATABASE_NAME),
                     requireString(args, 1, "delete", COLLECTION_NAME), requireString(args, 2, "delete", ID));
             return JsUndefined.getInstance();
         }));
-        db.set("listCollections", new JsNativeFunction("listCollections", (_, args) -> toStringArray(
+        db.set("listCollections", hostCall("listCollections", ops, args -> toStringArray(
                 database.listCollections(requireString(args, 0, "listCollections", DATABASE_NAME)))));
-        db.set("listDatabases",
-                new JsNativeFunction("listDatabases", (_, _) -> toStringArray(database.listDatabases())));
-        db.set("transaction", new JsNativeFunction("transaction", (_, args) -> transaction(database, ops, args)));
+        db.set("listDatabases", hostCall("listDatabases", ops, _ -> toStringArray(database.listDatabases())));
+        db.set("transaction", hostCall("transaction", ops, args -> transaction(database, ops, args)));
         final var scopedDatabase = database.scopedDatabase();
         if (scopedDatabase != null) {
             db.set("name", new JsString(scopedDatabase));
         }
         return db;
+    }
+
+    private static JsNativeFunction hostCall(String name, InterpreterOps ops, Function<List<JsValue>, JsValue> body) {
+        return new JsNativeFunction(name, (_, args) -> NativeDepth.withHeadroom(ops, () -> body.apply(args)));
     }
 
     private static JsValue findById(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
@@ -169,7 +173,7 @@ public final class DbModule {
             final var sort = new JsonObject();
             sort.add("type", new JsonString("SORT"));
             sort.add("fieldName", new JsonString(PK_FIELD));
-            sort.add("ascending", new JsonBoolean(true));
+            sort.add("ascending", JsonBoolean.of(true));
             final var ordered = new JsonArray();
             for (var i = 0; i < steps.size(); i++) {
                 if (i == index) {
@@ -200,6 +204,7 @@ public final class DbModule {
         }
 
         private void fetch() {
+            NativeDepth.requireHeadroom(ops);
             InterpreterOps.release(ops, batchBytes);
             batchBytes = 0;
             final var results = database.aggregate(dbName, collName, paged());
@@ -286,7 +291,7 @@ public final class DbModule {
     }
 
     private static JsonBaseElement payloadArg(List<JsValue> args, InterpreterOps ops) {
-        return args.size() > PAYLOAD_INDEX ? EJsonInterop.toHostEjson(args.get(PAYLOAD_INDEX), ops) : null;
+        return args.size() > PAYLOAD_INDEX ? EJsonInterop.toHostPayload(args.get(PAYLOAD_INDEX), ops) : null;
     }
 
     private static JsonObject requireDocument(JsonBaseElement converted) {

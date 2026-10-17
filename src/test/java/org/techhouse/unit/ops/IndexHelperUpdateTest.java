@@ -125,14 +125,14 @@ public class IndexHelperUpdateTest {
     @Test
     public void test_update_indexes_boolean_field() throws InterruptedException, IOException {
         Cache cache = IocContainer.get(Cache.class);
-        DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
+        DbEntry entry = entryWith("b1", "active", JsonBoolean.of(true));
         setupCollection(cache, entry);
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "active");
 
         final var adminColl = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         adminColl.setIndexes(Set.of("active"));
 
-        DbEntry newEntry = entryWith("b2", "active", new JsonBoolean(false));
+        DbEntry newEntry = entryWith("b2", "active", JsonBoolean.of(false));
         TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, newEntry);
         assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id()));
     }
@@ -181,7 +181,7 @@ public class IndexHelperUpdateTest {
     public void test_update_indexes_field_value_became_null_removes_scalar_entry()
             throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
-        DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
+        DbEntry entry = entryWith("b1", "active", JsonBoolean.of(true));
         setupCollection(cache, entry);
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "active");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("active"));
@@ -353,7 +353,7 @@ public class IndexHelperUpdateTest {
     public void test_update_indexes_boolean_to_number_type_change_removes_boolean_entry()
             throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
-        DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
+        DbEntry entry = entryWith("b1", "active", JsonBoolean.of(true));
         setupCollection(cache, entry);
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "active");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("active"));
@@ -400,7 +400,7 @@ public class IndexHelperUpdateTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("mixedField2"));
 
         TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
-                entryWith("m2", "mixedField2", new JsonBoolean(true)));
+                entryWith("m2", "mixedField2", JsonBoolean.of(true)));
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "m2");
 
         final var boolIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "mixedField2",

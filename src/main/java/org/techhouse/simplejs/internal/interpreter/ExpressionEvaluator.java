@@ -7,6 +7,8 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -128,11 +130,7 @@ public final class ExpressionEvaluator {
 
     public void spreadInto(List<JsValue> target, JsValue value) {
         switch (value) {
-            case JsArray array when Iteration.usesDefaultIterator(interp, array) -> {
-                for (var i = 0; i < array.length(); i++) {
-                    target.add(array.isHole(i) ? JsUndefined.getInstance() : array.get(i));
-                }
-            }
+            case JsArray array when Iteration.usesDefaultIterator(interp, array) -> spreadArray(target, array);
             case JsString string when Iteration.usesDefaultIterator(interp, string) ->
                 target.addAll(stringCodePoints(string.getValue()));
             default -> {
@@ -143,6 +141,19 @@ public final class ExpressionEvaluator {
                     element = iteration.next();
                 }
             }
+        }
+    }
+
+    private void spreadArray(List<JsValue> target, JsArray array) {
+        final var length = array.length();
+        final var unbackedSlots = Math.max(0L, length - array.getElements().size());
+        interp.charge(unbackedSlots * InterpreterOps.BYTES_PER_ELEMENT);
+        if (length > Integer.MAX_VALUE) {
+            throw new RangeErrorException("Invalid array length");
+        }
+        for (var i = 0; i < length; i++) {
+            InterpreterOps.pace(interp.ops(), i);
+            target.add(array.isHole(i) ? JsUndefined.getInstance() : array.get(i));
         }
     }
 

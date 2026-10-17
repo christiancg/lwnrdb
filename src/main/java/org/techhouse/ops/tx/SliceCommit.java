@@ -50,13 +50,11 @@ public final class SliceCommit {
             boolean recordsOutcome) throws Exception {
         final var txId = transaction.getTransactionId().toString();
         coordinator.reserveTransactionTombstones(transaction);
-        final var applier = new VersionedApply();
+        final VersionedApply applier;
         final boolean applied;
-        listenManager.deferNotifications(transaction.getHeldLocks());
-        try {
+        try (var batch = listenManager.openBatch(transaction.getHeldLocks())) {
+            applier = new VersionedApply(batch);
             applied = TransactionRecovery.applyAllWithRetry(ops, txId, applier);
-        } finally {
-            listenManager.flushDeferredNotifications();
         }
         if (!applied) {
             return Result.HALF_APPLIED;

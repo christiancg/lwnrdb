@@ -48,9 +48,9 @@ public final class TemporalPlainTimeBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("PlainTime", (thisArg, args) -> {
-            requireNewTargetOrSubclassInstance("Temporal.PlainTime", thisArg);
-            return withNewTargetPrototype(new JsTemporalPlainTime(constructFields(args, ops)), ops);
+        final var ctor = new JsNativeFunction("PlainTime", (thisArg, args, newTarget) -> {
+            requireNewTargetOrSubclassInstance("Temporal.PlainTime", thisArg, newTarget);
+            return withNewTargetPrototype(new JsTemporalPlainTime(constructFields(args, ops)), newTarget, ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> from(args, ops));
         from.setLength(1);

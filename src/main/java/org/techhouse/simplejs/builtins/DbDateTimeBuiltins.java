@@ -34,9 +34,9 @@ public final class DbDateTimeBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("DbDateTime", (thisArg, args) -> {
-            requireNewTarget("DbDateTime", thisArg);
-            return withNewTargetPrototype(new JsDbDateTime(construct(args, ops)), ops);
+        final var ctor = new JsNativeFunction("DbDateTime", (thisArg, args, newTarget) -> {
+            requireNewTarget("DbDateTime", thisArg, newTarget);
+            return withNewTargetPrototype(new JsDbDateTime(construct(args, ops)), newTarget, ops);
         });
         final var from = new JsNativeFunction("from",
                 (_, args) -> new JsDbDateTime(toLocalDateTime(arg(args, 0), ops)));

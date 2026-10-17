@@ -36,7 +36,7 @@ public class ProcedureOperationHelperTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -161,22 +161,23 @@ public class ProcedureOperationHelperTest {
     @Test
     public void test_delete_is_idempotent_when_absent() throws Exception {
         final var response = ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "never-existed"));
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "never-existed"), ACTOR);
         assertEquals(OperationStatus.OK, response.getStatus());
     }
 
     @Test
     public void test_delete_removes_the_procedure() throws Exception {
         save("return 1;");
-        assertEquals(OperationStatus.OK,
-                ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "p")).getStatus());
+        assertEquals(OperationStatus.OK, ProcedureOperationHelper
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "p"), ACTOR).getStatus());
         assertNull(cache.getProcedure(TestGlobals.DB, "p"));
         assertTrue(fs.listProcedureNames(TestGlobals.DB).isEmpty());
     }
 
     @Test
     public void test_delete_rejects_unknown_database() throws Exception {
-        final var response = ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest("missingDb", "p"));
+        final var response = ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest("missingDb", "p"),
+                ACTOR);
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), response.getErrorCode());
     }
 
@@ -184,27 +185,27 @@ public class ProcedureOperationHelperTest {
     public void test_list_omits_source_unless_requested() throws Exception {
         save("return 1;");
         final var withoutSource = (ListProceduresResponse) ProcedureOperationHelper
-                .executeList(new ListProceduresRequest(TestGlobals.DB));
+                .executeList(new ListProceduresRequest(TestGlobals.DB), null);
         assertEquals(1, withoutSource.getProcedures().size());
         assertFalse(withoutSource.getProcedures().getFirst().has("source"));
 
         final var request = new ListProceduresRequest(TestGlobals.DB);
         request.setIncludeSource(true);
-        final var withSource = (ListProceduresResponse) ProcedureOperationHelper.executeList(request);
+        final var withSource = (ListProceduresResponse) ProcedureOperationHelper.executeList(request, null);
         assertEquals("return 1;", withSource.getProcedures().getFirst().get("source").asJsonString().getValue());
     }
 
     @Test
     public void test_list_is_empty_for_a_database_with_no_procedures() {
         final var response = (ListProceduresResponse) ProcedureOperationHelper
-                .executeList(new ListProceduresRequest(TestGlobals.DB));
+                .executeList(new ListProceduresRequest(TestGlobals.DB), null);
         assertTrue(response.getProcedures().isEmpty());
     }
 
     @Test
     public void test_list_rejects_unknown_database() {
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(),
-                ProcedureOperationHelper.executeList(new ListProceduresRequest("missingDb")).getErrorCode());
+                ProcedureOperationHelper.executeList(new ListProceduresRequest("missingDb"), null).getErrorCode());
     }
 
     @Test

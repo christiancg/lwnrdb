@@ -20,6 +20,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.FilterOperatorHelper;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
@@ -133,16 +134,12 @@ public class FilterIdFieldIndexTest extends FilterResolutionSupport {
     public void test_filter_on_id_reads_only_the_matching_document() throws IOException {
         seedIds("a", "b", "c", "d", "e");
         final var analyze = new AnalyzeContext();
-        AnalyzeContext.set(analyze);
-        try {
-            assertEquals(Set.of("a"),
-                    matched(new FieldOperator(FieldOperatorType.EQUALS, Globals.PK_FIELD, new JsonString("a"))));
-            assertTrue(analyze.getIndexesUsed().contains(Globals.PK_FIELD),
-                    "the pk index must be reported as used: " + analyze.getIndexesUsed());
-            assertEquals(1, analyze.getDocumentsScanned(),
-                    "an _id equality must read exactly one document, not the whole collection");
-        } finally {
-            AnalyzeContext.clear();
-        }
+        assertEquals(Set.of("a"),
+                matched(new FieldOperator(FieldOperatorType.EQUALS, Globals.PK_FIELD, new JsonString("a")),
+                        PipelineContext.of(0L, Long.MAX_VALUE, analyze)));
+        assertTrue(analyze.getIndexesUsed().contains(Globals.PK_FIELD),
+                "the pk index must be reported as used: " + analyze.getIndexesUsed());
+        assertEquals(1, analyze.getDocumentsScanned(),
+                "an _id equality must read exactly one document, not the whole collection");
     }
 }

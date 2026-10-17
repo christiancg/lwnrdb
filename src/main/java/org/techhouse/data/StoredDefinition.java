@@ -15,6 +15,7 @@ public abstract class StoredDefinition {
     protected static final String CREATED_AT_FIELD = "createdAt";
     protected static final String UPDATED_AT_FIELD = "updatedAt";
     protected static final String UPDATED_BY_FIELD = "updatedBy";
+    protected static final String DISABLED_REASON_FIELD = "disabledReason";
 
     protected String name;
     protected boolean enabled;
@@ -22,6 +23,7 @@ public abstract class StoredDefinition {
     protected long createdAt;
     protected long updatedAt;
     protected String updatedBy;
+    protected String disabledReason;
 
     protected void readCommonFields(JsonObject object) {
         name = stringOrNull(object, NAME_FIELD);
@@ -30,6 +32,7 @@ public abstract class StoredDefinition {
         createdAt = longOrZero(object, CREATED_AT_FIELD);
         updatedAt = longOrZero(object, UPDATED_AT_FIELD);
         updatedBy = stringOrNull(object, UPDATED_BY_FIELD);
+        disabledReason = stringOrNull(object, DISABLED_REASON_FIELD);
     }
 
     protected void writeAuditFields(JsonObject json) {
@@ -38,6 +41,16 @@ public abstract class StoredDefinition {
         if (updatedBy != null) {
             json.add(UPDATED_BY_FIELD, new JsonString(updatedBy));
         }
+        if (disabledReason != null) {
+            json.add(DISABLED_REASON_FIELD, new JsonString(disabledReason));
+        }
+    }
+
+    protected void markDisabled(String reason, long at) {
+        enabled = false;
+        disabledReason = reason;
+        version = version + 1;
+        updatedAt = at;
     }
 
     public String getName() {
@@ -62,5 +75,9 @@ public abstract class StoredDefinition {
 
     public String getUpdatedBy() {
         return updatedBy;
+    }
+
+    public String getDisabledReason() {
+        return disabledReason;
     }
 }

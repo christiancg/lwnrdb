@@ -52,6 +52,7 @@ public final class Coroutine {
     private final AtomicBoolean running = new AtomicBoolean();
     private volatile boolean started;
     private volatile boolean done;
+    private volatile boolean cancelled;
 
     private JsValue sent = JsUndefined.getInstance();
     private RuntimeException inject;
@@ -61,6 +62,8 @@ public final class Coroutine {
     private JsValue yielded = JsUndefined.getInstance();
     private JsValue completed = JsUndefined.getInstance();
     private RuntimeException escaped;
+    private Error fatal;
+    private boolean exited;
 
     private Body body;
     private PauseReason pauseReason = PauseReason.YIELD;
@@ -153,6 +156,7 @@ public final class Coroutine {
             done = true;
             return;
         }
+        this.cancelled = true;
         this.inject = new CancelSignal();
         this.injectReturn = false;
         resume();
@@ -222,21 +226,27 @@ public final class Coroutine {
             Thread.ofVirtual().start(this::threadMain);
         }
         RuntimeException esc;
+        Error thrown;
         lock.lock();
         try {
             bodyTurn = true;
             turn.signalAll();
-            while (bodyTurn) {
+            while (bodyTurn && !exited) {
                 turn.await();
             }
             esc = escaped;
             escaped = null;
+            thrown = fatal;
+            fatal = null;
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Coroutine driver interrupted", interrupted);
         } finally {
             lock.unlock();
             running.set(false);
+        }
+        if (thrown != null) {
+            throw thrown;
         }
         if (resumeObserver != null) {
             resumeObserver.afterResume(esc);
@@ -248,6 +258,9 @@ public final class Coroutine {
     }
 
     private JsValue pause() {
+        if (cancelled) {
+            throw new CancelSignal();
+        }
         boolean doReturn;
         JsValue returnValue;
         RuntimeException error;
@@ -288,11 +301,13 @@ public final class Coroutine {
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
+            finish(JsUndefined.getInstance(), null, null);
             return;
         } finally {
             lock.unlock();
         }
         RuntimeException escapedError = null;
+        Error fatalError = null;
         var result = (JsValue) JsUndefined.getInstance();
         try {
             result = body.run();
@@ -301,12 +316,20 @@ public final class Coroutine {
         } catch (CancelSignal ignored) {
         } catch (RuntimeException runtime) {
             escapedError = runtime;
+        } catch (Error error) {
+            fatalError = error;
         }
+        finish(result, escapedError, fatalError);
+    }
+
+    private void finish(JsValue result, RuntimeException escapedError, Error fatalError) {
         lock.lock();
         try {
             done = true;
             completed = result;
             escaped = escapedError;
+            fatal = fatalError;
+            exited = true;
             bodyTurn = false;
             turn.signalAll();
         } finally {

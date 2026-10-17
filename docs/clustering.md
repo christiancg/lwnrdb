@@ -245,8 +245,15 @@ given the whole script budget, so the forward waits `scriptTimeoutMs +
 replicationAckTimeoutMs` rather than the ack timeout sized for a single write. No loop is
 possible: the target runs the script through `OperationProcessor` directly.
 
-Authorization stays at the edge, and the acting username travels on the forward so the
-target runs as the original user. `scriptsEnabled` and the `script*` sandbox keys must
+Authorization is decided at the edge and re-checked on the target. The acting username travels
+on the forward, and the target re-validates the request and re-runs the permission check for that
+user against its own admin cache, so a permission granted a moment ago may answer one `403-1` (or a
+user created a moment ago one `401-2`) on a node that has not applied it yet; a client that grants
+and then immediately uses a permission through a different edge may need one retry. Script-run
+history writes carry no user and are exempt from the permission check, though their names are
+still validated. The acting user is asserted by the sender: anyone with the cluster secret can
+name any user, so the secret and `clusterTlsEnabled` remain the trust boundary. The target then
+runs as the original user. `scriptsEnabled` and the `script*` sandbox keys must
 therefore be **uniform across the cluster** — the sandbox comes from the *executing* node's
 configuration, and a target with `scriptsEnabled=false` answers `403-2`, which the edge
 relays.
@@ -291,6 +298,12 @@ everywhere — `version`, `updatedAt`, `updatedBy` and, for a trigger or schedul
 peer never computes them, so it can neither disagree about a trigger's definer (which would run
 the same write under different authority depending on which node owns the collection) nor be
 told one by a client: a client request is always stamped from the acting user and local state.
+
+The same goes for the check that refuses `SAVE_PROCEDURE`/`DELETE_PROCEDURE` with `403-4` when a
+trigger, before hook or schedule of another definer reaches the procedure (see
+[simplejs.md](simplejs.md), *Triggers*): an edge forwards the raw request with its acting user, the
+handler runs the check once on the admin coordinator under that database's procedures lock, and
+peers install the resulting file without re-checking.
 
 `CALL_PROCEDURE` is placed exactly like `RUN_SCRIPT` (see *Scripts*).
 
@@ -386,6 +399,13 @@ membership machinery — serializes them:
    own indexes from its own documents. With `"primaryKey": true` each node also rebuilds its own
    `pk.idx` from its own page files; an entry the node could not version from its old `pk.idx`
    gets version 0, so anti-entropy lets any other node's copy or tombstone outrank it.
+   Every record a peer receives is checked before it is observed or applied: its key must
+   round-trip and name a valid database, collection, user, procedure or schedule for its kind
+   (the database not one of the reserved `admin`, `admin_pages`, `cluster`), and its version, and
+   a collection's incarnation, must not be more than `clusterMaxClockSkewMs` ahead of the
+   receiving node's wall clock. A record that fails is skipped with a warning and does **not**
+   make the merge incomplete: it is permanently invalid, and retrying it would keep admin
+   anti-entropy and the quorum count busy forever.
 3. A node without a write quorum rejects an admin op up front (`503-2`) — the same
    split-brain protection document writes get.
 4. A node that is not the coordinator refuses a coordinated admin op with `421-1` **before**
@@ -437,6 +457,21 @@ anti-entropy round, and it is decided per record:
   incarnation, quarantines a stale incarnation's folder, and builds or drops the indexes that
   differ from the record's index set — each under its `.building` marker. Removing a user prunes
   its database ownerships; removing a database or collection prunes the grants that named it.
+  Those local prunes keep each record's version. The coordinator's own `DROP_DATABASE`,
+  `DROP_COLLECTION` and `DELETE_USER` instead write the pruned user (or database) records at a new
+  version and replicate them with the drop, every user record for a drop and every database record
+  for a user removal. A node that missed both a drop and the re-create of the same name never
+  receives the tombstone, so only that newer version reaches it and removes the old grant.
+- **A changed password signs the user out on that node.** Installing a user record whose password
+  hash differs from the one this node held deauthenticates every socket connection of that user on
+  this node (their next request answers `401-1`), the same as `SET_PASSWORD` does on the node that
+  ran it. A record that only changes grants (same hash) signs nobody out, and a first install has
+  nobody to sign out. Forwarded and transaction-session clients are left alone, as for a deleted
+  user. One consequence is deliberate: a client that changed its **own** password through a node
+  other than the coordinator keeps its session when the op answers, then loses it on that node when
+  the replicated record lands, and must authenticate again with the new password. Telling it apart
+  would need the originating session carried in the admin record, a protocol change for a rare
+  operation, so the safe direction was chosen.
 - **A removal on a live `REPLICATE_ADMIN` runs the drop handler; a removal found by anti-entropy
   quarantines instead** (renames the folder aside, logging `Quarantined collection`/`Quarantined
   database`), because a stale node finding out late must never delete data it cannot prove was
@@ -630,7 +665,7 @@ then, drain the node's traffic at the load balancer first if that window matters
 **Testing failures between two statements.** Killing a process can only land *somewhere* in a
 critical section. To stop a node at one exact statement, the engine has a test-only fault seam:
 named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_ENTROPY_SNAPSHOTTED`,
-`PK_INDEX_REPLACED`, `PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
+`PK_INDEX_REPLACED`, `INDEX_BATCH_FLUSHED`, `PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
 inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
 suite turns it on for its throwaway nodes. See the
 [README](../README.md#fault-injection-testing-and-debugging-only) for the operations.
@@ -779,6 +814,10 @@ a tombstone is. A create never adopts an unregistered folder that still holds da
 that aside first, so a re-created name always starts empty. When the merge changed anything, a
 document reconciliation pass follows so freshly installed collections repopulate.
 
+Peer-supplied names and versions are validated here exactly as on the live path: a snapshot
+record with an invalid key or a version more than `clusterMaxClockSkewMs` ahead is skipped, and
+does not keep the node syncing.
+
 A definition a node could not read (a torn schema, triggers file, procedure or schedule) is left
 out of its snapshot. That is safe now that only a tombstone deletes: its peers keep their valid
 copies, and the node itself treats the torn file as absent, so the first peer copy it merges
@@ -845,6 +884,52 @@ The node-to-node channel reuses the client transport: line-delimited EJson over 
 whose `correlationId` lets one pooled connection multiplex many in-flight requests, and
 inbound messages whose `secret` does not match `clusterSecret` are rejected.
 
+**The channel authenticates before it parses.** Every outbound connection opens with one `HELLO`
+frame carrying the secret, sent without waiting for an answer. The listener reads that first line
+under a 4 KB cap and within `clusterHandshakeTimeoutMs`; a connection that stays silent, sends a
+longer line, sends anything other than a `HELLO`, or presents the wrong secret is closed without
+a reply. That read deadline is backed by an absolute one: a timer closes any connection still in
+its handshake at `clusterHandshakeTimeoutMs` plus one second, because a TLS handshake runs inside
+the first read and a peer dripping it one record at a time would otherwise reset the read timeout
+forever. Handshake failures are logged through the same rate limiter as the client port's
+pre-authentication warnings. At most 64 connections may be in that pre-authentication state at once, and at most 8 of
+them from one remote address; the next one is closed on accept. The per-address share keeps one
+flooding host from holding every slot while a restarted peer tries to rejoin. The `HELLO` line is
+parsed with the same 128-level nesting limit as a client request. Only after the handshake does the frame loop start, and every later line, in
+either direction, is capped at `clusterMaxFrameSize` (a larger frame closes the connection; the
+peer reconnects). The per-frame `secret` is still checked on every message. The secret must be at
+least 32 characters and is compared in constant time (`MessageDigest.isEqual`).
+
+**Mutual TLS.** With `clusterTlsEnabled=true` the cluster listener requires a client certificate
+(`needClientAuth`) and trusts exactly what the shared keystore trusts, which is also the key every
+node presents. A process without a certificate from that keystore (or its CA) fails the TLS
+handshake and is logged as `Rejected cluster connection: TLS handshake failed`. Outbound peer
+sockets pin the same protocols as the listeners (`TLSv1.3`, `TLSv1.2`). Hostname
+verification stays off, since nodes connect by advertised address; the guarantee is "holds a
+certificate the shared keystore trusts". With `clusterTlsEnabled=false` on a clustered node,
+startup logs a `SECURITY WARNING`.
+
+**Peer input is validated at every entry point, never trusted because the sender holds the
+secret.** `REPLICATE`, `REPLICATE_TX`, `DIGEST` and `PULL` must name a valid, non-reserved
+database and collection, and replicated document ids and delete ids must be valid ids; a payload
+that fails answers `ERROR` with `Rejected replicated payload: invalid collection or document id`.
+`REINDEX_BROADCAST` is re-validated. A forwarded request (`FORWARD_REQUEST`,
+`FORWARD_TX_REQUEST`) is re-validated and re-authorized for its `actingUser` on the target
+(`400-1`, `401-1` without a user, `401-2` for a user the target does not hold, `403-1`); a
+transaction rollback is always let through, so is a commit for a session that already holds a
+transaction (the user was checked when its ops were buffered, and refusing a re-sent COMMIT of a
+fenced slice would strand it), and script-run history writes on `script_runs` are exempt from the
+user check. A replicated admin record more than `clusterMaxClockSkewMs` ahead is deferred: it is
+not applied and `REPLICATE_ADMIN` answers `ERROR`, so the coordinator retries it once the clocks
+agree. A replicated version, delete version or collection incarnation more
+than `clusterMaxClockSkewMs` ahead of the receiving node's wall clock is refused and not observed
+into its write clock, so a forged near-`Long.MAX_VALUE` version cannot overflow it; the refusal is
+an `ERROR`, so the sender reports the replica as failed and a node whose clock is that far off is
+loud. Underneath all of this, the storage layer itself refuses an empty, `.`, `..` or
+separator-bearing name as a path segment. All of these protect against a stale or buggy peer and
+contain a secret holder; they do not make `actingUser` trustworthy, because whoever holds the
+secret chooses it.
+
 Every peer shares **one** connection, so what a node does with an inbound frame decides what the
 rest of that peer's traffic waits for. `ClusterConnectionHandler` answers replication, admin and 2PC
 messages on a single ordered executor and answers `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` concurrently beside it.
@@ -855,8 +940,16 @@ client's write be refused. They mutate nothing, and anti-entropy's two sides alr
 different instants, so nothing depends on where they sit in the stream. Replies may come back out of
 order; the peer dispatches them on `correlationId`.
 
+The client-port connection limits (`maxRequestSize` and the 64Kb pre-authentication line cap,
+`authTimeoutMs`, `transactionIdleTimeoutMs`, `maxConnections`) apply only to client sockets. They do not
+apply to peer connections on `clusterPort`, nor to forwarded requests and `txSessionId` sessions, which
+have no client socket on the participant: a participant's session is reaped by the existing `deadTimeoutMs`
+mechanism, and the edge's own idle-transaction rollback reaches it through the ordinary 2PC abort. The
+cluster listener has its own caps, described above.
+
 | Message (+ ack) | Carries | Purpose |
 |---|---|---|
+| `HELLO` (no ack) | `secret`, `sender` | the mandatory first frame of every connection |
 | `JOIN_REQUEST` / `JOIN_RESPONSE` | `sender`, `members` | discovery |
 | `GOSSIP` / `GOSSIP_ACK` | `sender`, `members` (+ heartbeat and telemetry) | membership, failure detection, script load |
 | `REPLICATE` | `replication`: `{dbName, collName, op: UPSERT\|DELETE, documents, ids, versions}` | document write replication |
@@ -878,8 +971,10 @@ See the *Clustering* row of the configuration table in the main
 `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`, `nodeId`,
 `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`, `deadTimeoutMs`,
 `deadProbeIntervalMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`, `readFallbackToLocal`,
-`scriptRoutingEnabled`, `scriptLocalityWeight`, `clusterTlsEnabled`, `clusterSecret`,
-`antiEntropyIntervalMs`, `tombstoneRetentionMs`.
+`scriptRoutingEnabled`, `scriptLocalityWeight`, `clusterTlsEnabled`, `clusterSecret` (at least 32
+characters when clustering is on), `clusterMaxFrameSize` (at least twice `maxRequestSize`),
+`clusterHandshakeTimeoutMs`, `clusterMaxClockSkewMs`, `antiEntropyIntervalMs`,
+`tombstoneRetentionMs`.
 
 Two classes of key have cluster-wide constraints: `scriptsEnabled` and the `script*`
 sandbox keys must be **uniform**, because the sandbox comes from the executing node; and
@@ -892,15 +987,20 @@ satisfies its own quorum, letting both sides of a partition accept divergent wri
 ## Operations runbook
 
 - **First node:** set `clusterEnabled=true`, a unique `clusterAdvertisedAddress`, a
-  non-blank `clusterSecret`, and leave `clusterSeeds` empty.
+  `clusterSecret` of at least 32 characters, and leave `clusterSeeds` empty.
 - **Additional nodes:** the same settings, with `clusterSeeds` pointing at one or more
   existing nodes. A new node joins automatically on start.
 - **Sizing:** set `clusterExpectedSize` to the steady-state node count.
-- **Security:** use a strong shared `clusterSecret`; enable `clusterTlsEnabled` with a
-  shared CA-issued keystore for encrypted inter-node traffic.
+- **Security:** use a strong shared `clusterSecret` (at least 32 characters, enforced at
+  startup) and enable `clusterTlsEnabled` with ONE keystore shared by every node: it is both
+  each node's identity and the trust store the cluster listener checks client certificates
+  against, so a node with a different keystore cannot join. Keep `clusterMaxClockSkewMs` above
+  the worst real clock skew between nodes (NTP keeps it far below the 1 hour default).
 - **Rolling upgrades:** every node must run the same build. Admin replication ships versioned
   records (`REPLICATE_ADMIN` and `ADMIN_SNAPSHOT` changed shape, and `REPLICATE_USER` is gone), so
   a node on an older build neither applies nor answers them; an older node also reports `0`
-  script load, which attracts placement it should not.
+  script load, which attracts placement it should not. The `HELLO` handshake, mutual TLS and the
+  32-character secret rule also require the same build everywhere: an older node never sends
+  `HELLO`, so a newer node closes its connections and mixed clusters do not form.
 - **Removing a node:** drain its traffic at the load balancer first — there is no LEAVE
   message, so peers wait out `deadTimeoutMs` before reassigning its collections.

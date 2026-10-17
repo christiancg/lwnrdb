@@ -26,7 +26,7 @@ public class DefinitionCacheTest {
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final BoundedLruCache<String> values = new BoundedLruCache<>(Integer.MAX_VALUE, Long.MAX_VALUE, _ -> 1L);
-    private final BoundedLruCache<Boolean> misses = new BoundedLruCache<>(Integer.MAX_VALUE, Long.MAX_VALUE, _ -> 1L);
+    private final PartitionedMissCache misses = new PartitionedMissCache(Integer.MAX_VALUE);
     private final CountDownLatch publishing = new CountDownLatch(1);
     private final CountDownLatch mayPublish = new CountDownLatch(1);
     private final AtomicInteger loaderThreadLookups = new AtomicInteger();

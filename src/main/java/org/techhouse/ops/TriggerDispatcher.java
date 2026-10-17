@@ -34,6 +34,7 @@ public final class TriggerDispatcher {
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final ScriptRunRegistry runRegistry = IocContainer.get(ScriptRunRegistry.class);
+    private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TriggerDispatcher.class);
 
@@ -71,16 +72,48 @@ public final class TriggerDispatcher {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             return;
         }
+        runAsDefiner(event, trigger, procedure);
+    }
+
+    private static void runAsDefiner(TriggerEvent event, TriggerDefinition trigger, ProcedureDefinition procedure) {
         final var definer = trigger.getDefiner();
-        if (definer == null || cache.getAdminUserEntry(definer) == null) {
+        final var refusal = DefinerAuthority.refusal(definer, event.getDbName(), event.getCollName());
+        if (refusal != null) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
-            final var reason = "definer '" + definer + "' no longer exists";
-            logger.warning("Trigger '" + event.getTriggerName() + "' not run: " + reason);
-            recordSkip(event, reason);
+            logger.warning("Trigger '" + event.getTriggerName() + "' not run: " + refusal);
+            recordSkip(event, refusal);
+            DefinerAuthority.disableTrigger(event.getDbName(), event.getCollName(), trigger, refusal);
             return;
         }
-        runOnCurrentEntries(event, trigger, procedure, definer);
+        switch (admission.acquireSlices(definer, event.getDbName())) {
+            case ScriptAdmission.Refusal limited -> deferForAdmission(event, limited.scope());
+            case ScriptAdmission.Permit permit -> {
+                try (permit) {
+                    runOnCurrentEntries(event, trigger, procedure, definer);
+                }
+            }
+        }
+    }
+
+    private static void deferForAdmission(TriggerEvent event, String scope) {
+        if (withinClusterRetryWindow(event)) {
+            final var delay = Math.max(1L, backoffFor(event.getAttempt()));
+            triggerExecutor.submitAfter(event.retry(event.getAttempt()), delay);
+            logger.info("Trigger '" + event.getTriggerName() + "' reached the " + scope
+                    + " script concurrency limit; retrying in " + delay + "ms without consuming an attempt");
+            return;
+        }
+        triggerExecutor.countFailure();
+        final var error = "ScriptConcurrencyLimit: the " + scope + " script concurrency limit was reached until the"
+                + " retry window closed";
+        if (event.getRunId() != null) {
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, event.getAttempt(), error, 0L);
+            triggerExecutor.countDeadLetter();
+        }
+        logger.warning(
+                "Trigger '" + event.getTriggerName() + "' was dead-lettered: " + error + "; runId=" + event.getRunId());
+        recordSkip(event, error);
     }
 
     private static void runOnCurrentEntries(TriggerEvent event, TriggerDefinition trigger,
@@ -300,7 +333,7 @@ public final class TriggerDispatcher {
                 base.reportUnhandledRejections(), base.fetchEnabled(), base.fetchHostAllowlist(),
                 base.maxResponseBytes(), base.fetchTimeoutMillis(), base.strictScriptGoal(), base.textImportEnabled(),
                 base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget(), -1,
-                base.cursorBatchSize(), base.cursorMaxBatchSize());
+                base.cursorBatchSize(), base.cursorMaxBatchSize(), base.fetchMaxConcurrent(), base.maxArrayLength());
     }
 
     private static JsonObject argsFor(TriggerEvent event, String definer) {

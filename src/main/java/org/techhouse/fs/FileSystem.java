@@ -1,16 +1,14 @@
 package org.techhouse.fs;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -19,9 +17,11 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
 
 public class FileSystem {
+    private final Configuration configuration = Configuration.getInstance();
     private final FilePaths paths = new FilePaths();
     private final IndexMarkers indexMarkers = new IndexMarkers(paths);
     private final TombstoneStore tombstones = new TombstoneStore(paths);
@@ -30,17 +30,26 @@ public class FileSystem {
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
-    private final CompactionJournal compactionJournal = new CompactionJournal(paths);
-    private final PageCompactor pageCompactor = new PageCompactor(paths, pkIndexStore, compactionJournal);
-    private final CompactionRecovery compactionRecovery = new CompactionRecovery(paths, pkIndexStore,
-            compactionJournal);
+    private final WriteIntentJournal writeIntentJournal = new WriteIntentJournal(paths);
+    private final PageVacuum pageVacuum = new PageVacuum(paths, pkIndexStore, writeIntentJournal);
+    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, writeIntentJournal,
+            pageVacuum);
+    private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore, pageVacuum);
+    private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
+            writeIntentJournal);
+    private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
+
+    public void onVacuum(Consumer<VacuumedPage> listener) {
+        pageVacuum.onVacuum(listener);
+    }
 
     public void createBaseDbPath() {
-        paths.useDbPath(Configuration.getInstance().getFilePath());
+        paths.useDbPath(configuration.getFilePath());
         final var directory = new File(paths.dbPath());
         if (!directory.exists()) {
-            var result = directory.mkdir();
-            if (!result) {
+            try {
+                OwnerOnly.createDirectories(directory.toPath());
+            } catch (IOException e) {
                 throw new DirectoryNotFoundException(directory.getAbsolutePath());
             }
         }
@@ -55,17 +64,17 @@ public class FileSystem {
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        final var pagesDatabases = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesDatabases = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        final var pagesCollections = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesCollections = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        final var pagesUsers = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesUsers = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_USERS_COLLECTION_NAME);
-        final var pagesCollectionUsage = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesCollectionUsage = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
-        final var pagesTransactions = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesTransactions = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        final var pagesTriggerRuns = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+        final var pagesTriggerRuns = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesDatabases);
         createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollections);
@@ -77,7 +86,12 @@ public class FileSystem {
 
     private void createAdminPagesFolder() {
         final var pagesFolder = paths.adminPagesFolder();
-        if (!pagesFolder.exists() && !pagesFolder.mkdirs()) {
+        if (pagesFolder.exists()) {
+            return;
+        }
+        try {
+            OwnerOnly.createDirectories(pagesFolder.toPath());
+        } catch (IOException e) {
             throw new DirectoryNotFoundException(pagesFolder.getAbsolutePath());
         }
     }
@@ -85,28 +99,30 @@ public class FileSystem {
     public boolean createDatabaseFolder(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
         if (!dbFolder.exists()) {
-            return dbFolder.mkdir();
+            return OwnerOnly.createDirectory(dbFolder.toPath());
         }
         return true;
     }
 
     public boolean deleteDatabase(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
-        return !dbFolder.exists() || FileTreeDeleter.delete(dbFolder);
+        final var deleted = isAbsent(dbFolder) || FileTreeDeleter.delete(dbFolder);
+        FileLocks.evictAllUnder(dbFolder);
+        return deleted;
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
-            if (collectionFolder.mkdir()) {
-                return collectionFile.createNewFile();
+            if (OwnerOnly.createDirectory(collectionFolder.toPath())) {
+                return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             } else {
                 return false;
             }
         } else {
             if (!collectionFile.exists()) {
-                return collectionFile.createNewFile();
+                return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             }
             return true;
         }
@@ -115,7 +131,13 @@ public class FileSystem {
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
-        return !collectionFolder.exists() || FileTreeDeleter.delete(collectionFolder);
+        final var deleted = isAbsent(collectionFolder) || FileTreeDeleter.delete(collectionFolder);
+        FileLocks.evictAllUnder(collectionFolder);
+        return deleted;
+    }
+
+    private static boolean isAbsent(File folder) {
+        return !Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS);
     }
 
     public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {
@@ -188,12 +210,33 @@ public class FileSystem {
         return folderQuarantine;
     }
 
+    public Path nodeIdFile() {
+        return nodeIdStore.file();
+    }
+
+    public String readNodeId() throws IOException {
+        return nodeIdStore.read();
+    }
+
+    public void writeNodeId(String nodeId) throws IOException {
+        nodeIdStore.write(nodeId);
+    }
+
     public TombstoneStore tombstones() {
         return tombstones;
     }
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
         return pkIndexStore.readWholePkIndexFile(dbName, collectionName);
+    }
+
+    public long pkIndexFileBytes(String dbName, String collectionName) {
+        return paths.pkIndexFile(dbName, collectionName).length();
+    }
+
+    public long indexFileBytes(String dbName, String collName, String fieldName, String indexTypeLabel) {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, indexTypeLabel);
+        return indexFile == null ? 0L : indexFile.length() + FilePaths.logFileOf(indexFile).length();
     }
 
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
@@ -211,126 +254,60 @@ public class FileSystem {
 
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
             final List<T> entries, final Function<? super T, Long> storagePageResolver) throws IOException {
-        final var indexEntries = new ArrayList<IndexedDbEntry>();
-        final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
-        final var lengthsBeforeAppend = new LinkedHashMap<File, Long>();
-        final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
-        try {
-            for (var groupedEntry : entrySet) {
-                final var page = groupedEntry.getKey();
-                final var pageEntries = groupedEntry.getValue();
-                final var file = paths.collectionPage(dbName, collName, page);
-                final var lock = FileLocks.lockFor(file).writeLock();
-                lock.lock();
-                try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
-                        Globals.BUFFER_SIZE)) {
-                    var currentOffset = file.length();
-                    lengthsBeforeAppend.putIfAbsent(file, currentOffset);
-                    final var separator = FileLocks.separatorBeforeAppend(file);
-                    writer.append(separator);
-                    currentOffset += separator.getBytes(StandardCharsets.UTF_8).length;
-                    for (var entry : pageEntries) {
-                        final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                        final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-                        final var length = bytes.length;
-                        writer.append(strData);
-                        final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, length,
-                                page, entry.getVersion());
-                        pkEntriesToIndex.add(pkEntry);
-                        final var indexedEntry = new IndexedDbEntry();
-                        indexedEntry.setIndex(pkEntry);
-                        indexedEntry.setCollectionName(collName);
-                        indexedEntry.setDatabaseName(dbName);
-                        indexedEntry.set_id(entry.get_id());
-                        indexedEntry.setData(entry.getData());
-                        indexedEntry.setVersion(entry.getVersion());
-                        indexEntries.add(indexedEntry);
-                        currentOffset += length;
-                    }
-                } finally {
-                    lock.unlock();
-                }
-            }
-            pkIndexStore.bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
-        } catch (IOException e) {
-            rollBackBulkAppends(lengthsBeforeAppend);
-            throw e;
-        }
-        return indexEntries;
+        return pageAppender.bulkInsert(dbName, collName, entries, storagePageResolver, DbEntry::encodeLine);
     }
 
-    private void rollBackBulkAppends(Map<File, Long> lengthsBeforeAppend) {
-        for (final var appended : lengthsBeforeAppend.entrySet()) {
-            final var lock = FileLocks.lockFor(appended.getKey()).writeLock();
-            lock.lock();
-            try {
-                FileLocks.truncateTo(appended.getKey(), appended.getValue());
-            } finally {
-                lock.unlock();
-            }
-        }
+    public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
+            final List<T> entries, final Function<? super T, Long> storagePageResolver,
+            final Function<? super T, byte[]> encodedLines) throws IOException {
+        return pageAppender.bulkInsert(dbName, collName, entries, storagePageResolver, encodedLines);
     }
 
     public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
-        final var dbName = entry.getDatabaseName();
-        final var collName = entry.getCollectionName();
-        final var page = entry.getPage();
-        final var file = paths.collectionPage(dbName, collName, page);
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
-        try {
-            final var strData = entry.toFileEntry() + Globals.NEWLINE;
-            final var length = strData.getBytes(StandardCharsets.UTF_8).length;
-            final var totalFileLength = file.length();
-            final var separator = FileLocks.separatorBeforeAppend(file);
-            try {
-                appendToPage(file, separator + strData);
-                return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(),
-                        totalFileLength + separator.getBytes(StandardCharsets.UTF_8).length, length, page,
-                        entry.getVersion());
-            } catch (IOException e) {
-                FileLocks.truncateTo(file, totalFileLength);
-                throw e;
-            }
-        } finally {
-            lock.unlock();
-        }
+        return pageAppender.insert(entry, entry.encodeLine());
     }
 
-    private void appendToPage(File file, String strData) throws IOException {
-        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
-            writer.append(strData);
-        }
+    public PkIndexEntry insertIntoCollection(DbEntry entry, byte[] encodedLine) throws IOException {
+        return pageAppender.insert(entry, encodedLine);
     }
 
-    public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
-        return pageCompactor.delete(pkIndexEntry);
+    public void deleteFromCollection(PkIndexEntry pkIndexEntry) throws IOException {
+        recordReplacer.delete(pkIndexEntry);
     }
 
-    public PkCompaction deleteForRelocation(PkIndexEntry source) {
-        return pageCompactor.deleteForRelocation(source);
+    public PkIndexEntry relocate(DbEntry entry, PkIndexEntry oldRow, long targetPage, byte[] encodedLine,
+            List<PkIndexEntry> residentRows) throws IOException {
+        entry.setPage(targetPage);
+        return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows);
     }
 
-    public PkIndexEntry insertRelocated(DbEntry entry, PkIndexEntry source) throws IOException {
-        pageCompactor.retargetRelocation(source, entry.getPage());
-        return insertIntoCollection(entry);
+    public List<PkIndexEntry> recoverWriteIntents() throws IOException {
+        return writeIntentRecovery.recoverAll();
     }
 
-    public void endRelocation(PkIndexEntry source) {
-        pageCompactor.endRelocation(source);
-    }
-
-    public List<PkIndexEntry> recoverInterruptedCompactions() throws IOException {
-        return compactionRecovery.recoverAll();
-    }
-
-    public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
+    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
-        return pageCompactor.bulkUpdate(dbName, collName, entries);
+        return bulkUpdateFromCollection(dbName, collName, entries, null, null);
     }
 
-    public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
-        return pageCompactor.update(entry, pkIndexEntry);
+    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
+            List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines) throws IOException {
+        return recordReplacer.bulkReplace(dbName, collName, entries, residentRows, encodedLines);
+    }
+
+    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
+        return updateFromCollection(entry, pkIndexEntry, entry.encodeLine(), null);
+    }
+
+    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
+            List<PkIndexEntry> residentRows) throws IOException {
+        return updateFromCollection(entry, pkIndexEntry, encodedLine, null, residentRows);
+    }
+
+    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
+            PagePlacement placement, List<PkIndexEntry> residentRows) throws IOException {
+        return recordReplacer.replace(entry, encodedLine, pkIndexEntry, pkIndexEntry.getPage(), placement,
+                residentRows);
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
@@ -343,14 +320,14 @@ public class FileSystem {
         fieldIndexStore.writeHashIndexFile(dbName, collName, fieldName, kind, entries);
     }
 
-    public void updateHashIndexFiles(String dbName, String collName, String fieldName, IndexKind kind,
-            FieldIndexEntry<String> insertedEntry, FieldIndexEntry<String> removedEntry) throws IOException {
-        fieldIndexStore.updateHashIndexFiles(dbName, collName, fieldName, kind, insertedEntry, removedEntry);
+    public boolean indexTypeFileExists(String dbName, String collName, String fieldName, String typeLabel) {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
+        return indexFile != null && (indexFile.exists() || FilePaths.logFileOf(indexFile).exists());
     }
 
-    public <T, K> void updateIndexFiles(String dbName, String collName, String fieldName,
-            FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry) throws IOException {
-        fieldIndexStore.updateIndexFiles(dbName, collName, fieldName, insertedEntry, removedEntry);
+    public void appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors) throws IOException {
+        fieldIndexStore.appendIndexLog(dbName, collName, fieldName, typeLabel, changes, survivors);
     }
 
     public boolean dropIndex(String dbName, String collName, String fieldName) {
@@ -384,6 +361,10 @@ public class FileSystem {
         return documentPageStore.pageFileLengths(dbName, collName);
     }
 
+    public long pageFileLength(String dbName, String collName, long page) {
+        return paths.collectionPage(dbName, collName, page).length();
+    }
+
     public void healTornPageTails(String dbName, String collName) throws IOException {
         TornPageTail.healAll(paths, dbName, collName, pageFileLengths(dbName, collName).keySet(),
                 () -> readWholePkIndexFile(dbName, collName));
@@ -395,9 +376,9 @@ public class FileSystem {
 
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
-            compactionRecovery.recoverPagesOf(dbName, collName);
+            writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
-            refuseStaleCompactionMarkers(dbName, collName);
+            refuseStaleWriteIntents(dbName, collName);
         }
         return PkIndexRebuild.plan(paths, pkIndexStore, dbName, collName, pageFileLengths(dbName, collName).keySet());
     }
@@ -406,12 +387,13 @@ public class FileSystem {
         PkIndexRebuild.apply(pkIndexStore, dbName, collName, rebuild);
     }
 
-    private void refuseStaleCompactionMarkers(String dbName, String collName) throws IOException {
-        final var stale = compactionRecovery.replayableMarkersOf(dbName, collName);
+    private void refuseStaleWriteIntents(String dbName, String collName) throws IOException {
+        final var stale = writeIntentRecovery.replayableMarkersOf(dbName, collName);
         if (!stale.isEmpty()) {
-            throw PkIndexRebuild.refused(dbName, collName, "compaction marker(s) " + stale + " were left by writes"
-                    + " this process could not clean up after; their saved tails are stale, and replaying one would"
-                    + " truncate every record written since. Fix what stopped their removal, then delete them");
+            throw PkIndexRebuild.refused(dbName, collName, "write intent(s) " + stale + " were left by writes this"
+                    + " process could not clean up after, and a rebuild would freeze whatever half of each write the"
+                    + " pages hold. Restart the server, which recovers them, or fix what stopped their removal and"
+                    + " delete them");
         }
     }
 

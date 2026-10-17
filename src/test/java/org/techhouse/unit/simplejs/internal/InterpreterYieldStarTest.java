@@ -181,7 +181,7 @@ public class InterpreterYieldStarTest {
             if (i > 0) {
                 sb.append('|');
             }
-            sb.append(org.techhouse.simplejs.internal.JsCoercion.toStr(array.get(i)));
+            sb.append(org.techhouse.simplejs.internal.JsCoercion.toStrDataOnly(array.get(i)));
         }
         return sb.toString();
     }

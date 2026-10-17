@@ -52,14 +52,17 @@ public class ProcedureDefinition extends StoredDefinition {
         if (description != null) {
             json.add(DESCRIPTION_FIELD, new JsonString(description));
         }
-        json.add(ENABLED_FIELD, new JsonBoolean(enabled));
+        json.add(ENABLED_FIELD, JsonBoolean.of(enabled));
         writeAuditFields(json);
         return json;
     }
 
-    public JsonObject toSummaryJson() {
+    public JsonObject toSummaryJson(boolean includeSourceHash) {
         final var json = toJsonObject();
         json.remove(SOURCE_FIELD);
+        if (!includeSourceHash) {
+            json.remove(SOURCE_HASH_FIELD);
+        }
         return json;
     }
 

@@ -74,6 +74,8 @@ public class TransactionClusteringTest {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.resetClients();
+        TestUtils.ensureAdminUser("admin");
+        TestUtils.ensureAdminUser("alice");
         origEnabled = config.isClusterEnabled();
         origExpected = config.getClusterExpectedSize();
         origReplicator = TestUtils.getPrivateField(coordinator, "replicator", Replicator.class);

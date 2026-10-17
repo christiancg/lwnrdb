@@ -2,7 +2,6 @@ package org.techhouse.unit.simplejs.builtins;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Map;
@@ -147,7 +146,7 @@ public class FetchBuiltinsTest {
         };
         final var source = "try { await fetch('http://x/'); return 'no'; } catch (e) { return e.message; }";
         final var result = run(source, failing, fetchLimits());
-        assertTrue(result.getValue().asJsonString().getValue().contains("connection refused"));
+        assertEquals("fetch failed", result.getValue().asJsonString().getValue());
     }
 
     @Test

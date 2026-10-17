@@ -1,42 +1,24 @@
 package org.techhouse.analyze;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicLong;
 import org.techhouse.config.Globals;
 
-/**
- * Safe as a ThreadLocal because an aggregation pipeline runs sequentially on the connection's virtual thread.
- */
 public final class AnalyzeContext {
-    private static final ThreadLocal<AnalyzeContext> CURRENT = new ThreadLocal<>();
-
-    private final AtomicLong documentsScanned = new AtomicLong();
-    private final Set<String> indexesUsed = ConcurrentHashMap.newKeySet();
-    private final List<String> locksAcquired = new CopyOnWriteArrayList<>();
-    private final AtomicLong scriptInvocations = new AtomicLong();
-    private final AtomicLong scriptNanos = new AtomicLong();
-
-    public static AnalyzeContext current() {
-        return CURRENT.get();
-    }
-
-    public static void set(AnalyzeContext context) {
-        CURRENT.set(context);
-    }
-
-    public static void clear() {
-        CURRENT.remove();
-    }
+    private final Set<String> indexesUsed = new HashSet<>();
+    private final List<String> locksAcquired = new ArrayList<>();
+    private long documentsScanned;
+    private long scriptInvocations;
+    private long scriptNanos;
 
     public static String fieldLockId(String dbName, String collName, String fieldName) {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR + fieldName;
     }
 
     public void addScanned(long count) {
-        documentsScanned.addAndGet(count);
+        documentsScanned += count;
     }
 
     public void addIndexUsed(String fieldName) {
@@ -48,20 +30,20 @@ public final class AnalyzeContext {
     }
 
     public void recordScriptInvocation(long nanos) {
-        scriptInvocations.incrementAndGet();
-        scriptNanos.addAndGet(nanos);
+        scriptInvocations++;
+        scriptNanos += nanos;
     }
 
     public long getScriptInvocations() {
-        return scriptInvocations.get();
+        return scriptInvocations;
     }
 
     public long getScriptMillis() {
-        return scriptNanos.get() / 1_000_000L;
+        return scriptNanos / 1_000_000L;
     }
 
     public long getDocumentsScanned() {
-        return documentsScanned.get();
+        return documentsScanned;
     }
 
     public Set<String> getIndexesUsed() {

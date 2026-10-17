@@ -28,14 +28,15 @@ public class SimpleJsInternalErrorTest {
     }
 
     @Test
-    public void test_an_unmapped_runtime_exception_becomes_a_script_error() {
+    public void test_an_unmapped_runtime_exception_is_reported_generically() {
         final var result = run("""
                 import db from "db";
                 db.findById("d", "c", "x");
                 """);
         assertTrue(result.isError());
         assertEquals(INTERNAL_ERROR, result.getErrorName());
-        assertTrue(result.getErrorMessage().contains("IndexOutOfBoundsException"), result.getErrorMessage());
+        assertEquals("Internal script error", result.getErrorMessage());
+        assertFalse(result.getErrorMessage().contains("IndexOutOfBoundsException"), result.getErrorMessage());
     }
 
     @Test

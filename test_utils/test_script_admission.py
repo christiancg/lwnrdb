@@ -9,7 +9,7 @@ from base_utils import check, check_code, check_result, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ADMISSION_TEST_PORT", "8997"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "admission_test_db"
 COLL = "docs"
@@ -21,6 +21,7 @@ bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSW
 CAPACITY = 2
 CALLERS = 6
 PER_USER_CAPACITY = 2
+PER_DATABASE_CAPACITY = 3
 SLOW_SCRIPT_MS = 600
 LONG_WAIT_MS = 10_000
 
@@ -150,6 +151,7 @@ def write_config(work_dir: str, capacity: int, queue_wait_ms: int, per_user: int
                     scriptMaxMemoryBytes=MAX_MEMORY_BYTES, scriptMaxSourceBytes=MAX_SOURCE_BYTES,
                     scriptInstructionBudget=10000000, scriptMaxDepth=200, triggersEnabled=True,
                     triggerThreads=2, schedulesEnabled=True, scheduleThreads=2, scheduleTickMs=200,
+                    scheduleMinIntervalMs=100,
                     scriptTimeZone="UTC", scriptLocale="en-US")
 
 
@@ -387,7 +389,7 @@ def test_wait_absorbs_the_burst(conn: Conn):
     check("every permit came back", await_available(conn, CAPACITY) == CAPACITY)
 
 
-def test_wait_may_exceed_the_run_timeout(conn: Conn):
+def test_wait_may_exceed_the_run_timeout():
     section("The wait is not bounded by the run timeout")
     check(f"the configured wait ({LONG_WAIT_MS}ms) exceeds scriptTimeoutMs ({TIMEOUT_MS}ms)",
           LONG_WAIT_MS > TIMEOUT_MS)
@@ -397,7 +399,7 @@ def test_wait_may_exceed_the_run_timeout(conn: Conn):
           f"only {len(burst.ok)} of {CAPACITY + 1} succeeded; rejected={len(burst.rejected)}")
 
 
-def test_per_user_cap(conn: Conn):
+def test_per_user_cap():
     section("A per-user cap under a generous node-wide cap")
     one_user = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
                           credentials=[TENANTS[0]])
@@ -433,21 +435,123 @@ def test_a_tenant_refusal_frees_the_node_permit(conn: Conn):
           stats.get("capacityPerUser") == PER_USER_CAPACITY and "capacityPerDatabase" in stats, f"got {stats}")
 
 
-def test_tenant_caps_exempt_triggers_and_schedules(conn: Conn):
-    section("Triggers and schedules are exempt from the tenant caps too")
-    check_status("install a trigger", conn.save_trigger("audit_writes", "audit", ["CREATED", "UPDATED"]), "OK")
-    saturate = threading.Thread(
-        target=lambda: fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
-                                  credentials=[TENANTS[0]]))
-    saturate.start()
-    check_status("a write still succeeds while the caps are saturated",
-                 conn.save_doc({"_id": "tenant_fired", "n": 1}), "OK")
-    saturate.join(120)
-    check("the trigger ran anyway", await_doc(conn, "tenant_fired", AUDIT_COLL) is not None,
-          "the trigger never wrote its audit row")
+def schedule_stats(conn: Conn) -> dict:
+    return conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("schedules", {})
+
+
+def test_triggers_and_schedules_take_their_definers_slice(conn: Conn):
+    section("Triggers and schedules take their definer's per-user slice")
+    username, password = TENANTS[0]
+    with Conn() as tenant:
+        tenant.authenticate(username, password)
+        check_status("the tenant installs a trigger",
+                     tenant.save_trigger("tenant_audit", "audit", ["CREATED"]), "OK")
+
+    holders = []
+    started = threading.Barrier(PER_USER_CAPACITY + 1)
+
+    def holder():
+        with Conn() as held:
+            held.authenticate(username, password)
+            started.wait()
+            held.run(f"export default new Promise(r => setTimeout(() => r(1), {SLOW_SCRIPT_MS * 5}));")
+
+    for _ in range(PER_USER_CAPACITY):
+        thread = threading.Thread(target=holder)
+        thread.start()
+        holders.append(thread)
+    started.wait()
+    check("the tenant's slice is full",
+          bu.wait_until(lambda: conn.script_stats().get("running") == PER_USER_CAPACITY, 10.0, 0.05),
+          f"running={conn.script_stats().get('running')}")
+    skipped_before = schedule_stats(conn).get("skipped", 0)
+    check_status("an admin write fires the tenant's trigger", conn.save_doc({"_id": "slice-deferred", "n": 1}),
+                 "OK")
+    with Conn() as tenant:
+        tenant.authenticate(username, password)
+        check_status("the tenant installs a fast schedule", tenant.save_schedule(
+            "tenant_tick", "tick", intervalMs=200, args={"id": "slice-skipped"}), "OK")
+    time.sleep(0.8)
+    check("the trigger waits for its definer's slice",
+          conn.find("slice-deferred", coll=AUDIT_COLL).get("status") == "NOT_FOUND",
+          "the trigger ran past a full per-user slice")
+    check("the scheduled run is skipped while the slice is full",
+          conn.find("slice-skipped", coll=TICKS_COLL).get("status") == "NOT_FOUND"
+          and schedule_stats(conn).get("skipped", 0) > skipped_before,
+          f"stats={schedule_stats(conn)}")
+
+    for thread in holders:
+        thread.join(120)
+    check("the deferred trigger runs once the slice frees, so it was delayed, not dropped",
+          await_doc(conn, "slice-deferred", AUDIT_COLL) is not None, "the audit row never appeared")
+    check("and the schedule fires again", await_doc(conn, "slice-skipped", TICKS_COLL) is not None,
+          "the tick row never appeared")
+    check_status("remove the schedule", conn.delete_schedule("tenant_tick"), "OK")
     check_status("remove the trigger",
                  conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
-                            "name": "audit_writes"}), "OK")
+                            "name": "tenant_audit"}), "OK")
+
+
+def test_per_database_cap(conn: Conn):
+    section("A per-database cap across two users")
+    rejected_before = conn.script_stats().get("rejectedPerDatabase") or 0
+    burst = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT}, credentials=TENANTS)
+    check("every caller got a response", len(burst.responses) == CALLERS, f"got {len(burst.responses)}")
+    check(f"no more than {PER_DATABASE_CAPACITY} runs in the database overlapped",
+          0 < burst.peak_running <= PER_DATABASE_CAPACITY, f"scripts.running peaked at {burst.peak_running}")
+    check("the database slice refused some of them",
+          (conn.script_stats().get("rejectedPerDatabase") or 0) > rejected_before, f"got {conn.script_stats()}")
+
+
+ORDINARY_RUNNERS = [("runner_a", "password123"), ("runner_b", "password123")]
+DB_OWNER = ("db_owner_c", "password123")
+
+
+def create_ordinary_runners(conn: Conn):
+    for username, password in ORDINARY_RUNNERS + [DB_OWNER]:
+        conn.send({"type": "DELETE_USER", "username": username})
+        check_status(f"create {username}",
+                     conn.send({"type": "CREATE_USER", "username": username, "password": password,
+                                "admin": False, "globalPermissions": [], "databasePermissions": {DB: "READ"},
+                                "collectionPermissions": {}, "scriptPermissions": {DB: "RUN"}}), "OK")
+    check_status("make db_owner_c an owner of the database",
+                 conn.send({"type": "SET_DATABASE_OWNERS", "databaseName": DB, "owners": [DB_OWNER[0]]}), "OK")
+
+
+def test_owner_keeps_a_database_slot_when_users_fill_it(conn: Conn):
+    section(f"The last of {PER_DATABASE_CAPACITY} database slots is kept for owners and admins")
+    create_ordinary_runners(conn)
+    holders = []
+    started = threading.Barrier(len(ORDINARY_RUNNERS) + 1)
+
+    def holder(holder_name: str, holder_password: str):
+        with Conn() as held:
+            held.authenticate(holder_name, holder_password)
+            started.wait()
+            held.run(f"export default new Promise(r => setTimeout(() => r(1), {SLOW_SCRIPT_MS * 5}));")
+
+    for username, password in ORDINARY_RUNNERS:
+        thread = threading.Thread(target=holder, args=(username, password))
+        thread.start()
+        holders.append(thread)
+    started.wait()
+    check("ordinary users hold every shared slot",
+          bu.wait_until(lambda: conn.script_stats().get("running") == len(ORDINARY_RUNNERS), 10.0, 0.05),
+          f"running={conn.script_stats().get('running')}")
+    with Conn() as runner:
+        runner.authenticate(*ORDINARY_RUNNERS[0])
+        refused = runner.run("export default 7;")
+        check_code("a third ordinary run is refused at the database slice", refused, "ERROR", "503-6")
+        check("the refusal names the database scope", "database" in (refused.get("message") or ""),
+              f"got {refused.get('message')!r}")
+    with Conn() as owner:
+        owner.authenticate(*DB_OWNER)
+        check_result("the database owner still runs in the reserved slot", owner.run("export default 7;"), 7)
+    check_result("so does an admin", conn.run("export default 7;"), 7)
+    for thread in holders:
+        thread.join(120)
+    check_status("clear the database owners",
+                 conn.send({"type": "SET_DATABASE_OWNERS", "databaseName": DB, "owners": []}), "OK")
 
 
 def test_cap_disabled(conn: Conn):
@@ -508,19 +612,22 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_wait_absorbs_the_burst(conn)
-            test_wait_may_exceed_the_run_timeout(conn)
+            test_wait_may_exceed_the_run_timeout()
 
         bu.stop_server(proc)
         proc = None
 
-        write_config(work_dir, capacity=CALLERS * 2, queue_wait_ms=0, per_user=PER_USER_CAPACITY)
+        write_config(work_dir, capacity=CALLERS * 2, queue_wait_ms=0, per_user=PER_USER_CAPACITY,
+                     per_database=PER_DATABASE_CAPACITY)
         print(f"\n  Restarting server (per-user cap {PER_USER_CAPACITY}) on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             create_tenants(conn)
-            test_per_user_cap(conn)
+            test_per_user_cap()
             test_a_tenant_refusal_frees_the_node_permit(conn)
-            test_tenant_caps_exempt_triggers_and_schedules(conn)
+            test_triggers_and_schedules_take_their_definers_slice(conn)
+            test_per_database_cap(conn)
+            test_owner_keeps_a_database_slot_when_users_fill_it(conn)
 
         bu.stop_server(proc)
         proc = None

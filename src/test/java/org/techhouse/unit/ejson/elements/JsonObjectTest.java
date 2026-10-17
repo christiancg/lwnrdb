@@ -2,6 +2,7 @@ package org.techhouse.unit.ejson.elements;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -173,7 +174,7 @@ public class JsonObjectTest {
         jsonObject.addProperty(propertyName, testValue);
 
         JsonNumber storedValue = (JsonNumber) jsonObject.get(propertyName);
-        assertEquals(testValue, storedValue.getValue());
+        assertEquals(testValue.doubleValue(), storedValue.doubleValue());
         assertEquals(testValue.intValue(), storedValue.asInteger());
     }
 
@@ -196,7 +197,7 @@ public class JsonObjectTest {
         jsonObject.addProperty(property, value);
 
         JsonNumber result = (JsonNumber) jsonObject.get(property);
-        assertEquals(value, result.getValue());
+        assertEquals(value.doubleValue(), result.doubleValue());
     }
 
     @Test
@@ -235,7 +236,7 @@ public class JsonObjectTest {
         JsonObject jsonObject = new JsonObject();
         jsonObject.add("key1", new JsonString("value1"));
         jsonObject.add("key2", new JsonNumber(123));
-        jsonObject.add("key3", new JsonBoolean(true));
+        jsonObject.add("key3", JsonBoolean.of(true));
 
         Set<Map.Entry<String, JsonBaseElement>> entries = jsonObject.entrySet();
 
@@ -243,7 +244,7 @@ public class JsonObjectTest {
         assertTrue(entries.stream()
                 .anyMatch(e -> e.getKey().equals("key1") && e.getValue().asJsonString().getValue().equals("value1")));
         assertTrue(entries.stream()
-                .anyMatch(e -> e.getKey().equals("key2") && e.getValue().asJsonNumber().getValue().equals(123)));
+                .anyMatch(e -> e.getKey().equals("key2") && e.getValue().asJsonNumber().doubleValue() == 123));
         assertTrue(entries.stream()
                 .anyMatch(e -> e.getKey().equals("key3") && e.getValue().asJsonBoolean().getValue().equals(true)));
     }
@@ -407,5 +408,52 @@ public class JsonObjectTest {
 
         JsonBoolean result = (JsonBoolean) jsonObject.get("isEnabled");
         assertEquals(true, result.getValue());
+    }
+
+    @Test
+    public void test_copy_for_writes_deep_copies_only_the_written_roots() {
+        final var nested = new JsonObject();
+        nested.addProperty("inner", 1);
+        final var kept = new JsonObject();
+        kept.addProperty("inner", 2);
+        final var source = new JsonObject();
+        source.add("written", nested);
+        source.add("kept", kept);
+
+        final var copy = source.copyForWrites(Set.of("written"));
+
+        assertNotSame(source, copy);
+        assertEquals(source, copy);
+        assertNotSame(nested, copy.get("written"));
+        assertSame(kept, copy.get("kept"));
+    }
+
+    @Test
+    public void test_copy_for_writes_keeps_member_order() {
+        final var source = new JsonObject();
+        source.addProperty("b", 1);
+        source.addProperty("a", 2);
+        source.addProperty("c", 3);
+
+        final var copy = source.copyForWrites(Set.of("a"));
+
+        assertEquals(List.of("b", "a", "c"), copy.entrySet().stream().map(Map.Entry::getKey).toList());
+    }
+
+    @Test
+    public void test_copy_without_drops_only_that_key_and_shares_the_rest() {
+        final var nested = new JsonObject();
+        final var source = new JsonObject();
+        source.addProperty("_id", "x");
+        source.add("nested", nested);
+        source.addProperty("n", 1);
+
+        final var copy = source.copyWithout("_id");
+
+        assertFalse(copy.has("_id"));
+        assertTrue(source.has("_id"));
+        assertSame(nested, copy.get("nested"));
+        assertEquals(2, copy.size());
+        assertEquals(source.copyWithout("missing"), source);
     }
 }

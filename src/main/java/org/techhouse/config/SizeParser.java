@@ -32,6 +32,10 @@ public class SizeParser {
             case "tb" -> 1024L * 1024L * 1024L * 1024L;
             default -> throw new IllegalArgumentException("Unknown size unit: " + unitPart);
         };
-        return numericPart * multiplier;
+        try {
+            return Math.multiplyExact(numericPart, multiplier);
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException("Size value overflows: " + input, e);
+        }
     }
 }

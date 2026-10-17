@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Set;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.ex.PkRebuildRefusedException;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
@@ -34,6 +36,7 @@ public final class IndexOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private IndexOperationHelper() {
     }
@@ -57,6 +60,12 @@ public final class IndexOperationHelper {
                     if (colliding != null) {
                         return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.NAME_COLLIDES_ON_DISK,
                                 colliding);
+                    }
+                    final var maxIndexes = configuration.intValue(ConfigKey.MAX_INDEXES_PER_COLLECTION);
+                    if (cache.getIndexesForCollection(dbName, collName).size() >= maxIndexes) {
+                        return new OperationResponse(OperationType.CREATE_INDEX,
+                                ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION.getDefaultMessage() + " (" + maxIndexes + ")",
+                                ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION);
                     }
                     fs.indexMarkers().mark(dbName, collName, fieldName);
                     IndexHelper.createIndex(dbName, collName, fieldName);

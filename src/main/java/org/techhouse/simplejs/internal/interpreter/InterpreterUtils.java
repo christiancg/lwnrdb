@@ -67,11 +67,10 @@ public final class InterpreterUtils {
 
     public static boolean isAnonymousFunctionDefinition(JsNode node) {
         return switch (node) {
-            case null -> false;
             case ArrowFunctionExpression ignored -> true;
             case FunctionExpression function -> function.getName() == null;
             case ClassExpression classExpression -> classExpression.getId() == null;
-            default -> false;
+            case null, default -> false;
         };
     }
 
@@ -194,7 +193,8 @@ public final class InterpreterUtils {
         return switch (key.getType()) {
             case IDENTIFIER -> ((Identifier) key).getName();
             case STRING_LITERAL -> ((StringLiteral) key).getValue();
-            case NUMBER_LITERAL -> JsCoercion.toStr(new JsNumber(((NumberLiteral) key).getValue().doubleValue()));
+            case NUMBER_LITERAL ->
+                JsCoercion.toStrDataOnly(new JsNumber(((NumberLiteral) key).getValue().doubleValue()));
             default -> throw new UnsupportedNodeException(key.getType().name());
         };
     }
@@ -207,6 +207,10 @@ public final class InterpreterUtils {
     }
 
     public static List<JsValue> arrayLikeElements(JsValue value) {
+        return primitiveArrayLikeElements(value, null);
+    }
+
+    private static List<JsValue> primitiveArrayLikeElements(JsValue value, InterpreterOps ops) {
         if (value instanceof JsArray array) {
             return array.getElements();
         }
@@ -214,7 +218,7 @@ public final class InterpreterUtils {
             return arguments.snapshot();
         }
         if (value instanceof JsTypedArray typed) {
-            return TypedArrayBuiltins.elements(typed);
+            return TypedArrayBuiltins.elements(typed, ops);
         }
         if (value instanceof JsString string) {
             final var chars = new ArrayList<JsValue>();
@@ -223,17 +227,18 @@ public final class InterpreterUtils {
             }
             return chars;
         }
-        throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
+        throw new TypeErrorException(JsCoercion.describe(value) + " is not iterable");
     }
 
     public static List<JsValue> arrayLikeElements(JsValue value, InterpreterOps ops, boolean fromEnd) {
         if (ops == null || !(value instanceof JsObject || value instanceof JsProxy)) {
-            return arrayLikeElements(value);
+            return primitiveArrayLikeElements(value, ops);
         }
         final var length = toLength(ops.getMember(value, new JsString("length")), ops);
         InterpreterOps.chargeElements(ops, length);
         final var elements = new ArrayList<JsValue>(length);
         for (var i = 0; i < length; i++) {
+            InterpreterOps.pace(ops, i);
             final var index = fromEnd ? length - 1 - i : i;
             final var key = new JsString(Integer.toString(index));
             final var element = ops.getMember(value, key);
@@ -334,7 +339,7 @@ public final class InterpreterUtils {
 
     public static TypeErrorException cannotReadProperties(JsValue target, String key) {
         return new TypeErrorException(
-                "Cannot read properties of " + JsCoercion.toStr(target) + " (reading '" + key + "')");
+                "Cannot read properties of " + JsCoercion.describe(target) + " (reading '" + key + "')");
     }
 
     public static JsValue stepResult(Coroutine.StepResult step) {
@@ -349,10 +354,6 @@ public final class InterpreterUtils {
         result.set("value", value);
         result.set("done", JsBoolean.of(done));
         return result;
-    }
-
-    public static JsValue toErrorValue(RuntimeException error) {
-        return toErrorValue(error, null);
     }
 
     public static JsValue toErrorValue(RuntimeException error, Intrinsics intrinsics) {

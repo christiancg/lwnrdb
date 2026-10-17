@@ -5,7 +5,6 @@ import static org.techhouse.simplejs.host.ScriptErrorNames.RESULT_TOO_LARGE;
 import java.io.IOException;
 import java.util.Comparator;
 import java.util.stream.Stream;
-import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -47,14 +46,14 @@ public final class ReduceOperatorHelper {
     }
 
     public static Stream<JsonObject> processReduceStep(ReduceAggregationStep step, Stream<JsonObject> resultStream,
-            String dbName, String collName, PipelineScriptContext context) throws IOException {
+            String dbName, String collName, PipelineContext context) throws IOException {
         final var callable = context.callableFor(step.getScript());
         var accumulator = step.getInitialValue() == null ? JsonNull.INSTANCE : step.getInitialValue();
         try (var stream = resultStream != null
                 ? resultStream
-                : cache.streamCollectionInScanOrder(dbName, collName).map(DbEntry::getData)) {
+                : context.scan(cache.streamCollectionInScanOrder(dbName, collName)).map(DbEntry::getData)) {
+            final var analyze = context.analyze();
             for (final var document : (Iterable<JsonObject>) stream::iterator) {
-                final var analyze = AnalyzeContext.current();
                 final var start = analyze == null ? 0 : System.nanoTime();
                 accumulator = callable.apply(accumulator, document);
                 if (analyze != null) {

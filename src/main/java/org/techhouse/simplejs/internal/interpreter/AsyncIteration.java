@@ -40,7 +40,7 @@ public final class AsyncIteration {
         }
         final var syncMethod = interp.getMemberByKey(source, JsSymbol.ITERATOR);
         if (isNullish(syncMethod)) {
-            throw new TypeErrorException(JsCoercion.toStr(source) + " is not async iterable");
+            throw new TypeErrorException(JsCoercion.describe(source) + " is not async iterable");
         }
         final var opened = openWith(interp, source, syncMethod, "Symbol.iterator");
         return new AsyncIteration(interp, opened, interp.getMember(opened, "next"), true);

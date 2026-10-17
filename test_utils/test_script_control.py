@@ -11,7 +11,7 @@ from base_utils import check, check_code, check_status, section
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCRIPT_CONTROL_TEST_PORT", "8998"))
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "script_control_db"
 COLL = "docs"
@@ -57,11 +57,11 @@ class Conn(bu.Conn):
 
     def stats(self) -> dict:
         response = self.send({"type": "GET_DATABASE_STATS"})
-        return ((response.get("stats") or {}).get("scripts") or {})
+        return (response.get("stats") or {}).get("scripts") or {}
 
     def trigger_stats(self) -> dict:
         response = self.send({"type": "GET_DATABASE_STATS"})
-        return ((response.get("stats") or {}).get("triggers") or {})
+        return (response.get("stats") or {}).get("triggers") or {}
 
 def admin_conn(timeout=60) -> Conn:
     conn = Conn(timeout=timeout)
@@ -126,7 +126,8 @@ def write_config(work_dir: str):
                     scriptLocale="en-US", procedureCacheSize=16, triggersEnabled=True, triggerThreads=2,
                     triggerQueueSize=1000, triggerMaxDepth=3, triggerTimeoutMs=TIMEOUT_MS,
                     triggerRunLogEnabled=True, schedulesEnabled=True, scheduleTickMs=TICK_MS,
-                    scheduleRefreshMs=2000, scheduleTimeoutMs=TIMEOUT_MS, maxConcurrentScripts=8)
+                    scheduleRefreshMs=2000, scheduleTimeoutMs=TIMEOUT_MS, maxConcurrentScripts=8,
+                    scheduleMinIntervalMs=100)
 
 
 def setup_data(conn: Conn):
@@ -275,6 +276,21 @@ def test_a_parked_run_is_cancelled_promptly(conn: Conn):
     check_code("the caller receives 408-2", background.response or {}, "ERROR", "408-2")
 
 
+def test_a_native_scan_is_cancelled_promptly(conn: Conn):
+    section("A run inside a long native scan is cancelled promptly")
+    background = BackgroundRun(lambda c: c.run("return new Array(2 ** 32 - 1).indexOf(1);"))
+    row = await_one_run(conn)
+    check("the scanning run is listed", bool(row))
+    time.sleep(0.5)
+    started = time.time()
+    check("CANCEL_SCRIPT reports it as cancelled",
+          conn.cancel(row["runId"]).get("cancelled") is True if row else False)
+    returned = background.join(30.0)
+    elapsed = time.time() - started
+    check("the scan returned promptly", returned and elapsed < 5.0, f"took {time.time() - started:.1f}s")
+    check_code("the caller receives 408-2", background.response or {}, "ERROR", "408-2")
+
+
 def test_cancelling_a_transactional_script(conn: Conn):
     section("A cancelled db.transaction is rolled back")
     script = ("import db from \"db\";\n"
@@ -304,8 +320,8 @@ def test_reports_several_concurrent_runs(conn: Conn):
     second = BackgroundRun(lambda c: c.call("slow"))
 
     def _two():
-        rows = conn.list_scripts().get("scripts") or []
-        return rows if len(rows) == 2 else None
+        listed = conn.list_scripts().get("scripts") or []
+        return listed if len(listed) == 2 else None
 
     rows = bu.wait_until(_two, 30.0, 0.1)
     check("both runs are listed", bool(rows), f"got {conn.list_scripts().get('scripts')!r}")
@@ -435,6 +451,7 @@ def main():
             test_cancels_a_scheduled_run(conn)
             test_cancellation_is_not_catchable(conn)
             test_a_parked_run_is_cancelled_promptly(conn)
+            test_a_native_scan_is_cancelled_promptly(conn)
             test_cancelling_a_transactional_script(conn)
             test_reports_several_concurrent_runs(conn)
             test_cancel_answers_that_are_not_errors(conn)

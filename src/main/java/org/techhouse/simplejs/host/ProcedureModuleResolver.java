@@ -4,25 +4,30 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.req.validations.NameValidations;
+import org.techhouse.simplejs.ModuleReferences;
 
 public final class ProcedureModuleResolver implements ModuleResolver {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
-    public static final String SPECIFIER_PREFIX = "procedures/";
+    public static final String SPECIFIER_PREFIX = ModuleReferences.PROCEDURE_SPECIFIER_PREFIX;
 
     private final String scopedDatabase;
+    private final boolean revealsSource;
 
     public ProcedureModuleResolver(String scopedDatabase) {
+        this(scopedDatabase, true);
+    }
+
+    public ProcedureModuleResolver(String scopedDatabase, boolean revealsSource) {
         this.scopedDatabase = scopedDatabase;
+        this.revealsSource = revealsSource;
     }
 
     @Override
     public ResolvedModule resolve(String specifier, String referrer) {
-        if (scopedDatabase == null || specifier == null || !specifier.startsWith(SPECIFIER_PREFIX)) {
-            return null;
-        }
-        final var name = specifier.substring(SPECIFIER_PREFIX.length());
-        if (name.isEmpty() || name.indexOf('/') >= 0) {
+        final var name = ModuleReferences.procedureNameOf(specifier);
+        if (scopedDatabase == null || !NameValidations.isValidProcedureName(name)) {
             return null;
         }
         final var definition = cache.getProcedure(scopedDatabase, name);
@@ -31,6 +36,9 @@ public final class ProcedureModuleResolver implements ModuleResolver {
         }
         final var version = definition.getVersion();
         final var source = definition.getSource();
+        if (!revealsSource) {
+            return ResolvedModule.withHiddenSource(moduleId(name, version), source, SPECIFIER_PREFIX + name);
+        }
         return new ResolvedModule(moduleId(name, version), source,
                 compiledProcedures.get(scopedDatabase, name, version, source), SPECIFIER_PREFIX + name);
     }

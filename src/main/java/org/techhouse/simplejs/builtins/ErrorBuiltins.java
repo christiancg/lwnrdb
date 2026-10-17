@@ -20,20 +20,18 @@ public final class ErrorBuiltins {
     private static final List<String> NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError", "URIError",
             "ReferenceError", "EvalError");
 
-    private static final ThreadLocal<Intrinsics> CURRENT_INTRINSICS = new InheritableThreadLocal<>();
-
     private ErrorBuiltins() {
     }
 
     public static JsObject makeError(String name, String message) {
-        return makeError(name, message, null);
+        return makeError(name, message, null, List.of());
     }
 
-    public static JsObject makeError(String name, String message, JsObject proto) {
+    public static JsObject makeError(String name, String message, JsObject proto, List<String> frames) {
         final var error = new JsObject();
         defineErrorProperty(error, "name", new JsString(name));
         defineErrorProperty(error, "message", new JsString(message));
-        error.markErrorData();
+        error.markErrorData(frames);
         error.setProto(proto);
         return error;
     }
@@ -43,10 +41,10 @@ public final class ErrorBuiltins {
         error.setFlags(key, HIDDEN);
     }
 
-    public static JsObject makeSuppressedError(JsValue error, JsValue suppressed, String message) {
-        final var intrinsics = CURRENT_INTRINSICS.get();
-        final var proto = intrinsics == null ? null : intrinsics.errorProto("SuppressedError");
-        final var result = makeError("SuppressedError", message, proto);
+    public static JsObject makeSuppressedError(Intrinsics intrinsics, JsValue error, JsValue suppressed,
+            String message) {
+        final var result = makeError("SuppressedError", message, intrinsics.errorProto("SuppressedError"),
+                intrinsics.captureStack());
         defineErrorProperty(result, "error", error);
         defineErrorProperty(result, "suppressed", suppressed);
         return result;
@@ -69,8 +67,8 @@ public final class ErrorBuiltins {
         if (!(thisArg instanceof JsObject error) || !error.isErrorData()) {
             return JsUndefined.getInstance();
         }
-        final var name = error.has("name") ? JsCoercion.toStr(error.get("name")) : "Error";
-        final var message = error.has("message") ? JsCoercion.toStr(error.get("message")) : "";
+        final var name = error.has("name") ? JsCoercion.describe(error.get("name")) : "Error";
+        final var message = error.has("message") ? JsCoercion.describe(error.get("message")) : "";
         return new JsString(name + ": " + message + renderFrames(error.getErrorStack()));
     }
 
@@ -120,10 +118,10 @@ public final class ErrorBuiltins {
 
     public static void install(Environment global, Intrinsics intrinsics, InterpreterOps ops,
             IterableToList iterableToList) {
-        CURRENT_INTRINSICS.set(intrinsics);
         JsNativeFunction errorConstructor = null;
         for (final var name : NAMES) {
-            final var constructor = new JsNativeFunction(name, (_, args) -> construct(intrinsics, name, args, ops));
+            final var constructor = new JsNativeFunction(name,
+                    (_, args, newTarget) -> construct(intrinsics, name, args, newTarget, ops));
             if ("Error".equals(name)) {
                 constructor.setProperty("isError",
                         new JsNativeFunction("isError", (_, args) -> JsBoolean.of(isError(arg(args, 0)))));
@@ -136,35 +134,37 @@ public final class ErrorBuiltins {
             global.declareBuiltin(name, constructor);
         }
         final var suppressed = new JsNativeFunction("SuppressedError",
-                (_, args) -> constructSuppressed(intrinsics, args, ops));
+                (_, args, newTarget) -> constructSuppressed(intrinsics, args, newTarget, ops));
         suppressed.setLength(3);
         suppressed.setOwnProto(errorConstructor);
         link(suppressed, intrinsics, "SuppressedError");
         global.declareBuiltin("SuppressedError", suppressed);
         final var aggregate = new JsNativeFunction("AggregateError",
-                (_, args) -> constructAggregate(intrinsics, args, ops, iterableToList));
+                (_, args, newTarget) -> constructAggregate(intrinsics, args, newTarget, ops, iterableToList));
         aggregate.setLength(2);
         aggregate.setOwnProto(errorConstructor);
         link(aggregate, intrinsics, "AggregateError");
         global.declareBuiltin("AggregateError", aggregate);
     }
 
-    private static JsObject construct(Intrinsics intrinsics, String name, List<JsValue> args, InterpreterOps ops) {
-        final var error = newError(intrinsics, name, arg(args, 0), ops);
+    private static JsObject construct(Intrinsics intrinsics, String name, List<JsValue> args, JsValue newTarget,
+            InterpreterOps ops) {
+        final var error = newError(intrinsics, name, arg(args, 0), newTarget, ops);
         installErrorCause(error, arg(args, 1), ops);
         return error;
     }
 
-    private static JsObject constructSuppressed(Intrinsics intrinsics, List<JsValue> args, InterpreterOps ops) {
-        final var error = newError(intrinsics, "SuppressedError", arg(args, 2), ops);
+    private static JsObject constructSuppressed(Intrinsics intrinsics, List<JsValue> args, JsValue newTarget,
+            InterpreterOps ops) {
+        final var error = newError(intrinsics, "SuppressedError", arg(args, 2), newTarget, ops);
         defineErrorProperty(error, "error", arg(args, 0));
         defineErrorProperty(error, "suppressed", arg(args, 1));
         return error;
     }
 
-    private static JsObject constructAggregate(Intrinsics intrinsics, List<JsValue> args, InterpreterOps ops,
-            IterableToList iterableToList) {
-        final var error = newError(intrinsics, "AggregateError", arg(args, 1), ops);
+    private static JsObject constructAggregate(Intrinsics intrinsics, List<JsValue> args, JsValue newTarget,
+            InterpreterOps ops, IterableToList iterableToList) {
+        final var error = newError(intrinsics, "AggregateError", arg(args, 1), newTarget, ops);
         installErrorCause(error, arg(args, 2), ops);
         final var array = new JsArray();
         for (final var element : errorsList(arg(args, 0), iterableToList)) {
@@ -181,19 +181,19 @@ public final class ErrorBuiltins {
         return errors instanceof JsArray array ? array.getElements() : List.of();
     }
 
-    private static JsObject newError(Intrinsics intrinsics, String name, JsValue message, InterpreterOps ops) {
+    private static JsObject newError(Intrinsics intrinsics, String name, JsValue message, JsValue newTarget,
+            InterpreterOps ops) {
         final var error = new JsObject();
-        error.markErrorData();
-        error.setProto(newTargetProto(intrinsics, name, ops));
+        error.markErrorData(intrinsics.captureStack());
+        error.setProto(newTargetProto(intrinsics, name, newTarget, ops));
         if (!(message instanceof JsUndefined)) {
             defineErrorProperty(error, "message", new JsString(JsCoercion.toStr(message, ops)));
         }
         return error;
     }
 
-    private static JsObject newTargetProto(Intrinsics intrinsics, String name, InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (newTarget != null && ops != null
+    private static JsObject newTargetProto(Intrinsics intrinsics, String name, JsValue newTarget, InterpreterOps ops) {
+        if (NewTargetSupport.isConstructCall(newTarget) && ops != null
                 && ops.getMember(newTarget, new JsString("prototype")) instanceof JsObject proto) {
             return proto;
         }

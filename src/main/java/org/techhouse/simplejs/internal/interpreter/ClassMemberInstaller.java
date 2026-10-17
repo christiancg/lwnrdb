@@ -95,7 +95,7 @@ final class ClassMemberInstaller {
                 }
                 return;
             }
-            installStringMethod(cls, method, kind, fn, JsCoercion.toStr(keyValue));
+            installStringMethod(cls, method, kind, fn, JsCoercion.toStr(keyValue, interp.ops()));
             return;
         }
         installStringMethod(cls, method, kind, fn, staticKeyName(method.getKey()));

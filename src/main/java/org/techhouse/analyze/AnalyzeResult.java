@@ -14,6 +14,12 @@ public class AnalyzeResult {
     public long scriptMillis;
     public List<String> suggestions;
 
+    public void recordTiming(long start, long end) {
+        startTime = start;
+        endTime = end;
+        durationMillis = end - start;
+    }
+
     public long getStartTime() {
         return startTime;
     }

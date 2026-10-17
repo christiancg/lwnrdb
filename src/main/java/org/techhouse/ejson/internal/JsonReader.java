@@ -1,132 +1,22 @@
 package org.techhouse.ejson.internal;
 
-import java.util.List;
-import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonBaseElement;
-import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ejson.elements.JsonSyntaxToken;
-import org.techhouse.ejson.exceptions.MalformedJsonException;
-
 public class JsonReader {
-
-    private record ParseTokenResult(JsonBaseElement element, int tokensToSkip) {
-    }
 
     public <T> T fromJson(String input, Class<T> tClass) {
         return fromJson(input, tClass, Integer.MAX_VALUE);
     }
 
     public <T> T fromJson(String input, Class<T> tClass, int maxDepth) {
-        final var tokens = Lexer.lex(input);
-        final var parsed = internalParse(tokens, true, maxDepth);
-        if (parsed.tokensToSkip() < tokens.size()) {
-            throw new MalformedJsonException("Unexpected content after the root value");
-        }
-        final var newInstance = Assigner.assign(parsed.element().asJsonObject(), tClass);
-        return tClass.cast(newInstance);
+        return fromJson(input, tClass, maxDepth, Integer.MAX_VALUE);
     }
 
-    private ParseTokenResult internalParse(List<JsonBaseElement> tokens, boolean isRoot, int remainingDepth) {
-        if (tokens.isEmpty()) {
-            throw new MalformedJsonException("Empty JSON array");
-        }
-        final var firstToken = tokens.getFirst();
-        if (isRoot && (!firstToken.equals(JsonSyntaxToken.LEFT_BRACE)
-                && !firstToken.equals(JsonSyntaxToken.LEFT_BRACKET))) {
-            throw new MalformedJsonException("Json must start with either a left bracket or a left brace");
-        }
-        if (firstToken.equals(JsonSyntaxToken.LEFT_BRACKET)) {
-            return parseArray(skipOneToken(tokens), nestedDepth(remainingDepth));
-        } else if (firstToken.equals(JsonSyntaxToken.LEFT_BRACE)) {
-            return parseObject(skipOneToken(tokens), nestedDepth(remainingDepth));
-        } else if (firstToken instanceof JsonSyntaxToken) {
-            throw new MalformedJsonException("Expected a value, got " + firstToken.getJsonType());
-        } else {
-            return new ParseTokenResult(firstToken, 1);
-        }
+    public <T> T fromJson(byte[] utf8, int start, int end, Class<T> tClass, int maxDepth, int maxTokens) {
+        final var root = JsonParser.parse(utf8, start, end, maxDepth, maxTokens);
+        return tClass.cast(Assigner.assign(root.asJsonObject(), tClass));
     }
 
-    private static int nestedDepth(int remainingDepth) {
-        if (remainingDepth <= 0) {
-            throw new MalformedJsonException("JSON nesting is deeper than the allowed limit");
-        }
-        return remainingDepth - 1;
-    }
-
-    private ParseTokenResult parseObject(List<JsonBaseElement> tokens, int remainingDepth) {
-        int tokensToSkip = 1;
-        final var obj = new JsonObject();
-        var firstToken = tokens.getFirst();
-        if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACE)) {
-            tokensToSkip++;
-            return new ParseTokenResult(obj, tokensToSkip);
-        }
-        for (;;) {
-            firstToken = tokens.getFirst();
-            String propertyName;
-            if (firstToken.isJsonString()) {
-                propertyName = ((JsonString) firstToken).getValue();
-                tokens = skipOneToken(tokens);
-                tokensToSkip++;
-            } else {
-                throw new MalformedJsonException("Expected string key, got " + firstToken.getJsonType());
-            }
-            firstToken = tokens.getFirst();
-            if (!firstToken.equals(JsonSyntaxToken.COLON)) {
-                throw new MalformedJsonException(
-                        "Expected colon after key in object, got: " + firstToken.getJsonType());
-            }
-            tokens = skipOneToken(tokens);
-            tokensToSkip++;
-            final var parsedValue = internalParse(tokens, false, remainingDepth);
-            tokensToSkip += parsedValue.tokensToSkip();
-            obj.add(propertyName, parsedValue.element());
-            tokens = skipTokens(tokens, parsedValue);
-            firstToken = tokens.getFirst();
-            if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACE)) {
-                tokensToSkip++;
-                return new ParseTokenResult(obj, tokensToSkip);
-            } else if (!firstToken.equals(JsonSyntaxToken.COMMA)) {
-                throw new MalformedJsonException(
-                        "Expected comma after pair in object, got: " + firstToken.getJsonType());
-            }
-            tokens = skipOneToken(tokens);
-            tokensToSkip++;
-        }
-    }
-
-    private ParseTokenResult parseArray(List<JsonBaseElement> tokens, int remainingDepth) {
-        int tokensToSkip = 1;
-        final var arr = new JsonArray();
-        var firstToken = tokens.getFirst();
-        if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACKET)) {
-            tokensToSkip++;
-            return new ParseTokenResult(arr, tokensToSkip);
-        }
-        while (true) {
-            final var parsed = internalParse(tokens, false, remainingDepth);
-            arr.add(parsed.element());
-            tokensToSkip += parsed.tokensToSkip();
-            tokens = skipTokens(tokens, parsed);
-            firstToken = tokens.getFirst();
-            if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACKET)) {
-                tokensToSkip++;
-                return new ParseTokenResult(arr, tokensToSkip);
-            } else if (!firstToken.equals(JsonSyntaxToken.COMMA)) {
-                throw new MalformedJsonException("Expected comma after object in array");
-            } else {
-                tokensToSkip++;
-                tokens = skipOneToken(tokens);
-            }
-        }
-    }
-
-    private List<JsonBaseElement> skipOneToken(List<JsonBaseElement> tokens) {
-        return tokens.subList(1, tokens.size());
-    }
-
-    private List<JsonBaseElement> skipTokens(List<JsonBaseElement> tokens, ParseTokenResult element) {
-        return tokens.subList(element.tokensToSkip(), tokens.size());
+    public <T> T fromJson(String input, Class<T> tClass, int maxDepth, int maxTokens) {
+        final var root = JsonParser.parse(input, maxDepth, maxTokens);
+        return tClass.cast(Assigner.assign(root.asJsonObject(), tClass));
     }
 }

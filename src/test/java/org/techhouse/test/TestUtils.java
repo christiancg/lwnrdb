@@ -14,13 +14,16 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.mockito.Mockito;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.PartitionedMissCache;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
@@ -28,14 +31,17 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.SizeParser;
 import org.techhouse.config.ValueType;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.auth.AuthFailureThrottle;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.utils.ReflectionUtils;
@@ -67,6 +73,8 @@ public class TestUtils {
         TestUtils.setPrivateField(adminCache, "usersPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(userCache, "collectionMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(userCache, "fieldIndexMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(TestUtils.getPrivateField(userCache, "fieldLookups", Object.class), "byCollection",
+                new ConcurrentHashMap<>());
         TestUtils.setPrivateField(userCache, "pkIndexMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pageCacheOf(adminCache), "pages", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pageCacheOf(adminCache), "pagesPkIndexes", new ConcurrentHashMap<>());
@@ -77,7 +85,7 @@ public class TestUtils {
         clearBoundedCache(adminCache, "procedures");
         clearBoundedCache(adminCache, "triggers");
         clearBoundedCache(adminCache, "schedules");
-        clearBoundedCache(adminCache, "metadataMisses");
+        TestUtils.getPrivateField(adminCache, "metadataMisses", PartitionedMissCache.class).clear();
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pendingIndexWrites, "generations", new ConcurrentHashMap<>());
@@ -85,6 +93,8 @@ public class TestUtils {
         // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
         ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
         TestUtils.setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
+        resetSocketClients(clientTracker);
+        TestUtils.getPrivateField(IocContainer.get(AuthFailureThrottle.class), "states", Map.class).clear();
     }
 
     private static void clearBoundedCache(AdminCache adminCache, String fieldName)
@@ -289,6 +299,13 @@ public class TestUtils {
         final var clientTracker = IocContainer.get(ClientTracker.class);
         setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
         setPrivateField(clientTracker, "txSessions", new ConcurrentHashMap<>());
+        resetSocketClients(clientTracker);
+    }
+
+    private static void resetSocketClients(ClientTracker clientTracker)
+            throws NoSuchFieldException, IllegalAccessException {
+        setPrivateField(clientTracker, "disconnectSignals", new ConcurrentHashMap<>());
+        getPrivateField(clientTracker, "socketClients", AtomicInteger.class).set(0);
     }
 
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {
@@ -321,6 +338,22 @@ public class TestUtils {
         return result;
     }
 
+    public static void ensureAdminUser(String username) {
+        final var cache = IocContainer.get(Cache.class);
+        if (username == null || cache.getAdminUserEntry(username) != null) {
+            return;
+        }
+        try {
+            AdminOperationHelper.saveUserEntry(
+                    new AdminUserEntry(username, "unused", true, Set.of(), new HashMap<>(), new HashMap<>()));
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
     public static OperationResponse createAdmin(String username) {
         final var request = new CreateUserRequest();
         request.setUsername(username);
@@ -338,6 +371,12 @@ public class TestUtils {
         Mockito.when(socket.getInetAddress()).thenReturn(address);
         Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
         return socket;
+    }
+
+    public static OutboundQueue inlineOutbound(OutputStream out) {
+        return new OutboundQueue(out, () -> {
+        }, Long.MAX_VALUE, Runnable::run, () -> {
+        });
     }
 
     public static Socket clientSocket(InputStream in, OutputStream out) throws IOException {

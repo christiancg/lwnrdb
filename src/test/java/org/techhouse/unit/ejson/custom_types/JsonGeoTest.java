@@ -168,6 +168,22 @@ public class JsonGeoTest {
         assertFalse(JsonGeo.containsNonFinitePoint(new JsonString("#geo(NaN,1) as text")));
     }
 
+    @Test
+    public void test_containers_holding_only_finite_points_and_scalars_have_no_non_finite_point() {
+        final var array = new JsonArray();
+        array.add(new JsonGeo("#geo(1,2)"));
+        array.add(new JsonNumber(3));
+        array.add(new JsonArray());
+        final var nested = new org.techhouse.ejson.elements.JsonObject();
+        nested.add("places", array);
+        nested.add("label", new JsonString("home"));
+        final var document = new org.techhouse.ejson.elements.JsonObject();
+        document.add("nested", nested);
+        document.add("empty", new org.techhouse.ejson.elements.JsonObject());
+
+        assertFalse(JsonGeo.containsNonFinitePoint(document));
+    }
+
     private static Map<String, JsonBaseElement> distanceArgs(JsonBaseElement target, String comparator, double dist) {
         return Map.of("value", target, "comparator", new JsonString(comparator), "distance", new JsonNumber(dist));
     }

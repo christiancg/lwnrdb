@@ -117,6 +117,35 @@ public class ClusterRouterForwardedTxTest extends RemoteOwnerTxTestBase {
     }
 
     @Test
+    public void a_resent_commit_finishes_a_fenced_slice_even_when_the_owner_no_longer_knows_the_user()
+            throws Exception {
+        fenceTheRemoteCommit("ghosted");
+        fs.createCollectionFile(TestGlobals.DB, coll);
+        final var commit = new CommitTransactionRequest();
+
+        final var resent = router.forward(commit, eJson.toJson(commit), true, "ghost_user", clientId);
+
+        assertNull(errorCodeOf(resent), "a deleted user must not strand the fenced slice, got: " + resent);
+        assertEquals(OperationStatus.OK, findStatus("ghosted"));
+        assertNull(clientTracker.getActiveTransaction(clientId));
+        assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
+    }
+
+    @Test
+    public void a_fenced_forwarded_commit_is_never_reaped_as_idle() throws Exception {
+        fenceTheRemoteCommit("idle");
+
+        assertTrue(clientTracker.hasFencedRemoteSlice(clientId));
+        assertFalse(TransactionOperationHelper.isReapable(clientId),
+                "the idle reaper must not roll back a slice the owner still holds");
+
+        fs.createCollectionFile(TestGlobals.DB, coll);
+        route(new CommitTransactionRequest());
+
+        assertFalse(clientTracker.hasFencedRemoteSlice(clientId), "finishing the slice clears the fence");
+    }
+
+    @Test
     public void a_rollback_after_a_fenced_forwarded_commit_reports_half_applied() throws Exception {
         fenceTheRemoteCommit("rolled");
 

@@ -27,6 +27,8 @@ public class MemoryManagement {
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final UsageTracker usageTracker = IocContainer.get(UsageTracker.class);
     private final AtomicBoolean sweepRunning = new AtomicBoolean(false);
+    private final AtomicBoolean sweepOutOfMemory = new AtomicBoolean(false);
+    private final AtomicBoolean flushOutOfMemory = new AtomicBoolean(false);
     private volatile ScheduledExecutorService scheduler;
 
     public static String buildKey(AccessKind kind, String dbName, String collName, String indexKey) {
@@ -94,18 +96,25 @@ public class MemoryManagement {
     }
 
     private void runEvictionSweepSafely() {
-        try {
-            runEvictionSweep();
-        } catch (Exception e) {
-            logger.error("Eviction sweep failed", e);
-        }
+        runSurvivingErrors("Eviction sweep failed", this::runEvictionSweep, sweepOutOfMemory);
     }
 
     private void flushUsageProfileSafely() {
+        runSurvivingErrors("Usage profile flush failed", this::flushUsageProfile, flushOutOfMemory);
+    }
+
+    private void runSurvivingErrors(String failure, Runnable task, AtomicBoolean previousRunOutOfMemory) {
         try {
-            flushUsageProfile();
-        } catch (Exception e) {
-            logger.error("Usage profile flush failed", e);
+            task.run();
+            previousRunOutOfMemory.set(false);
+        } catch (OutOfMemoryError e) {
+            logger.error(failure, e);
+            if (previousRunOutOfMemory.getAndSet(true)) {
+                throw e;
+            }
+        } catch (Exception | Error e) {
+            logger.error(failure, e);
+            previousRunOutOfMemory.set(false);
         }
     }
 
@@ -122,7 +131,7 @@ public class MemoryManagement {
     private void submitCleanupTask() {
         try {
             taskManager.submitBackgroundTask(new UsageProfileCleanupEvent());
-        } catch (Exception e) {
+        } catch (Exception | Error e) {
             logger.error("Failed to submit usage profile cleanup", e);
         }
     }
@@ -134,7 +143,7 @@ public class MemoryManagement {
         if (config.isCacheUnlimited()) {
             return AdmissionDecision.ADMIT;
         }
-        return userCacheBytes() + estimatedBytes > config.getMaxMemoryBytes()
+        return userCacheBytes(Measure.REMEMBERED) + estimatedBytes > config.getMaxMemoryBytes()
                 ? AdmissionDecision.REJECT
                 : AdmissionDecision.ADMIT;
     }
@@ -147,7 +156,7 @@ public class MemoryManagement {
             return;
         }
         try {
-            evictDownTo(config.getMaxMemoryBytes());
+            evictDownTo(config.getMaxMemoryBytes(), Measure.FULL);
         } finally {
             sweepRunning.set(false);
         }
@@ -158,17 +167,17 @@ public class MemoryManagement {
             return;
         }
         final var maxBytes = config.getMaxMemoryBytes();
-        if (userCacheBytes() + nextPageEstimateBytes <= maxBytes) {
+        if (userCacheBytes(Measure.REMEMBERED) + nextPageEstimateBytes <= maxBytes) {
             return;
         }
-        evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes));
+        evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes), Measure.REMEMBERED);
     }
 
     private record RankedResource(CacheableResource resource, int tier, long accessCount, long lastAccess) {
     }
 
-    private void evictDownTo(long targetBytes) {
-        var resources = userCache.listCacheableResources();
+    private void evictDownTo(long targetBytes, Measure measure) {
+        final var resources = userCache.listCacheableResources(measure);
         var remaining = sumBytes(resources);
         if (remaining <= targetBytes) {
             return;
@@ -220,7 +229,11 @@ public class MemoryManagement {
     }
 
     public long userCacheBytes() {
-        return sumBytes(userCache.listCacheableResources());
+        return userCacheBytes(Measure.FULL);
+    }
+
+    private long userCacheBytes(Measure measure) {
+        return sumBytes(userCache.listCacheableResources(measure));
     }
 
     private long sumBytes(java.util.List<CacheableResource> resources) {

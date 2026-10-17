@@ -46,15 +46,15 @@ public final class DataViewBuiltins {
     }
 
     public static JsNativeFunction dataView(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("DataView", (thisArg, args) -> {
-            requireNewTarget("DataView", thisArg);
-            return constructDataView(args, ops);
+        final var ctor = new JsNativeFunction("DataView", (thisArg, args, newTarget) -> {
+            requireNewTarget("DataView", thisArg, newTarget);
+            return constructDataView(args, newTarget, ops);
         });
         ctor.setLength(1);
         return ctor;
     }
 
-    public static JsValue constructDataView(List<JsValue> args, InterpreterOps ops) {
+    public static JsValue constructDataView(List<JsValue> args, JsValue newTarget, InterpreterOps ops) {
         if (args.isEmpty() || !(args.getFirst() instanceof JsArrayBuffer buffer)) {
             throw new TypeErrorException("First argument to DataView constructor must be an ArrayBuffer");
         }
@@ -67,7 +67,7 @@ public final class DataViewBuiltins {
         if (byteOffset > buffer.byteLength()) {
             throw new RangeErrorException("Start offset is outside the bounds of the buffer");
         }
-        final var observedProto = observePrototype(ops);
+        final var observedProto = observePrototype(newTarget, ops);
         if (buffer.isDetached()) {
             throw new TypeErrorException("Cannot construct a DataView over a detached ArrayBuffer");
         }

@@ -79,6 +79,7 @@ public class TransactionOpCleanupOrderTest {
 
     private UUID openTransaction() {
         final var clientId = clientTracker.registerForwardedClient("cleanup-" + UUID.randomUUID());
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         return clientId;
     }
@@ -274,6 +275,7 @@ public class TransactionOpCleanupOrderTest {
 
     private UUID preparedParticipantSaving(String... ids) {
         final var clientId = clientTracker.registerForwardedClient("participant-" + UUID.randomUUID());
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         for (final var id : ids) {
             final var object = new JsonObject();

@@ -73,8 +73,7 @@ public final class TombstoneStore {
         if (!file.exists()) {
             return;
         }
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(file);
         try {
             final var parsed = parseTombstones(file);
             if (parsed.unrecognised()) {
@@ -102,8 +101,7 @@ public final class TombstoneStore {
         if (!file.exists()) {
             return;
         }
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
+        final var lock = FileLocks.lockWrite(file);
         try {
             final var parsed = parseTombstones(file);
             if (parsed.unrecognised()) {

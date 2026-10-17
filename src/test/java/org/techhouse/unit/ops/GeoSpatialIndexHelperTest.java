@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -30,14 +31,14 @@ public class GeoSpatialIndexHelperTest {
         args.add("distance", new JsonNumber(1000));
         final var op = new CustomOperator("distance", "location", target, args);
 
-        assertNull(GeoSpatialIndexHelper.candidateIds(op, "db", "coll"));
+        assertNull(GeoSpatialIndexHelper.candidateIds(op, "db", "coll", ReadObserver.NONE));
     }
 
     @Test
     public void test_unknown_custom_operator_is_not_index_accelerable() throws Exception {
         final var op = new CustomOperator("mystery", "location", null, new JsonObject());
 
-        assertNull(GeoSpatialIndexHelper.candidateIds(op, "db", "coll"));
+        assertNull(GeoSpatialIndexHelper.candidateIds(op, "db", "coll", ReadObserver.NONE));
     }
 
     private static void seedGeoIndex() throws Exception {
@@ -71,8 +72,8 @@ public class GeoSpatialIndexHelperTest {
         try {
             final var operator = withinRadius();
             IndexRaceSupport.readWhileTheIndexerChurns(TestGlobals.DB, TestGlobals.COLL, "location", JsonGeo.class,
-                    () -> assertNotNull(
-                            GeoSpatialIndexHelper.candidateIds(operator, TestGlobals.DB, TestGlobals.COLL)));
+                    () -> assertNotNull(GeoSpatialIndexHelper.candidateIds(operator, TestGlobals.DB, TestGlobals.COLL,
+                            ReadObserver.NONE)));
         } finally {
             TestUtils.standardTearDown();
         }
@@ -105,7 +106,7 @@ public class GeoSpatialIndexHelperTest {
             cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("location"));
 
             final var candidates = GeoSpatialIndexHelper.candidateIds(withinAntimeridianPolygon(), TestGlobals.DB,
-                    TestGlobals.COLL);
+                    TestGlobals.COLL, ReadObserver.NONE);
 
             assertNotNull(candidates);
             assertTrue(candidates.contains("dateline"),

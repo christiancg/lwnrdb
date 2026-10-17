@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -20,6 +21,7 @@ import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.unit.ejson.validate.DiamondSchemas;
 
 public class SchemaValidationHelperTest {
     private final Cache cache = IocContainer.get(Cache.class);
@@ -199,5 +201,105 @@ public class SchemaValidationHelperTest {
         final var refused = SchemaValidationHelper.check(save(doc(null)));
         assertNotNull(refused);
         assertEquals("400-7", refused.getErrorCode());
+    }
+
+    private void installRedosSchema() {
+        cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL,
+                eJson.fromJson(DiamondSchemas.redosPatternSchema(), JsonObject.class));
+    }
+
+    @Test
+    public void test_check_maps_budget_exception_to_400_23_not_503_11() {
+        installRedosSchema();
+
+        final var response = SchemaValidationHelper.check(save(doc(DiamondSchemas.hostileName())));
+
+        assertNotNull(response);
+        assertEquals("400-23", response.getErrorCode());
+        assertEquals("Schema validation exceeded its evaluation budget", response.getMessage());
+        assertNull(SchemaValidationHelper.check(save(doc("xxy"))));
+    }
+
+    @Test
+    public void test_bulk_save_budget_refusal_names_400_23() {
+        installRedosSchema();
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(doc("xxy"), doc(DiamondSchemas.hostileName())));
+
+        final var response = SchemaValidationHelper.check(request);
+
+        assertNotNull(response);
+        assertEquals("400-23", response.getErrorCode());
+    }
+
+    @Test
+    public void test_stored_over_limit_schema_still_loads_and_cheap_documents_pass() throws Exception {
+        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, DiamondSchemas.behindProperty("deep", 28));
+        cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+
+        assertNotNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(SchemaValidationHelper.check(save(doc("cheap"))));
+        final var expensive = doc("expensive");
+        expensive.add("deep", new JsonObject());
+        final var refused = SchemaValidationHelper.check(save(expensive));
+        assertNotNull(refused);
+        assertEquals("400-23", refused.getErrorCode());
+    }
+
+    @Test
+    public void test_a_request_already_checked_against_the_same_schema_is_not_validated_again() {
+        installSchema();
+        final var document = doc("Alice");
+        final var request = save(document);
+        assertNull(SchemaValidationHelper.check(request));
+
+        document.remove("name");
+
+        assertNull(SchemaValidationHelper.check(request),
+                "the under-lock re-check of the request the edge already validated must not pay for it twice");
+        assertNotNull(SchemaValidationHelper.check(save(document)), "another request is validated in full");
+    }
+
+    @Test
+    public void test_a_replaced_schema_or_document_is_validated_again() {
+        installSchema();
+        final var request = save(doc("Alice"));
+        assertNull(SchemaValidationHelper.check(request));
+
+        request.setObject(doc(null));
+        assertNotNull(SchemaValidationHelper.check(request), "a before hook's replacement is a new document");
+
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var documents = new ArrayList<>(List.of(doc("Alice")));
+        bulk.setObjects(documents);
+        assertNull(SchemaValidationHelper.check(bulk));
+        installSchema();
+        documents.getFirst().remove("name");
+        assertNotNull(SchemaValidationHelper.check(bulk), "a new schema object means the edge check is stale");
+    }
+
+    @Test
+    public void aRequestReparsedFromJsonIsValidatedInFull() {
+        installSchema();
+        final var document = doc("Alice");
+        final var request = save(document);
+        assertNull(SchemaValidationHelper.check(request));
+        document.remove("name");
+
+        final var forwarded = eJson.fromJson(eJson.toJson(request), SaveRequest.class);
+
+        assertNull(forwarded.getSchemaCheck());
+        assertNotNull(SchemaValidationHelper.check(forwarded), "the memo is node-local and never crosses a forward");
+    }
+
+    @Test
+    public void aClientSuppliedSchemaCheckIsIgnored() {
+        installSchema();
+        final var parsed = eJson.fromJson("{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"object\":{},"
+                + "\"schemaCheck\":{\"payload\":{},\"schema\":{},\"budget\":null}}", SaveRequest.class);
+
+        assertNull(parsed.getSchemaCheck());
+        assertNotNull(SchemaValidationHelper.check(parsed));
     }
 }

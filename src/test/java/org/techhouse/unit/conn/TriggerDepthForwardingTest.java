@@ -2,7 +2,10 @@ package org.techhouse.unit.conn;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.MessageProcessor;
@@ -10,9 +13,14 @@ import org.techhouse.ops.req.RequestParser;
 
 public class TriggerDepthForwardingTest {
     private static String sanitize(String rawMessage) throws Exception {
-        final Method method = MessageProcessor.class.getDeclaredMethod("withoutTriggerDepth", String.class);
+        final var wireDepth = RequestParser.parseRequest(rawMessage).getTriggerDepth();
+        return sanitize(rawMessage, wireDepth);
+    }
+
+    private static String sanitize(String rawMessage, int wireDepth) throws Exception {
+        final Method method = MessageProcessor.class.getDeclaredMethod("withoutTriggerDepth", String.class, int.class);
         method.setAccessible(true);
-        return (String) method.invoke(null, rawMessage);
+        return (String) method.invoke(null, rawMessage, wireDepth);
     }
 
     @Test
@@ -26,9 +34,31 @@ public class TriggerDepthForwardingTest {
     }
 
     @Test
+    public void test_an_escaped_triggerDepth_key_does_not_survive_forwarding() throws Exception {
+        final var raw = "{\"type\":\"SAVE\",\"databaseName\":\"db\",\"collectionName\":\"coll\","
+                + "\"trigger\\u0044epth\":1,\"object\":{\"_id\":\"a\"}}";
+        assertEquals(1, RequestParser.parseRequest(raw).getTriggerDepth());
+        assertEquals(0, RequestParser.parseRequest(sanitize(raw)).getTriggerDepth());
+    }
+
+    @Test
+    public void test_a_negative_escaped_triggerDepth_does_not_survive_forwarding() throws Exception {
+        final var raw = "{\"type\":\"SAVE\",\"databaseName\":\"db\",\"collectionName\":\"coll\","
+                + "\"\\u0074riggerDepth\":-2000000000,\"object\":{\"_id\":\"a\"}}";
+        assertEquals(0, RequestParser.parseRequest(sanitize(raw)).getTriggerDepth());
+    }
+
+    @Test
     public void test_a_body_without_a_depth_is_returned_unchanged() throws Exception {
         final var raw = "{\"type\":\"SAVE\",\"databaseName\":\"db\",\"collectionName\":\"coll\","
                 + "\"object\":{\"_id\":\"a\"}}";
+        assertEquals(raw, sanitize(raw));
+    }
+
+    @Test
+    public void test_a_zero_depth_body_is_returned_unchanged() throws Exception {
+        final var raw = "{\"type\":\"SAVE\",\"databaseName\":\"db\",\"collectionName\":\"coll\","
+                + "\"triggerDepth\":0,\"object\":{\"_id\":\"a\"}}";
         assertEquals(raw, sanitize(raw));
     }
 
@@ -42,8 +72,8 @@ public class TriggerDepthForwardingTest {
     }
 
     @Test
-    public void test_a_malformed_body_is_passed_through_untouched() throws Exception {
-        final var raw = "{\"triggerDepth\":";
-        assertEquals(raw, sanitize(raw));
+    public void test_a_malformed_body_with_a_depth_fails_closed() {
+        final var thrown = assertThrows(InvocationTargetException.class, () -> sanitize("{\"triggerDepth\":", 3));
+        assertInstanceOf(RuntimeException.class, thrown.getCause());
     }
 }

@@ -32,8 +32,8 @@ public final class MapBuiltins {
     public static JsNativeFunction create(IterableToList iterableToList, Invoker invoker, InterpreterOps ops,
             boolean weak) {
         final var name = weak ? "WeakMap" : "Map";
-        final var constructor = new JsNativeFunction(name, (thisArg, args) -> {
-            requireNewTarget(name, thisArg);
+        final var constructor = new JsNativeFunction(name, (thisArg, args, newTarget) -> {
+            requireNewTarget(name, thisArg, newTarget);
             return construct(args, ops, weak);
         });
         if (!weak) {

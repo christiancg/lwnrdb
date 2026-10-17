@@ -38,21 +38,21 @@ public final class SortOperatorHelper {
     }
 
     public static Stream<JsonObject> processSortStep(SortAggregationStep sortStep, Stream<JsonObject> resultStream,
-            String dbName, String collName, long bound) throws IOException {
+            String dbName, String collName, long bound, PipelineContext context) throws IOException {
         final var fieldName = sortStep.getFieldName();
         final var ascending = sortStep.getAscending();
         if (resultStream == null) {
             final var orderedIds = IndexHelper.getSortedIdsForField(dbName, collName, fieldName, entryOrder(ascending),
-                    bound > 0 ? bound : Long.MAX_VALUE);
+                    bound > 0 ? bound : Long.MAX_VALUE, context);
             if (orderedIds != null) {
-                return fetchInOrder(orderedIds, dbName, collName, bound);
+                return fetchInOrder(orderedIds, dbName, collName, bound, context);
             }
-            final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName);
+            final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName, context);
             if (indexEntries != null) {
-                return sortViaIndex(indexEntries, dbName, collName, ascending, bound);
+                return sortViaIndex(indexEntries, dbName, collName, ascending, bound, context);
             }
         }
-        final var source = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
+        final var source = context.source(resultStream, dbName, collName);
         final var comparator = keyComparator(ascending);
         if (bound > 0 && bound <= MAX_BOUNDED_SORT) {
             return boundedSort(source, fieldName, comparator, (int) bound);
@@ -108,20 +108,20 @@ public final class SortOperatorHelper {
         return decorated.toArray(Keyed[]::new);
     }
 
-    private static Stream<JsonObject> fetchInOrder(List<String> orderedIds, String dbName, String collName,
-            long bound) {
+    private static Stream<JsonObject> fetchInOrder(List<String> orderedIds, String dbName, String collName, long bound,
+            PipelineContext context) {
         final var chunks = Spliterators.spliteratorUnknownSize(
                 chunkIterator(orderedIds.iterator(), firstChunkSize(bound)), Spliterator.ORDERED);
-        return StreamSupport.stream(chunks, false).flatMap(chunk -> fetchChunk(chunk, dbName, collName));
+        return StreamSupport.stream(chunks, false).flatMap(chunk -> fetchChunk(chunk, dbName, collName, context));
     }
 
     private static Stream<JsonObject> sortViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
-            String collName, boolean ascending, long bound) {
+            String collName, boolean ascending, long bound, PipelineContext context) {
         final var order = entryOrder(ascending);
         final var sortedEntries = new ArrayList<>(indexEntries);
         sortedEntries.sort(order);
         return fetchInOrder(IndexHelper.idsInOrder(sortedEntries, order, bound > 0 ? bound : Long.MAX_VALUE), dbName,
-                collName, bound);
+                collName, bound, context);
     }
 
     private static Comparator<FieldIndexEntry<?>> entryOrder(boolean ascending) {
@@ -159,9 +159,11 @@ public final class SortOperatorHelper {
         };
     }
 
-    private static Stream<JsonObject> fetchChunk(List<String> chunk, String dbName, String collName) {
+    private static Stream<JsonObject> fetchChunk(List<String> chunk, String dbName, String collName,
+            PipelineContext context) {
         try {
             final var documents = cache.getEntriesByIds(dbName, collName, Set.copyOf(chunk));
+            context.scanned(documents.size());
             if (documents.size() == 1) {
                 return Stream.of(documents.getFirst().getData());
             }

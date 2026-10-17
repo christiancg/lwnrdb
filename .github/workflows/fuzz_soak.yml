@@ -8,6 +8,9 @@ on:
         description: Soak minutes per shard
         default: '45'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build

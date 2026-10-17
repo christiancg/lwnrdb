@@ -12,7 +12,7 @@ from base_utils import Conn, check, section
 HOST = "127.0.0.1"
 PORT = 8989
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "administrator"
+ADMIN_PASSWORD = bu.PASSWORD
 
 DB = "bench_db"
 COLL = "items"
@@ -38,7 +38,7 @@ def connect():
     return c
 
 
-def setup(c):
+def setup(c: Conn):
     c.send({"type": "DROP_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_COLLECTION",
@@ -89,7 +89,7 @@ def run_query(c, value):
     })
 
 
-def time_query(c, value):
+def time_query(c: Conn, value):
     t0 = time.perf_counter()
     r = run_query(c, value)
     dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -100,7 +100,6 @@ SERVER_LOG = "/tmp/lwnrdb-bench.log"
 
 
 def kill_server():
-    pids = []
     try:
         out = subprocess.check_output(
             ["pgrep", "-f", bu.SERVER_PROC_PATTERN], text=True).strip()
@@ -122,7 +121,7 @@ def kill_server():
         time.sleep(0.2)
 
 
-def timed_runs(c, values):
+def timed_runs(c: Conn, values):
     samples, all_ok = [], True
     for v in values:
         dt_ms, ok = time_query(c, v)

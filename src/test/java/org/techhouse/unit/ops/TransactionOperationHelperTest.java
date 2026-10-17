@@ -54,6 +54,7 @@ public class TransactionOperationHelperTest {
         final var coll = "cross_thread_coll";
         processor.processMessage(new org.techhouse.ops.req.CreateCollectionRequest(TestGlobals.DB, coll));
         final var clientId = clientTracker.registerForwardedClient("cross");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         final var holder = new Thread(() -> {
             TransactionOperationHelper.start(clientId);
             final var request = new SaveRequest(TestGlobals.DB, coll);
@@ -77,6 +78,7 @@ public class TransactionOperationHelperTest {
     @Test
     public void test_a_commit_keeps_the_transaction_registered_while_a_lock_is_still_held() {
         final var clientId = clientTracker.registerForwardedClient("unreleasable");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var object = new JsonObject();
@@ -404,6 +406,7 @@ public class TransactionOperationHelperTest {
     @Test
     public void test_commit_still_applies_when_ownership_is_retained() throws Exception {
         final var sessionId = "session-" + UUID.randomUUID();
+        TestUtils.ensureAdminUser("alice");
         final var session = clientTracker.registerTxSession(sessionId, "alice", "nodeB");
         final var clientId = session.clientId();
         try {

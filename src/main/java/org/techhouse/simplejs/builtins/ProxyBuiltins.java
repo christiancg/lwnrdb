@@ -14,9 +14,8 @@ public final class ProxyBuiltins {
     }
 
     public static JsNativeFunction create() {
-        final var proxy = new JsNativeFunction("Proxy", (thisArg, args) -> {
-            final var newTarget = JsNativeFunction.currentNewTarget();
-            if ((newTarget == null || newTarget instanceof JsUndefined) && !(thisArg instanceof JsObject)) {
+        final var proxy = new JsNativeFunction("Proxy", (thisArg, args, newTarget) -> {
+            if (!NewTargetSupport.isConstructCall(newTarget) && !(thisArg instanceof JsObject)) {
                 throw new TypeErrorException("Constructor Proxy requires 'new'");
             }
             return construct(args);

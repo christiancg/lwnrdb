@@ -54,6 +54,7 @@ public class TransactionFencedTeardownTest {
 
     private UUID fencedTransaction(String id) throws Exception {
         final var clientId = clientTracker.registerForwardedClient("fencer");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var transaction = clientTracker.getActiveTransaction(clientId);
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -67,6 +68,7 @@ public class TransactionFencedTeardownTest {
 
     private UUID preparedTransaction(String id) throws Exception {
         final var clientId = clientTracker.registerForwardedClient("preparer");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var transaction = clientTracker.getActiveTransaction(clientId);
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -215,6 +217,7 @@ public class TransactionFencedTeardownTest {
     @Test
     public void test_an_unfenced_transaction_is_still_rolled_back_normally() {
         final var clientId = clientTracker.registerForwardedClient("ordinary");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var transaction = clientTracker.getActiveTransaction(clientId);
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -270,6 +273,7 @@ public class TransactionFencedTeardownTest {
     @Test
     public void test_a_fenced_commit_keeps_the_transaction_registered() throws Exception {
         final var clientId = clientTracker.registerForwardedClient("fenced-owner");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var transaction = clientTracker.getActiveTransaction(clientId);
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);

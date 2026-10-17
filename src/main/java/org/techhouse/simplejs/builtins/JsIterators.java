@@ -3,10 +3,7 @@ package org.techhouse.simplejs.builtins;
 import static org.techhouse.simplejs.values.JsObject.PropertyFlags.HIDDEN;
 import static org.techhouse.simplejs.values.JsObject.PropertyFlags.TAG;
 
-import java.util.Collections;
 import java.util.Iterator;
-import java.util.Map;
-import java.util.WeakHashMap;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -19,7 +16,8 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class JsIterators {
-    private static final Map<JsObject, Supplier<JsValue>> STATE = Collections.synchronizedMap(new WeakHashMap<>());
+    private interface Stepper extends Supplier<JsValue> {
+    }
 
     private JsIterators() {
     }
@@ -53,7 +51,7 @@ public final class JsIterators {
     }
 
     public static JsValue linkPrototype(JsValue value, JsObject proto) {
-        if (proto != null && value instanceof JsObject object && STATE.containsKey(object)) {
+        if (proto != null && value instanceof JsObject object && object.getInternalSlot() instanceof Stepper) {
             object.setProto(proto);
         }
         return value;
@@ -62,7 +60,7 @@ public final class JsIterators {
     private static JsObject instance(Supplier<JsValue> stepper) {
         final var iterator = new JsObject();
         final var done = new boolean[]{false};
-        STATE.put(iterator, () -> {
+        iterator.setInternalSlot((Stepper) () -> {
             if (done[0]) {
                 return null;
             }
@@ -74,8 +72,7 @@ public final class JsIterators {
     }
 
     private static JsValue step(JsValue receiver, String tag, JsObject objectProto) {
-        final var stepper = receiver instanceof JsObject object ? STATE.get(object) : null;
-        if (stepper == null) {
+        if (!(receiver instanceof JsObject object) || !(object.getInternalSlot() instanceof Stepper stepper)) {
             throw new TypeErrorException(tag + ".next called on an incompatible receiver");
         }
         final var value = stepper.get();

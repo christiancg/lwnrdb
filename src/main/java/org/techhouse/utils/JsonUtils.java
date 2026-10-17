@@ -5,10 +5,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.function.ToIntBiFunction;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
@@ -25,6 +25,7 @@ import org.techhouse.ejson.internal.JsonStrings;
 
 public final class JsonUtils {
     private static final double MAX_EXACT_LONG = 9007199254740992d;
+    private static final int MAX_RECURSIVE_NESTING_LIMIT = 1024;
 
     private JsonUtils() {
     }
@@ -84,8 +85,8 @@ public final class JsonUtils {
             return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
         }
         if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-            return FieldIndexEntry.compareIndexedNumbers(o1Primitive.asJsonNumber().getValue(),
-                    o2Primitive.asJsonNumber().getValue());
+            return FieldIndexEntry.compareIndexedNumbers(o1Primitive.asJsonNumber().doubleValue(),
+                    o2Primitive.asJsonNumber().doubleValue());
         }
         if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
             return Boolean.compare(o1Primitive.asJsonBoolean().getValue(), o2Primitive.asJsonBoolean().getValue());
@@ -143,18 +144,19 @@ public final class JsonUtils {
     }
 
     private static void appendCanonicalObject(JsonObject object, StringBuilder sb) {
-        final var entries = new ArrayList<>(object.entrySet());
-        entries.sort(java.util.Map.Entry.comparingByKey());
+        final var keys = new String[object.size()];
+        for (var i = 0; i < keys.length; i++) {
+            keys[i] = object.keyAt(i);
+        }
+        Arrays.sort(keys);
         sb.append('{');
-        var first = true;
-        for (final var entry : entries) {
-            if (!first) {
+        for (var i = 0; i < keys.length; i++) {
+            if (i > 0) {
                 sb.append(',');
             }
-            first = false;
-            appendCanonicalString(entry.getKey(), sb);
+            appendCanonicalString(keys[i], sb);
             sb.append(':');
-            appendCanonical(entry.getValue(), sb);
+            appendCanonical(object.get(keys[i]), sb);
         }
         sb.append('}');
     }
@@ -283,6 +285,11 @@ public final class JsonUtils {
         parent.remove(segments.getLast());
     }
 
+    public static String rootOf(String path) {
+        final var segments = pathSegments(path);
+        return segments.isEmpty() ? null : segments.getFirst();
+    }
+
     private static List<String> pathSegments(String path) {
         if (path.indexOf('.') < 0) {
             return List.of(path);
@@ -304,6 +311,13 @@ public final class JsonUtils {
     }
 
     public static boolean nestingExceeds(JsonBaseElement root, int limit) {
+        if (limit > MAX_RECURSIVE_NESTING_LIMIT) {
+            return nestingExceedsIteratively(root, limit);
+        }
+        return nestingExceeds(root, 1, limit);
+    }
+
+    private static boolean nestingExceedsIteratively(JsonBaseElement root, int limit) {
         final var pending = new ArrayDeque<NestedElement>();
         pending.push(new NestedElement(root, 1));
         while (!pending.isEmpty()) {
@@ -326,9 +340,44 @@ public final class JsonUtils {
     }
 
     private static Collection<JsonBaseElement> childrenOf(JsonBaseElement element) {
-        return element instanceof JsonObject object
-                ? object.entrySet().stream().map(Map.Entry::getValue).toList()
-                : element.asJsonArray().asList();
+        if (!(element instanceof JsonObject object)) {
+            return element.asJsonArray().asList();
+        }
+        final var children = new ArrayList<JsonBaseElement>(object.size());
+        for (var index = 0; index < object.size(); index++) {
+            children.add(object.valueAt(index));
+        }
+        return children;
+    }
+
+    private static boolean nestingExceeds(JsonBaseElement element, int depth, int limit) {
+        switch (element) {
+            case JsonObject object -> {
+                if (depth > limit) {
+                    return true;
+                }
+                for (var index = 0; index < object.size(); index++) {
+                    if (nestingExceeds(object.valueAt(index), depth + 1, limit)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            case JsonArray array -> {
+                if (depth > limit) {
+                    return true;
+                }
+                for (var index = 0; index < array.size(); index++) {
+                    if (nestingExceeds(array.get(index), depth + 1, limit)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            default -> {
+                return false;
+            }
+        }
     }
 
 }

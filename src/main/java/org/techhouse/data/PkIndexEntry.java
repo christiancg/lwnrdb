@@ -1,10 +1,15 @@
 package org.techhouse.data;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import org.techhouse.config.Globals;
 
 public class PkIndexEntry extends CollectionScopedEntry implements Comparable<String> {
     private static final int FIELD_COUNT = 5;
+    private static final int MAX_UNCHECKED_DIGITS = 18;
+    private static final byte SEPARATOR = (byte) Globals.ID_SEPARATOR.charAt(0);
+    private static final String DELETE_MARK = "-";
+    private static final byte DELETE_MARK_BYTE = '-';
     private String value;
     private long position;
     private long length;
@@ -36,14 +41,59 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
     }
 
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
-        final var cleaned = line.replace("\r", "").replace("\n", "");
-        final var fields = cleaned.split(Globals.ID_SEPARATOR, -1);
-        if (fields.length != FIELD_COUNT) {
+        final var bytes = line.replace("\r", "").replace("\n", "").getBytes(StandardCharsets.UTF_8);
+        return fromIndexFileBytes(databaseName, collectionName, bytes, 0, bytes.length);
+    }
+
+    public static PkIndexEntry fromIndexFileBytes(String databaseName, String collectionName, byte[] line, int start,
+            int end) {
+        final var valueEnd = nextSeparator(line, start, end);
+        final var positionEnd = nextSeparator(line, valueEnd + 1, end);
+        final var lengthEnd = nextSeparator(line, positionEnd + 1, end);
+        final var pageEnd = nextSeparator(line, lengthEnd + 1, end);
+        if (pageEnd >= end || nextSeparator(line, pageEnd + 1, end) != end) {
             throw new IllegalArgumentException("A PK index line must hold " + FIELD_COUNT + " separated fields");
         }
-        return new PkIndexEntry(databaseName, collectionName, FieldIndexEntry.unescapeIndexToken(fields[0]),
-                Long.parseLong(fields[1]), Long.parseLong(fields[2]), Long.parseLong(fields[3]),
-                Long.parseLong(fields[4]));
+        final var value = new String(line, start, valueEnd - start, StandardCharsets.UTF_8);
+        return new PkIndexEntry(databaseName, collectionName, FieldIndexEntry.unescapeIndexToken(value),
+                parseLong(line, valueEnd + 1, positionEnd), parseLong(line, positionEnd + 1, lengthEnd),
+                parseLong(line, lengthEnd + 1, pageEnd), parseLong(line, pageEnd + 1, end));
+    }
+
+    public static String toDeleteRow(String id) {
+        return FieldIndexEntry.escapeIndexToken(id) + Globals.ID_SEPARATOR + DELETE_MARK;
+    }
+
+    public static String deletedIdOf(byte[] line, int start, int end) {
+        final var valueEnd = nextSeparator(line, start, end);
+        if (valueEnd + 2 != end || line[valueEnd + 1] != DELETE_MARK_BYTE) {
+            return null;
+        }
+        return FieldIndexEntry.unescapeIndexToken(new String(line, start, valueEnd - start, StandardCharsets.UTF_8));
+    }
+
+    private static int nextSeparator(byte[] line, int from, int end) {
+        for (var index = from; index < end; index++) {
+            if (line[index] == SEPARATOR) {
+                return index;
+            }
+        }
+        return end;
+    }
+
+    private static long parseLong(byte[] line, int from, int to) {
+        if (from < to && to - from <= MAX_UNCHECKED_DIGITS) {
+            var value = 0L;
+            var index = from;
+            while (index < to && line[index] >= '0' && line[index] <= '9') {
+                value = value * 10 + (line[index] - '0');
+                index++;
+            }
+            if (index == to) {
+                return value;
+            }
+        }
+        return Long.parseLong(new String(line, from, to - from, StandardCharsets.UTF_8));
     }
 
     public String getValue() {

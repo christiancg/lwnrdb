@@ -78,7 +78,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_boolean_to_number_returns_null() {
         JsonObject input = new JsonObject();
-        input.add("t", new JsonBoolean(true));
+        input.add("t", JsonBoolean.of(true));
         JsonObject result = MapOperatorHelper.processOperator(
                 new AddFieldMapOperator("n", null, new CastMidOperator("t", CastToType.NUMBER)), input);
         assertTrue(result.get("n").isJsonNull());
@@ -114,7 +114,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_boolean_to_string() {
         JsonObject input = new JsonObject();
-        input.add("flag", new JsonBoolean(true));
+        input.add("flag", JsonBoolean.of(true));
         CastMidOperator cast = new CastMidOperator("flag", CastToType.STRING);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
         assertEquals("true", result.get("out").asJsonString().getValue());
@@ -123,7 +123,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_boolean_to_boolean_returns_same() {
         JsonObject input = new JsonObject();
-        input.add("flag", new JsonBoolean(false));
+        input.add("flag", JsonBoolean.of(false));
         CastMidOperator cast = new CastMidOperator("flag", CastToType.BOOLEAN);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
         assertFalse(result.get("out").asJsonBoolean().getValue());
@@ -249,7 +249,7 @@ public class MapOperatorCastTest {
     @Test
     public void test_cast_integral_string_to_number_narrows_like_the_parser() {
         assertEquals(new JsonNumber("5").getValue(), castToNumber("5").asJsonNumber().getValue());
-        assertInstanceOf(Integer.class, castToNumber("5").asJsonNumber().getValue());
+        assertInstanceOf(Double.class, castToNumber("5").asJsonNumber().getValue());
         assertEquals(new JsonNumber("2147483647").getValue(), castToNumber("2147483647").asJsonNumber().getValue());
         assertEquals(new JsonNumber("2147483648").getValue(), castToNumber("2147483648").asJsonNumber().getValue());
     }
@@ -314,5 +314,11 @@ public class MapOperatorCastTest {
         }
         assertEquals(List.of(), disagreeing,
                 "CAST to STRING must spell a number exactly as the document serializer spells it");
+    }
+
+    @Test
+    public void test_cast_negative_zero_to_number_is_positive_zero() {
+        assertEquals(0, Double.compare(0.0, castToNumber("-0").asJsonNumber().doubleValue()));
+        assertEquals(0, Double.compare(0.0, castToNumber("-0.0").asJsonNumber().doubleValue()));
     }
 }

@@ -1,15 +1,17 @@
 package org.techhouse.listen;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
+import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.ejson.EJson;
+import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.resp.ListenEndedResponse;
@@ -21,8 +23,8 @@ public class ListenProcessorThread implements Runnable {
     private final LinkedBlockingQueue<UUID> dirtyQueue;
     private final ListenManager manager;
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private final EJson eJson = IocContainer.get(EJson.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final Configuration configuration = Configuration.getInstance();
 
     public ListenProcessorThread(LinkedBlockingQueue<UUID> dirtyQueue, ListenManager manager) {
         this.dirtyQueue = dirtyQueue;
@@ -38,7 +40,7 @@ public class ListenProcessorThread implements Runnable {
                 processListen(listenId);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-            } catch (Exception e) {
+            } catch (Exception | Error e) {
                 logger.error("Error in listen processor thread: ", e);
             }
         }
@@ -79,7 +81,11 @@ public class ListenProcessorThread implements Runnable {
         }
         final List<JsonObject> results;
         try {
-            results = AggregationOperationHelper.processAggregation(registration.request());
+            results = AggregationOperationHelper.processAggregation(registration.request(),
+                    configuration.longValue(ConfigKey.LISTEN_RERUN_TIMEOUT_MS));
+        } catch (AggregateLimitException refused) {
+            logger.warning("Listen " + listenId + " was not re-run: " + refused.getMessage());
+            return null;
         } catch (Exception e) {
             logger.error("Error re-running listen query for " + listenId, e);
             return null;
@@ -118,9 +124,9 @@ public class ListenProcessorThread implements Runnable {
     }
 
     private void push(UUID listenId, UUID clientId, OperationResponse frame, ListenRegistration expected) {
-        final var writer = clientTracker.getWriter(clientId);
+        final var outbound = clientTracker.getOutbound(clientId);
         final var writerLock = clientTracker.getWriterLock(clientId);
-        if (writer == null || writerLock == null) {
+        if (outbound == null || writerLock == null) {
             manager.unregister(listenId);
             return;
         }
@@ -129,11 +135,9 @@ public class ListenProcessorThread implements Runnable {
             if (expected != null && manager.getRegistration(listenId) != expected) {
                 return;
             }
-            writer.write(eJson.toJson(frame));
-            writer.newLine();
-            writer.flush();
-        } catch (IOException e) {
-            manager.unregister(listenId);
+            if (!outbound.offer(OutboundQueue.frameOf(frame))) {
+                manager.unregister(listenId);
+            }
         } finally {
             writerLock.unlock();
         }

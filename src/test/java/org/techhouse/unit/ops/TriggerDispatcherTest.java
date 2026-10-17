@@ -39,6 +39,7 @@ import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
@@ -194,7 +195,7 @@ public class TriggerDispatcherTest {
         installTrigger("temporary", true, false);
         final var deleteRequest = new DeleteUserRequest();
         deleteRequest.setUsername("temporary");
-        UserOperationHelper.processDeleteUser(deleteRequest);
+        UserOperationHelper.processDeleteUser(deleteRequest, new RestampedRecords());
         final var failedBefore = triggerExecutor.getFailed();
         TriggerDispatcher.dispatch(event("orphaned", OWNER, 0));
         assertNull(auditRow("orphaned"), "a trigger whose definer is gone must not run");

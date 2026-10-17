@@ -2,8 +2,7 @@ package org.techhouse.unit.data;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.BufferedWriter;
-import java.io.StringWriter;
+import java.io.ByteArrayOutputStream;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.ClientTracker;
@@ -13,45 +12,45 @@ import org.techhouse.test.TestUtils;
 public class ClientWriterTest {
 
     @Test
-    public void client_writerGetterSetter() {
+    public void client_outboundGetterSetter() {
         final var client = new Client("127.0.0.1");
-        final var writer = new BufferedWriter(new StringWriter());
+        final var outbound = TestUtils.inlineOutbound(new ByteArrayOutputStream());
 
-        client.setWriter(writer);
+        client.setOutbound(outbound);
 
-        assertSame(writer, client.getWriter());
+        assertSame(outbound, client.getOutbound());
     }
 
     @Test
-    public void clientTracker_registerAndGetWriter() {
+    public void clientTracker_registerAndGetOutbound() {
         final var tracker = new ClientTracker();
         final var clientId = tracker.addClient(TestUtils.clientSocket());
-        final var writer = new BufferedWriter(new StringWriter());
+        final var outbound = TestUtils.inlineOutbound(new ByteArrayOutputStream());
 
-        tracker.registerWriter(clientId, writer);
+        tracker.registerOutbound(clientId, outbound);
 
-        assertSame(writer, tracker.getWriter(clientId));
+        assertSame(outbound, tracker.getOutbound(clientId));
     }
 
     @Test
-    public void clientTracker_getWriter_unknownId_returnsNull() {
+    public void clientTracker_getOutbound_unknownId_returnsNull() {
         final var tracker = new ClientTracker();
 
-        assertNull(tracker.getWriter(UUID.randomUUID()));
+        assertNull(tracker.getOutbound(UUID.randomUUID()));
     }
 
     @Test
-    public void clientTracker_registerWriter_nullId_doesNotThrow() {
+    public void clientTracker_registerOutbound_nullId_doesNotThrow() {
         final var tracker = new ClientTracker();
-        final var writer = new BufferedWriter(new StringWriter());
+        final var outbound = TestUtils.inlineOutbound(new ByteArrayOutputStream());
 
-        assertDoesNotThrow(() -> tracker.registerWriter(null, writer));
+        assertDoesNotThrow(() -> tracker.registerOutbound(null, outbound));
     }
 
     @Test
-    public void clientTracker_getWriter_nullId_returnsNull() {
+    public void clientTracker_getOutbound_nullId_returnsNull() {
         final var tracker = new ClientTracker();
 
-        assertNull(tracker.getWriter(null));
+        assertNull(tracker.getOutbound(null));
     }
 }

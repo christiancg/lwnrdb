@@ -20,6 +20,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
@@ -133,7 +134,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         index(cache, "status");
 
         final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));
-        final var ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL);
+        final var ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL,
+                PipelineContext.withoutScripts());
 
         assertEquals(java.util.Set.of("r1", "r3"), ids);
     }
@@ -144,7 +146,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         addIndexedDoc(cache, "r1", new JsonString("active"));
 
         final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));
-        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL));
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL,
+                PipelineContext.withoutScripts()));
     }
 
     @Test
@@ -158,8 +161,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         final var and = new ConjunctionOperator(ConjunctionOperatorType.AND,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
-        assertEquals(java.util.Set.of("r1"),
-                FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(java.util.Set.of("r1"), FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB,
+                TestGlobals.COLL, PipelineContext.withoutScripts()));
     }
 
     @Test
@@ -173,8 +176,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         final var or = new ConjunctionOperator(ConjunctionOperatorType.OR,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(3))));
-        assertEquals(java.util.Set.of("r1", "r2", "r3"),
-                FilterOperatorHelper.resolveIdsViaIndex(or, TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(java.util.Set.of("r1", "r2", "r3"), FilterOperatorHelper.resolveIdsViaIndex(or, TestGlobals.DB,
+                TestGlobals.COLL, PipelineContext.withoutScripts()));
     }
 
     @Test
@@ -188,8 +191,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         final var xor = new ConjunctionOperator(ConjunctionOperatorType.XOR,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
-        assertEquals(java.util.Set.of("r2", "r3"),
-                FilterOperatorHelper.resolveIdsViaIndex(xor, TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(java.util.Set.of("r2", "r3"), FilterOperatorHelper.resolveIdsViaIndex(xor, TestGlobals.DB,
+                TestGlobals.COLL, PipelineContext.withoutScripts()));
     }
 
     @Test
@@ -204,8 +207,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         final var nor = new ConjunctionOperator(ConjunctionOperatorType.NOR,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(3))));
-        assertEquals(java.util.Set.of(),
-                FilterOperatorHelper.resolveIdsViaIndex(nor, TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(java.util.Set.of(), FilterOperatorHelper.resolveIdsViaIndex(nor, TestGlobals.DB, TestGlobals.COLL,
+                PipelineContext.withoutScripts()));
     }
 
     @Test
@@ -220,8 +223,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         final var nand = new ConjunctionOperator(ConjunctionOperatorType.NAND,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
-        assertEquals(java.util.Set.of("r2", "r3"),
-                FilterOperatorHelper.resolveIdsViaIndex(nand, TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(java.util.Set.of("r2", "r3"), FilterOperatorHelper.resolveIdsViaIndex(nand, TestGlobals.DB,
+                TestGlobals.COLL, PipelineContext.withoutScripts()));
     }
 
     @Test
@@ -233,7 +236,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         final var and = new ConjunctionOperator(ConjunctionOperatorType.AND,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
-        assertNull(FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB, TestGlobals.COLL));
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB, TestGlobals.COLL,
+                PipelineContext.withoutScripts()));
     }
 
     @Test
@@ -243,7 +247,8 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         index(cache, "status");
 
         final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("missing"));
-        final var ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL);
+        final var ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL,
+                PipelineContext.withoutScripts());
 
         assertNotNull(ids);
         assertTrue(ids.isEmpty());
@@ -288,7 +293,9 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
 
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", objField(1));
-        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL),
+        assertNull(
+                FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL,
+                        PipelineContext.withoutScripts()),
                 "object operands are disqualified from the index-only COUNT (hash hits are candidates)");
 
         final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
@@ -310,7 +317,9 @@ public class FilterOperatorResolutionTest extends FilterResolutionSupport {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
 
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", arrField("x", "y"));
-        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL),
+        assertNull(
+                FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL,
+                        PipelineContext.withoutScripts()),
                 "array operands are disqualified from the index-only COUNT (hash hits are candidates)");
 
         final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)

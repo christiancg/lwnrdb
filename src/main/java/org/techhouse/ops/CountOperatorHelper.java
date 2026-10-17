@@ -37,10 +37,10 @@ public final class CountOperatorHelper {
         return Stream.of(result);
     }
 
-    public static FastCount tryIndexOnlyCount(List<BaseAggregationStep> steps, String dbName, String collName)
-            throws IOException {
+    public static FastCount tryIndexOnlyCount(List<BaseAggregationStep> steps, String dbName, String collName,
+            PipelineContext context) throws IOException {
         final var countIndex = indexOfFirstCount(steps);
-        if (countIndex < 1 || AggregationStepValidator.containsScript(steps.subList(0, countIndex))) {
+        if (countIndex < 1 || AggregationStepValidator.canFailWhileRunning(steps.subList(0, countIndex))) {
             return null;
         }
         final var filterSets = new ArrayList<Set<String>>();
@@ -53,7 +53,7 @@ public final class CountOperatorHelper {
                         return null;
                     }
                     final var operator = ((FilterAggregationStep) step).getOperator();
-                    final var ids = FilterOperatorHelper.resolveIdsViaIndex(operator, dbName, collName);
+                    final var ids = FilterOperatorHelper.resolveIdsViaIndex(operator, dbName, collName, context);
                     if (ids == null) {
                         return null;
                     }

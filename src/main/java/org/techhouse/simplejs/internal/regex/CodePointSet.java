@@ -8,6 +8,7 @@ public final class CodePointSet {
     public static final int MAX_CODE_POINT = 0x10FFFF;
     public static final CodePointSet EMPTY = new CodePointSet(new int[0]);
     public static final CodePointSet ALL = CodePointSet.of(0, MAX_CODE_POINT);
+    private static final int OBJECT_AND_ARRAY_HEADER_BYTES = 32;
 
     private final int[] ranges;
 
@@ -24,6 +25,10 @@ public final class CodePointSet {
 
     public static CodePointSet ofChar(int cp) {
         return of(cp, cp);
+    }
+
+    long estimatedBytes() {
+        return OBJECT_AND_ARRAY_HEADER_BYTES + (long) Integer.BYTES * ranges.length;
     }
 
     public boolean isEmpty() {

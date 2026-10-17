@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.data.DbEntry;
 
 public class BulkEntityEventTest {
@@ -21,8 +22,8 @@ public class BulkEntityEventTest {
 
         assertEquals(dbName, event.getDbName());
         assertEquals(collName, event.getCollName());
-        assertEquals(insertedEntries, event.getInsertedEntries());
-        assertEquals(updatedEntries, event.getUpdatedEntries());
+        assertEquals(EntityRef.allOf(insertedEntries), event.getInserted());
+        assertEquals(EntityRef.allOf(updatedEntries), event.getUpdated());
     }
 
     @Test
@@ -36,8 +37,8 @@ public class BulkEntityEventTest {
 
         assertEquals(dbName, event.getDbName());
         assertEquals(collName, event.getCollName());
-        assertTrue(event.getInsertedEntries().isEmpty());
-        assertTrue(event.getUpdatedEntries().isEmpty());
+        assertTrue(event.getInserted().isEmpty());
+        assertTrue(event.getUpdated().isEmpty());
     }
 
     @Test
@@ -48,8 +49,8 @@ public class BulkEntityEventTest {
         BulkEntityEvent event = new BulkEntityEvent("testDB", "testCollection", insertedEntries, updatedEntries);
         assertEquals("testDB", event.getDbName());
         assertEquals("testCollection", event.getCollName());
-        assertEquals(insertedEntries, event.getInsertedEntries());
-        assertEquals(updatedEntries, event.getUpdatedEntries());
+        assertEquals(EntityRef.allOf(insertedEntries), event.getInserted());
+        assertEquals(EntityRef.allOf(updatedEntries), event.getUpdated());
     }
 
     @Test

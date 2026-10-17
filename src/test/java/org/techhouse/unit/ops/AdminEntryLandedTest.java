@@ -231,6 +231,7 @@ public class AdminEntryLandedTest {
 
     private UUID transactionSaving(String clientName, String id) {
         final var clientId = clientTracker.registerForwardedClient(clientName);
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var object = new JsonObject();

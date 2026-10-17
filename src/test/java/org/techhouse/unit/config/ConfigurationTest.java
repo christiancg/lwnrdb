@@ -264,4 +264,17 @@ public class ConfigurationTest {
             }
         }
     }
+
+    @Test
+    public void test_schema_validation_budget_defaults_to_five_million() {
+        assertEquals(5_000_000, Configuration.getInstance().getSchemaValidationBudget());
+    }
+
+    @Test
+    public void test_connection_limits_resolve_their_shipped_defaults() {
+        final var config = Configuration.getInstance();
+        assertEquals(64L * 1024 * 1024, config.getMaxRequestSize());
+        assertEquals(10_000L, config.getAuthTimeoutMs());
+        assertEquals(30_000L, config.getTransactionIdleTimeoutMs());
+    }
 }

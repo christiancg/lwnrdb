@@ -181,7 +181,7 @@ public final class YieldDelegation {
 
     private JsValue openIterator(JsValue iterable, JsValue method, String name) {
         if (isNullish(method)) {
-            throw new TypeErrorException(JsCoercion.toStr(iterable) + " is not iterable");
+            throw new TypeErrorException(JsCoercion.describe(iterable) + " is not iterable");
         }
         if (!isCallable(method)) {
             throw new TypeErrorException(name + " is not a function");

@@ -18,6 +18,7 @@ import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.DirtySink;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.DeleteOperationHelper;
 import org.techhouse.ops.OperationProcessor;
@@ -110,8 +111,8 @@ public class ReplicatedApplyHelperTest {
         final var baseline = dirtyQueueSize();
         final var queuedDuringApply = new ArrayList<Integer>();
         try (var mocked = mockStatic(DeleteOperationHelper.class)) {
-            mocked.when(() -> DeleteOperationHelper.executeDelete(any())).thenAnswer(ignored -> {
-                listenManager.markDirty(TestGlobals.DB, TestGlobals.COLL);
+            mocked.when(() -> DeleteOperationHelper.executeDelete(any(), any())).thenAnswer(invocation -> {
+                invocation.getArgument(1, DirtySink.class).markDirty(TestGlobals.DB, TestGlobals.COLL);
                 queuedDuringApply.add(dirtyQueueSize() - baseline);
                 return null;
             });
@@ -142,8 +143,8 @@ public class ReplicatedApplyHelperTest {
     public void test_the_flush_runs_even_when_an_apply_throws() throws Exception {
         final var listenId = registerListener();
         try (var mocked = mockStatic(DeleteOperationHelper.class)) {
-            mocked.when(() -> DeleteOperationHelper.executeDelete(any())).thenAnswer(ignored -> {
-                listenManager.markDirty(TestGlobals.DB, TestGlobals.COLL);
+            mocked.when(() -> DeleteOperationHelper.executeDelete(any(), any())).thenAnswer(invocation -> {
+                invocation.getArgument(1, DirtySink.class).markDirty(TestGlobals.DB, TestGlobals.COLL);
                 throw new java.io.IOException("disk full");
             });
             final var before = dirtyQueueSize();

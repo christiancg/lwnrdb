@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -95,14 +96,14 @@ public class CacheCompletenessGateTest extends CacheFixtureSupport {
     }
 
     @Test
-    public void test_initializeStreamIfNecessary_skips_cache_when_disabled() throws Exception {
+    public void test_streamCollection_skips_cache_when_disabled() throws Exception {
         final var config = Configuration.getInstance();
         final long original = config.getMaxMemoryBytes();
         TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             TestUtils.createTestDatabaseAndCollection();
-            final var stream = cache.initializeStreamIfNecessary(null, TestGlobals.DB, TestGlobals.COLL);
+            final var stream = cache.streamCollection(TestGlobals.DB, TestGlobals.COLL);
             assertNotNull(stream);
             stream.close();
             final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
@@ -143,7 +144,7 @@ public class CacheCompletenessGateTest extends CacheFixtureSupport {
     }
 
     @Test
-    public void test_streamCollection_not_cached_streams_pages_with_headroom_check() throws Exception {
+    public void test_streamCollection_not_cached_asks_headroom_for_the_page_heap_after_reading_it() throws Exception {
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
         TestUtils.setPrivateField(cache, "fs", fsMock);
@@ -171,8 +172,12 @@ public class CacheCompletenessGateTest extends CacheFixtureSupport {
         }
 
         assertEquals(2, result.size());
-        verify(mmMock).ensureHeadroomForBytes(1234L);
-        verify(fsMock).readWholeCollectionPage("userDb", "c1", 0L);
+        final var pageHeap = CacheSizeEstimator.estimatePageHeap(page.values());
+        assertNotEquals(1234L, pageHeap, "the fixture must tell the on-disk size and the page heap apart");
+        final var order = inOrder(fsMock, mmMock);
+        order.verify(fsMock).readWholeCollectionPage("userDb", "c1", 0L);
+        order.verify(mmMock).ensureHeadroomForBytes(pageHeap);
+        verify(mmMock, never()).ensureHeadroomForBytes(1234L);
     }
 
     @Test

@@ -27,6 +27,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.ScheduleDispatcher;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -72,7 +73,7 @@ public class ScheduleDispatcherTest {
     @AfterAll
     static void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         IocContainer.get(ScheduleRegistry.class).clear();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
@@ -146,10 +147,13 @@ public class ScheduleDispatcherTest {
     @Test
     public void test_is_bounded_by_the_definers_authority() throws Exception {
         storeWritingProcedure();
-        final var before = scheduleExecutor.getFailed();
+        final var before = scheduleExecutor.getSkipped();
         ScheduleDispatcher.dispatch(register("job", OUTSIDER, true, 0L, idArgs("by-outsider")));
         assertNull(outputRow("by-outsider"));
-        assertEquals(before + 1, scheduleExecutor.getFailed());
+        assertEquals(before + 1, scheduleExecutor.getSkipped());
+        final var stored = cache.getSchedule(TestGlobals.DB, "s");
+        assertFalse(stored.isEnabled(), "a definer without script RUN disables the schedule");
+        assertTrue(stored.getDisabledReason().contains("no longer holds script RUN"));
     }
 
     // Deliberately no fallback to an admin: that would let deleting a user widen a job's authority.
@@ -160,7 +164,7 @@ public class ScheduleDispatcherTest {
         final var entry = register("job", "tempdefiner", true, 0L, idArgs("no-definer"));
         final var request = new DeleteUserRequest();
         request.setUsername("tempdefiner");
-        UserOperationHelper.processDeleteUser(request);
+        UserOperationHelper.processDeleteUser(request, new RestampedRecords());
 
         final var before = scheduleExecutor.getSkipped();
         ScheduleDispatcher.dispatch(entry);

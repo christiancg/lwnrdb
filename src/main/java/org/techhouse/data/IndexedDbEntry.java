@@ -14,6 +14,7 @@ public class IndexedDbEntry extends JsonDocumentEntry {
         entry.setData(data);
         if (index != null) {
             entry.setPage(index.getPage());
+            entry.rememberEncodedLength(Math.toIntExact(index.getLength()));
         }
         entry.setVersion(version);
         entry.setPreviousByteSize(previousByteSize);

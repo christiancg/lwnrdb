@@ -1,13 +1,11 @@
 src/main/java/org/techhouse/Main.java 3
 src/main/java/org/techhouse/ShutdownCoordinator.java 2
-src/main/java/org/techhouse/analyze/AnalyzeContext.java 1
 src/main/java/org/techhouse/bckg_ops/PendingIndexWrites.java 1
 src/main/java/org/techhouse/cache/AdminCache.java 8
 src/main/java/org/techhouse/cache/AdminPageCache.java 1
 src/main/java/org/techhouse/cache/Cache.java 3
-src/main/java/org/techhouse/cache/CacheSizeEstimator.java 2
 src/main/java/org/techhouse/cache/DefinitionCache.java 3
-src/main/java/org/techhouse/cache/UserCache.java 8
+src/main/java/org/techhouse/cache/UserCache.java 4
 src/main/java/org/techhouse/cluster/ClusterConnectionHandler.java 8
 src/main/java/org/techhouse/cluster/ClusterCoordinator.java 6
 src/main/java/org/techhouse/cluster/ClusterRouter.java 4
@@ -40,9 +38,7 @@ src/main/java/org/techhouse/ejson/custom_types/CustomTypeFactory.java 1
 src/main/java/org/techhouse/ejson/custom_types/GeoDistanceComparator.java 1
 src/main/java/org/techhouse/ejson/custom_types/JsonGeo.java 2
 src/main/java/org/techhouse/ejson/custom_types/JsonVector.java 1
-src/main/java/org/techhouse/ejson/elements/JsonNumber.java 2
 src/main/java/org/techhouse/ejson/internal/JsonStrings.java 2
-src/main/java/org/techhouse/ejson/internal/Lexer.java 1
 src/main/java/org/techhouse/ejson/internal/NumberFormatter.java 2
 src/main/java/org/techhouse/ejson/internal/ReflectionUtils.java 4
 src/main/java/org/techhouse/ejson/internal/UnsafeAllocator.java 1
@@ -54,8 +50,6 @@ src/main/java/org/techhouse/fs/DocumentPageStore.java 2
 src/main/java/org/techhouse/fs/FieldIndexLoader.java 3
 src/main/java/org/techhouse/fs/FileLocks.java 3
 src/main/java/org/techhouse/fs/FilePaths.java 4
-src/main/java/org/techhouse/fs/PkCompaction.java 1
-src/main/java/org/techhouse/fs/PkIndexStore.java 1
 src/main/java/org/techhouse/ops/AdminOperationHelper.java 4
 src/main/java/org/techhouse/ops/AggregationOperationHelper.java 1
 src/main/java/org/techhouse/ops/AnalyzeHelper.java 1
@@ -64,10 +58,9 @@ src/main/java/org/techhouse/ops/DeleteOperationHelper.java 1
 src/main/java/org/techhouse/ops/EntrySizeGuard.java 1
 src/main/java/org/techhouse/ops/FilterOperatorHelper.java 10
 src/main/java/org/techhouse/ops/GeoSpatialIndexHelper.java 4
-src/main/java/org/techhouse/ops/IndexHelper.java 8
 src/main/java/org/techhouse/ops/OperationProcessor.java 2
 src/main/java/org/techhouse/ops/ReplicatedApplyHelper.java 3
-src/main/java/org/techhouse/ops/SaveOperationHelper.java 8
+src/main/java/org/techhouse/ops/SaveOperationHelper.java 7
 src/main/java/org/techhouse/ops/SchemaOperationHelper.java 1
 src/main/java/org/techhouse/ops/SchemaValidationHelper.java 2
 src/main/java/org/techhouse/ops/TransactionOperationHelper.java 4
@@ -79,7 +72,6 @@ src/main/java/org/techhouse/ops/admin/ReadPathHelper.java 1
 src/main/java/org/techhouse/ops/auth/AuthorizationChecker.java 4
 src/main/java/org/techhouse/ops/index/IndexEntryReader.java 4
 src/main/java/org/techhouse/ops/index/IndexOperationHelper.java 4
-src/main/java/org/techhouse/ops/index/IndexValueCodec.java 2
 src/main/java/org/techhouse/ops/index/PendingWriteReconciler.java 2
 src/main/java/org/techhouse/ops/req/OperationRequest.java 2
 src/main/java/org/techhouse/ops/req/RequestParser.java 3
@@ -114,7 +106,6 @@ src/test/java/org/techhouse/unit/bckg_ops/ScheduleExecutorTest.java 5
 src/test/java/org/techhouse/unit/bckg_ops/TriggerExecutorTest.java 4
 src/test/java/org/techhouse/unit/bckg_ops/events/EventTest.java 1
 src/test/java/org/techhouse/unit/cache/AdminCacheBoundsTest.java 3
-src/test/java/org/techhouse/unit/cache/AdminCachePageTest.java 2
 src/test/java/org/techhouse/unit/cache/AdminCacheProcedureTest.java 1
 src/test/java/org/techhouse/unit/cache/AdminCacheTest.java 2
 src/test/java/org/techhouse/unit/cache/AdminCacheTriggerTest.java 1
@@ -125,7 +116,7 @@ src/test/java/org/techhouse/unit/cache/MemoryManagementTest.java 2
 src/test/java/org/techhouse/unit/cache/UserCacheAdmissionTest.java 3
 src/test/java/org/techhouse/unit/cache/UserCacheEntryTest.java 2
 src/test/java/org/techhouse/unit/cache/UserCacheEvictionTest.java 1
-src/test/java/org/techhouse/unit/cache/UserCacheIndexTest.java 4
+src/test/java/org/techhouse/unit/cache/UserCacheIndexTest.java 2
 src/test/java/org/techhouse/unit/cluster/ClusterConnectionHandlerTest.java 13
 src/test/java/org/techhouse/unit/cluster/ClusterReplicationCoverageTest.java 1
 src/test/java/org/techhouse/unit/cluster/ClusterRouterTest.java 3
@@ -139,7 +130,7 @@ src/test/java/org/techhouse/unit/cluster/membership/MembershipServiceTest.java 2
 src/test/java/org/techhouse/unit/concurrency/ResourceLockingTest.java 2
 src/test/java/org/techhouse/unit/config/ConfigurationValidatorTest.java 2
 src/test/java/org/techhouse/unit/conn/MessageProcessorCleanupTest.java 2
-src/test/java/org/techhouse/unit/conn/MessageProcessorTest.java 4
+src/test/java/org/techhouse/unit/conn/MessageProcessorTest.java 3
 src/test/java/org/techhouse/unit/conn/MessageProcessorTriggerDepthTest.java 1
 src/test/java/org/techhouse/unit/conn/ScriptAdmissionE2ETest.java 2
 src/test/java/org/techhouse/unit/conn/tls/DerWriterTest.java 4
@@ -152,13 +143,10 @@ src/test/java/org/techhouse/unit/data/admin/AdminUserEntryScriptPermissionTest.j
 src/test/java/org/techhouse/unit/ejson/custom_types/CustomTypeFactoryTest.java 1
 src/test/java/org/techhouse/unit/ejson/custom_types/JsonGeoTest.java 1
 src/test/java/org/techhouse/unit/ejson/internal/JsonStringsTest.java 3
-src/test/java/org/techhouse/unit/ejson/internal/LexerTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/TypeAdapterFactoryTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/impl/JsonCustomTypeAdapterTest.java 1
 src/test/java/org/techhouse/unit/ejson/type_adapters/impl/ReflectionTypeAdapterTest.java 4
-src/test/java/org/techhouse/unit/fs/FileSystemFieldIndexTest.java 1
-src/test/java/org/techhouse/unit/fs/FileSystemPkIndexTest.java 2
-src/test/java/org/techhouse/unit/fs/FileSystemReadTest.java 3
+src/test/java/org/techhouse/unit/fs/FileSystemReadTest.java 2
 src/test/java/org/techhouse/unit/fs/FileSystemWriteTest.java 1
 src/test/java/org/techhouse/unit/fs/TornCodepointRecoveryTest.java 2
 src/test/java/org/techhouse/unit/listen/ListenProcessorThreadTest.java 6
@@ -287,7 +275,6 @@ src/test/java/org/techhouse/unit/simplejs/internal/AsyncFromSyncIterationTest.ja
 src/test/java/org/techhouse/unit/simplejs/internal/AsyncIterationProgramTest.java 7
 src/test/java/org/techhouse/unit/simplejs/internal/AsyncIteratorHelperTest.java 1
 src/test/java/org/techhouse/unit/simplejs/internal/AwaitYieldContextTest.java 4
-src/test/java/org/techhouse/unit/simplejs/internal/CallStackTest.java 2
 src/test/java/org/techhouse/unit/simplejs/internal/CollectionAndIteratorProgramTest.java 1
 src/test/java/org/techhouse/unit/simplejs/internal/DbTransactionProgramTest.java 4
 src/test/java/org/techhouse/unit/simplejs/internal/EnvironmentTest.java 2

@@ -2,7 +2,6 @@ package org.techhouse.ops;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
@@ -39,7 +38,8 @@ public final class BeforeHookHelper {
             if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
                 return null;
             }
-            try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
+            try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser,
+                    SchemaValidationHelper.budgetFor(request))) {
                 final var outcome = hooks.apply(request.getObject(), request.get_id(), OperationType.SAVE);
                 if (outcome.isRejected()) {
                     return outcome.rejection();
@@ -64,15 +64,14 @@ public final class BeforeHookHelper {
             return null;
         }
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING, () -> {
-            try (var hooks = BulkBeforeHooks.open(dbName, collName, actingUser)) {
-                final var existingIds = new HashSet<String>();
-                cache.getPkIndexAndLoadIfNecessary(dbName, collName)
-                        .forEach(entry -> existingIds.add(entry.getValue()));
+            try (var hooks = BulkBeforeHooks.open(dbName, collName, actingUser,
+                    SchemaValidationHelper.budgetFor(request))) {
+                final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
                 final var objects = new ArrayList<>(request.getObjects());
                 for (var i = 0; i < objects.size(); i++) {
                     final var object = objects.get(i);
                     final var id = resolveIdForWrite(object);
-                    final var isUpdate = id != null && existingIds.contains(id);
+                    final var isUpdate = id != null && Collections.binarySearch(primaryKeyIndex, id) >= 0;
                     final var outcome = hooks.apply(isUpdate, object, id, OperationType.BULK_SAVE);
                     if (outcome.isRejected()) {
                         return outcome.rejection();

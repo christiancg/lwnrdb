@@ -170,7 +170,7 @@ public class OperationProcessorVectorTest {
         args.add("value", q);
         args.add("k", new JsonNumber((double) k));
         if (exact) {
-            args.add("exact", new JsonBoolean(true));
+            args.add("exact", JsonBoolean.of(true));
         }
         return new FilterAggregationStep(new CustomOperator("nearest", "embedding", q, args));
     }

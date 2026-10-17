@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -44,7 +45,7 @@ public class ScheduleOperationHelperTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
         IocContainer.get(ScheduleRegistry.class).clear();
         TestUtils.releaseAllLocks();
@@ -95,6 +96,29 @@ public class ScheduleOperationHelperTest {
         assertInstanceOf(SaveScheduleResponse.class,
                 ScheduleOperationHelper.executeSave(cronRequest("leap", "0 0 29 2 *"), ACTOR),
                 "February 29 falls within the search horizon");
+    }
+
+    @Test
+    public void cronFasterThanMinimumRefused() throws Exception {
+        TestUtils.setPrivateField(configuration, "scheduleMinIntervalMs", 120_000L);
+        try {
+            assertEquals(ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getCode(), ScheduleOperationHelper
+                    .executeSave(cronRequest("every_minute", "* * * * *"), ACTOR).getErrorCode());
+            assertEquals(ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getCode(),
+                    ScheduleOperationHelper.executeSave(cronRequest("close_pair", "0,1 9 * * *"), ACTOR).getErrorCode(),
+                    "two fires a minute apart are refused whenever the schedule is saved");
+            assertEquals(
+                    ErrorCode.SCHEDULE_INTERVAL_TOO_SMALL.getCode(), ScheduleOperationHelper
+                            .executeSave(cronRequest("across_midnight", "0,59 0,23 * * *"), ACTOR).getErrorCode(),
+                    "23:59 and the next day's 00:00 are a minute apart too");
+            assertInstanceOf(SaveScheduleResponse.class,
+                    ScheduleOperationHelper.executeSave(cronRequest("every_five", "*/5 * * * *"), ACTOR));
+            assertInstanceOf(SaveScheduleResponse.class,
+                    ScheduleOperationHelper.executeSave(cronRequest("weekly", "0 9 * * 1"), ACTOR));
+        } finally {
+            TestUtils.setPrivateField(configuration, "scheduleMinIntervalMs",
+                    ConfigKey.SCHEDULE_MIN_INTERVAL_MS.defaultValue());
+        }
     }
 
     private SaveScheduleResponse save(SaveScheduleRequest request) throws Exception {
@@ -209,35 +233,35 @@ public class ScheduleOperationHelperTest {
     public void test_delete_is_idempotent_and_refreshes_the_registry() throws Exception {
         save(intervalRequest("s"));
         assertNotNull(registry.get(TestGlobals.DB, "s"));
-        assertEquals(OperationStatus.OK,
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s")).getStatus());
+        assertEquals(OperationStatus.OK, ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR).getStatus());
         assertNull(cache.getSchedule(TestGlobals.DB, "s"));
         assertNull(registry.get(TestGlobals.DB, "s"));
-        assertEquals(OperationStatus.OK,
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s")).getStatus());
+        assertEquals(OperationStatus.OK, ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR).getStatus());
     }
 
     @Test
     public void test_delete_rejects_an_unknown_database_and_a_disabled_feature() throws Exception {
-        assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(),
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest("missingDb", "s")).getErrorCode());
+        assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest("missingDb", "s"), ACTOR).getErrorCode());
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
-        assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(),
-                ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s")).getErrorCode());
+        assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(), ScheduleOperationHelper
+                .executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR).getErrorCode());
     }
 
     @Test
     public void test_deleting_a_procedure_referenced_by_a_schedule_is_refused() throws Exception {
         save(intervalRequest("s"));
         final var response = ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE));
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE), ACTOR);
         assertEquals(ErrorCode.INVALID_SCHEDULE.getCode(), response.getErrorCode());
         assertTrue(response.getMessage().contains("'s'"), response.getMessage());
         assertNotNull(cache.getProcedure(TestGlobals.DB, PROCEDURE));
 
-        ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"));
+        ScheduleOperationHelper.executeDelete(new DeleteScheduleRequest(TestGlobals.DB, "s"), ACTOR);
         assertEquals(OperationStatus.OK, ProcedureOperationHelper
-                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE)).getStatus());
+                .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE), ACTOR).getStatus());
     }
 
     @Test

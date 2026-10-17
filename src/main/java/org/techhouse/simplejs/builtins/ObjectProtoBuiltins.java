@@ -87,7 +87,7 @@ public final class ObjectProtoBuiltins {
             throw new TypeErrorException("Cannot set prototype of a non-extensible object");
         }
         if (!ops.setPrototypeOf(receiver, proto)) {
-            throw new TypeErrorException("Cannot set prototype: rejected for '" + JsCoercion.toStr(proto) + "'");
+            throw new TypeErrorException("Cannot set prototype: rejected for '" + JsCoercion.describe(proto) + "'");
         }
         return JsUndefined.getInstance();
     }
@@ -216,7 +216,7 @@ public final class ObjectProtoBuiltins {
         if (key instanceof JsSymbol symbol) {
             return ObjectOwnKeys.hasOwnSymbol(receiver, symbol, ops);
         }
-        return ObjectOwnKeys.hasOwnKey(receiver, JsCoercion.toStr(key), ops);
+        return ObjectOwnKeys.hasOwnKey(receiver, JsCoercion.toStr(key, ops), ops);
     }
 
     private static boolean isEnumerable(JsValue receiver, List<JsValue> args, InterpreterOps ops) {
@@ -226,7 +226,7 @@ public final class ObjectProtoBuiltins {
             return ObjectOwnKeys.hasOwnSymbol(receiver, symbol, ops)
                     && ObjectOwnKeys.isEnumerableOwnSymbol(receiver, symbol);
         }
-        final var key = JsCoercion.toStr(propertyKey);
+        final var key = JsCoercion.toStr(propertyKey, ops);
         if (!ObjectOwnKeys.hasOwnKey(receiver, key, ops)) {
             return false;
         }

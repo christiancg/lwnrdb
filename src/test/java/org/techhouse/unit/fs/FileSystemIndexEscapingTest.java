@@ -15,6 +15,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.LegacyIndexLines;
 import org.techhouse.test.TestGlobals;
 
 public class FileSystemIndexEscapingTest extends FileSystemTestBase {
@@ -24,7 +25,7 @@ public class FileSystemIndexEscapingTest extends FileSystemTestBase {
 
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar",
                 Set.of("id1"));
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
@@ -38,7 +39,7 @@ public class FileSystemIndexEscapingTest extends FileSystemTestBase {
 
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue",
                 Set.of("doc|id|one", "doc|id|two"));
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
         List<FieldIndexEntry<String>> index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName,
                 String.class);
@@ -55,7 +56,7 @@ public class FileSystemIndexEscapingTest extends FileSystemTestBase {
 
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue",
                 Set.of("doc;id;one", "doc;id;two"));
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
         List<FieldIndexEntry<String>> index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName,
                 String.class);
@@ -72,7 +73,7 @@ public class FileSystemIndexEscapingTest extends FileSystemTestBase {
 
         Set<String> ids = Set.of("id|pipe", "id;semi", "id|and;both");
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue", ids);
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
         List<FieldIndexEntry<String>> index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName,
                 String.class);
@@ -87,13 +88,13 @@ public class FileSystemIndexEscapingTest extends FileSystemTestBase {
 
         FieldIndexEntry<String> initial = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
                 Set.of("doc|one", "doc;two"));
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, initial, null);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, initial, null);
 
         FieldIndexEntry<String> removed = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
                 Set.of("doc;two"));
         FieldIndexEntry<String> updated = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
                 Set.of("doc|one"));
-        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, updated, removed);
+        LegacyIndexLines.of(fs).updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, updated, removed);
 
         List<FieldIndexEntry<String>> index = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName,
                 String.class);
