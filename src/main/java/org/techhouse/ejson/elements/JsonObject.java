@@ -14,7 +14,8 @@ public class JsonObject extends JsonBaseElement {
     private static final JsonBaseElement[] NO_VALUES = {};
     private static final int INDEXED_ABOVE = 16;
     private static final int FIRST_CAPACITY = 4;
-    private static final int HASH_SPREAD = 0x9E3779B9;
+    private static final long SLOT_SEED = seedFrom(new java.security.SecureRandom());
+    private static final long SLOT_MULTIPLIER = 0x9E3779B97F4A7C15L;
 
     private String[] keys;
     private JsonBaseElement[] values;
@@ -167,8 +168,26 @@ public class JsonObject extends JsonBaseElement {
     }
 
     private static int homeSlot(String key, int mask) {
-        final var mixed = key.hashCode() * HASH_SPREAD;
-        return (mixed ^ (mixed >>> 16)) & mask;
+        return slotHash(key) & mask;
+    }
+
+    private static long seedFrom(java.security.SecureRandom random) {
+        return random.nextLong();
+    }
+
+    private static int slotHash(String key) {
+        var hash = SLOT_SEED ^ key.length();
+        for (var i = 0; i < key.length(); i++) {
+            hash = slotMix(hash ^ key.charAt(i));
+        }
+        return Long.hashCode(hash);
+    }
+
+    private static long slotMix(long value) {
+        var mixed = value * SLOT_MULTIPLIER;
+        mixed ^= mixed >>> 32;
+        mixed *= SLOT_MULTIPLIER;
+        return mixed ^ (mixed >>> 29);
     }
 
     private void rebuildSlots() {

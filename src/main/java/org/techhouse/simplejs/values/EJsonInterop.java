@@ -23,6 +23,7 @@ import org.techhouse.ejson.internal.KeyTable;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.JsonBuiltins;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 
@@ -31,6 +32,7 @@ public final class EJsonInterop {
     private static final long BYTES_PER_CHAR = 2L;
     private static final long BYTES_PER_NUMBER = 8L;
     private static final long BYTES_PER_LITERAL = 4L;
+    private static final int MAX_CONVERSION_DEPTH = 256;
 
     private EJsonInterop() {
     }
@@ -67,7 +69,12 @@ public final class EJsonInterop {
         };
     }
 
-    private record Conversion(boolean hostMode, Map<JsValue, Boolean> visited, InterpreterOps ops, CharTally tally) {
+    private record Conversion(boolean hostMode, Map<JsValue, Boolean> visited, InterpreterOps ops, CharTally tally,
+            Depth depth) {
+        Conversion(boolean hostMode, Map<JsValue, Boolean> visited, InterpreterOps ops, CharTally tally) {
+            this(hostMode, visited, ops, tally, new Depth());
+        }
+
         void chargeChars(String text) {
             if (tally != null) {
                 InterpreterOps.chargeChars(ops, text.length());
@@ -80,8 +87,23 @@ public final class EJsonInterop {
         private long chars;
     }
 
+    private static final class Depth {
+        private int level;
+    }
+
     private static JsonBaseElement convert(JsValue value, Conversion mode, String path) {
         InterpreterOps.chargeElements(mode.ops(), 1);
+        if (++mode.depth().level > MAX_CONVERSION_DEPTH) {
+            throw new RangeErrorException("Maximum nesting depth exceeded");
+        }
+        try {
+            return convertValue(value, mode, path);
+        } finally {
+            mode.depth().level--;
+        }
+    }
+
+    private static JsonBaseElement convertValue(JsValue value, Conversion mode, String path) {
         return switch (value) {
             case JsNumber n -> numberToEjson(n, mode, path);
             case JsBigInt bigInt -> bigIntToEjson(bigInt, mode, path);

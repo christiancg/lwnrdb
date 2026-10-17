@@ -25,6 +25,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.utils.CaseFolding;
 import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SaltedKey;
 
@@ -282,7 +283,12 @@ public final class IndexEntryReader {
         recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var matchingIds = new HashSet<String>();
+        final var foldedStringKeys = new HashSet<String>();
         for (var localValue : localValues) {
+            if (localValue instanceof JsonString string && !string.isJsonCustom()
+                    && !foldedStringKeys.add(CaseFolding.foldKey(string.getValue()))) {
+                continue;
+            }
             final var lookupValue = IndexValueCodec.elementToLookupValue(localValue);
             final var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, localValue);
             final var ids = cache.getIdsFromIndex(dbName, collName, fieldName, operator, lookupValue);

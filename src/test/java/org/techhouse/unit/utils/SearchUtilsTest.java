@@ -303,4 +303,35 @@ public class SearchUtilsTest {
         Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.NOT_EQUALS, "z");
         assertEquals(Set.of("id1", "id2"), result);
     }
+
+    @Test
+    public void test_in_with_duplicate_operands_matches_once() {
+        List<FieldIndexEntry<String>> entries = List.of(
+                new FieldIndexEntry<>("db", "col", "active", Set.of("id1", "id2")),
+                new FieldIndexEntry<>("db", "col", "idle", Set.of("id3")));
+        final var operands = new ArrayList<String>();
+        for (var i = 0; i < 5000; i++) {
+            operands.add("active");
+        }
+        Set<String> result = SearchUtils.findingInNotIn(entries, FieldOperatorType.IN, operands);
+        assertEquals(Set.of("id1", "id2"), result);
+    }
+
+    @Test
+    public void test_in_collapses_case_variant_operands() {
+        List<FieldIndexEntry<String>> entries = List
+                .of(new FieldIndexEntry<>("db", "col", "active", Set.of("id1", "id2")));
+        Set<String> result = SearchUtils.findingInNotIn(entries, FieldOperatorType.IN,
+                List.of("active", "ACTIVE", "Active"));
+        assertEquals(Set.of("id1", "id2"), result);
+    }
+
+    @Test
+    public void test_not_in_with_duplicate_operands_excludes_once() {
+        List<FieldIndexEntry<String>> entries = List.of(new FieldIndexEntry<>("db", "col", "active", Set.of("id1")),
+                new FieldIndexEntry<>("db", "col", "idle", Set.of("id2")));
+        Set<String> result = SearchUtils.findingInNotIn(entries, FieldOperatorType.NOT_IN,
+                List.of("active", "active", "active"));
+        assertEquals(Set.of("id2"), result);
+    }
 }

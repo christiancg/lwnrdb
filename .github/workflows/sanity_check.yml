@@ -105,6 +105,11 @@ jobs:
             run: |
               python3 test_utils/test_connection_limits.py
 
+          - name: metadata-limits
+            start_server: false
+            run: |
+              python3 test_utils/test_metadata_limits.py
+
           - name: clustering-replication
             start_server: false
             run: |

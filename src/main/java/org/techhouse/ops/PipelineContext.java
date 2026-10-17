@@ -99,6 +99,12 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         }
     }
 
+    public void guardResultValue(long estimatedBytes) {
+        if (estimatedBytes > maxResultBytes) {
+            throw new AggregateLimitException(ErrorCode.AGGREGATE_RESULT_TOO_LARGE);
+        }
+    }
+
     public AnalyzeContext analyze() {
         return analyze;
     }
