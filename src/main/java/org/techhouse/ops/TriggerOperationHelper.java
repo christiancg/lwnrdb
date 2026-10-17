@@ -30,6 +30,7 @@ public final class TriggerOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private TriggerOperationHelper() {
     }
@@ -115,7 +116,7 @@ public final class TriggerOperationHelper {
         if (foreign != null) {
             return foreign;
         }
-        final var maxTriggers = Configuration.getInstance().intValue(ConfigKey.TRIGGER_MAX_PER_COLLECTION);
+        final var maxTriggers = configuration.intValue(ConfigKey.TRIGGER_MAX_PER_COLLECTION);
         if (existing == null && existingList.size() >= maxTriggers) {
             return new OperationResponse(OperationType.SAVE_TRIGGER,
                     ErrorCode.TOO_MANY_TRIGGERS.getDefaultMessage() + " (" + maxTriggers + ")",
@@ -167,7 +168,7 @@ public final class TriggerOperationHelper {
             return new OperationResponse(OperationType.TEST_TRIGGER, "Collection '" + collName + "' not found",
                     ErrorCode.DATABASE_NOT_FOUND);
         }
-        if (!Configuration.getInstance().isScriptsEnabled()) {
+        if (!configuration.isScriptsEnabled()) {
             return new OperationResponse(OperationType.TEST_TRIGGER, ErrorCode.SCRIPTS_DISABLED);
         }
         final var event = parseEvent(request.getEvent());

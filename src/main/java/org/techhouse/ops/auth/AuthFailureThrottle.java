@@ -14,6 +14,7 @@ public final class AuthFailureThrottle {
     private static final char KEY_SEPARATOR = '|';
     private static final String ADDRESS_WIDE = "*";
     public static final int ADDRESS_FAILURE_GRACE = 20;
+    private static final Configuration configuration = Configuration.getInstance();
 
     private final LongSupplier clock;
     private final long baseMillis;
@@ -21,8 +22,8 @@ public final class AuthFailureThrottle {
     private final Map<String, State> states;
 
     public AuthFailureThrottle() {
-        this(System::currentTimeMillis, Configuration.getInstance().getAuthFailureDelayBaseMs(),
-                Configuration.getInstance().getAuthFailureDelayMaxMs(), MAX_KEYS);
+        this(System::currentTimeMillis, configuration.getAuthFailureDelayBaseMs(),
+                configuration.getAuthFailureDelayMaxMs(), MAX_KEYS);
     }
 
     public AuthFailureThrottle(LongSupplier clock, long baseMillis, long capMillis, int maxKeys) {

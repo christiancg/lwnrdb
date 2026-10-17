@@ -12,12 +12,13 @@ public final class FetchPinningGuard {
             + " fetch could be re-pointed at a private address between the check and the connect. Run the server from"
             + " the shaded jar (META-INF/services must be on the classpath) or set scriptFetchEnabled=false.";
     private static final Logger logger = Logger.logFor(FetchPinningGuard.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private FetchPinningGuard() {
     }
 
     public static void refuseUnpinnedFetch() {
-        refuseUnpinnedFetch(Configuration.getInstance().isScriptFetchEnabled(), PinningResolver::isInstalled);
+        refuseUnpinnedFetch(configuration.isScriptFetchEnabled(), PinningResolver::isInstalled);
     }
 
     static void refuseUnpinnedFetch(boolean fetchEnabled, BooleanSupplier pinningInstalled) {

@@ -35,7 +35,7 @@ public class ScheduleExecutor {
     private volatile Consumer<ScheduleRegistry.Entry> dispatcher;
 
     public ScheduleExecutor() {
-        this.queue = new LinkedBlockingQueue<>(Math.max(1, Configuration.getInstance().getScheduleQueueSize()));
+        this.queue = new LinkedBlockingQueue<>(Math.max(1, configuration.getScheduleQueueSize()));
     }
 
     public synchronized void start(Consumer<ScheduleRegistry.Entry> scheduleDispatcher) {

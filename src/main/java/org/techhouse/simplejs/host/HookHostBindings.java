@@ -10,6 +10,8 @@ import org.techhouse.ejson.elements.JsonObject;
 
 public record HookHostBindings(ResourceLimits limits, ZoneId timeZone, Locale locale, Consumer<String> console,
         ModuleResolver moduleResolver, CancellationToken cancellation) implements HostBindings {
+    private static final Configuration configuration = Configuration.getInstance();
+
     public static HookHostBindings live(String scopedDatabase, ResourceLimits limits, CancellationToken cancellation) {
         return of(scopedDatabase, limits, _ -> {
         }, cancellation);
@@ -22,7 +24,6 @@ public record HookHostBindings(ResourceLimits limits, ZoneId timeZone, Locale lo
 
     private static HookHostBindings of(String scopedDatabase, ResourceLimits limits, Consumer<String> sink,
             CancellationToken cancellation) {
-        final var configuration = Configuration.getInstance();
         final var resolver = configuration.isScriptProcedureImportEnabled() && scopedDatabase != null
                 ? new ProcedureModuleResolver(scopedDatabase)
                 : null;
@@ -41,7 +42,6 @@ public record HookHostBindings(ResourceLimits limits, ZoneId timeZone, Locale lo
     }
 
     public static ResourceLimits limitsFromConfiguration() {
-        final var configuration = Configuration.getInstance();
         return new ResourceLimits(configuration.getBeforeHookInstructionBudget(),
                 configuration.getBeforeHookTimeoutMs(), configuration.getScriptMaxDepth(), true, false, List.of(), -1,
                 -1, false, false, ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.DEFAULT_MAX_LOG_LINES,
