@@ -70,7 +70,7 @@ public class UserOperationHelperAdminTest {
         changeReq.setDatabasePermissions(new HashMap<>());
         changeReq.setCollectionPermissions(new HashMap<>());
 
-        final var resp = UserOperationHelper.processChangePermissions(changeReq);
+        final var resp = UserOperationHelper.processChangePermissions(changeReq, new RestampedRecords());
         assertEquals(OperationStatus.OK, resp.getStatus());
         final var user = cache.getAdminUserEntry("to_promotee");
         assertTrue(user.isAdmin());
@@ -125,7 +125,7 @@ public class UserOperationHelperAdminTest {
         changeReq.setDatabasePermissions(dbPerms);
         changeReq.setCollectionPermissions(collPerms);
 
-        final var resp = UserOperationHelper.processChangePermissions(changeReq);
+        final var resp = UserOperationHelper.processChangePermissions(changeReq, new RestampedRecords());
         assertEquals(OperationStatus.OK, resp.getStatus());
 
         final var user = cache.getAdminUserEntry("perm_user");

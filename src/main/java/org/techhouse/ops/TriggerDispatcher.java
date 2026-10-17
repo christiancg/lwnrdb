@@ -78,6 +78,12 @@ public final class TriggerDispatcher {
     private static void runAsDefiner(TriggerEvent event, TriggerDefinition trigger, ProcedureDefinition procedure) {
         final var definer = trigger.getDefiner();
         final var refusal = DefinerAuthority.refusal(definer, event.getDbName(), event.getCollName());
+        if (refusal != null && !DefinerAuthority.decidesDefinitions()) {
+            deferUntilRetryWindowCloses(event,
+                    "its definer is refused here and the disable is decided by the admin coordinator",
+                    "DefinerRefused: " + refusal);
+            return;
+        }
         if (refusal != null) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
@@ -97,16 +103,20 @@ public final class TriggerDispatcher {
     }
 
     private static void deferForAdmission(TriggerEvent event, String scope) {
+        deferUntilRetryWindowCloses(event, "reached the " + scope + " script concurrency limit",
+                "ScriptConcurrencyLimit: the " + scope + " script concurrency limit was reached until the"
+                        + " retry window closed");
+    }
+
+    private static void deferUntilRetryWindowCloses(TriggerEvent event, String why, String error) {
         if (withinClusterRetryWindow(event)) {
             final var delay = Math.max(1L, backoffFor(event.getAttempt()));
             triggerExecutor.submitAfter(event.retry(event.getAttempt()), delay);
-            logger.info("Trigger '" + event.getTriggerName() + "' reached the " + scope
-                    + " script concurrency limit; retrying in " + delay + "ms without consuming an attempt");
+            logger.info("Trigger '" + event.getTriggerName() + "' " + why + "; retrying in " + delay
+                    + "ms without consuming an attempt");
             return;
         }
         triggerExecutor.countFailure();
-        final var error = "ScriptConcurrencyLimit: the " + scope + " script concurrency limit was reached until the"
-                + " retry window closed";
         if (event.getRunId() != null) {
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, event.getAttempt(), error, 0L);
             triggerExecutor.countDeadLetter();
@@ -127,8 +137,8 @@ public final class TriggerDispatcher {
         }
         if (current == null) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
-            logger.info("Trigger '" + event.getTriggerName()
-                    + "' retry skipped: its document(s) no longer exist; runId=" + event.getRunId());
+            logger.info("Trigger '" + event.getTriggerName() + "' skipped: its document(s) no longer exist; runId="
+                    + event.getRunId());
             recordSkip(event, "its document(s) no longer exist");
             return;
         }

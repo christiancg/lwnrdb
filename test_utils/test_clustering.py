@@ -2792,6 +2792,91 @@ def test_a_procedure_bound_by_another_definer_is_protected_through_any_node():
         op(port, {"type": "DELETE_USER", "username": username})
 
 
+def trigger_listed_on(port, coll, name):
+    listed = op(port, {"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": coll})
+    return next((t for t in (listed.get("triggers") or []) if t.get("name") == name), {})
+
+
+def collection_owned_off_the_coordinator(coordinator, prefix):
+    for i in range(8):
+        coll = f"{prefix}_{i}"
+        check_status(f"CREATE_COLLECTION {coll}", create_coll(coordinator.client_port, DB, coll), "OK")
+        owner = owner_of(coordinator.client_port, DB, coll)
+        if owner is not None and owner is not coordinator:
+            return coll, owner
+    return None, None
+
+
+def test_a_revoked_definer_is_disabled_on_every_node():
+    section("A trigger whose definer loses READ is disabled on every node, not only where it fires")
+
+    definer, password = "cluster_revoked_definer", "cluster_revoked1234"
+    coordinator = admin_coordinator_node()
+    port = coordinator.client_port
+    source, owner = collection_owned_off_the_coordinator(coordinator, "revoke_src")
+    if source is None:
+        check("a collection owned by a node other than the admin coordinator exists", False,
+              "eight collections all landed on the coordinator")
+        return
+    check_status("CREATE_COLLECTION for the audit rows", create_coll(port, DB, "revoke_audit"), "OK")
+
+    def grants(source_access):
+        return {"type": "CHANGE_PERMISSIONS", "username": definer,
+                "databasePermissions": {DB: "READ_WRITE"} if source_access else {},
+                "collectionPermissions": {f"{DB}|revoke_audit": "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}
+
+    op(port, {"type": "DELETE_USER", "username": definer})
+    check_status("CREATE_USER the definer", op(port, {
+        "type": "CREATE_USER", "username": definer, "password": password, "admin": False,
+        "databasePermissions": {DB: "READ_WRITE"}, "collectionPermissions": {f"{DB}|revoke_audit": "READ_WRITE"},
+        "scriptPermissions": {DB: "MANAGE"}}), "OK")
+    check("the definer authenticates on every node", wait_until(lambda: all(
+        as_user(n.client_port, definer, password).get("status") == "OK" for n in nodes), timeout_s=15.0))
+    check_status("the definer saves an auditing procedure", as_user(port, definer, password, {
+        "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "revoke_audit_proc",
+        "script": "import db from 'db'; import args from 'args';"
+                  " db.save(db.name, 'revoke_audit', { _id: 'audit-' + args.id }); return 1;"}), "OK")
+    check_status("and binds it to a collection the coordinator does not own", as_user(port, definer, password, {
+        "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": source, "name": "revocable",
+        "events": ["CREATED"], "procedureName": "revoke_audit_proc"}), "OK")
+    check_status("a write fires it on the owner", save(owner.client_port, DB, source, {"_id": "r1"}), "OK")
+    check("while the definer holds READ the trigger runs", wait_until(
+        lambda: find_by_id(owner.client_port, DB, "revoke_audit", "audit-r1").get("status") == "OK",
+        timeout_s=15.0))
+
+    check_status("the admin narrows the definer", op(port, grants(False)), "OK")
+    check("every node lists the trigger disabled", wait_until(
+        lambda: all(trigger_listed_on(n.client_port, source, "revocable").get("enabled") is False for n in nodes),
+        timeout_s=15.0), f"got {[trigger_listed_on(n.client_port, source, 'revocable') for n in nodes]}")
+    check("with the reason recorded", f"READ on collection '{source}'" in str(
+        trigger_listed_on(owner.client_port, source, "revocable").get("disabledReason")))
+    check_status("another write on the owner", save(owner.client_port, DB, source, {"_id": "r2"}), "OK")
+
+    check_status("the admin gives the grant back", op(port, grants(True)), "OK")
+    check_status("a write after the re-grant", save(owner.client_port, DB, source, {"_id": "r3"}), "OK")
+    time.sleep(2.0)
+    for doc_id in ("audit-r2", "audit-r3"):
+        check(f"{doc_id} was never written", find_by_id(owner.client_port, DB, "revoke_audit", doc_id).get("status")
+              == "NOT_FOUND", "a revoked definer's trigger ran on the collection owner")
+    check("re-granting alone does not revive it on any node",
+          all(trigger_listed_on(n.client_port, source, "revocable").get("enabled") is False for n in nodes))
+
+    check_status("the admin re-saves the trigger", op(port, {
+        "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": source, "name": "revocable",
+        "events": ["CREATED"], "procedureName": "revoke_audit_proc"}), "OK")
+    check("which re-enables it everywhere", wait_until(
+        lambda: all(trigger_listed_on(n.client_port, source, "revocable").get("enabled") is True for n in nodes),
+        timeout_s=15.0))
+    check_status("a write after the re-save", save(owner.client_port, DB, source, {"_id": "r4"}), "OK")
+    check("the trigger runs again", wait_until(
+        lambda: find_by_id(owner.client_port, DB, "revoke_audit", "audit-r4").get("status") == "OK",
+        timeout_s=15.0))
+
+    op(port, {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": source, "name": "revocable"})
+    op(port, {"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "revoke_audit_proc"})
+    op(port, {"type": "DELETE_USER", "username": definer})
+
+
 def test_before_hook_runs_on_the_owner():
     section("Before hooks — a write forwarded to the owner still runs the hook")
 
@@ -3573,6 +3658,7 @@ GROUPS = {
     "scripts": [
         test_formation_and_quorum_writes,
         test_a_procedure_bound_by_another_definer_is_protected_through_any_node,
+        test_a_revoked_definer_is_disabled_on_every_node,
         test_script_placement_forwards_runs,
         test_script_run_history_still_reaches_the_collection_owner,
         test_forwarded_script_reads_and_writes,

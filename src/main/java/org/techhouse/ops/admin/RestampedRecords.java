@@ -6,7 +6,7 @@ import java.util.List;
 public final class RestampedRecords {
     private final List<AdminRecordKey> keys = new ArrayList<>();
 
-    void add(AdminRecordKey key) {
+    public void add(AdminRecordKey key) {
         keys.add(key);
     }
 

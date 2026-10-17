@@ -3,6 +3,7 @@ package org.techhouse.bckg_ops.events;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.data.DbEntry;
 
 public class TriggerEvent extends CollectionScopedEvent {
@@ -90,7 +91,7 @@ public class TriggerEvent extends CollectionScopedEvent {
         for (final var entry : entries) {
             bytes += entry.getData() == null
                     ? QUEUED_ID_OVERHEAD_BYTES + 2L * String.valueOf(entry.get_id()).length()
-                    : entry.byteSize();
+                    : CacheSizeEstimator.estimateEntry(entry);
         }
         return bytes;
     }

@@ -357,9 +357,11 @@ credited back once the payload is converted.
 and a longer `parseInt` digit run evaluate to `Infinity` (or the value of the digits left after
 leading zeros) without being parsed. Every promise (96 bytes) and every generator or `async`
 function coroutine (2Kb) is charged when it is created, since the run keeps them until it ends;
-a queued microtask (64 bytes) and a pending timer (96 bytes) are charged while they wait and
+a queued microtask (64 bytes) and a pending timer (160 bytes) are charged while they wait and
 released when they run or are cleared, so a backlog is bounded without taxing a long `await`
-loop. Spreading an array charges the slots its storage does not back, so `[...a]` over
+loop. Only pending timers are tracked: `clearTimeout`/`clearInterval` of an id that names no
+pending timer (never issued, already fired, or not a number) does nothing and retains nothing,
+so clearing an id before it is issued cannot cancel the timer that later receives it. Spreading an array charges the slots its storage does not back, so `[...a]` over
 `a.length = 2 ** 32 - 1` fails on the budget instead of materialising four billion holes.
 
 What the static model still cannot see — many retained copies of a large string (`big + i`,
@@ -766,12 +768,19 @@ whose permissions are later reduced narrows it. `ops/DefinerAuthority` re-checks
 time an after trigger or a schedule fires — a recovery replay and a `RESOLVE_TRIGGER_RUN` replay
 included, since both go through the same dispatch: an after trigger needs script `RUN` on the
 database and `READ` on its collection (the documents it is handed are that collection's), a
-schedule needs `RUN`. A definer that is gone or lacks them skips the run and **disables** the
-definition with a stored `disabledReason`, so a later re-grant (or a re-created user of the same
-name) does not silently revive it; its owner re-saves it. The disable is a definition write, so it
-is made only where definitions are decided — a standalone node, or the cluster's admin coordinator
-with quorum and a completed admin sync, which replicates it like any other definition change. Any
-other node still skips every run and leaves the definition as it is. Before hooks are not
+schedule needs `RUN`. A definer that is gone or lacks them has the definition **disabled** with a
+stored `disabledReason`, so a later re-grant (or a re-created user of the same name) does not
+silently revive it; its owner re-saves it. The disable is a definition write, so it is made only
+where definitions are decided — a standalone node, or the cluster's admin coordinator with quorum
+and a completed admin sync — and it happens when the rights are taken away: `CHANGE_PERMISSIONS`
+and `DELETE_USER` re-check that user's triggers and schedules in every database, and
+`SET_DATABASE_OWNERS` re-checks every definition in that database, disabling the ones that lost
+their rights and replicating them with the grant change itself. The check when a definition fires
+stays as the backstop: on the deciding node it skips the run and disables the definition. Any other
+node never writes the definition: it postpones a refused trigger run, at the same attempt with the
+retry backoff, until the disabled definition (or the grant it is still missing) reaches it, and
+dead-letters it only once `triggerRunRetentionMs` has passed since it fired; a refused schedule
+occurrence is skipped. Before hooks are not
 re-checked: a hook has no `db` and no `fetch`, so it can hand nothing to its definer.
 
 The definer is always the saving user: no request field can name another one, so a client cannot
@@ -835,8 +844,10 @@ whose record is already gone. Such a run is recorded as an error and **never re-
 re-running it would apply the effects a second time. A retryable failure
 (a script error or a commit failure) increments `attempts` and re-queues after a doubling
 backoff up to `triggerMaxAttempts`, after which the record is marked `DEAD` with its payload and
-last error kept, for `triggerDeadLetterRetentionMs` from the moment it died. A retry re-reads its documents when it *runs*, not when it is scheduled, so it
-sees any write made during the backoff; if they are gone the run is consumed, and if the read
+last error kept, for `triggerDeadLetterRetentionMs` from the moment it died. A run — the first
+attempt as much as a retry — re-reads its documents when it *runs*, not when it was fired or
+scheduled, so it sees any write made while it waited; if they are gone the run is consumed and
+recorded as skipped, and if the read
 itself fails the run stays pending and is retried (then dead-lettered) like any other failure. A
 run evicted by a full trigger queue is dead-lettered too, not dropped. Everything else is terminal
 and consumes the record: a missing definer or procedure, exceeded depth, and a **cancellation** —
@@ -882,7 +893,9 @@ let one slow trigger stall field-index maintenance for every collection. On over
 queued run is dead-lettered and counted. The queue is bounded by count (`triggerQueueSize`) and by
 bytes (`triggerQueueMaxBytes`): a queued `CREATED`/`UPDATED` event keeps only its ids and re-reads
 the documents when it runs (a retry always did), so only a `DELETED` event's snapshot, which has
-nothing to re-read, takes real space. Dropping a collection or database discards its queued events
+nothing to re-read, takes real space, and it is charged its modelled heap size, not its on-disk
+bytes. Because a run reads the document as it is when the run starts, two quick writes to one id
+each get their own run, and both runs deliver the later version. Dropping a collection or database discards its queued events
 and every pending or dead-lettered run record, so a same-name collection created later never
 receives the dropped one's documents. A standalone node garbage-collects stranded and expired
 dead-lettered runs every minute, not only at startup; a cluster node already does it in its

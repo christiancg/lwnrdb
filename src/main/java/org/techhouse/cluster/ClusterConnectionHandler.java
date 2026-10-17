@@ -85,7 +85,7 @@ public class ClusterConnectionHandler implements Runnable {
                 serve(reader);
             }
         } catch (RequestTooLargeException e) {
-            logger.warning("Closed a cluster connection: a frame exceeded clusterMaxFrameSize");
+            ConnectionLog.warn(logger, "Closed a cluster connection: a frame exceeded clusterMaxFrameSize");
         } catch (SSLException e) {
             ConnectionLog.warn(logger, "Rejected cluster connection: TLS handshake failed");
         } catch (IOException e) {
@@ -152,7 +152,7 @@ public class ClusterConnectionHandler implements Runnable {
         try {
             respond(writer, writerLock, request);
         } catch (IOException e) {
-            logger.warning("Could not answer a " + request.getType() + " request: " + e.getMessage());
+            ConnectionLog.warn(logger, "Could not answer a " + request.getType() + " request: " + e.getMessage());
         }
     }
 

@@ -139,7 +139,7 @@ public class UserOperationHelperTest {
         changeReq.setDatabasePermissions(new HashMap<>());
         changeReq.setCollectionPermissions(new HashMap<>());
 
-        final var resp = UserOperationHelper.processChangePermissions(changeReq);
+        final var resp = UserOperationHelper.processChangePermissions(changeReq, new RestampedRecords());
         assertEquals(OperationStatus.OK, resp.getStatus());
 
         final var user = cache.getAdminUserEntry("permChangeUser");
@@ -151,7 +151,7 @@ public class UserOperationHelperTest {
     public void test_change_permissions_user_not_found() {
         final var req = new ChangePermissionsRequest();
         req.setUsername("nonexistent");
-        final var resp = UserOperationHelper.processChangePermissions(req);
+        final var resp = UserOperationHelper.processChangePermissions(req, new RestampedRecords());
         assertEquals(OperationStatus.NOT_FOUND, resp.getStatus());
     }
 
@@ -195,7 +195,8 @@ public class UserOperationHelperTest {
         final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
         scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
         change.setScriptPermissions(scriptPerms);
-        assertEquals(OperationStatus.OK, UserOperationHelper.processChangePermissions(change).getStatus());
+        assertEquals(OperationStatus.OK,
+                UserOperationHelper.processChangePermissions(change, new RestampedRecords()).getStatus());
         assertTrue(cache.getAdminUserEntry("scriptchanged").canRunScripts("mydb"));
     }
 

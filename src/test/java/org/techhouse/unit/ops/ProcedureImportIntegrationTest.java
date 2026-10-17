@@ -34,6 +34,7 @@ import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.ScriptOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -80,7 +81,7 @@ public class ProcedureImportIntegrationTest {
         change.setGlobalPermissions(new HashSet<>());
         change.setDatabasePermissions(new HashMap<>());
         change.setCollectionPermissions(collPerms);
-        UserOperationHelper.processChangePermissions(change);
+        UserOperationHelper.processChangePermissions(change, new RestampedRecords());
     }
 
     private static void createAdmin() {

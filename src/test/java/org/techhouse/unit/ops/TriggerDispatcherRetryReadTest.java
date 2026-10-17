@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.techhouse.test.TriggerTestSupport.entry;
 import static org.techhouse.test.TriggerTestSupport.pendingRun;
@@ -176,10 +175,27 @@ public class TriggerDispatcherRetryReadTest {
     }
 
     @Test
-    public void test_a_first_attempt_is_not_read_again() throws Exception {
-        final var first = firstAttempt("never-read", "first-run", EventType.UPDATED);
+    public void test_a_queued_first_attempt_reads_the_current_document() throws Exception {
+        saveDocument("queued", "A");
+        final var queued = firstAttempt("queued", "queued-run", EventType.UPDATED).withIdsOnly();
+        saveDocument("queued", "B");
 
-        assertSame(first, withCurrentEntries(first));
+        final var current = withCurrentEntries(queued);
+
+        assertNotNull(current);
+        assertEquals(1, current.getAttempt());
+        assertEquals("B", current.getEntries().getFirst().getData().get("value").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_a_first_attempt_whose_document_is_gone_is_consumed() throws Exception {
+        saveDocument("gone", "A");
+        final var runId = pendingRunFor("gone");
+        deleteTheGoneDocument();
+
+        TriggerDispatcher.dispatch(firstAttempt("gone", runId, EventType.UPDATED).withIdsOnly());
+
+        assertNull(pendingRun(runId), "a first run whose document no longer exists is consumed");
     }
 
     @Test

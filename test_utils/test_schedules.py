@@ -522,9 +522,8 @@ def test_a_schedule_whose_definer_lost_script_run_is_disabled():
         check("it fires while the definer holds RUN", await_counter(admin, "revocable", 1) >= 1,
               "counter never advanced")
         check_status("revoke the definer's script grant", set_script_level(admin, "NONE"), "OK")
-        disabled = bu.wait_until(lambda: schedule_entry(admin, "revocable").get("enabled") is False, 10.0, 0.2)
         stored = schedule_entry(admin, "revocable")
-        check("the next fire disables the schedule", disabled, f"got {stored}")
+        check("the grant change itself disables the schedule", stored.get("enabled") is False, f"got {stored}")
         check("with the reason recorded", "no longer holds script RUN" in str(stored.get("disabledReason")),
               f"got {stored}")
         frozen = counter_value(admin, "revocable")

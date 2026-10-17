@@ -6,8 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterAll;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
+import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
@@ -101,7 +104,8 @@ public class TriggerQueueBytesTest {
 
     @Test
     public void test_the_trigger_queue_is_bounded_by_bytes() throws Exception {
-        TestUtils.setPrivateField(configuration, "triggerQueueMaxBytes", "5Kb");
+        final var budget = event(EventType.DELETED, TestGlobals.COLL, "sizing", 2_000).queuedBytes() * 5 / 2;
+        TestUtils.setPrivateField(configuration, "triggerQueueMaxBytes", budget + "b");
         final var executor = executorThatNeverDrains();
 
         executor.submit(event(EventType.DELETED, TestGlobals.COLL, "first", 2_000));
@@ -111,7 +115,7 @@ public class TriggerQueueBytesTest {
         assertEquals(1, executor.getDropped(), "the queue holds deleted documents only up to its byte budget");
         assertEquals(List.of("second", "third"),
                 queueOf(executor).stream().map(queued -> queued.getEntries().getFirst().get_id()).toList());
-        assertTrue(executor.getQueuedBytes() <= 5_120L);
+        assertTrue(executor.getQueuedBytes() <= budget);
     }
 
     @Test
@@ -217,5 +221,52 @@ public class TriggerQueueBytesTest {
 
         assertTrue(afterStop >= 2, "the sweep ran " + afterStop + " time(s)");
         assertEquals(afterStop, sweeps.get(), "stopping the executor stops its sweep");
+    }
+
+    @Test
+    public void test_a_deleted_event_is_charged_its_heap_estimate() {
+        final var deleted = event(EventType.DELETED, TestGlobals.COLL, "heap", 2_000);
+        final var entry = deleted.getEntries().getFirst();
+
+        assertEquals(256L + CacheSizeEstimator.estimateEntry(entry), deleted.queuedBytes());
+        assertTrue(deleted.queuedBytes() > entry.byteSize(), "heap, not on-disk bytes");
+    }
+
+    @Test
+    public void test_the_charge_is_released_exactly_on_dispatch() throws Exception {
+        final var dispatched = new CountDownLatch(1);
+        final var executor = new TriggerExecutor();
+        executor.start(_ -> dispatched.countDown());
+        try {
+            executor.submit(event(EventType.DELETED, TestGlobals.COLL, "released", 2_000));
+            assertTrue(dispatched.await(10, TimeUnit.SECONDS));
+            final var deadline = System.currentTimeMillis() + 10_000L;
+            while (executor.getQueuedBytes() != 0L && System.currentTimeMillis() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(0L, executor.getQueuedBytes());
+        } finally {
+            executor.stop();
+        }
+    }
+
+    @Test
+    public void test_stop_sweep_ends_the_sweep_but_keeps_the_executor_running() throws Exception {
+        final var executor = executorThatNeverDrains();
+        final var sweeps = new AtomicInteger();
+        executor.sweepPeriodically(sweeps::incrementAndGet, 10L);
+        final var deadline = System.currentTimeMillis() + 10_000L;
+        while (sweeps.get() < 1 && System.currentTimeMillis() < deadline) {
+            Thread.onSpinWait();
+        }
+
+        executor.stopSweep();
+        final var afterStop = sweeps.get();
+        Thread.sleep(50L);
+        executor.submit(event(EventType.CREATED, TestGlobals.COLL, "still-queued", 10));
+
+        assertTrue(afterStop >= 1);
+        assertEquals(afterStop, sweeps.get(), "stopSweep ends the sweep");
+        assertEquals(1, executor.getQueued(), "the executor still accepts work");
     }
 }
