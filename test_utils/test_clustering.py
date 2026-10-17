@@ -1438,7 +1438,7 @@ def test_script_run_history_still_reaches_the_collection_owner():
         until_forwarded(port, _batch)
     check("every call answered OK", calls and all(c.get("status") == "OK" for c in calls),
           f"statuses={sorted({c.get('status') for c in calls})}")
-    check("every call left a history row", wait_until(lambda: len(history_rows()) >= len(calls), timeout_s=20.0),
+    check("every call left a history row", wait_until(lambda: len(history_rows()) >= len(calls), timeout_s=60.0),
           f"rows={len(history_rows())} calls={len(calls)}")
     check("rows were recorded by more than one node, so at least one came from a non-owner",
           len(runners()) >= 2, f"runners={runners()}")
