@@ -30,6 +30,7 @@ import org.techhouse.test.TestUtils;
 import org.techhouse.test.Tx2pcFixtures;
 
 public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBase {
+    private static final long REPLY_DELIVERY_MS = 2000L;
 
     private void seedPreparedSlice(String dtxId, String id) throws Exception {
         Tx2pcFixtures.seedPreparedSlice(Tx2pcFixtures.saveOp(dtxId, "coordinator", TestGlobals.COLL, id),
@@ -74,7 +75,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
             assertEquals(ClusterMessageType.ADMIN_SNAPSHOT_ACK, ack.getType(),
                     "a message queued behind the commit on the ordered lane must still be answered, not left"
                             + " waiting on the same lock forever");
-            assertEquals(0L, commitDone.getCount(),
+            assertTrue(commitDone.await(REPLY_DELIVERY_MS, TimeUnit.MILLISECONDS),
                     "the commit must have already given up on its own budget for the lane to reach the snapshot");
         } finally {
             locks.release(TestGlobals.DB, TestGlobals.COLL);

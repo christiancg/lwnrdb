@@ -2,14 +2,17 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -27,6 +30,8 @@ import org.techhouse.test.TestUtils;
 
 public class ListenOperationTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
+    private final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private final List<UUID> clients = new ArrayList<>();
 
     @BeforeAll
     static void setUpBeforeClass() throws Exception {
@@ -38,6 +43,19 @@ public class ListenOperationTest {
     static void tearDownAll() throws Exception {
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
+    }
+
+    @AfterEach
+    void unregisterEveryClient() {
+        for (final var clientId : clients) {
+            listenManager.unregisterAllForClient(clientId);
+        }
+    }
+
+    private UUID client() {
+        final var clientId = UUID.randomUUID();
+        clients.add(clientId);
+        return clientId;
     }
 
     private String registerListener(UUID clientId) {
@@ -54,8 +72,8 @@ public class ListenOperationTest {
 
     @Test
     public void processStopListen_fromAnotherClient_isRefused() {
-        final var victim = UUID.randomUUID();
-        final var attacker = UUID.randomUUID();
+        final var victim = client();
+        final var attacker = client();
         final var listenId = registerListener(victim);
 
         final var stolen = stopListen(listenId, attacker);
@@ -68,9 +86,9 @@ public class ListenOperationTest {
 
     @Test
     public void processStopListen_leavesTheVictimRegistered() {
-        final var victim = UUID.randomUUID();
+        final var victim = client();
         final var listenId = registerListener(victim);
-        stopListen(listenId, UUID.randomUUID());
+        stopListen(listenId, client());
 
         assertInstanceOf(StopListenResponse.class, stopListen(listenId, victim),
                 "the owner's registration must survive another client's attempt to cancel it");
@@ -78,7 +96,7 @@ public class ListenOperationTest {
 
     @Test
     public void processStopListen_fromTheOwningClient_succeeds() {
-        final var owner = UUID.randomUUID();
+        final var owner = client();
         final var listenId = registerListener(owner);
 
         assertInstanceOf(StopListenResponse.class, stopListen(listenId, owner));
@@ -90,7 +108,7 @@ public class ListenOperationTest {
         final var req = new ListenRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of());
 
-        final var resp = processor.processMessage(req, UUID.randomUUID());
+        final var resp = processor.processMessage(req, client());
 
         assertInstanceOf(ListenResponse.class, resp);
         assertEquals(OperationType.LISTEN, resp.getType());
@@ -111,7 +129,7 @@ public class ListenOperationTest {
         final var req = new ListenRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of());
 
-        final var resp = (ListenResponse) processor.processMessage(req, UUID.randomUUID());
+        final var resp = (ListenResponse) processor.processMessage(req, client());
 
         assertTrue(resp.getResults().stream()
                 .anyMatch(r -> "listen-doc-1".equals(r.get("_id").asJsonString().getValue())));
@@ -119,7 +137,7 @@ public class ListenOperationTest {
 
     @Test
     public void processStopListen_validId_returnsStopListenResponse() {
-        final var clientId = UUID.randomUUID();
+        final var clientId = client();
         final var listenReq = new ListenRequest(TestGlobals.DB, TestGlobals.COLL);
         listenReq.setAggregationSteps(List.of());
         final var listenResp = (ListenResponse) processor.processMessage(listenReq, clientId);
@@ -138,7 +156,7 @@ public class ListenOperationTest {
         final var stopReq = new StopListenRequest();
         stopReq.setListenId(UUID.randomUUID().toString());
 
-        final var resp = processor.processMessage(stopReq, UUID.randomUUID());
+        final var resp = processor.processMessage(stopReq, client());
 
         assertEquals(OperationStatus.NOT_FOUND, resp.getStatus());
         assertEquals("404-7", resp.getErrorCode());
@@ -146,7 +164,7 @@ public class ListenOperationTest {
 
     @Test
     public void processStopListen_alreadyUnregistered_returns404() {
-        final var clientId = UUID.randomUUID();
+        final var clientId = client();
         final var listenReq = new ListenRequest(TestGlobals.DB, TestGlobals.COLL);
         listenReq.setAggregationSteps(List.of());
         final var listenResp = (ListenResponse) processor.processMessage(listenReq, clientId);
@@ -164,7 +182,7 @@ public class ListenOperationTest {
         final var dropColl = "listenDropColl";
         processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, dropColl));
 
-        final var clientId = UUID.randomUUID();
+        final var clientId = client();
         final var listenReq = new ListenRequest(TestGlobals.DB, dropColl);
         listenReq.setAggregationSteps(List.of());
         final var listenResp = (ListenResponse) processor.processMessage(listenReq, clientId);
@@ -186,7 +204,7 @@ public class ListenOperationTest {
         processor.processMessage(new CreateCollectionRequest(dropDb, "coll1"));
         processor.processMessage(new CreateCollectionRequest(dropDb, "coll2"));
 
-        final var clientId = UUID.randomUUID();
+        final var clientId = client();
         final var listenReq1 = new ListenRequest(dropDb, "coll1");
         listenReq1.setAggregationSteps(List.of());
         final var listenId1 = ((ListenResponse) processor.processMessage(listenReq1, clientId)).getListenId();

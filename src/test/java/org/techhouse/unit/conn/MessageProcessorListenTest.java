@@ -147,6 +147,7 @@ public class MessageProcessorListenTest {
         final var thread = new Thread(processor);
         thread.start();
         thread.join(3000);
+        original.unregisterAllForClient(TestUtils.getPrivateField(processor, "clientId", UUID.class));
 
         assertEquals(1, deliveredIds.size(), "only the LISTEN response delivers a listen");
         final var listenLine = writtenAtDelivery.getFirst().lines().filter(line -> line.contains("listenId"))
