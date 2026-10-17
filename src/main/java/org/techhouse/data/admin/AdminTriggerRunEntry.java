@@ -138,10 +138,11 @@ public class AdminTriggerRunEntry extends DbEntry {
 
     private static Map<String, Long> readPriorVersions(JsonObject object) {
         final var versions = new LinkedHashMap<String, Long>();
-        if (object.has(PRIOR_VERSIONS_FIELD) && object.get(PRIOR_VERSIONS_FIELD).isJsonObject()) {
-            for (final var entry : object.get(PRIOR_VERSIONS_FIELD).asJsonObject().entrySet()) {
-                if (entry.getValue() instanceof JsonString version) {
-                    versions.put(entry.getKey(), Long.parseLong(version.getValue()));
+        if (object.has(PRIOR_VERSIONS_FIELD) && object.get(PRIOR_VERSIONS_FIELD).isJsonArray()) {
+            for (final var element : object.get(PRIOR_VERSIONS_FIELD).asJsonArray()) {
+                if (element instanceof JsonArray pair && pair.size() == 2 && pair.get(0) instanceof JsonString id
+                        && pair.get(1) instanceof JsonString version) {
+                    versions.put(id.getValue(), Long.parseLong(version.getValue()));
                 }
             }
         }
@@ -215,8 +216,13 @@ public class AdminTriggerRunEntry extends DbEntry {
             data.remove(PRIOR_VERSIONS_FIELD);
             return;
         }
-        final var versions = new JsonObject();
-        priorVersions.forEach((id, version) -> versions.addProperty(id, Long.toString(version)));
+        final var versions = new JsonArray();
+        priorVersions.forEach((id, version) -> {
+            final var pair = new JsonArray();
+            pair.add(id);
+            pair.add(Long.toString(version));
+            versions.add(pair);
+        });
         data.add(PRIOR_VERSIONS_FIELD, versions);
     }
 

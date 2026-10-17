@@ -21,6 +21,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
@@ -61,6 +62,7 @@ public class ScriptRunHistoryRetryTest {
         when(ownership.isOwner(anyString(), anyString())).thenReturn(false);
         when(ownership.ownerAddress(anyString(), anyString())).thenReturn(OWNER);
         TestUtils.setPrivateField(router, "ownershipManager", ownership);
+        TestUtils.setPrivateField(configuration, "backgroundProcessingThreads", 2);
         taskManager.stopBackgroundWorkers();
         taskManager.startBackgroundWorkers();
         history.startSweep();
@@ -70,6 +72,8 @@ public class ScriptRunHistoryRetryTest {
     public void tearDown() throws Exception {
         history.stopSweep();
         taskManager.stopBackgroundWorkers();
+        TestUtils.setPrivateField(configuration, "backgroundProcessingThreads",
+                ConfigKey.BACKGROUND_PROCESSING_THREADS.defaultValue());
         TestUtils.setPrivateField(router, "pool", routerPool);
         TestUtils.setPrivateField(router, "ownershipManager", routerOwnership);
         cluster.disable();

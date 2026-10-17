@@ -8,6 +8,7 @@ import java.time.LocalTime;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.KeyTable;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.TestUtils;
 import org.techhouse.utils.GeoPoint;
 
 public class DocumentHeapSizerTest {
@@ -51,16 +53,24 @@ public class DocumentHeapSizerTest {
     private static final long NESTING_LEVEL = EMPTY_OBJECT + SMALL_OBJECT_ARRAYS + STRING_UP_TO_4_CHARS;
 
     private final Map<String, Class<? extends JsonCustom<?>>> registeredBefore = new HashMap<>();
+    private int pinnedBefore;
 
     @BeforeEach
-    public void rememberTheRegistry() {
+    public void rememberTheRegistry() throws Exception {
         registeredBefore.putAll(CustomTypeFactory.getCustomTypes());
+        pinnedBefore = sharedPinCount().getAndSet(0);
     }
 
     @AfterEach
-    public void restoreTheRegistry() {
+    public void restoreTheRegistry() throws Exception {
         CustomTypeFactory.getCustomTypes().clear();
         CustomTypeFactory.getCustomTypes().putAll(registeredBefore);
+        sharedPinCount().addAndGet(pinnedBefore);
+    }
+
+    private static AtomicInteger sharedPinCount() throws Exception {
+        return TestUtils.getPrivateField(TestUtils.getPrivateStaticField(KeyTable.class, "SHARED", KeyTable.class),
+                "pinnedCount", AtomicInteger.class);
     }
 
     private static String fresh(String key) {
