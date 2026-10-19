@@ -244,14 +244,14 @@ public final class ScheduleOperationHelper {
         for (final var name : fs.listScheduleNames(dbName)) {
             final var definition = cache.getSchedule(dbName, name);
             if (definition != null) {
-                result.add(summaryOf(dbName, definition));
+                result.add(summaryOf(dbName, definition, request.isIncludeArgs()));
             }
         }
         return new ListSchedulesResponse("Ok", result);
     }
 
-    private static JsonObject summaryOf(String dbName, ScheduleDefinition definition) {
-        final var json = definition.toSummaryJson();
+    private static JsonObject summaryOf(String dbName, ScheduleDefinition definition, boolean includeArgs) {
+        final var json = includeArgs ? definition.toJsonObject() : definition.toSummaryJson();
         final var entry = registry.get(dbName, definition.getName());
         if (entry != null) {
             json.addProperty("nextRunAt", entry.getNextRunAt());

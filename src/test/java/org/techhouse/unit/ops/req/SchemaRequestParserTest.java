@@ -1,14 +1,17 @@
 package org.techhouse.unit.ops.req;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.DeleteSchemaRequest;
+import org.techhouse.ops.req.GetSchemaRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveSchemaRequest;
+import org.techhouse.ops.req.validations.RequestValidator;
 
 public class SchemaRequestParserTest {
     @Test
@@ -32,5 +35,22 @@ public class SchemaRequestParserTest {
         assertInstanceOf(DeleteSchemaRequest.class, request);
         assertEquals(OperationType.DELETE_SCHEMA, request.getType());
         assertEquals("myColl", request.getCollectionName());
+    }
+
+    @Test
+    public void test_parse_get_schema() {
+        final var message = "{\"type\":\"GET_SCHEMA\",\"databaseName\":\"myDb\",\"collectionName\":\"myColl\"}";
+        final var request = RequestParser.parseRequest(message);
+        assertInstanceOf(GetSchemaRequest.class, request);
+        assertEquals(OperationType.GET_SCHEMA, request.getType());
+        assertEquals("myDb", request.getDatabaseName());
+        assertEquals("myColl", request.getCollectionName());
+    }
+
+    @Test
+    public void test_get_schema_needs_a_collection_name() {
+        final var request = RequestParser.parseRequest("{\"type\":\"GET_SCHEMA\",\"databaseName\":\"myDb\"}");
+        assertEquals(OperationType.GET_SCHEMA, request.getType());
+        assertFalse(RequestValidator.validate(request).isValid());
     }
 }

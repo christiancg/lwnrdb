@@ -47,8 +47,10 @@ class Conn(bu.Conn):
     def delete_schedule(self, name, db=DB) -> dict:
         return self.send({"type": "DELETE_SCHEDULE", "databaseName": db, "name": name})
 
-    def list_schedules(self, db=DB) -> dict:
-        return self.send({"type": "LIST_SCHEDULES", "databaseName": db})
+    def list_schedules(self, db=DB, **extra) -> dict:
+        payload = {"type": "LIST_SCHEDULES", "databaseName": db}
+        payload.update(extra)
+        return self.send(payload)
 
     def find(self, doc_id, coll=COLL, db=DB) -> dict:
         return self.send({"type": "FIND_BY_ID", "databaseName": db, "collectionName": coll, "_id": doc_id})
@@ -443,6 +445,25 @@ def test_permissions():
                    "UNAUTHENTICATED", "401-1")
 
 
+def test_include_args():
+    section("LIST_SCHEDULES includeArgs")
+    with admin_conn() as admin:
+        check_status("save a schedule with args", admin.save_schedule(
+            "withArgs", "counter", cron="0 3 * * *", args={"id": "withArgs", "limit": 7}), "OK")
+    with user_conn(MANAGER) as manager:
+        listed = [s for s in manager.list_schedules(includeArgs=True).get("schedules", []) if s["name"] == "withArgs"]
+        check("a MANAGE user gets the args with includeArgs",
+              len(listed) == 1 and listed[0].get("args") == {"id": "withArgs", "limit": 7}, f"got {listed}")
+        default = [s for s in manager.list_schedules().get("schedules", []) if s["name"] == "withArgs"]
+        check("the default listing still omits args", len(default) == 1 and "args" not in default[0],
+              f"got {default}")
+    with user_conn(READER) as reader:
+        check_code("a user without script MANAGE is refused includeArgs",
+                   reader.list_schedules(includeArgs=True), "FORBIDDEN", "403-6")
+    with admin_conn() as admin:
+        admin.delete_schedule("withArgs")
+
+
 def test_a_manager_cannot_change_a_schedule_defined_by_someone_else():
     section("A MANAGE user cannot replace or delete a schedule another user defined")
     with admin_conn() as admin:
@@ -646,6 +667,7 @@ def main():
             test_run_history(conn)
             test_referential_integrity(conn)
         test_permissions()
+        test_include_args()
         test_a_client_cannot_forge_the_stamped_definer()
         test_a_manager_cannot_change_a_schedule_defined_by_someone_else()
         test_a_schedule_whose_definer_lost_script_run_is_disabled()

@@ -32,6 +32,7 @@ import org.techhouse.ops.resp.CloseConnectionResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
+import org.techhouse.ops.resp.GetSchemaResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.ListProceduresResponse;
@@ -100,12 +101,12 @@ public class ResponseBytesTest {
                 new CallProcedureResponse("failed", ErrorCode.ERROR_RETRIEVING, logs, true, "run-2", List.of("at x")),
                 new CancelScriptResponse("ok", true), new CloseConnectionResponse(), new DeleteResponse("ok"),
                 new FindByIdResponse("ok", doc), new FindByIdResponse("ok", null),
-                new GetDatabaseStatsResponse("ok", doc), new ListCollectionsResponse("ok", List.of("c1", "c2")),
-                new ListDatabasesResponse("ok", List.of("db1")), new ListProceduresResponse("ok", rows),
-                new ListSchedulesResponse("ok", rows), new ListScriptsResponse("ok", rows),
-                new ListTransactionsResponse("ok", rows), new ListTriggerRunsResponse("ok", rows),
-                new ListTriggersResponse("ok", rows), new ListUsersResponse("ok", rows),
-                new ListenEndedResponse("listen-1", "collection dropped"),
+                new GetDatabaseStatsResponse("ok", doc), new GetSchemaResponse("ok", doc),
+                new ListCollectionsResponse("ok", List.of("c1", "c2")), new ListDatabasesResponse("ok", List.of("db1")),
+                new ListProceduresResponse("ok", rows), new ListSchedulesResponse("ok", rows),
+                new ListScriptsResponse("ok", rows), new ListTransactionsResponse("ok", rows),
+                new ListTriggerRunsResponse("ok", rows), new ListTriggersResponse("ok", rows),
+                new ListUsersResponse("ok", rows), new ListenEndedResponse("listen-1", "collection dropped"),
                 new ListenResponse("listen-1", rows, "hash", true), new ListenResponse("listen-2", rows, "h", false),
                 new PrimaryKeyReindexResponse("ok", List.of("f"),
                         new PkRebuild(List.of(), 2, true, List.of(), List.of())),

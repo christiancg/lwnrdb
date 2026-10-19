@@ -70,6 +70,7 @@ public enum ErrorCode {
     PROCEDURE_NOT_FOUND("404-8", "Procedure not found", OperationStatus.NOT_FOUND),
     TRIGGER_NOT_FOUND("404-9", "Trigger not found", OperationStatus.NOT_FOUND),
     COLLECTION_NOT_FOUND("404-11", "Collection not found", OperationStatus.NOT_FOUND),
+    SCHEMA_NOT_FOUND("404-12", "The collection has no schema", OperationStatus.NOT_FOUND),
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
     SCRIPT_CANCELLED("408-2", "Script was cancelled", OperationStatus.ERROR),
     FAULT_NOT_REACHED("408-3", "The armed fault point was not reached in time", OperationStatus.ERROR),
