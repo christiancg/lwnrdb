@@ -302,7 +302,8 @@ or an admin) → `403-5`:
 ```
 
 A user with `READ` on the database but not script `MANAGE` (nor ownership, nor admin) asking for procedure source
-→ `403-6`; the same request without `includeSource` answers the summary:
+or schedule args → `403-6` (the same code covers both); the same request without `includeSource` (or
+`includeArgs`) answers the summary:
 
 ```json
 {"type": "LIST_PROCEDURES", "databaseName": "test", "includeSource": true}
@@ -310,6 +311,14 @@ A user with `READ` on the database but not script `MANAGE` (nor ownership, nor a
 
 ```json
 {"type": "LIST_PROCEDURES", "status": "FORBIDDEN", "message": "Procedure source requires script MANAGE", "errorCode": "403-6"}
+```
+
+```json
+{"type": "LIST_SCHEDULES", "databaseName": "test", "includeArgs": true}
+```
+
+```json
+{"type": "LIST_SCHEDULES", "status": "FORBIDDEN", "message": "schedule args require script MANAGE", "errorCode": "403-6"}
 ```
 
 That user's `RUN_SCRIPT` still runs an imported procedure, but cannot print it: this answers
@@ -2003,10 +2012,19 @@ Writing one by hand is refused — the collection is the server's → `400-1`
 {"type": "SAVE", "databaseName": "test", "collectionName": "script_runs", "object": {"_id": "forged", "outcome": "ok"}}
 ```
 
-Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM, totals across databases/collections, plus per-collection page/index/entry breakdown)
+Get memory & schema stats (heap usage, cache usage vs cap, OS free RAM, totals across databases/collections, plus per-collection page/index/entry breakdown) — the full report as an admin
 
 ```json
 {"type": "GET_DATABASE_STATS"}
+```
+
+The same request as any other authenticated user answers `OK` with only what that user can see: the databases
+`LIST_DATABASES` shows them, the collections they own or hold `READ` on, and `totals` over that view (no `userCount`);
+`memory`, `inDoubtTransactions`, `triggers`, `schedules` and `scripts` are left out. A user with only a script grant
+sees the database with an empty `collections`, and one with no grant at all gets an empty `databases`
+
+```json
+{"type": "GET_DATABASE_STATS", "status": "OK", "message": "Ok", "stats": {"totals": {"databaseCount": 1, "collectionCount": 1, "indexCount": 0, "pageCount": 1, "entryCount": 3, "sizeBytes": 120}, "databases": [{"name": "test", "collectionCount": 1, "indexCount": 0, "pageCount": 1, "entryCount": 3, "sizeBytes": 120, "collections": [{"name": "testCollection", "indexCount": 0, "indexes": [], "pageCount": 1, "entryCount": 3, "sizeBytes": 120}]}]}}
 ```
 
 Custom types
@@ -2285,6 +2303,22 @@ first; regex work costs one instruction per 64 matcher steps), instead of runnin
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "return /(x+x+)+y/.test('x'.repeat(800) + '!');"}
 ```
 
+Read the schema back — `READ` on the collection is enough
+
+```json
+{"type": "GET_SCHEMA", "databaseName": "test", "collectionName": "people"}
+```
+
+A collection that does not exist → `404-11`; a user without access to the collection → `403-1`
+
+```json
+{"type": "GET_SCHEMA", "databaseName": "test", "collectionName": "ghosts"}
+```
+
+```json
+{"type": "GET_SCHEMA", "status": "NOT_FOUND", "message": "Collection 'ghosts' not found", "errorCode": "404-11"}
+```
+
 Remove the schema — idempotent, so sending it twice still returns OK
 
 ```json
@@ -2293,6 +2327,16 @@ Remove the schema — idempotent, so sending it twice still returns OK
 
 ```json
 {"type": "DELETE_SCHEMA", "databaseName": "test", "collectionName": "people"}
+```
+
+With no schema, `GET_SCHEMA` → `404-12`
+
+```json
+{"type": "GET_SCHEMA", "databaseName": "test", "collectionName": "people"}
+```
+
+```json
+{"type": "GET_SCHEMA", "status": "NOT_FOUND", "message": "The collection has no schema", "errorCode": "404-12"}
 ```
 
 The write that was refused above now succeeds
@@ -2952,6 +2996,13 @@ List them — `nextRunAt` and `owner` are this node's view; `args` is omitted
 
 ```json
 {"type": "LIST_SCHEDULES", "databaseName": "test"}
+```
+
+`includeArgs` returns each full definition, `args` included (needs script `MANAGE`, ownership or admin; `READ`
+alone answers `403-6`)
+
+```json
+{"type": "LIST_SCHEDULES", "databaseName": "test", "includeArgs": true}
 ```
 
 Re-saving replaces the schedule and bumps its `version`; `ifVersion` is refused when stale → `409-8`

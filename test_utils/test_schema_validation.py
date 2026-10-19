@@ -67,6 +67,10 @@ def delete_schema(c, coll, db=DB) -> dict:
     return c.send({"type": "DELETE_SCHEMA", "databaseName": db, "collectionName": coll})
 
 
+def get_schema(c, coll, db=DB) -> dict:
+    return c.send({"type": "GET_SCHEMA", "databaseName": db, "collectionName": coll})
+
+
 PERSON_SCHEMA = {
     "type": "object",
     "required": ["name", "age"],
@@ -442,6 +446,36 @@ def test_delete_schema(c):
     check_status("deleting a schema again is idempotent", delete_schema(c, COLL), "OK")
 
 
+def test_get_schema(c):
+    section("GET_SCHEMA")
+    save_schema(c, COLL, PERSON_SCHEMA)
+    got = get_schema(c, COLL)
+    check_status("GET_SCHEMA after SAVE_SCHEMA answers OK", got, "OK")
+    check("GET_SCHEMA returns the saved schema", got.get("schema") == PERSON_SCHEMA, str(got.get("schema")))
+    check_status("delete the schema", delete_schema(c, COLL), "OK")
+    check_code("GET_SCHEMA after DELETE_SCHEMA is 404-12", get_schema(c, COLL), "NOT_FOUND", "404-12")
+    check_code("GET_SCHEMA on an unknown collection is 404-11", get_schema(c, "no_such_coll"), "NOT_FOUND",
+               "404-11")
+
+
+def test_get_schema_permissions(c):
+    section("GET_SCHEMA permissions: READ is enough")
+    save_schema(c, COLL, PERSON_SCHEMA)
+    create_user(c, "schema_viewer", "schema_viewer1234", db_perms={DB: "READ"})
+    create_user(c, "schema_outsider", "schema_outsider1234")
+
+    with Conn() as rc:
+        rc.authenticate("schema_viewer", "schema_viewer1234")
+        check_status("a READ-only user may read the schema", get_schema(rc, COLL), "OK")
+
+    with Conn() as oc:
+        oc.authenticate("schema_outsider", "schema_outsider1234")
+        check_status("a user without access may not read the schema", get_schema(oc, COLL), "FORBIDDEN")
+
+    delete_user(c, "schema_viewer")
+    delete_user(c, "schema_outsider")
+
+
 def test_permissions(c):
     section("Permissions: admin/owner only")
     create_user(c, "schema_owner", "schema_owner1234")
@@ -500,6 +534,8 @@ def main():
         test_schema_warnings,
         test_custom_type_enforcement,
         test_delete_schema,
+        test_get_schema,
+        test_get_schema_permissions,
         test_permissions,
     ]
     for group in groups:

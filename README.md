@@ -50,7 +50,7 @@ JSON socket protocol — optionally [TLS](#tls--secure-connections). On top of t
 | Integrity | [per-collection JSON Schema](#schema-validation), [transactions](#transactions), [users and permissions](#users--permissions) |
 | Scripting | a built-in JS engine — [ad-hoc scripts](#run_script), [stored procedures](#save_procedure), [triggers](#save_trigger) (after and before the write), [scheduled procedures](#save_schedule), [pipeline operators](#script-operators-simplejs-in-the-pipeline), and shared code via `import … from "procedures/<name>"`. See [docs/simplejs.md](docs/simplejs.md) |
 | Clustering | fully-replicated nodes, no master, per-collection ownership, quorum writes, anti-entropy, cross-node transactions and script placement. See [docs/clustering.md](docs/clustering.md) |
-| Operations | [`GET_DATABASE_STATS`](#get_database_stats-admin-only), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
+| Operations | [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
 
 **Known non-goals.** No compound indexes (a pipeline uses as many single-field indexes as
 apply), no sharding (every node holds a complete copy), no compression, and no attempt to
@@ -460,6 +460,17 @@ Removes the collection's schema, so writes are no longer validated. Idempotent �
 {"type":"DELETE_SCHEMA","databaseName":"my_db","collectionName":"my_coll"}
 ```
 
+#### `GET_SCHEMA`
+Returns the collection's schema exactly as it was saved. Requires `READ` on the collection.
+```json
+{"type":"GET_SCHEMA","databaseName":"my_db","collectionName":"my_coll"}
+```
+```json
+{"type":"GET_SCHEMA","status":"OK","message":"Ok","schema":{"type":"object","required":["_id"]}}
+```
+Answers `404-12` when the collection has no schema, `404-11` when the collection does not exist, and `503-11` when
+the stored schema cannot be read (an unreadable schema is reported, never mistaken for no schema).
+
 #### `LISTEN`
 
 Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
@@ -822,7 +833,7 @@ Runs a stored procedure around a write to a collection — **after** it commits 
 ```
 
 - `timing` is `after` (the default) or `before`. The two differ in almost every respect, so they are described separately below. An omitted `timing` reads as `after`, so every trigger written before this existed keeps its meaning.
-- **An `after` trigger fires once the write has committed**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a `before` trigger or a [collection schema](#schema-validation) for that — and its failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
+- **An `after` trigger fires once the write has committed**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a `before` trigger or a [collection schema](#schema-validation) for that — and its failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats).
 - **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. The definer's authority is re-checked every time the trigger fires (and when a pending run is replayed): if the definer is deleted, or no longer holds script `RUN` on the database and `READ` on the collection, the run is skipped and the trigger is **disabled** — `LIST_TRIGGERS` shows `enabled:false` with a `disabledReason` — and stays disabled until its owner re-saves it, even if the grant comes back. It never falls back to the writer or to an admin.
 - **A collection holds at most `triggerMaxPerCollection` triggers** (`400-32` past it). A trigger run takes its definer's `maxConcurrentScriptsPerUser` and its database's `maxConcurrentScriptsPerDatabase` slice; refused, it is retried after a backoff without consuming an attempt, and dead-lettered only once `triggerRunRetentionMs` has passed since it fired.
 - **Dropping a collection or database discards its pending and dead-lettered trigger runs**, so a later collection of the same name never receives the dropped one's documents.
@@ -961,7 +972,9 @@ Idempotent — succeeds whether or not the schedule existed. A schedule installe
   ]
 }
 ```
-`args` is omitted from a listing. `nextRunAt` and `owner` are computed by the answering node — the schedule registry is in-memory and per-node, so both describe that node's view rather than a cluster-wide fact (`owner` is absent when clustering is off). Requires `READ` on the database.
+`args` is omitted from a listing unless the request sets `"includeArgs":true`, which returns each schedule's full
+definition including `args`. Like `LIST_PROCEDURES`' `includeSource`, `includeArgs` also requires script `MANAGE` on
+the database (or ownership, or admin); a caller with only `READ`/`RUN` is refused with `403-6`. `nextRunAt` and `owner` are computed by the answering node — the schedule registry is in-memory and per-node, so both describe that node's view rather than a cluster-wide fact (`owner` is absent when clustering is off). Requires `READ` on the database.
 
 #### `CLOSE_CONNECTION`
 ```json
@@ -1073,7 +1086,7 @@ Replaces the full owners list for a database. All usernames must already exist. 
 {"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["Alice","bob"]}
 ```
 
-#### `GET_DATABASE_STATS` (admin only)
+#### `GET_DATABASE_STATS`
 Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxMemory`. `memory.userCacheBytes` is the modelled heap of the user cache (the total `maxMemory` is enforced against); the `heap*` fields are the JVM's measured heap.
 
 ```json
@@ -1150,6 +1163,23 @@ Response shape:
 }
 ```
 
+Any authenticated user may send it, and the answer is filtered by what that user can see. An admin gets the full report
+above. Anyone else gets only:
+- the databases [`LIST_DATABASES`](#list_databases) would show them;
+- inside each, the collections they own or hold `READ` on (an owner sees every collection; a user with only a script
+  grant sees the database with no collections);
+- `totals` summed over that view, without `userCount`.
+
+The node-wide sections — `memory`, `inDoubtTransactions`, `triggers`, `schedules`, `scripts` — are admin-only, since
+they describe the whole node and every tenant on it.
+
+```json
+{"type":"GET_DATABASE_STATS","status":"OK","message":"Ok","stats":{
+  "totals":{"databaseCount":1,"collectionCount":1,"indexCount":1,"pageCount":2,"entryCount":2495,"sizeBytes":800000},
+  "databases":[{"name":"shop","collectionCount":1,"indexCount":1,"pageCount":2,"entryCount":2495,"sizeBytes":800000,
+    "collections":[{"name":"orders","indexCount":1,"indexes":["customer"],"pageCount":2,"entryCount":2495,"sizeBytes":800000}]}]}}
+```
+
 #### `LIST_USERS` (admin only)
 Returns all users with their permissions. `passwordHash` is never included in the response. `aggregationSteps` is optional; when omitted all users are returned.
 
@@ -1222,8 +1252,9 @@ Being allowed to start a script is separate from what it may do: every operation
 
 > **Upgrade note.** Roll every node to this version before granting `MANAGE` or otherwise rewriting a user record in a cluster. User records replicate by shipping the record itself, and a node without `scriptPermissions` levels cannot parse the string form — it would skip the whole user record, not just the grant. Note that any write to a user record converts it (a password change will do), so the ordering matters even if you never touch a script grant.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`. An `AGGREGATE` whose pipeline carries a [script operator](#script-operators-simplejs-in-the-pipeline) additionally requires `RUN`, since running code is wider than reading.  
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `GET_SCHEMA`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`. An `AGGREGATE` whose pipeline carries a [script operator](#script-operators-simplejs-in-the-pipeline) additionally requires `RUN`, since running code is wider than reading.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
+`LIST_DATABASES` and [`GET_DATABASE_STATS`](#get_database_stats) need no grant either: any authenticated user may send them, and each answers only what that user can see.  
 `START_TRANSACTION`, `COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` need no grant: any authenticated user may use a transaction, and every operation inside it is authorized on its own request, so a `READ` user can open one but cannot buffer a write.
 
 ### Authentication errors
@@ -1337,7 +1368,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `403-3` | `FORBIDDEN` | Fault injection is disabled on this server — a [fault injection](#fault-injection-testing-and-debugging-only) operation on a server without `faultInjectionEnabled=true` |
 | `403-4` | `FORBIDDEN` | Procedure is bound by a trigger or schedule that runs as another user — a [`SAVE_PROCEDURE`](#save_procedure) or [`DELETE_PROCEDURE`](#delete_procedure) by someone other than the binding's definer, a database owner or an admin |
 | `403-5` | `FORBIDDEN` | The trigger or schedule belongs to another user — a `SAVE_TRIGGER`, `DELETE_TRIGGER`, `SAVE_SCHEDULE` or `DELETE_SCHEDULE` replacing or removing a definition by someone other than its definer, a database owner or an admin |
-| `403-6` | `FORBIDDEN` | Procedure source requires script MANAGE — a [`LIST_PROCEDURES`](#list_procedures) with `includeSource: true` by a caller with `READ` but not script `MANAGE`, ownership or admin |
+| `403-6` | `FORBIDDEN` | Procedure source requires script MANAGE — a [`LIST_PROCEDURES`](#list_procedures) with `includeSource: true`, or a [`LIST_SCHEDULES`](#list_schedules) with `includeArgs: true`, by a caller with `READ` but not script `MANAGE`, ownership or admin |
 | `404-1` | `NOT_FOUND` | User not found |
 | `404-2` | `NOT_FOUND` | Entry not found |
 | `404-3` | `NOT_FOUND` | No results |
@@ -1348,6 +1379,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-8` | `NOT_FOUND` | Procedure not found |
 | `404-9` | `NOT_FOUND` | Trigger not found |
 | `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
+| `404-12` | `NOT_FOUND` | The collection has no schema — a [`GET_SCHEMA`](#get_schema) on a collection without one |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
 | `408-3` | `ERROR` | The armed fault point was not reached in time (`AWAIT_FAULT`, testing only) |
@@ -1447,6 +1479,101 @@ The image runs as the unprivileged `lwnrdb` user, not root. A host directory mou
 The integration suites in `test_utils/` authenticate with `base_utils.PASSWORD` (`Tst-Admin-9xQ2mV`): a server the
 suites do not start themselves must have `defaultAdminPassword=Tst-Admin-9xQ2mV` in its `lwnrdb.cfg`, which is what
 CI appends before starting it. The suites that start their own servers write that value into their own config.
+
+### Client (shell, exec, dump/restore)
+
+The server jar is also its own client. When the first argument starts with `--`, it connects to a running server,
+local or remote, instead of starting one:
+
+```bash
+java -jar lwnrdb.jar --shell   [connection]
+java -jar lwnrdb.jar --exec '<json>' [--exec '<json>' ...] [connection]
+java -jar lwnrdb.jar --exec [connection] < commands.jsonl
+java -jar lwnrdb.jar --dump [--databases a,b | --collections db.coll,...] [--compress] [connection] > backup.ldump
+java -jar lwnrdb.jar --restore [connection] < backup.ldump
+```
+
+| Connection flag | Default | |
+|---|---|---|
+| `--host <host>` | `127.0.0.1` | |
+| `--port <port>` | `8989` | |
+| `--user <user>` | `admin` | |
+| `--password <password>` | | or the `LWNRDB_PASSWORD` environment variable; `--shell` on a terminal prompts for it |
+| `--tls` | off | TLS, verified against the JVM trust store with hostname verification |
+| `--insecure` | off | with `--tls`, trust any certificate, e.g. the server's dev-only self-signed one |
+
+- **`--shell`** prints a `lwnrdb> ` prompt, sends each line (one JSON request) as it is and pretty-prints the reply.
+  `exit`, `quit` or end of input ends the session. There is no line editing, history or multi-line input.
+- **`--exec`** sends each `--exec` value, or each line of standard input when no value is given, and prints every
+  reply on its own line. It stops at the first reply that is not `OK`.
+- **`--dump`** writes a backup to standard output and progress (`shop.orders: 12000 documents`) to standard error.
+  `--compress` gzips the stream.
+- **`--restore`** reads a backup from standard input, plain or gzipped (detected by its first two bytes), and prints
+  `restored N requests` to standard error every 1000 requests and at the end.
+
+Exit codes: `0` success; `1` a command answered non-OK, or the dump or restore stopped (the restore names the line);
+`2` usage error; `3` the server cannot be reached, TLS failed, or authentication was refused. The client never reads
+`lwnrdb.cfg` and never creates `db/` or `logs/` in its working directory.
+
+**The dump format is the restore script.** Every line is one ordinary request: `CREATE_DATABASE`,
+`CREATE_COLLECTION`, `BULK_SAVE` (at most 4 MB of documents per line), `SAVE_SCHEMA`, `CREATE_INDEX`,
+`SAVE_PROCEDURE`, `SAVE_TRIGGER` and `SAVE_SCHEDULE`, in that order, so a restore writes documents before the schema,
+before hooks and indexes that would re-check or slow them, saves a procedure before what imports or binds it, and
+installs after triggers last so they do not fire on a fresh target. Restore sends each line and stops at the first
+error; the lines before it stay applied.
+
+Every request runs as `--user`, so what a dump or restore can do follows that user's permissions:
+
+| User | Dump | Restore into an existing database |
+|---|---|---|
+| Admin | everything | everything |
+| Owner of the database | `--databases db` or `--collections db.x`, definitions included | yes, definitions included |
+| `READ` on the database, no script `MANAGE` | data, schemas and indexes; definitions are skipped with a note | no, writes need `READ_WRITE` |
+| `READ_WRITE` and script `MANAGE` | everything in the database | data yes; a procedure, trigger or schedule another user defined or bound stops it (`403-4`/`403-5`) |
+| A grant on single collections only | no, listing a database's collections needs database `READ` | no |
+
+A dump skips a kind of definition it may not list (`403-2` when scripts are disabled, `403-6` without script
+`MANAGE`) and says so on standard error; when the procedures are skipped, the triggers bound to them are skipped too.
+A dump without `--databases` skips, with a note, a database the user can see but not read; a database named in
+`--databases` that the user cannot read stops the dump. Restoring a database that does not exist yet needs the
+global `CREATE_DATABASE` permission, and the user who creates it becomes its owner.
+
+A dump covers the whole server, the databases named by `--databases`, or the collections named by `--collections`
+(each `db.coll`). A collection dump carries `CREATE_DATABASE`, `CREATE_COLLECTION`, the collection's documents,
+schema and indexes, its triggers, and the procedures those triggers call together with everything they import; it
+carries no schedules, which belong to the database.
+
+| Not in a dump | Why |
+|---|---|
+| Users, permissions, database owners | Password hashes never leave the server, and `CREATE_USER` takes only plaintext |
+| `script_runs` | Reserved: client writes to it are refused |
+| `admin` and cluster metadata | Not user data |
+| Trigger runs, in-doubt transactions | Node-local runtime state |
+| Definers, versions, timestamps, `disabledReason` | Restored definitions are stamped by the restoring user, who becomes their definer and whose permissions they then run with, and start at version 1; a disabled one comes back with `enabled:false` |
+
+**A dump is not a point-in-time snapshot.** Collections are read page by page while writes may continue; for an exact
+copy, stop the writers while dumping.
+
+**Restore merges** into whatever the target already holds: an existing database or collection is reused (restore
+lists the databases first and skips the `CREATE_DATABASE` of one that exists, reporting `restored N requests, skipped
+M existing databases`; a `409-2` answer is still accepted), documents with the same `_id` and definitions with the same name are
+overwritten, and nothing the dump lacks is deleted. Restoring the same dump twice leaves the same data. On a merge,
+the target's own schema, before hooks and after triggers apply to the restored documents: a schema the dumped
+documents violate stops the restore with `400-7`, a before hook can veto or rewrite them, and enabled after triggers
+fire. Restore into a collection without them, or disable them first. To replace rather than merge, drop first:
+
+```bash
+java -jar lwnrdb.jar --exec '{"type":"DROP_COLLECTION","databaseName":"shop","collectionName":"orders"}' --password …
+java -jar lwnrdb.jar --restore --password … < orders.ldump
+```
+
+From Docker, override the command (the image's working directory holds its own `lwnrdb.cfg`, which the client
+ignores); add `-i` to feed a restore:
+
+```bash
+docker run --rm lwnrdb java -jar app.jar --dump --compress --host db.internal --password … > backup.ldump.gz
+docker run --rm -i lwnrdb java -jar app.jar --restore --host db.internal --password … < backup.ldump.gz
+```
 
 ### Bootstrap
 

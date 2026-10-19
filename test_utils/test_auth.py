@@ -153,6 +153,47 @@ def listed_databases(username, password):
     return [name for name in response.get("databases") or [] if name.startswith("lsdb_")]
 
 
+STATS_NODE_SECTIONS = ("memory", "inDoubtTransactions", "triggers", "schedules", "scripts")
+
+
+def stats_view(username, password) -> dict:
+    with Conn() as session:
+        check_status(f"AUTHENTICATE as {username!r}", session.authenticate(username, password), "OK")
+        response = session.send({"type": "GET_DATABASE_STATS"})
+    check_status(f"GET_DATABASE_STATS as {username!r}", response, "OK")
+    return response.get("stats") or {}
+
+
+def lsdb_collections(stats: dict) -> dict:
+    return {db["name"]: sorted(coll["name"] for coll in db.get("collections", []))
+            for db in stats.get("databases", []) if db["name"].startswith("lsdb_")}
+
+
+def check_database_stats_are_filtered_by_grant(c):
+    section("GET_DATABASE_STATS shows only what the caller can see; node sections are admin-only")
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    for db, coll in (("lsdb_b", "ycoll"), ("lsdb_c", "zcoll"), ("lsdb_d", "owned")):
+        check_status(f"CREATE_COLLECTION {db}.{coll}", c.send({"type": "CREATE_COLLECTION", "databaseName": db,
+                                                                "collectionName": coll}), "OK")
+    expectations = (("lsdb_dbgrant", {"lsdb_a": []}, "a database grant sees that database"),
+                    ("lsdb_collgrant", {"lsdb_b": ["xcoll"]}, "a collection grant sees only that collection"),
+                    ("lsdb_scriptgrant", {"lsdb_c": []}, "a script grant sees the database but no collection"),
+                    ("lsdb_owner", {"lsdb_d": ["owned"]}, "an owner sees every collection of the database"),
+                    ("lsdb_nogrant", {}, "no grant sees nothing"))
+    for username, expected, label in expectations:
+        stats = stats_view(username, LSDB_PASSWORD)
+        check(label, lsdb_collections(stats) == expected, f"expected={expected} got={lsdb_collections(stats)}")
+        hidden = [key for key in STATS_NODE_SECTIONS if key in stats] + (
+            ["userCount"] if "userCount" in stats.get("totals", {}) else [])
+        check(f"{username} gets no node-wide section", not hidden, f"got {hidden}")
+    admin_stats = stats_view(ADMIN_USERNAME, ADMIN_PASSWORD)
+    check("the admin still gets every node-wide section and userCount",
+          all(key in admin_stats for key in STATS_NODE_SECTIONS) and "userCount" in admin_stats.get("totals", {}))
+    check("the admin sees every lsdb collection",
+          lsdb_collections(admin_stats) == {"lsdb_a": [], "lsdb_b": ["xcoll", "ycoll"], "lsdb_c": ["zcoll"],
+                                            "lsdb_d": ["owned"]}, str(lsdb_collections(admin_stats)))
+
+
 def test_list_databases_is_filtered_by_grant(c):
     section("LIST_DATABASES lists only the databases the caller owns or holds a grant on")
 
@@ -184,6 +225,8 @@ def test_list_databases_is_filtered_by_grant(c):
         check(label, listed == expected, f"expected={expected} got={listed}")
     admin_list = listed_databases(ADMIN_USERNAME, ADMIN_PASSWORD)
     check("admin lists all four", admin_list == list(LSDB_DATABASES), f"got={admin_list}")
+
+    check_database_stats_are_filtered_by_grant(c)
 
     check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
     for user in LSDB_USERS:
@@ -617,9 +660,10 @@ def test_user_management(c):
           change_permissions(c, "db_reader", admin=True),
           "FORBIDDEN")
 
-    check_status("GET_DATABASE_STATS as non-admin (FORBIDDEN)",
-          c.send({"type": "GET_DATABASE_STATS"}),
-          "FORBIDDEN")
+    non_admin_stats = c.send({"type": "GET_DATABASE_STATS"})
+    check_status("GET_DATABASE_STATS as non-admin answers its filtered view", non_admin_stats, "OK")
+    check("and leaves out the node-wide sections", "memory" not in (non_admin_stats.get("stats") or {}),
+          str(non_admin_stats)[:200])
 
 
 def list_users(c, steps=None) -> dict:

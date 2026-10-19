@@ -4,17 +4,21 @@ import java.io.IOException;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteSchemaRequest;
+import org.techhouse.ops.req.GetSchemaRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
+import org.techhouse.ops.resp.GetSchemaResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveSchemaResponse;
 
-// Callers hold the collection write lock, serializing the schema file write, cache update and any save.
+// Save and delete callers hold the collection write lock over the file write and cache update; get, its read lock.
 public final class SchemaOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -65,5 +69,24 @@ public final class SchemaOperationHelper {
         }
         cache.removeCollectionSchema(dbName, collName);
         return OperationResponse.ok(OperationType.DELETE_SCHEMA, "Collection schema deleted successfully");
+    }
+
+    public static OperationResponse executeGetSchema(GetSchemaRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        if (cache.getAdminCollectionEntry(dbName, collName) == null) {
+            return new OperationResponse(OperationType.GET_SCHEMA, "Collection '" + collName + "' not found",
+                    ErrorCode.COLLECTION_NOT_FOUND);
+        }
+        final JsonObject schema;
+        try {
+            schema = cache.getCollectionSchema(dbName, collName);
+        } catch (MetadataReadException e) {
+            return new OperationResponse(OperationType.GET_SCHEMA, ErrorCode.SCHEMA_UNAVAILABLE);
+        }
+        if (schema == null) {
+            return new OperationResponse(OperationType.GET_SCHEMA, ErrorCode.SCHEMA_NOT_FOUND);
+        }
+        return new GetSchemaResponse("Ok", schema.deepCopy());
     }
 }

@@ -9,6 +9,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.cluster.ScriptPlacement;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
@@ -30,27 +31,36 @@ public final class DatabaseStatsHelper {
     private DatabaseStatsHelper() {
     }
 
-    public static OperationResponse processGetDatabaseStats() {
+    public static OperationResponse processGetDatabaseStats(String actingUser) {
         return OperationResponse.respondOrError(OperationType.GET_DATABASE_STATS, ErrorCode.ERROR_GATHERING_STATS,
-                () -> {
-                    final var stats = new JsonObject();
-                    stats.add("memory", buildMemoryStats());
-                    stats.add("inDoubtTransactions", buildInDoubtTransactions());
-                    stats.add("triggers", buildTriggerStats());
-                    stats.add("schedules", buildScheduleStats());
-                    stats.add("scripts", buildScriptStats());
+                () -> new GetDatabaseStatsResponse("Ok", build(StatsView.of(userOf(actingUser)))));
+    }
 
-                    final var dbNames = cache.getUserDatabaseNames();
-                    final var dbArray = new JsonArray();
-                    final var totals = new Totals();
-                    for (var dbName : dbNames) {
-                        dbArray.add(buildDatabaseStats(dbName, totals));
-                    }
-                    stats.add("totals", buildTotals(totals, dbNames.size()));
-                    stats.add("databases", dbArray);
+    private static AdminUserEntry userOf(String actingUser) {
+        return actingUser == null ? null : cache.getAdminUserEntry(actingUser);
+    }
 
-                    return new GetDatabaseStatsResponse("Ok", stats);
-                });
+    private static JsonObject build(StatsView view) {
+        final var stats = new JsonObject();
+        if (view.includesNodeSections()) {
+            stats.add("memory", buildMemoryStats());
+            stats.add("inDoubtTransactions", buildInDoubtTransactions());
+            stats.add("triggers", buildTriggerStats());
+            stats.add("schedules", buildScheduleStats());
+            stats.add("scripts", buildScriptStats());
+        }
+        final var dbArray = new JsonArray();
+        final var totals = new Totals();
+        var databaseCount = 0;
+        for (var dbName : cache.getUserDatabaseNames()) {
+            if (view.includesDatabase(dbName)) {
+                dbArray.add(buildDatabaseStats(view, dbName, totals));
+                databaseCount++;
+            }
+        }
+        stats.add("totals", buildTotals(view, totals, databaseCount));
+        stats.add("databases", dbArray);
+        return stats;
     }
 
     private static JsonObject buildTriggerStats() {
@@ -159,8 +169,9 @@ public final class DatabaseStatsHelper {
         return json;
     }
 
-    private static JsonObject buildDatabaseStats(String dbName, Totals totals) {
-        final var collNames = cache.getCollectionNamesForDatabase(dbName);
+    private static JsonObject buildDatabaseStats(StatsView view, String dbName, Totals totals) {
+        final var collNames = cache.getCollectionNamesForDatabase(dbName).stream()
+                .filter(collName -> view.includesCollection(dbName, collName)).toList();
         final var collArray = new JsonArray();
         long dbIndexes = 0L;
         long dbPages = 0L;
@@ -219,9 +230,11 @@ public final class DatabaseStatsHelper {
         return new CollectionStats(collObj, indexes.size(), pageCount, entryCount, sizeBytes);
     }
 
-    private static JsonObject buildTotals(Totals totals, int databaseCount) {
+    private static JsonObject buildTotals(StatsView view, Totals totals, int databaseCount) {
         final var json = new JsonObject();
-        json.addProperty("userCount", (long) cache.getAllAdminUserEntries().size());
+        if (view.includesNodeSections()) {
+            json.addProperty("userCount", (long) cache.getAllAdminUserEntries().size());
+        }
         json.addProperty("databaseCount", (long) databaseCount);
         json.addProperty("collectionCount", totals.collections);
         json.addProperty("indexCount", totals.indexes);

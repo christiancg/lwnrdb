@@ -37,6 +37,7 @@ import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.GetSchemaRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
 import org.techhouse.ops.req.ListSchedulesRequest;
@@ -110,6 +111,7 @@ public class OperationProcessor {
             case REINDEX -> processReindex((ReindexRequest) operationRequest);
             case SAVE_SCHEMA -> processSaveSchema((SaveSchemaRequest) operationRequest);
             case DELETE_SCHEMA -> processDeleteSchema((DeleteSchemaRequest) operationRequest);
+            case GET_SCHEMA -> processGetSchema((GetSchemaRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
@@ -122,7 +124,7 @@ public class OperationProcessor {
             case LIST_USERS -> processListUsers((ListUsersRequest) operationRequest);
             case SET_PASSWORD ->
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
-            case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
+            case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats(actingUser);
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
             case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest, clientId);
             case START_TRANSACTION ->
@@ -439,6 +441,12 @@ public class OperationProcessor {
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
                 ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
+    }
+
+    private OperationResponse processGetSchema(GetSchemaRequest request) {
+        final var collectionId = Cache.getCollectionIdentifier(request.getDatabaseName(), request.getCollectionName());
+        return OperationLocks.withReadLocks(false, List.of(collectionId), OperationType.GET_SCHEMA,
+                ErrorCode.ERROR_RETRIEVING, () -> SchemaOperationHelper.executeGetSchema(request));
     }
 
 }

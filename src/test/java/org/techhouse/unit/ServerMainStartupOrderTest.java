@@ -7,8 +7,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
-public class MainStartupOrderTest {
-    private static final Path MAIN_SOURCE = Path.of("src", "main", "java", "org", "techhouse", "Main.java");
+public class ServerMainStartupOrderTest {
+    private static final Path MAIN_SOURCE = Path.of("src", "main", "java", "org", "techhouse", "ServerMain.java");
     private static final String RECOVER_LOCAL = "TriggerRunRecovery.recoverLocal(startupTriggerRuns);";
 
     private static String mainBody() throws IOException {
@@ -18,7 +18,7 @@ public class MainStartupOrderTest {
 
     private static int positionOf(String body, String call) {
         final var position = body.indexOf(call);
-        assertTrue(position >= 0, "Main.main no longer calls " + call);
+        assertTrue(position >= 0, "ServerMain.main no longer calls " + call);
         return position;
     }
 
