@@ -15,7 +15,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -26,7 +25,6 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
-import org.techhouse.ops.ScriptAdmission;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
@@ -34,7 +32,6 @@ import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.DropIndexRequest;
-import org.techhouse.ops.req.GetDatabaseStatsRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
 import org.techhouse.ops.req.ReindexRequest;
@@ -46,7 +43,6 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
-import org.techhouse.ops.resp.GetDatabaseStatsResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -323,72 +319,6 @@ public class OperationProcessorDdlTest {
 
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
         assertEquals("404-6", response.getErrorCode());
-    }
-
-    @Test
-    public void test_get_database_stats_returns_populated_payload() {
-        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
-        final var obj = new JsonObject();
-        obj.addProperty(Globals.PK_FIELD, "stats_seed");
-        obj.addProperty("v", 1);
-        save.setObject(obj);
-        save.set_id("stats_seed");
-        processor.processMessage(save);
-
-        final var response = (GetDatabaseStatsResponse) processor.processMessage(new GetDatabaseStatsRequest());
-        assertEquals(OperationStatus.OK, response.getStatus());
-        assertEquals(OperationType.GET_DATABASE_STATS, response.getType());
-        final var stats = response.getStats();
-        assertNotNull(stats);
-        assertTrue(stats.has("memory"));
-        assertTrue(stats.has("totals"));
-        assertTrue(stats.has("databases"));
-        assertTrue(stats.has("scripts"));
-
-        final var scripts = stats.get("scripts").asJsonObject();
-        assertTrue(scripts.has("routingEnabled"));
-        assertEquals(0L, scripts.get("running").asJsonNumber().getValue().longValue());
-        final var admission = IocContainer.get(ScriptAdmission.class);
-        assertEquals(admission.capacity(), scripts.get("capacity").asJsonNumber().getValue().longValue());
-        assertEquals(admission.available(), scripts.get("available").asJsonNumber().getValue().longValue());
-        assertEquals(admission.getRejected(), scripts.get("rejected").asJsonNumber().getValue().longValue());
-        assertEquals(admission.getWaited(), scripts.get("waited").asJsonNumber().getValue().longValue());
-        assertTrue(scripts.has("forwarded"));
-        assertTrue(scripts.has("forwardFallbacks"));
-        assertEquals(Configuration.getInstance().getScriptLocalityWeight(),
-                scripts.get("localityWeight").asJsonNumber().getValue().intValue());
-        assertTrue(scripts.has("localityPreferred"));
-        assertEquals(IocContainer.get(org.techhouse.ops.ScriptRunRegistry.class).getCancelled(),
-                scripts.get("cancelled").asJsonNumber().getValue().longValue());
-
-        final var memory = stats.get("memory").asJsonObject();
-        assertTrue(memory.has("heapUsedBytes"));
-        assertTrue(memory.has("heapMaxBytes"));
-        assertTrue(memory.has("userCacheBytes"));
-        assertTrue(memory.has("maxMemoryBytes"));
-
-        final var totals = stats.get("totals").asJsonObject();
-        assertTrue(totals.get("userCount").asJsonNumber().getValue().longValue() >= 0L);
-        assertTrue(totals.get("databaseCount").asJsonNumber().getValue().longValue() >= 1L);
-        assertTrue(totals.get("collectionCount").asJsonNumber().getValue().longValue() >= 1L);
-        assertTrue(totals.get("entryCount").asJsonNumber().getValue().longValue() >= 0L);
-
-        final var dbs = stats.get("databases").asJsonArray().asList();
-        assertFalse(dbs.isEmpty(), "expected at least one user database in the stats payload");
-        final var firstDb = dbs.getFirst().asJsonObject();
-        assertTrue(firstDb.has("name"));
-        assertTrue(firstDb.has("collectionCount"));
-        assertTrue(firstDb.has("collections"));
-        final var firstCollections = firstDb.get("collections").asJsonArray().asList();
-        if (!firstCollections.isEmpty()) {
-            final var firstColl = firstCollections.getFirst().asJsonObject();
-            assertTrue(firstColl.has("name"));
-            assertTrue(firstColl.has("indexCount"));
-            assertTrue(firstColl.has("indexes"));
-            assertTrue(firstColl.has("pageCount"));
-            assertTrue(firstColl.has("entryCount"));
-            assertTrue(firstColl.has("sizeBytes"));
-        }
     }
 
     @Test

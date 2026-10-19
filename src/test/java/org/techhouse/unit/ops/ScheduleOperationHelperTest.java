@@ -278,6 +278,36 @@ public class ScheduleOperationHelperTest {
     }
 
     @Test
+    public void test_include_args_lists_args() throws Exception {
+        final var request = intervalRequest("weekly");
+        final var args = new JsonObject();
+        args.add("limit", new JsonNumber(7));
+        request.setArgs(args);
+        save(request);
+        final var list = new ListSchedulesRequest(TestGlobals.DB);
+        list.setIncludeArgs(true);
+
+        final var listed = ((ListSchedulesResponse) ScheduleOperationHelper.executeList(list)).getSchedules();
+
+        assertEquals(args, listed.getFirst().get("args"));
+        assertTrue(listed.getFirst().has("nextRunAt"));
+    }
+
+    @Test
+    public void test_default_listing_omits_args() throws Exception {
+        final var request = intervalRequest("weekly");
+        final var args = new JsonObject();
+        args.add("limit", new JsonNumber(7));
+        request.setArgs(args);
+        save(request);
+
+        final var listed = ((ListSchedulesResponse) ScheduleOperationHelper
+                .executeList(new ListSchedulesRequest(TestGlobals.DB))).getSchedules();
+
+        assertFalse(listed.getFirst().has("args"));
+    }
+
+    @Test
     public void test_list_on_an_unknown_database_and_a_disabled_feature() throws Exception {
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(),
                 ScheduleOperationHelper.executeList(new ListSchedulesRequest("missingDb")).getErrorCode());

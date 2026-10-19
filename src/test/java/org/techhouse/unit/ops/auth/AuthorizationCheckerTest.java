@@ -20,6 +20,8 @@ import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.GetDatabaseStatsRequest;
+import org.techhouse.ops.req.GetSchemaRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReleaseFaultRequest;
@@ -71,6 +73,44 @@ public class AuthorizationCheckerTest {
         assertTrue(AuthorizationChecker.check(new StartTransactionRequest(), user).isAllowed());
         assertFalse(AuthorizationChecker.check(new SaveRequest("testDb", "testColl"), user).isAllowed(),
                 "opening a transaction must not widen what the user may write");
+    }
+
+    @Test
+    public void test_get_schema_needs_read_on_the_collection() {
+        final var readerPerms = new HashMap<String, PermissionLevel>();
+        readerPerms.put("testDb", PermissionLevel.READ);
+        final var reader = new AdminUserEntry("reader", "hash", false, new HashSet<>(), readerPerms, new HashMap<>());
+        final var request = new GetSchemaRequest("testDb", "testColl");
+
+        assertTrue(AuthorizationChecker.check(request, reader).isAllowed());
+        assertFalse(AuthorizationChecker.check(request, createNonAdminUser()).isAllowed());
+    }
+
+    @Test
+    public void test_get_database_stats_is_allowed_for_any_authenticated_user() {
+        final var request = new GetDatabaseStatsRequest();
+
+        assertTrue(AuthorizationChecker.check(request, createNonAdminUser()).isAllowed());
+        assertTrue(AuthorizationChecker.check(request, createAdminUser()).isAllowed());
+        assertFalse(AuthorizationChecker.check(request, null).isAllowed());
+    }
+
+    @Test
+    public void test_can_read_collection_follows_admin_and_grants() {
+        final var dbPerms = new HashMap<String, PermissionLevel>();
+        dbPerms.put("testDb", PermissionLevel.READ);
+        final var dbReader = new AdminUserEntry("dbReader", "hash", false, new HashSet<>(), dbPerms, new HashMap<>());
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ_WRITE);
+        final var collWriter = new AdminUserEntry("collWriter", "hash", false, new HashSet<>(), new HashMap<>(),
+                collPerms);
+
+        assertTrue(AuthorizationChecker.canReadCollection(createAdminUser(), "testDb", "testColl"));
+        assertTrue(AuthorizationChecker.canReadCollection(dbReader, "testDb", "otherColl"));
+        assertTrue(AuthorizationChecker.canReadCollection(collWriter, "testDb", "testColl"));
+        assertFalse(AuthorizationChecker.canReadCollection(collWriter, "testDb", "otherColl"));
+        assertFalse(AuthorizationChecker.canReadCollection(createNonAdminUser(), "testDb", "testColl"));
+        assertFalse(AuthorizationChecker.canReadCollection(null, "testDb", "testColl"));
     }
 
     @Test

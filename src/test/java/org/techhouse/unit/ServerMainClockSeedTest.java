@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.Main;
+import org.techhouse.ServerMain;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -24,7 +24,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-public class MainClockSeedTest {
+public class ServerMainClockSeedTest {
     private static final String UNREADABLE_COLL = "unreadablecoll";
     private final Configuration config = Configuration.getInstance();
     private final HybridClock hybridClock = IocContainer.get(HybridClock.class);
@@ -62,7 +62,7 @@ public class MainClockSeedTest {
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a", 0, 10, 0, planted).toFileEntry() + "\n",
                 StandardCharsets.UTF_8);
         Files.writeString(pkIndexFile(UNREADABLE_COLL).toPath(), "a|0|20|0|0\n", StandardCharsets.UTF_8);
-        final var seed = Main.class.getDeclaredMethod("seedHybridClock");
+        final var seed = ServerMain.class.getDeclaredMethod("seedHybridClock");
         seed.setAccessible(true);
 
         seed.invoke(null);
@@ -71,7 +71,7 @@ public class MainClockSeedTest {
     }
 
     private void seed() throws Exception {
-        final var seed = Main.class.getDeclaredMethod("seedHybridClock");
+        final var seed = ServerMain.class.getDeclaredMethod("seedHybridClock");
         seed.setAccessible(true);
         seed.invoke(null);
     }

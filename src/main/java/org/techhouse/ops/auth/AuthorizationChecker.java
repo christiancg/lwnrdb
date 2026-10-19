@@ -10,6 +10,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
+import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
@@ -19,13 +20,14 @@ public final class AuthorizationChecker {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(OperationType.CREATE_USER,
             OperationType.DELETE_USER, OperationType.CHANGE_PERMISSIONS, OperationType.SET_DATABASE_OWNERS,
-            OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS, OperationType.RESOLVE_TRANSACTION,
-            OperationType.LIST_TRANSACTIONS, OperationType.LIST_SCRIPTS, OperationType.CANCEL_SCRIPT,
-            OperationType.LIST_TRIGGER_RUNS, OperationType.RESOLVE_TRIGGER_RUN, OperationType.ARM_FAULT,
-            OperationType.AWAIT_FAULT, OperationType.RELEASE_FAULT);
+            OperationType.LIST_USERS, OperationType.RESOLVE_TRANSACTION, OperationType.LIST_TRANSACTIONS,
+            OperationType.LIST_SCRIPTS, OperationType.CANCEL_SCRIPT, OperationType.LIST_TRIGGER_RUNS,
+            OperationType.RESOLVE_TRIGGER_RUN, OperationType.ARM_FAULT, OperationType.AWAIT_FAULT,
+            OperationType.RELEASE_FAULT);
     private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
-            OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN,
-            OperationType.START_TRANSACTION, OperationType.COMMIT_TRANSACTION, OperationType.ROLLBACK_TRANSACTION);
+            OperationType.GET_DATABASE_STATS, OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD,
+            OperationType.STOP_LISTEN, OperationType.START_TRANSACTION, OperationType.COMMIT_TRANSACTION,
+            OperationType.ROLLBACK_TRANSACTION);
     private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,
             OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER,
             OperationType.SAVE_SCHEDULE, OperationType.DELETE_SCHEDULE, OperationType.TEST_TRIGGER);
@@ -113,6 +115,11 @@ public final class AuthorizationChecker {
                     ErrorCode.SOURCE_REQUIRES_MANAGE);
         }
 
+        if (req instanceof ListSchedulesRequest listRequest && listRequest.isIncludeArgs()
+                && !user.canManageScripts(dbName)) {
+            return AuthorizationResult.deny("schedule args require script MANAGE", ErrorCode.SOURCE_REQUIRES_MANAGE);
+        }
+
         final java.util.List<org.techhouse.ops.req.agg.BaseAggregationStep> stepsToCheck;
         if (req instanceof AggregateRequest aggReq && aggReq.getAggregationSteps() != null) {
             stepsToCheck = aggReq.getAggregationSteps();
@@ -188,6 +195,18 @@ public final class AuthorizationChecker {
         return dbEntry != null && dbEntry.isOwner(user.get_id());
     }
 
+    public static boolean canReadCollection(AdminUserEntry user, String dbName, String collName) {
+        if (user == null) {
+            return false;
+        }
+        if (user.isAdmin()) {
+            return true;
+        }
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        return dbEntry != null && dbEntry.isOwner(user.get_id())
+                || !lacksCollectionAccess(user, dbName, collName, PermissionLevel.READ);
+    }
+
     private static boolean allowsScriptManagement(AdminUserEntry user, String dbName, OperationRequest req) {
         if (!user.canManageScripts(dbName)) {
             return false;
@@ -210,7 +229,8 @@ public final class AuthorizationChecker {
 
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
-            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN, LIST_PROCEDURES, LIST_TRIGGERS, LIST_SCHEDULES ->
+            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, GET_SCHEMA, LISTEN, LIST_PROCEDURES, LIST_TRIGGERS,
+                    LIST_SCHEDULES ->
                 PermissionLevel.READ;
             default -> PermissionLevel.READ_WRITE;
         };

@@ -15,6 +15,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.Main;
+import org.techhouse.ServerMain;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
@@ -162,7 +163,7 @@ public class MainTest {
     public void bindFailureExitsNonZero() throws Exception {
         TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
         TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
-        final var exitField = Main.class.getDeclaredField("exit");
+        final var exitField = ServerMain.class.getDeclaredField("exit");
         exitField.setAccessible(true);
         final var original = exitField.get(null);
         final var status = new AtomicInteger(-1);

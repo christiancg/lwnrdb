@@ -17,6 +17,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.ListProceduresRequest;
+import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -53,6 +54,28 @@ public class ProcedureSourceAuthorizationTest {
         final var request = new ListProceduresRequest(TestGlobals.DB);
         request.setIncludeSource(includeSource);
         return request;
+    }
+
+    private static ListSchedulesRequest schedules(boolean includeArgs) {
+        final var request = new ListSchedulesRequest(TestGlobals.DB);
+        request.setIncludeArgs(includeArgs);
+        return request;
+    }
+
+    @Test
+    public void test_list_schedules_args_require_manage() {
+        final var runner = user("runner", false, PermissionLevel.READ, ScriptPermissionLevel.RUN);
+        final var refused = AuthorizationChecker.check(schedules(true), runner);
+        assertFalse(refused.isAllowed());
+        assertEquals(ErrorCode.SOURCE_REQUIRES_MANAGE, refused.getErrorCode());
+        assertTrue(AuthorizationChecker.check(schedules(false), runner).isAllowed());
+    }
+
+    @Test
+    public void test_list_schedules_args_are_allowed_with_manage_and_for_an_admin() {
+        final var manager = user("manager", false, PermissionLevel.READ, ScriptPermissionLevel.MANAGE);
+        assertTrue(AuthorizationChecker.check(schedules(true), manager).isAllowed());
+        assertTrue(AuthorizationChecker.check(schedules(true), user("root", true, null, null)).isAllowed());
     }
 
     @Test
