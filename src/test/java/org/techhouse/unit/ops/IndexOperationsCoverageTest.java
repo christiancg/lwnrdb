@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -98,13 +99,13 @@ public class IndexOperationsCoverageTest {
         return TestUtils.dirtyIndexCollections().contains(COLLECTION_IDENTIFIER);
     }
 
-    private void markDirty() {
+    private void markDirty() throws IOException {
         fs.indexMarkers().markDirty(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(isMarkedDirty());
     }
 
     @Test
-    public void test_a_whole_collection_reindex_clears_the_dirty_marker() {
+    public void test_a_whole_collection_reindex_clears_the_dirty_marker() throws IOException {
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "n"));
         markDirty();
 
@@ -116,7 +117,7 @@ public class IndexOperationsCoverageTest {
     }
 
     @Test
-    public void test_a_partial_reindex_keeps_the_dirty_marker() {
+    public void test_a_partial_reindex_keeps_the_dirty_marker() throws IOException {
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "n"));
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "s"));
         markDirty();
@@ -129,7 +130,7 @@ public class IndexOperationsCoverageTest {
     }
 
     @Test
-    public void test_a_reindex_with_no_registered_indexes_clears_the_dirty_marker() {
+    public void test_a_reindex_with_no_registered_indexes_clears_the_dirty_marker() throws IOException {
         markDirty();
 
         assertEquals(OperationStatus.OK,

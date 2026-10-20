@@ -3191,6 +3191,16 @@ was unreadable or `fieldNames` named some) and answers those fields by a scan un
 {"type": "ARM_FAULT", "point": "PK_INDEX_REPLACED", "action": "HALT", "match": "test|testCollection"}
 ```
 
+`WAL_APPENDED` stops any write right after its record reached the collection's write-ahead log (`{collection}.wal`)
+and before a page or `pk.idx` byte is written. Arm it with `HALT` and send a `SAVE`: the client gets no answer, and
+after a restart `FIND_BY_ID` returns the document, because startup replays the log. `WAL_CHECKPOINT_FORCED` stops a
+checkpoint after it forced the pages and `pk.idx` and before it rewrote the log; a restart loses and duplicates
+nothing.
+
+```json
+{"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "HALT", "match": "test|testCollection"}
+```
+
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not
 be read — and cannot be provoked from this playbook; the server log names the cause. That includes a
 `DELETE_PROCEDURE`, `DELETE_SCHEDULE`, `DELETE_TRIGGER` or `DELETE_SCHEMA` whose file could not be removed

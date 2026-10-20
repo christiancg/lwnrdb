@@ -89,4 +89,39 @@ public class IndexMarkersTest {
         assertFalse(markers.isMarked(DB, "not_written_yet", "name"));
         assertFalse(paths.collectionFolder(DB, "not_written_yet").exists());
     }
+
+    private File dirtyMarker() {
+        return new File(paths.collectionFolder(DB, COLL), COLL + "-indexes.dirty");
+    }
+
+    @Test
+    public void test_clear_dirty_without_a_written_marker_touches_no_file() throws IOException {
+        java.nio.file.Files.writeString(dirtyMarker().toPath(), "left by an earlier process");
+
+        markers.clearDirty(DB, COLL);
+
+        assertTrue(dirtyMarker().exists(), "only a marker this process wrote is cleared on the write path");
+    }
+
+    @Test
+    public void test_a_marker_this_process_wrote_is_cleared() throws IOException {
+        markers.markDirty(DB, COLL);
+        assertTrue(dirtyMarker().exists());
+
+        markers.clearDirty(DB, COLL);
+
+        assertFalse(dirtyMarker().exists());
+        markers.markDirty(DB, COLL);
+        markers.clearDirty(DB, COLL);
+        assertFalse(dirtyMarker().exists(), "a cleared marker written again is cleared again");
+    }
+
+    @Test
+    public void test_retire_dirty_removes_a_marker_another_process_left() throws IOException {
+        java.nio.file.Files.writeString(dirtyMarker().toPath(), "left by an earlier process");
+
+        markers.retireDirty(DB, COLL);
+
+        assertFalse(dirtyMarker().exists());
+    }
 }

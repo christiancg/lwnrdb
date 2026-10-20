@@ -58,6 +58,7 @@ final class FieldIndexStore {
 
     static void replaceType(File indexFile, File logFile, List<? extends FieldIndexEntry<?>> entries)
             throws IOException {
+        PageTails.forget(logFile);
         if (entries.isEmpty()) {
             deleteIndexFile(indexFile);
             deleteIndexFile(logFile);
@@ -69,7 +70,9 @@ final class FieldIndexStore {
                 lines.write(entry);
             }
         });
-        Files.deleteIfExists(logFile.toPath());
+        if (Files.deleteIfExists(logFile.toPath())) {
+            syncFolderOf(logFile);
+        }
     }
 
     boolean dropIndex(String dbName, String collName, String fieldName) {
@@ -81,9 +84,11 @@ final class FieldIndexStore {
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {
+                    PageTails.forget(index);
                     deleted.add(index.delete());
                     FileLocks.evictIfUnused(index);
                 }
+                SyncedWrites.entriesOfLanded(collFolder.toPath(), "Dropping the index files of " + fieldName);
                 return deleted.stream().allMatch(aBoolean -> aBoolean);
             }
         }
@@ -115,7 +120,10 @@ final class FieldIndexStore {
         final var lock = FileLocks.lockWrite(indexFile);
         try {
             FileLocks.rewriteFileAtomically(indexFile.toPath(), content.toString().getBytes(StandardCharsets.UTF_8));
-            Files.deleteIfExists(FilePaths.logFileOf(indexFile).toPath());
+            PageTails.forget(FilePaths.logFileOf(indexFile));
+            if (Files.deleteIfExists(FilePaths.logFileOf(indexFile).toPath())) {
+                syncFolderOf(indexFile);
+            }
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
@@ -124,9 +132,18 @@ final class FieldIndexStore {
     }
 
     private static void deleteIndexFile(File indexFile) {
-        if (indexFile.exists() && !indexFile.delete()) {
+        if (!indexFile.exists()) {
+            return;
+        }
+        if (indexFile.delete()) {
+            syncFolderOf(indexFile);
+        } else {
             logger.warning("Could not delete the now-empty index file " + indexFile.getName()
                     + "; while it exists CONTAINS and NOT_IN decline this field's index until a REINDEX");
         }
+    }
+
+    private static void syncFolderOf(File file) {
+        SyncedWrites.entriesOfLanded(file.getAbsoluteFile().getParentFile().toPath(), "Deleting " + file.getName());
     }
 }

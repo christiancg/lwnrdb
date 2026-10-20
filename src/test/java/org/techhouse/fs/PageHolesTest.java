@@ -40,7 +40,7 @@ public class PageHolesTest {
         try (var channel = FileChannel.open(fx.page(0).toPath(), StandardOpenOption.WRITE)) {
             PageHoles.blank(channel, row.getPosition(), row.getLength());
         }
-        fx.store.appendDeletes(DB, COLL, List.of(id));
+        PkRowWrites.deleteRows(fx.paths, fx.store, DB, COLL, List.of(id));
     }
 
     @Test

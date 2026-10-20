@@ -74,7 +74,7 @@ public class RecordReplacerTest {
         assertEquals(updated.toFileEntry(), rf.fx.indexed("b").toFileEntry());
         final var hole = " ".repeat((int) old.getLength() - 1) + "\n";
         assertEquals(hole, rf.fx.readAt(old));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -98,7 +98,7 @@ public class RecordReplacerTest {
         assertTrue(rf.fx.readAt(old).isBlank());
         assertEquals(PkIndexEntry.toDeleteRow("b"),
                 Files.readAllLines(rf.fx.paths.pkIndexFile(DB, COLL).toPath()).getLast());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -127,7 +127,7 @@ public class RecordReplacerTest {
         }
 
         assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length, "a write that failed before its commit ends its own intent");
+        assertEquals(0, rf.intents(), "a write that failed before its commit ends its own intent");
     }
 
     @Test
@@ -141,7 +141,7 @@ public class RecordReplacerTest {
         assertThrows(IOException.class, () -> rf.replacer.delete(dangling));
 
         assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -196,21 +196,27 @@ public class RecordReplacerTest {
         }
     }
 
+    private int loggedRecords() throws IOException {
+        return WalCodec.decodeAll(Files.readAllBytes(rf.fx.paths.writeAheadLog(DB, COLL).toPath())).records().size();
+    }
+
     @Test
-    public void pageCopyAppendedFiresAfterTheAppendAndBeforeTheCommit() throws Exception {
+    public void pageCopyAppendedFiresAfterTheLogAndBeforeTheApply() throws Exception {
         final var lengthBefore = rf.fx.page(0).length();
         final var oldRow = rf.fx.indexed("b").toFileEntry();
+        final var recordsBefore = loggedRecords();
         final var observed = haltRecording(FaultPoint.PAGE_COPY_APPENDED,
-                () -> "grown=" + (rf.fx.page(0).length() > lengthBefore) + " committed="
+                () -> "logged=" + (loggedRecords() == recordsBefore + 1) + " grown="
+                        + (rf.fx.page(0).length() > lengthBefore) + " committed="
                         + !rf.fx.indexed("b").toFileEntry().equals(oldRow));
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
-        assertEquals(List.of("grown=true committed=false"), observed);
+        assertEquals(List.of("logged=true grown=false committed=false"), observed);
     }
 
     @Test
-    public void pkRowCommittedFiresAfterTheCommitAndBeforeTheBlank() throws Exception {
+    public void pkRowCommittedFiresOnceTheWholeRecordIsApplied() throws Exception {
         final var old = rf.fx.indexed("b");
         final var observed = haltRecording(FaultPoint.PK_ROW_COMMITTED,
                 () -> "committed=" + (rf.fx.indexed("b").getVersion() == StorageFixture.NEW_VERSION) + " blanked="
@@ -218,18 +224,18 @@ public class RecordReplacerTest {
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
-        assertEquals(List.of("committed=true blanked=false"), observed);
+        assertEquals(List.of("committed=true blanked=true"), observed);
     }
 
     @Test
-    public void pkRowCommittedFiresForADeleteBeforeItsBlank() throws Exception {
+    public void pkRowCommittedFiresForADeleteOnceItsBlankIsApplied() throws Exception {
         final var old = rf.fx.indexed("b");
         final var observed = haltRecording(FaultPoint.PK_ROW_COMMITTED,
                 () -> "deleted=" + (rf.fx.indexed("b") == null) + " blanked=" + rf.fx.readAt(old).isBlank());
 
         rf.replacer.delete(old);
 
-        assertEquals(List.of("deleted=true blanked=false"), observed);
+        assertEquals(List.of("deleted=true blanked=true"), observed);
     }
 
     @Test

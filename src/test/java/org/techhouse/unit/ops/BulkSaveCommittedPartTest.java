@@ -13,6 +13,9 @@ import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -20,13 +23,18 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.PartialBulkSaveException;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ClusterWriteHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.StagedTriggerRuns;
 import org.techhouse.ops.TriggerHelper;
@@ -144,6 +152,47 @@ public class BulkSaveCommittedPartTest {
                     eq(COMMITTED_INSERTS), any(), anyInt()));
             triggers.verify(() -> TriggerHelper.afterWriteIds(anyString(), anyString(), eq(EventType.UPDATED),
                     eq(COMMITTED_UPDATES), any(), anyInt()));
+        }
+    }
+
+    private static List<JsonObject> objectsFor(int round, int count) {
+        final var ids = new LinkedHashSet<String>();
+        for (var i = 0; ids.size() < count; i++) {
+            ids.add("bulk-" + ((i * 7 + round * 31) % 300));
+        }
+        final var objects = new ArrayList<JsonObject>();
+        for (final var id : ids) {
+            final var object = new JsonObject();
+            object.addProperty(Globals.PK_FIELD, id);
+            object.addProperty("round", round);
+            objects.add(object);
+        }
+        return objects;
+    }
+
+    @Test
+    public void test_a_bulk_save_keeps_the_pk_list_sorted_and_unique() throws Exception {
+        final var processor = IocContainer.get(OperationProcessor.class);
+        for (var round = 0; round < 4; round++) {
+            final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.setObjects(objectsFor(round, round % 2 == 0 ? 200 : 10));
+            assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+        }
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var cache = IocContainer.get(Cache.class);
+        final var fs = IocContainer.get(FileSystem.class);
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            final var cached = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL);
+            final var ids = cached.stream().map(PkIndexEntry::getValue).toList();
+            for (var i = 1; i < ids.size(); i++) {
+                assertEquals(-1, Integer.signum(ids.get(i - 1).compareTo(ids.get(i))), "sorted and unique at " + i);
+            }
+            final var fromDisk = new ArrayList<>(fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL));
+            fromDisk.sort(Comparator.comparing(PkIndexEntry::getValue));
+            assertEquals(fromDisk, new ArrayList<>(cached));
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
         }
     }
 }

@@ -20,6 +20,8 @@ public enum ConfigKey {
     MAX_LOG_FILES("maxLogFiles", ValueType.INT, "7", Rule.atLeast(1)),
     MAX_LOG_FILE_SIZE("maxLogFileSize", ValueType.SIZE, "100Mb", Rule.positiveSize()),
     MAX_PAGE_SIZE("maxPageSize", ValueType.SIZE, "2Mb", Rule.positiveSize()),
+    SYNC_WRITES("syncWrites", ValueType.BOOLEAN, "true", Rule.bool()),
+    WAL_CHECKPOINT_BYTES("walCheckpointBytes", ValueType.SIZE, "8Mb", Rule.positiveSize()),
     MAX_ENTRY_SIZE("maxEntrySize", ValueType.SIZE, "1Mb", Rule.positiveSize()),
     MAX_MEMORY("maxMemory", ValueType.SIZE, "512mb", Rule.memory()),
     TRANSIENT_LOAD_PERMITS("transientLoadPermits", ValueType.INT, "4", Rule.atLeast(1)),

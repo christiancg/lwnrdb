@@ -65,9 +65,14 @@ public class RecordReplacerBulkTest {
         return Files.readAllLines(rf.fx.paths.pkIndexFile(DB, COLL).toPath(), StandardCharsets.UTF_8).size();
     }
 
+    private int loggedRecords() throws IOException {
+        return WalCodec.decodeAll(Files.readAllBytes(rf.fx.paths.writeAheadLog(DB, COLL).toPath())).records().size();
+    }
+
     @Test
-    public void nUpdatesWriteOneIntentAndOnePkAppend() throws Exception {
+    public void nUpdatesWriteOneLogRecordAndOnePkAppend() throws Exception {
         final var linesBefore = pkLines();
+        final var recordsBefore = loggedRecords();
         TestUtils.setPrivateField(faultInjector, "enabled", true);
         faultInjector.arm(FaultPoint.PAGE_COPY_APPENDED, FaultAction.PAUSE, DB + "|" + COLL);
         final var bulk = CompletableFuture.supplyAsync(() -> {
@@ -79,14 +84,15 @@ public class RecordReplacerBulkTest {
         });
         assertTrue(faultInjector.awaitReached(FaultPoint.PAGE_COPY_APPENDED, 5_000));
 
-        assertEquals(1, rf.intents().length, "one intent covers every item of the bulk");
-        assertEquals(linesBefore, pkLines(), "nothing is committed until every copy is appended");
+        assertEquals(recordsBefore + 1, loggedRecords(), "one record covers every item of the bulk");
+        assertEquals(0, rf.intents());
+        assertEquals(linesBefore, pkLines(), "nothing is applied until the record is logged");
         faultInjector.release(FaultPoint.PAGE_COPY_APPENDED);
         final var result = bulk.get(5, TimeUnit.SECONDS);
 
         assertEquals(3, result.size());
         assertEquals(linesBefore + 3, pkLines());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
         for (final var id : List.of("a", "c", "y")) {
             assertEquals(StorageFixture.record(id, "bulk-" + id), rf.fx.readAt(rf.fx.indexed(id)));
         }
@@ -121,7 +127,7 @@ public class RecordReplacerBulkTest {
         assertArrayEquals(page0, Files.readAllBytes(rf.fx.page(0).toPath()));
         assertArrayEquals(page1Bytes, Files.readAllBytes(page1.toPath()));
         assertEquals(linesBefore, pkLines());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -160,6 +166,6 @@ public class RecordReplacerBulkTest {
         assertTrue(rf.bulk(List.of()).isEmpty());
 
         assertEquals(linesBefore, pkLines());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 }

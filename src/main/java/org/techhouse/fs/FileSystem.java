@@ -32,15 +32,19 @@ public class FileSystem {
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
     private final WriteIntentJournal writeIntentJournal = new WriteIntentJournal(paths);
     private final PageVacuum pageVacuum = new PageVacuum(paths, pkIndexStore, writeIntentJournal);
-    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, writeIntentJournal,
-            pageVacuum);
+    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, pageVacuum);
     private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore, pageVacuum);
     private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
             writeIntentJournal);
     private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
+    private final WriteAheadLog writeAheadLog = new WriteAheadLog(paths);
 
     public void onVacuum(Consumer<VacuumedPage> listener) {
         pageVacuum.onVacuum(listener);
+    }
+
+    public void guardCheckpoints(CheckpointGuard guard) {
+        WriteAheadLog.guardWith(guard);
     }
 
     public void createBaseDbPath() {
@@ -53,6 +57,10 @@ public class FileSystem {
                 throw new DirectoryNotFoundException(directory.getAbsolutePath());
             }
         }
+    }
+
+    public void verifyDeviceSync() throws IOException {
+        SyncedWrites.verifyFolderSync(new File(paths.dbPath()).toPath());
     }
 
     public void createAdminDatabase() throws IOException {
@@ -281,8 +289,28 @@ public class FileSystem {
         return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows);
     }
 
-    public List<PkIndexEntry> recoverWriteIntents() throws IOException {
-        return writeIntentRecovery.recoverAll();
+    public List<PkIndexEntry> redoWriteAheadLogs() throws IOException {
+        return WalRedo.redoAll(paths);
+    }
+
+    public void recoverWriteIntents() throws IOException {
+        writeIntentRecovery.recoverAll();
+        cutUncommittedAdminCopies();
+    }
+
+    private void cutUncommittedAdminCopies() throws IOException {
+        for (final var collName : Globals.ADMIN_COLLECTION_NAMES) {
+            cutUncommittedCopiesOf(Globals.ADMIN_DB_NAME, collName);
+            cutUncommittedCopiesOf(Globals.ADMIN_PAGES_DB_NAME,
+                    AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME, collName));
+        }
+    }
+
+    private void cutUncommittedCopiesOf(String dbName, String collName) throws IOException {
+        if (paths.collectionFolder(dbName, collName).isDirectory()) {
+            OrphanedPageRecords.cutUncommittedCopies(paths, pkIndexStore, dbName, collName,
+                    pageFileLengths(dbName, collName).keySet());
+        }
     }
 
     public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
@@ -374,7 +402,20 @@ public class FileSystem {
         return OrphanedPageRecords.retireDangling(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
     }
 
+    public void checkpointWriteAheadLogs() {
+        writeAheadLog.checkpointAll();
+    }
+
+    public void openWriteGroup(String dbName, String collName) throws IOException {
+        writeAheadLog.openGroup(dbName, collName);
+    }
+
+    public boolean settleWriteGroup(String dbName, String collName) throws IOException {
+        return writeAheadLog.closeGroup(dbName, collName);
+    }
+
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
+        writeAheadLog.checkpoint(dbName, collName);
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
             writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
@@ -388,12 +429,11 @@ public class FileSystem {
     }
 
     private void refuseStaleWriteIntents(String dbName, String collName) throws IOException {
-        final var stale = writeIntentRecovery.replayableMarkersOf(dbName, collName);
+        final var stale = writeIntentRecovery.replayableIntentsOf(dbName, collName);
         if (!stale.isEmpty()) {
             throw PkIndexRebuild.refused(dbName, collName, "write intent(s) " + stale + " were left by writes this"
                     + " process could not clean up after, and a rebuild would freeze whatever half of each write the"
-                    + " pages hold. Restart the server, which recovers them, or fix what stopped their removal and"
-                    + " delete them");
+                    + " pages hold. Restart the server, which recovers them");
         }
     }
 

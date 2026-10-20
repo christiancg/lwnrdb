@@ -29,7 +29,12 @@ final class MetadataFileStore {
     static boolean delete(File file) throws IOException {
         final var lock = FileLocks.lockWrite(file);
         try {
-            return Files.deleteIfExists(file.toPath());
+            final var deleted = Files.deleteIfExists(file.toPath());
+            if (deleted) {
+                SyncedWrites.entriesOfLanded(file.getAbsoluteFile().getParentFile().toPath(),
+                        "Deleting " + file.getName());
+            }
+            return deleted;
         } finally {
             lock.unlock();
             FileLocks.evictIfUnused(file);

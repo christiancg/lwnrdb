@@ -37,8 +37,8 @@ public class AllocationBudgetTest {
     private static final long SAVE_UPDATE_BUDGET = 30 * KB;
     private static final long INSERT_BUDGET_PER_DOC = 3 * KB;
     private static final long COLD_SCAN_BUDGET_PER_DOC = 4 * KB;
-    private static final long BATCH_OF_ONE_BUDGET = 44 * KB;
-    private static final long BULK_UPDATE_BUDGET_PER_DOC = 5 * KB;
+    private static final long BATCH_OF_ONE_BUDGET = 11 * KB;
+    private static final long BULK_UPDATE_BUDGET_PER_DOC = 4 * KB;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[

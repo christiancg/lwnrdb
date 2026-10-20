@@ -33,6 +33,7 @@ public class StartupWarningsTest {
     private String origMaxMemory;
     private String origScriptsEnabled;
     private String origFaultInjection;
+    private String origSyncWrites;
 
     @BeforeEach
     public void setUp() {
@@ -46,6 +47,7 @@ public class StartupWarningsTest {
         origMaxMemory = String.valueOf(config.getMaxMemoryBytes());
         origScriptsEnabled = String.valueOf(config.isScriptsEnabled());
         origFaultInjection = String.valueOf(config.isFaultInjectionEnabled());
+        origSyncWrites = String.valueOf(config.isSyncWrites());
     }
 
     @AfterEach
@@ -60,6 +62,7 @@ public class StartupWarningsTest {
         TestUtils.setPrivateField(config, "maxMemory", origMaxMemory);
         TestUtils.setPrivateField(config, "scriptsEnabled", origScriptsEnabled);
         TestUtils.setPrivateField(config, "faultInjectionEnabled", origFaultInjection);
+        TestUtils.setPrivateField(config, "syncWrites", origSyncWrites);
     }
 
     @Test
@@ -145,6 +148,24 @@ public class StartupWarningsTest {
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.warnIfFaultInjectionEnabled();
             assertLogged(logWriter, "faultInjectionEnabled=true");
+        }
+    }
+
+    @Test
+    public void test_warns_when_writes_are_not_synced() throws Exception {
+        TestUtils.setPrivateField(config, "syncWrites", "false");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfWritesAreNotSynced();
+            assertLogged(logWriter, "DURABILITY WARNING: syncWrites=false");
+        }
+    }
+
+    @Test
+    public void test_silent_when_writes_are_synced() throws Exception {
+        TestUtils.setPrivateField(config, "syncWrites", "true");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfWritesAreNotSynced();
+            logWriter.verifyNoInteractions();
         }
     }
 

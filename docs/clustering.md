@@ -665,7 +665,7 @@ then, drain the node's traffic at the load balancer first if that window matters
 **Testing failures between two statements.** Killing a process can only land *somewhere* in a
 critical section. To stop a node at one exact statement, the engine has a test-only fault seam:
 named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_ENTROPY_SNAPSHOTTED`,
-`PK_INDEX_REPLACED`, `INDEX_BATCH_FLUSHED`, `PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
+`PK_INDEX_REPLACED`, `INDEX_BATCH_FLUSHED`, `WAL_APPENDED`, `WAL_CHECKPOINT_FORCED`, `PEER_REPLY`, among others) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
 inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
 suite turns it on for its throwaway nodes. See the
 [README](../README.md#fault-injection-testing-and-debugging-only) for the operations.

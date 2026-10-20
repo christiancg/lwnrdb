@@ -59,7 +59,7 @@ public class PageVacuumTest {
         assertEquals(List.of(vacuumed), rf.vacuumed, "the listener hears of every vacuum");
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
         assertEquals(a.toFileEntry(), rf.fx.indexed("a").toFileEntry(), "a record that did not move keeps its row");
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -84,7 +84,7 @@ public class PageVacuumTest {
         assertThrows(IOException.class, () -> rf.vacuum.vacuum(DB, COLL, 0, pageRows()));
 
         assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
         assertTrue(rf.vacuumed.isEmpty());
     }
 

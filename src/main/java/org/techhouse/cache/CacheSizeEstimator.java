@@ -131,16 +131,30 @@ public final class CacheSizeEstimator {
             return 0L;
         long total = 0L;
         for (var e : entries) {
-            total += fieldEntryOverhead(layout) + DocumentHeapSizer.indexedValueSize(e.getValue(), layout);
             final var ids = e.getIds();
-            if (ids != null) {
-                total += layout.presizedHashTableSize(ids.size());
-                for (final var id : ids) {
-                    total += idSize(id, layout);
-                }
+            if (ids == null) {
+                total += fieldEntryOverhead(layout) + DocumentHeapSizer.indexedValueSize(e.getValue(), layout);
+                continue;
+            }
+            total += fieldEntryShellSize(e.getValue(), ids.size(), layout);
+            for (final var id : ids) {
+                total += idSize(id, layout);
             }
         }
         return total;
+    }
+
+    public static long fieldEntryShellSize(Object value, int idCount) {
+        return fieldEntryShellSize(value, idCount, HeapLayout.current());
+    }
+
+    private static long fieldEntryShellSize(Object value, int idCount, HeapLayout layout) {
+        return fieldEntryOverhead(layout) + DocumentHeapSizer.indexedValueSize(value, layout)
+                + layout.presizedHashTableSize(idCount);
+    }
+
+    public static long fieldIndexIdSize(String id) {
+        return idSize(id, HeapLayout.current());
     }
 
     public static long estimateFieldIndexLookupSize(int ids) {

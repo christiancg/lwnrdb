@@ -122,6 +122,10 @@ final class DocumentPageStore {
     }
 
     Map<Long, Long> pageFileLengths(String dbName, String collName) throws IOException {
+        return pageFileLengths(paths, dbName, collName);
+    }
+
+    static Map<Long, Long> pageFileLengths(FilePaths paths, String dbName, String collName) throws IOException {
         final var collectionFolder = paths.collectionFolder(dbName, collName).toPath();
         final var lengths = new TreeMap<Long, Long>();
         if (!Files.exists(collectionFolder)) {

@@ -22,6 +22,8 @@ import org.techhouse.fs.IndexLogChange;
 import org.techhouse.ioc.IocContainer;
 
 final class FieldIndexSlot {
+    static final int POINT_EDIT_LIMIT = 64;
+    private static final int CREATED_IN_BATCH = -1;
     private static final Cache cache = IocContainer.get(Cache.class);
     @SuppressWarnings("FieldMayBeFinal")
     private static FileSystem fs = IocContainer.get(FileSystem.class);
@@ -34,13 +36,14 @@ final class FieldIndexSlot {
     private final Comparator<FieldIndexEntry<Object>> order;
     private final Loader loader;
     private final Map<String, FieldIndexEntry<Object>> created = new HashMap<>();
-    private final Map<FieldIndexEntry<Object>, Boolean> touched = new IdentityHashMap<>();
+    private final Map<FieldIndexEntry<Object>, Integer> touched = new IdentityHashMap<>();
+    private final Map<FieldIndexEntry<Object>, Boolean> emptied = new IdentityHashMap<>();
     private Map<String, Map<String, Boolean>> logged;
     private List<FieldIndexEntry<Object>> resident;
     private boolean onDisk;
     private List<FieldIndexEntry<Object>> entries;
     private int previousCount;
-    private long bytesBefore;
+    private long idBytesDelta;
     private boolean dirty;
 
     @FunctionalInterface
@@ -87,7 +90,9 @@ final class FieldIndexSlot {
         } else {
             final var fromDisk = loader.load();
             onDisk = fromDisk != null;
-            if (!onDisk && fs.indexTypeFileExists(dbName, collName, fieldName, fileLabel)) {
+            if (!onDisk && !fs.indexTypeFileExists(dbName, collName, fieldName, fileLabel)) {
+                cache.rememberFieldIndexTypeAbsent(dbName, collName, identifier);
+            } else if (!onDisk) {
                 throw new IOException(
                         "The " + fileLabel + " index file of " + Cache.getCollectionIdentifier(dbName, collName) + "."
                                 + fieldName + " could not be read, so this batch leaves it untouched;"
@@ -140,12 +145,14 @@ final class FieldIndexSlot {
             entry = new FieldIndexEntry<>(dbName, collName, value, new HashSet<>());
             created.put(key, entry);
             if (resident != null) {
-                touched.put(entry, Boolean.TRUE);
+                touched.put(entry, CREATED_IN_BATCH);
             }
         } else {
             touch(entry);
         }
-        entry.getIds().add(id);
+        if (entry.getIds().add(id) && resident != null) {
+            idBytesDelta += CacheSizeEstimator.fieldIndexIdSize(id);
+        }
         log(key, id, true);
         dirty = true;
         return entry;
@@ -154,8 +161,14 @@ final class FieldIndexSlot {
     void removeId(String id, FieldIndexEntry<Object> entry) {
         touch(entry);
         if (entry.getIds().remove(id)) {
+            if (resident != null) {
+                idBytesDelta -= CacheSizeEstimator.fieldIndexIdSize(id);
+            }
             log(FieldIndexEntry.fileKeyOf(entry.getValue()), id, false);
             dirty = true;
+            if (entry.getIds().isEmpty()) {
+                emptied.put(entry, Boolean.TRUE);
+            }
         }
     }
 
@@ -167,8 +180,8 @@ final class FieldIndexSlot {
     }
 
     private void touch(FieldIndexEntry<Object> entry) {
-        if (resident != null && touched.putIfAbsent(entry, Boolean.TRUE) == null) {
-            bytesBefore += sizeOf(entry);
+        if (resident != null) {
+            touched.putIfAbsent(entry, entry.getIds().size());
         }
     }
 
@@ -177,6 +190,7 @@ final class FieldIndexSlot {
             return false;
         }
         applyInPlace();
+        cache.forgetFieldIndexTypeAbsent(dbName, collName, identifier);
         fs.appendIndexLog(dbName, collName, fieldName, fileLabel, changes(), entries);
         return true;
     }
@@ -198,14 +212,66 @@ final class FieldIndexSlot {
     }
 
     private void applyInPlace() {
-        entries.removeIf(entry -> entry.getIds().isEmpty());
-        for (final var entry : created.values()) {
+        final var removed = Collections.newSetFromMap(new IdentityHashMap<FieldIndexEntry<Object>, Boolean>());
+        for (final var entry : emptied.keySet()) {
             if (entry.getIds().isEmpty()) {
-                continue;
+                removed.add(entry);
             }
+        }
+        final var added = new ArrayList<FieldIndexEntry<Object>>(created.size());
+        for (final var entry : created.values()) {
+            if (!entry.getIds().isEmpty()) {
+                added.add(entry);
+            }
+        }
+        if (removed.size() + added.size() > POINT_EDIT_LIMIT) {
+            mergeInOnePass(removed, added);
+            return;
+        }
+        for (final var entry : removed) {
+            removeExact(entry);
+        }
+        for (final var entry : added) {
             final var at = Collections.binarySearch(entries, entry, order);
             entries.add(at < 0 ? -at - 1 : at, entry);
         }
+    }
+
+    private void removeExact(FieldIndexEntry<Object> entry) {
+        final var at = Collections.binarySearch(entries, entry, order);
+        if (at < 0) {
+            return;
+        }
+        for (var i = at; i >= 0 && order.compare(entries.get(i), entry) == 0; i--) {
+            if (entries.get(i) == entry) {
+                entries.remove(i);
+                return;
+            }
+        }
+        for (var i = at + 1; i < entries.size() && order.compare(entries.get(i), entry) == 0; i++) {
+            if (entries.get(i) == entry) {
+                entries.remove(i);
+                return;
+            }
+        }
+    }
+
+    private void mergeInOnePass(Set<FieldIndexEntry<Object>> removed, List<FieldIndexEntry<Object>> added) {
+        added.sort(order);
+        final var merged = new ArrayList<FieldIndexEntry<Object>>(entries.size() - removed.size() + added.size());
+        var next = 0;
+        for (final var entry : entries) {
+            if (removed.contains(entry)) {
+                continue;
+            }
+            while (next < added.size() && order.compare(added.get(next), entry) < 0) {
+                merged.add(added.get(next++));
+            }
+            merged.add(entry);
+        }
+        merged.addAll(added.subList(next, added.size()));
+        entries.clear();
+        entries.addAll(merged);
     }
 
     void publish() {
@@ -220,7 +286,7 @@ final class FieldIndexSlot {
             cache.evictFieldIndex(dbName, collName, identifier);
             return;
         }
-        cache.rememberFieldIndexBatch(dbName, collName, identifier, previousCount, bytesAfter() - bytesBefore);
+        cache.rememberFieldIndexBatch(dbName, collName, identifier, previousCount, bytesDelta());
     }
 
     boolean coveredByCache() {
@@ -233,17 +299,18 @@ final class FieldIndexSlot {
         }
     }
 
-    private long bytesAfter() {
-        var total = 0L;
-        for (final var entry : touched.keySet()) {
+    private long bytesDelta() {
+        var total = idBytesDelta;
+        for (final var change : touched.entrySet()) {
+            final var entry = change.getKey();
+            final int countBefore = change.getValue();
+            if (countBefore != CREATED_IN_BATCH) {
+                total -= CacheSizeEstimator.fieldEntryShellSize(entry.getValue(), countBefore);
+            }
             if (!entry.getIds().isEmpty()) {
-                total += sizeOf(entry);
+                total += CacheSizeEstimator.fieldEntryShellSize(entry.getValue(), entry.getIds().size());
             }
         }
         return total;
-    }
-
-    private static long sizeOf(FieldIndexEntry<Object> entry) {
-        return CacheSizeEstimator.estimateFieldIndexSize(List.of(entry));
     }
 }

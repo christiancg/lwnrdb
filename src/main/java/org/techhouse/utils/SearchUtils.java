@@ -27,6 +27,49 @@ public final class SearchUtils {
         };
     }
 
+    public static <T> Set<String> findingBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
+        final var slice = sliceOf(entries, bounds);
+        return slice == null ? Set.of() : toIdSet(entries, slice[0], slice[1]);
+    }
+
+    public static <T> long countBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
+        final var slice = sliceOf(entries, bounds);
+        var count = 0L;
+        if (slice != null) {
+            for (var i = slice[0]; i < slice[1]; i++) {
+                count += entries.get(i).getIds().size();
+            }
+        }
+        return count;
+    }
+
+    private static <T> int[] sliceOf(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
+        var from = 0;
+        var to = entries.size();
+        for (final var bound : bounds.bounds()) {
+            final var boundary = boundaryIndex(entries, bound.value(), typeOf(bound.operatorType()));
+            if (boundary < 0) {
+                return null;
+            }
+            if (bound.isLower()) {
+                from = Math.max(from, boundary);
+            } else {
+                to = Math.min(to, boundary + 1);
+            }
+        }
+        return from < to ? new int[]{from, to} : null;
+    }
+
+    private static GreaterSmallerEqualsType typeOf(FieldOperatorType operatorType) {
+        return switch (operatorType) {
+            case GREATER_THAN -> GreaterSmallerEqualsType.GREATER_THAN;
+            case GREATER_THAN_EQUALS -> GreaterSmallerEqualsType.GREATER_THAN_EQUALS;
+            case SMALLER_THAN -> GreaterSmallerEqualsType.SMALLER_THAN;
+            case SMALLER_THAN_EQUALS -> GreaterSmallerEqualsType.SMALLER_THAN_EQUALS;
+            default -> throw new IllegalArgumentException("Not a range bound: " + operatorType);
+        };
+    }
+
     private static <T> Set<String> findingEquals(List<FieldIndexEntry<T>> entries, T value) {
         final var run = equalRun(entries, value);
         return run == null ? Set.of() : toIdSet(entries, run[0], run[1]);
@@ -59,7 +102,8 @@ public final class SearchUtils {
                 : toIdSet(entries, 0, index + 1);
     }
 
-    private static <T> int boundaryIndex(List<FieldIndexEntry<T>> entries, T value, GreaterSmallerEqualsType type) {
+    private static <T> int boundaryIndex(List<FieldIndexEntry<T>> entries, Object value,
+            GreaterSmallerEqualsType type) {
         if (value instanceof Number n) {
             return binarySearchBoundary(entries, n.doubleValue(), type, SearchUtils::compareAsDouble);
         }

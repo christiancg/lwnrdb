@@ -108,12 +108,16 @@ public final class FieldIndexBatch {
         loaded = true;
         var covered = true;
         for (final var type : IndexKind.scalarIndexClasses()) {
-            covered &= register(
-                    scalarSlots.computeIfAbsent(type, _ -> FieldIndexSlot.scalar(dbName, collName, fieldName, type)));
+            if (mayHaveAFile(Cache.getIndexIdentifier(fieldName, type))) {
+                covered &= register(scalarSlots.computeIfAbsent(type,
+                        _ -> FieldIndexSlot.scalar(dbName, collName, fieldName, type)));
+            }
         }
         for (final var kind : IndexKind.HASH_KINDS) {
-            covered &= register(
-                    hashSlots.computeIfAbsent(kind, _ -> FieldIndexSlot.hash(dbName, collName, fieldName, kind)));
+            if (mayHaveAFile(Cache.getHashIndexIdentifier(fieldName, kind.label()))) {
+                covered &= register(
+                        hashSlots.computeIfAbsent(kind, _ -> FieldIndexSlot.hash(dbName, collName, fieldName, kind)));
+            }
         }
         lookup = covered && slots.stream().anyMatch(FieldIndexSlot::isResident)
                 ? cache.fieldIndexLookup(dbName, collName, fieldName)
@@ -132,6 +136,10 @@ public final class FieldIndexBatch {
         return slot.attach();
     }
 
+    private boolean mayHaveAFile(String indexIdentifier) {
+        return !cache.isFieldIndexTypeAbsent(dbName, collName, indexIdentifier);
+    }
+
     private FieldIndexSlot slotFor(Class<?> type) throws IOException {
         final var existing = scalarSlots.get(type);
         if (existing != null) {
@@ -139,6 +147,20 @@ public final class FieldIndexBatch {
         }
         final var slot = FieldIndexSlot.scalar(dbName, collName, fieldName, type);
         scalarSlots.put(type, slot);
+        return registerLate(slot);
+    }
+
+    private FieldIndexSlot hashSlotFor(IndexKind kind) throws IOException {
+        final var existing = hashSlots.get(kind);
+        if (existing != null) {
+            return existing;
+        }
+        final var slot = FieldIndexSlot.hash(dbName, collName, fieldName, kind);
+        hashSlots.put(kind, slot);
+        return registerLate(slot);
+    }
+
+    private FieldIndexSlot registerLate(FieldIndexSlot slot) throws IOException {
         register(slot);
         slot.indexInto(lookup);
         return slot;
@@ -176,7 +198,7 @@ public final class FieldIndexBatch {
         return scalarTarget(custom.getClass(), custom);
     }
 
-    private Target hashTarget(IndexKind kind, String hash) {
-        return new Target(hashSlots.get(kind), FieldIndexEntry.fileKeyOf(hash), hash);
+    private Target hashTarget(IndexKind kind, String hash) throws IOException {
+        return new Target(hashSlotFor(kind), FieldIndexEntry.fileKeyOf(hash), hash);
     }
 }

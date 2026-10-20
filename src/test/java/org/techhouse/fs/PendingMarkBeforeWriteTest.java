@@ -97,8 +97,8 @@ public class PendingMarkBeforeWriteTest {
             waitUntilPending();
             assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(ID),
                     "the id must be pending before its page write can land");
-            assertTrue(TestUtils.dirtyIndexCollections().contains(DIRTY_KEY),
-                    "a kill during the page write must leave the index-dirty marker behind");
+            assertFalse(TestUtils.dirtyIndexCollections().contains(DIRTY_KEY),
+                    "a logged write writes no index-dirty marker: its log record is what startup replays");
             assertFalse(running.isDone(), "the write must still be blocked on the page");
         } finally {
             pageLock.unlock();

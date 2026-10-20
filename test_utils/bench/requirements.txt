@@ -1,0 +1,4 @@
+mysql-connector-python==26.7.0
+psycopg[binary]==3.3.6
+pymongo==4.19.0
+couchbase==4.6.3

@@ -34,6 +34,14 @@ final class FilePaths {
                 + Globals.DB_FILE_EXTENSION);
     }
 
+    File writeAheadLog(String dbName, String collectionName) {
+        return new File(collectionPrefix(dbName, collectionName) + Globals.WAL_EXTENSION);
+    }
+
+    File intentLog(String dbName, String collectionName) {
+        return new File(collectionPrefix(dbName, collectionName) + Globals.INTENT_LOG_EXTENSION);
+    }
+
     File vacuumFile(String dbName, String collectionName, long page) {
         return new File(collectionPrefix(dbName, collectionName) + Globals.FILE_PAGE_SEPARATOR + page
                 + Globals.VACUUM_FILE_EXTENSION);

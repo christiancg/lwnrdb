@@ -45,7 +45,8 @@ public class SingleDefinitionTest {
     @Test
     public void test_no_file_is_opened_in_a_synced_mode() {
         assertTrue(filesOpeningInASyncedMode(JavaSources.under(JavaSources.MAIN)).isEmpty(),
-                "Writes are not synced to the device by decision; open files with \"rw\", never \"rwd\"/\"rws\"");
+                "Durability is the explicit SyncedWrites forces at each write step; open files with \"rw\", never"
+                        + " \"rwd\"/\"rws\"");
     }
 
     @Test

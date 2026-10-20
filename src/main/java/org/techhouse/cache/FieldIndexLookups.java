@@ -35,6 +35,16 @@ final class FieldIndexLookups {
         byCollection.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
+    long footprintBytes() {
+        var total = 0L;
+        for (final var lookups : byCollection.values()) {
+            for (final var lookup : lookups.values()) {
+                total += CacheSizeEstimator.estimateFieldIndexLookupSize(lookup.size());
+            }
+        }
+        return total;
+    }
+
     void addResources(List<CacheableResource> resources) {
         for (var entry : byCollection.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);

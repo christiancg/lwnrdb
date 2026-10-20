@@ -18,6 +18,7 @@ import org.techhouse.simplejs.host.PublicAddressPolicy;
 
 public final class StartupWarnings {
     private static final Configuration config = Configuration.getInstance();
+    private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Logger logger = Logger.logFor(StartupWarnings.class);
     private static final List<ConfigKey> LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_CONNECTIONS,
             ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS, ConfigKey.MAX_UNAUTHENTICATED_INVALID_REQUESTS,
@@ -32,12 +33,12 @@ public final class StartupWarnings {
     }
 
     public static void retainAndReportUncleanStops() {
-        final var dirty = IocContainer.get(FileSystem.class).indexMarkers().retainUncleanStops();
+        final var dirty = fs.indexMarkers().retainUncleanStops();
         if (!dirty.isEmpty()) {
             logger.warning("These collections stopped with field-index work outstanding, so their indexes may be"
                     + " missing entries: " + String.join(", ", dirty) + ". Run REINDEX on each of them.");
         }
-        final var unbuilt = IocContainer.get(FileSystem.class).indexMarkers().listMarked();
+        final var unbuilt = fs.indexMarkers().listMarked();
         if (!unbuilt.isEmpty()) {
             logger.warning("These field indexes were left half-built or half-dropped, so they are answered by a"
                     + " full scan until rebuilt: " + String.join(", ", unbuilt)
@@ -102,6 +103,14 @@ public final class StartupWarnings {
             logger.warning("SECURITY WARNING: the " + what + " at " + path.toAbsolutePath()
                     + " is accessible by group or other users, and it holds data, credentials or secrets. Run '" + fix
                     + " " + path.toAbsolutePath() + "' to restrict it to the server's own user.");
+        }
+    }
+
+    public static void warnIfWritesAreNotSynced() {
+        if (!config.isSyncWrites()) {
+            logger.warning("DURABILITY WARNING: syncWrites=false, so a write is acknowledged once the operating system"
+                    + " has it, and an acknowledged write can be lost on power loss. Set syncWrites=true in"
+                    + " lwnrdb.cfg to sync every write to the device before acknowledging it.");
         }
     }
 

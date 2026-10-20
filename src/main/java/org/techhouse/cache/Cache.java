@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.techhouse.config.Globals;
@@ -17,9 +18,17 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.utils.RangeBounds;
 
 public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private static final String FIELD_LOOKUP_LABEL = "~lookup";
+    private static final ClassValue<String> INDEX_TYPE_NAMES = new ClassValue<>() {
+        @Override
+        protected String computeValue(Class<?> type) {
+            final var name = type.getName();
+            return name.substring(name.lastIndexOf('.') + 1);
+        }
+    };
     private static final Comparator<DbEntry> BY_ID = Comparator.comparing(DbEntry::get_id);
     private static final Comparator<DbEntry> BY_PAGE_THEN_ID = Comparator.comparingLong(DbEntry::getPage)
             .thenComparing(DbEntry::get_id);
@@ -27,6 +36,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final AdminCache adminCache = IocContainer.get(AdminCache.class);
     private final UserCache userCache = IocContainer.get(UserCache.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final AbsentIndexTypes absentIndexTypes = new AbsentIndexTypes();
     private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
             .get(org.techhouse.concurrency.ResourceLocking.class);
 
@@ -51,8 +61,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public static String getIndexIdentifier(String fieldName, Class<?> fieldType) {
-        final var parts = fieldType.getName().split("\\.");
-        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + parts[parts.length - 1];
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + INDEX_TYPE_NAMES.get(fieldType);
     }
 
     public static String getIndexIdentifier(String fieldName, String typeLabel) {
@@ -94,11 +103,20 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return userCache.getIdsFromIndex(dbName, collName, fieldName, operator, value);
     }
 
+    public Set<String> getIdsInRange(String dbName, String collName, RangeBounds bounds) throws IOException {
+        return IndexLookupResolver.idsInRange(userCache, dbName, collName, bounds);
+    }
+
+    public OptionalLong countInRange(String dbName, String collName, RangeBounds bounds) throws IOException {
+        return IndexLookupResolver.countInRange(userCache, dbName, collName, bounds);
+    }
+
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
         return userCache.getEntriesByIds(dbName, collName, ids);
     }
 
     public void evictDatabase(String dbName) {
+        absentIndexTypes.forgetDatabase(dbName);
         userCache.evictDatabase(dbName);
         adminCache.removeCollectionSchemasForDatabase(dbName);
         adminCache.removeProceduresForDatabase(dbName);
@@ -107,9 +125,34 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public void evictCollection(String dbName, String collName) {
+        absentIndexTypes.forgetCollection(getCollectionIdentifier(dbName, collName));
         userCache.evictCollection(dbName, collName);
         adminCache.removeCollectionSchema(dbName, collName);
         adminCache.removeTriggers(dbName, collName);
+    }
+
+    @Override
+    public void evictFieldIndex(String dbName, String collName, String indexIdentifier) {
+        absentIndexTypes.forget(getCollectionIdentifier(dbName, collName), indexIdentifier);
+        userCache.evictFieldIndex(dbName, collName, indexIdentifier);
+    }
+
+    @Override
+    public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
+        absentIndexTypes.forgetField(getCollectionIdentifier(dbName, collName), fieldName);
+        userCache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+    }
+
+    public boolean isFieldIndexTypeAbsent(String dbName, String collName, String indexIdentifier) {
+        return absentIndexTypes.isAbsent(getCollectionIdentifier(dbName, collName), indexIdentifier);
+    }
+
+    public void rememberFieldIndexTypeAbsent(String dbName, String collName, String indexIdentifier) {
+        absentIndexTypes.remember(getCollectionIdentifier(dbName, collName), indexIdentifier);
+    }
+
+    public void forgetFieldIndexTypeAbsent(String dbName, String collName, String indexIdentifier) {
+        absentIndexTypes.forget(getCollectionIdentifier(dbName, collName), indexIdentifier);
     }
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {

@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -34,6 +35,14 @@ public final class OperationLocks {
         } finally {
             locks.release(dbName, collName);
         }
+    }
+
+    public static OperationResponse withGroupedCollectionLock(String dbName, String collName, OperationType type,
+            ErrorCode errorCode, BooleanSupplier groupable, OperationResponse.Attempt attempt) {
+        if (!GroupCommit.enabled() || !GroupCommit.groupable(groupable)) {
+            return withCollectionLock(dbName, collName, type, errorCode, attempt);
+        }
+        return GroupCommit.run(dbName, collName, new GroupCommit.GroupedWrite(type, errorCode, groupable, attempt));
     }
 
     private static boolean acquireWriteLock(String dbName, String collName, boolean bounded)

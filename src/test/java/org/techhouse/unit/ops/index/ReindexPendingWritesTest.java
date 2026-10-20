@@ -79,7 +79,7 @@ public class ReindexPendingWritesTest {
     @Test
     public void test_a_full_reindex_clears_the_overlay_and_the_marker() {
         seedIndexedNameAndLabel();
-        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "stranded");
+        pendingIndexWrites.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("stranded"));
         assertTrue(markerPresent());
 
         final var response = processor.processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of()));
@@ -93,7 +93,7 @@ public class ReindexPendingWritesTest {
     @Test
     public void test_a_partial_reindex_leaves_the_overlay_and_the_marker() {
         seedIndexedNameAndLabel();
-        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "stranded");
+        pendingIndexWrites.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("stranded"));
         final var request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("name"));
 
         final var response = processor.processMessage(request);
@@ -115,7 +115,7 @@ public class ReindexPendingWritesTest {
 
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("doc-1"),
                 "the newer write's index update has not run yet, so its id must stay reconciled");
-        assertTrue(markerPresent());
+        assertFalse(markerPresent(), "a logged write's index work is covered by its log record, not a marker");
     }
 
     private void seed(String id, JsonBaseElement value) {

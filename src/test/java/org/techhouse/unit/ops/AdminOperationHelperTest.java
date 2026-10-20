@@ -26,6 +26,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
@@ -122,6 +123,7 @@ public class AdminOperationHelperTest {
         entry.setPage(0L);
         AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
                 java.util.List.of(EntityRef.of(entry)), 0L);
+        PageRowWriteBack.flushAll();
 
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, TestGlobals.DB,
                 TestGlobals.COLL);

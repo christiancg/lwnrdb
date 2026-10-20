@@ -2,9 +2,9 @@ package org.techhouse.fs;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -26,6 +26,7 @@ final class PageVacuum {
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
     private final WriteIntentJournal journal;
+    private final WriteAheadLog wal;
     private volatile Consumer<VacuumedPage> listener = _ -> {
     };
 
@@ -33,6 +34,7 @@ final class PageVacuum {
         this.paths = paths;
         this.pkIndexStore = pkIndexStore;
         this.journal = journal;
+        this.wal = new WriteAheadLog(paths);
     }
 
     void onVacuum(Consumer<VacuumedPage> vacuumListener) {
@@ -45,7 +47,7 @@ final class PageVacuum {
             return null;
         }
         final var page = paths.collectionPage(dbName, collName, pageNumber);
-        final var fileLength = page.exists() ? page.length() : 0L;
+        final var fileLength = page.length();
         final var maxPageSize = configuration.getMaxPageSize();
         if (placement == null && fileLength + appendedBytes <= maxPageSize) {
             return null;
@@ -61,6 +63,7 @@ final class PageVacuum {
     VacuumedPage vacuum(String dbName, String collName, long pageNumber, List<PkIndexEntry> pageRows)
             throws IOException {
         final var page = paths.collectionPage(dbName, collName, pageNumber);
+        wal.checkpoint(dbName, collName);
         final var bytes = Files.readAllBytes(page.toPath());
         final var lines = PageLines.recordsOf(bytes, 0L);
         requireEveryLineNamed(page, lines, pageRows);
@@ -86,7 +89,17 @@ final class PageVacuum {
             throw e;
         }
         journal.end(intent);
+        checkpointAfter(dbName, collName, page);
         return vacuumed;
+    }
+
+    private void checkpointAfter(String dbName, String collName, File page) {
+        try {
+            wal.checkpoint(dbName, collName);
+        } catch (IOException e) {
+            logger.warning("Vacuumed " + page.getName() + " but could not checkpoint the write-ahead log after it;"
+                    + " the writes logged after the vacuum already address the page as it is now: " + e.getMessage());
+        }
     }
 
     private static void requireEveryLineNamed(File page, List<PageLines.Line> lines, List<PkIndexEntry> pageRows)
@@ -113,8 +126,7 @@ final class PageVacuum {
     private static void writeLiveRecords(File temp, byte[] bytes, List<PageLines.Line> lines,
             LinkedHashMap<String, VacuumedPage.Move> moves) throws IOException {
         OwnerOnly.ensureOwnerOnlyFile(temp.toPath());
-        try (var out = new BufferedOutputStream(Files.newOutputStream(temp.toPath(), StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), Globals.BUFFER_SIZE)) {
+        try (var stream = new FileOutputStream(temp); var out = new BufferedOutputStream(stream, Globals.BUFFER_SIZE)) {
             var next = 0L;
             for (final var line : lines) {
                 out.write(bytes, (int) line.position(), line.length());
@@ -123,6 +135,8 @@ final class PageVacuum {
                 }
                 next += line.length();
             }
+            out.flush();
+            SyncedWrites.content(stream.getChannel(), temp.toPath());
         }
     }
 

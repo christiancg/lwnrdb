@@ -401,11 +401,11 @@ Returns `404-6` if a named field has no registered index.
 `"primaryKey": true` also rebuilds the collection's primary-key index (`pk.idx`) from its page files, which are
 authoritative, and then its page-occupancy metadata. It is the repair for a `pk.idx` that cannot be read (every
 read and write of the collection answers an error until then), that points at the wrong bytes, or that lost or
-kept a record the pages say otherwise about. When the old `pk.idx` cannot be read, a write intent (`.intent`) that startup left for that reason is settled on
-the page side first: an update whose old copy is still on its page has its new copies blanked, a delete
-is blanked, and a vacuum's temporary file is removed. When it can be read, any intent still on disk was left by a
-write this process could not clean up after, so the rebuild refuses with `409-15` and names it; a restart
-recovers it. The page scan skips holes, the blank lines an update or delete leaves behind.
+kept a record the pages say otherwise about. The rebuild first checkpoints the collection's write-ahead log, so every
+logged write is on the pages it scans. When the old `pk.idx` cannot be read, a vacuum intent (`.intents`) that startup
+left for that reason is settled first by removing the vacuum's temporary file. When it can be read, any intent still
+on disk was left by a vacuum this process could not clean up after, so the rebuild refuses with `409-15` and names
+it; a restart recovers it. The page scan skips holes, the blank lines an update or delete leaves behind.
 ```json
 {"type":"REINDEX","databaseName":"my_db","collectionName":"my_coll","primaryKey":true}
 ```
@@ -1280,9 +1280,11 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
 | `PK_INDEX_REPLACED` | A `REINDEX` with `"primaryKey": true` wrote the rebuilt `pk.idx` and has not rebuilt the page rows or field indexes yet | `<db>\|<collection>` |
 | `INDEX_BATCH_FLUSHED` | A background field-index batch appended to the first of the type logs it changed and has not appended to the others yet | `<db>\|<collection>` |
-| `PAGE_COPY_APPENDED` | An update, relocation or bulk update appended its new copies to their page and has not committed them in `pk.idx` yet | `<db>\|<collection>` |
-| `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete committed its rows in `pk.idx` and has not blanked the copies they supersede yet | `<db>\|<collection>` |
+| `PAGE_COPY_APPENDED` | An update, relocation or bulk update logged its record in the write-ahead log and has not written its copies, `pk.idx` rows or blanks yet | `<db>\|<collection>` |
+| `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete wrote everything its logged record describes: the new copies, the `pk.idx` rows and the blanks of the copies they supersede | `<db>\|<collection>` |
 | `PAGE_VACUUM_RENAMED` | A page vacuum moved its rewritten page into place and has not appended the moved records' rows to `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log (and forced it with `syncWrites`) and has not written the pages or `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_CHECKPOINT_FORCED` | A checkpoint forced the pages and `pk.idx` the log touched and has not rewritten the log as a single checkpoint yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
 
 | Action | Effect |
@@ -1618,6 +1620,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxLogFiles` | Valid number ≥ 1 |
 | `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
+| `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory refuses to start |
+| `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, the pages and `pk.idx` its records touched are synced together and the log is rewritten as a single checkpoint. Larger means fewer checkpoints and a longer replay after a crash |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
 | `schemaMaxPatterns` | Valid number > 0 (default `256`). Most regular expressions (`pattern` values plus `patternProperties` keys, counted through `$ref`s) one schema may hold; `SAVE_SCHEMA` refuses more with `400-39` before compiling any. A stored or replicated schema with more still loads, with a warning. Keep it equal on every node of a cluster |
@@ -1723,6 +1727,8 @@ maxConcurrentPasswordChecks=0
 filePath=db
 logPath=logs
 maxPageSize=2Mb
+syncWrites=true
+walCheckpointBytes=8Mb
 maxEntrySize=1Mb
 # schema evaluation steps one write request may spend before it is refused (400-23)
 schemaValidationBudget=5000000
@@ -1945,14 +1951,14 @@ Eviction order is LFU. Access counts are recorded asynchronously and persisted i
 
 Earlier versions charged each document its on-disk size and each index entry a flat 64–96 bytes, which undercounted the real heap 3–8×. The same data now takes a larger share of `maxMemory`, so a deployment tuned to the old numbers evicts sooner and may want a larger cap.
 
-**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, each page's modelled heap (a sample of its documents scaled to the page) drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
+**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). A conjunction that starts the pipeline first combines its legs' id sets from the indexes (`AND` intersects the indexed legs and tests the others on what survives; `OR`/`XOR` take the union when every leg is indexed) and then fetches only the surviving documents once, so `price >= 20 AND price < 50` reads the documents in that range rather than each bound's half of the collection. Two or more numeric bounds on the same indexed field inside an `AND` are one walk of the sorted index. `NOR`/`NAND`, and a conjunction holding a vector `nearest`, keep reading every leg as before. When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, each page's modelled heap (a sample of its documents scaled to the page) drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
 
 `SORT`, `GROUP_BY`, `JOIN`, and `DISTINCT` also use a single-field index when one exists on the step's field **and** the step is the pipeline source (no earlier step has already produced a stream). The field index maps each value to its matching ids, so the step works from that grouping instead of scanning the whole collection: `DISTINCT` reads no documents at all (the index keys are the distinct values), `GROUP_BY`/`SORT` fetch only the grouped/ordered documents via positioned reads, and `JOIN` fetches only the remote documents whose value matches a local value. Because indexes model scalar/custom/null values only, documents whose indexed field holds a JSON object or array are outside index scope and do not appear in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results; run the step on a non-indexed field if you need those included. When no index applies, these steps still materialize their working set in memory as before.
 
 > **Note — an index buys `GROUP_BY` little (often nothing).** Unlike `DISTINCT`/`FILTER`/index-only `COUNT`, an index-backed `GROUP_BY` cannot avoid reading documents: its output places every grouped document into a `group` array, so every matched document is still fetched. The index only supplies the value→ids buckets, which replaces a cheap in-memory `groupingBy` — a negligible saving. On a field present in (nearly) every document this yields **effectively no speed-up** over a plain scan, and is in fact slightly *worse*: the index path fetches via random positioned reads and materializes the whole working set (the id set, a `docById` map and the grouped list) in memory, whereas the scan path streams page-by-page with the between-pages headroom check. The fast-path helps **only when the grouped field is sparse** (few documents carry it) — there, like `FILTER`, it reads just the matching documents instead of every page. The index fast-path is kept for that sparse case, but `GROUP_BY` should not be expected to benefit from an index the way the other steps do.
 Object- and array-valued fields are covered only by the **element-match hash indexes** used at the `FILTER` step (`EQUALS`/`NOT_EQUALS`/`IN`/`NOT_IN`), stored in separate `…-Object.idx` / `…-Array.idx` files; those hashes cannot be reconstructed or ordered, so `GROUP_BY`/`SORT`/`DISTINCT` still skip object/array values.
 
-A `COUNT` (with the collection as the pipeline source) is answered from the indexes alone — without reading any documents — whenever every step before it either filters via an index or leaves the document count unchanged. `FILTER` steps are resolved to id-sets through their indexes; sequential filters compose as `AND`, so the count is the size of the **intersection** of their id-sets. A single indexed field operator resolves through its field index; a conjunction resolves when every leaf is index-resolvable, combining the per-leaf id-sets with set algebra (`AND` = intersection, `OR` = union, `XOR` = exactly-one, and `NOR`/`NAND` = the complement against the full id universe taken from the PK index). Count-preserving steps between the filters and the `COUNT` — `MAP`, `JOIN`, `SORT` — are skipped entirely (they emit one row per input row, and `COUNT` discards their transformed output; `JOIN` permissions are still checked before execution). A `FILTER` is only index-resolvable while it still sees the stored documents, so once a `MAP`/`JOIN` has modified them no later `FILTER` can use its index. If a step changes the count in a data-dependent way (`GROUP_BY`, `DISTINCT`, `LIMIT`, `SKIP`), or any leaf lacks a usable index, the count falls back to counting the filtered stream as before.
+A `COUNT` (with the collection as the pipeline source) is answered from the indexes alone — without reading any documents — whenever every step before it either filters via an index or leaves the document count unchanged. `FILTER` steps are resolved to id-sets through their indexes; sequential filters compose as `AND`, so the count is the size of the **intersection** of their id-sets. A single indexed field operator resolves through its field index; a conjunction resolves when every leaf is index-resolvable, combining the per-leaf id-sets with set algebra (`AND` = intersection, `OR` = union, `XOR` = exactly-one, and `NOR`/`NAND` = the complement against the full id universe taken from the PK index). Count-preserving steps between the filters and the `COUNT` — `MAP`, `JOIN`, `SORT` — are skipped entirely (they emit one row per input row, and `COUNT` discards their transformed output; `JOIN` permissions are still checked before execution). A `FILTER` is only index-resolvable while it still sees the stored documents, so once a `MAP`/`JOIN` has modified them no later `FILTER` can use its index. A single numeric range, or an `AND` of numeric bounds on one indexed field, is counted straight from the index slice without building an id set, unless writes to the collection are still being indexed. If a step changes the count in a data-dependent way (`GROUP_BY`, `DISTINCT`, `LIMIT`, `SKIP`), or any leaf lacks a usable index, the count falls back to counting the filtered stream as before.
 
 ### Concurrency & locking
 
@@ -1973,18 +1979,57 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Guaranteed**
 
 - **An acknowledged write survives a process crash.** Writes go to the files before the response is sent, so a `kill -9` or a JVM crash loses nothing that was acknowledged.
-- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, commits it with one appended `pk.idx` row, then blanks the old copy into a hole, all under a `.intent` file written first. An interrupted one is kept or undone at startup according to whether its `pk.idx` row landed, and an interrupted page vacuum re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
+- **An acknowledged write survives a power loss** while `syncWrites` is on (the default). Every write is first appended to its collection's write-ahead log as the exact bytes it puts at each offset of each page and of `pk.idx`, and that record is synced to the device before the pages and `pk.idx` are touched; a created, renamed or deleted file has its folder synced too. Startup replays the log over whatever the files hold, so a power loss leaves every acknowledged write and no unacknowledged one. On a platform that cannot sync a directory the server refuses to start with `syncWrites=true`. See [Durability](#durability) for what it costs.
+- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, appends its `pk.idx` row, then blanks the old copy into a hole, and the whole write is one record in the collection's write-ahead log (`.wal`), logged before any of it. Startup replays every logged record and cuts the bytes past a logged end, so an interrupted write is either whole or absent. An interrupted page vacuum, which rewrites a page outside the log, keeps an intent in the collection's `.intents` log and re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.
 
 **Not guaranteed, by design**
 
-- **Device durability.** Writes are not synced to the device. A power loss or an operating-system crash can lose recently acknowledged writes, whatever the engine does afterwards. If that matters, run on storage with power-loss protection, or run a [cluster](#clustering-multi-node) so a second node holds the write.
-- **Field indexes after a crash with index work pending.** The index can miss entries written just before the crash, so an index-backed query can omit those documents until a full [`REINDEX`](#reindex). Startup logs a warning naming each collection in that state, and the `-indexes.unclean` marker behind it stays until a `REINDEX` rebuilds every registered index of the collection.
+- **Device durability with `syncWrites=false`.** A write is then acknowledged once the operating system has it, so a power loss or an operating-system crash can lose recently acknowledged writes; the server says so in a startup warning. Turn it off only on storage with power-loss protection, or in a [cluster](#clustering-multi-node) where a second node holds the write.
+- **Field indexes after a crash with index work pending.** Work for writes still in the collection's write-ahead log is re-queued at startup and needs nothing from you. Work the log no longer covers (a checkpoint dropped the records while it was pending, or it came from a startup heal or a `REINDEX` with `"primaryKey": true`) can miss entries, so an index-backed query can omit those documents until a full [`REINDEX`](#reindex). Startup logs a warning naming each collection in that state, and the `-indexes.unclean` marker behind it stays until a `REINDEX` rebuilds every registered index of the collection.
 - **Exact vector search by default.** `nearest` is an approximate (ANN) search unless `"exact":true` is passed (see [custom operators](#custom-operators-type-specific)).
 - **Catching up on schedules.** A scheduled procedure fires at most once per due instant, and runs missed while the node was down are skipped (see [`SAVE_SCHEDULE`](#save_schedule)).
 - **Isolation for dirty reads.** A read with `"dirtyRead":true` can observe a write half-way through (see [Concurrency & locking](#concurrency--locking)).
+
+### Durability
+
+With `syncWrites=true` a write is acknowledged once its record in the collection's write-ahead log
+(`{collection}.wal`) is on the device: one sequential append and one force, whatever the write is. An insert, an
+update, a delete, a relocation and a whole bulk write each log one record holding the exact bytes they put on each
+page and in `pk.idx`, then write those files without forcing them. A checkpoint forces every page and `pk.idx` the log
+touched since the last one, in parallel, then rewrites the log as a single checkpoint record; it runs once the log
+passes `walCheckpointBytes`, before a page vacuum or a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`,
+and at shutdown. After a power loss startup replays the log over whatever the files hold and cuts each file back to
+its last logged end, so an acknowledged write is redone and an unacknowledged one leaves nothing. With
+`syncWrites=false` there is no cut, since the bytes past a logged end may then be an acknowledged write whose record
+did not reach the disk. A write whose
+record is logged but whose files cannot be written is taken back and marked aborted in the log; when even that fails,
+it is applied before the next write to the collection, or by the next startup. A write does not write the
+collection's index-dirty marker either: its log record is what tells startup that its field-index work may be
+unfinished, so startup re-queues that work for every id the replayed log wrote. A checkpoint that drops records whose
+index work is still pending writes those ids into the new log, so startup re-queues them too, and shutdown leaves a
+collection with pending work's log in place for the next startup to replay. Clearing an index marker is not forced, because a power loss that undoes it leaves a
+journal behind that startup already settles. A field index's `.idxlog` appends are not forced either: the log record
+of the write still covers that work, so a checkpoint forces the `.idxlog` files it touched together with the pages and
+`pk.idx` before it drops records, and clearing an index marker forces them before the marker goes. The page-occupancy
+rows of a user collection are kept in memory and written back within a second (and at shutdown); startup rebuilds them
+from the page files anyway, so a crash costs nothing there.
+
+Concurrent single-document `SAVE`s and `DELETE`s on one collection share one force (group commit): each writer queues
+its write and takes the collection lock; the first one in runs every queued write, appends their records without
+forcing, forces the log once, and answers them all, so the others find their answer ready. A write's page appends
+and `pk.idx` rows are written before that force, but the blanks of the copies it supersedes wait for it, because a
+blank cannot be undone; startup cuts every page and `pk.idx` back to their logged ends, so an append whose record never
+reached the disk leaves nothing. When the force fails, every write of the group is taken back and answered with its
+error. Writes inside a transaction, on a collection with triggers or before-hooks, nested in a trigger, with
+`syncWrites=false` or with clustering on take the one-force-per-write path. A dirty read (`"dirtyRead":true`) can see a
+grouped write before its force. A force costs what the disk makes it cost, and the per-collection write lock is held
+across it, so it bounds the write rate of one collection: with 8 clients the Docker bench measured 3-4k synced inserts
+and updates and 5-7k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
+Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed
+there; the Docker image on Linux is the production target). Different collections write in parallel. Logs and the generated TLS keystore are not forced.
 
 ## Q&A
 

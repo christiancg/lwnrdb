@@ -39,8 +39,8 @@ public class UserCache {
         final var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
             final var fromDisk = wholeLoads.pkIndex(dbName, collName, bytes -> loadsAdmitted(dbName, collName, bytes));
-            if (!isCachingDisabled(dbName) && rl.holdsCollectionLock(dbName, collName)) {
-                admitPkIndex(dbName, collectionIdentifier, fromDisk);
+            if (fromDisk != null && !isCachingDisabled(dbName) && rl.holdsCollectionLock(dbName, collName)) {
+                return admitPkIndex(dbName, collectionIdentifier, fromDisk);
             }
             return fromDisk;
         }
@@ -50,12 +50,15 @@ public class UserCache {
         return snapshotForLockFreeReader(dbName, collName, primaryKeyIndex);
     }
 
-    private void admitPkIndex(String dbName, String collectionIdentifier, List<PkIndexEntry> fromDisk) {
+    private List<PkIndexEntry> admitPkIndex(String dbName, String collectionIdentifier, List<PkIndexEntry> fromDisk) {
         final var bytesPerEntry = CacheSizeEstimator.pkIndexBytesPerEntry(fromDisk);
-        if (shouldCache(dbName, () -> bytesPerEntry * fromDisk.size())) {
-            sizes.recordPkBytesPerEntry(collectionIdentifier, bytesPerEntry);
-            pkIndexMap.put(collectionIdentifier, fromDisk);
+        if (!shouldCache(dbName, () -> bytesPerEntry * fromDisk.size())) {
+            return fromDisk;
         }
+        final var cached = PkIndexList.of(fromDisk);
+        sizes.recordPkBytesPerEntry(collectionIdentifier, bytesPerEntry);
+        pkIndexMap.put(collectionIdentifier, cached);
+        return cached;
     }
 
     private List<PkIndexEntry> snapshotForLockFreeReader(String dbName, String collName, List<PkIndexEntry> shared)
@@ -108,11 +111,7 @@ public class UserCache {
     }
 
     private long footprintBytes() {
-        var total = 0L;
-        for (final var resource : listCacheableResources(Measure.REMEMBERED)) {
-            total += resource.estimatedSizeBytes();
-        }
-        return total;
+        return sizes.rememberedFootprint(pkIndexMap, collectionMap, fieldIndexMap) + fieldLookups.footprintBytes();
     }
 
     // Callers must hold the field's index lock (read for queries, write for the background index

@@ -19,6 +19,7 @@ public final class IndexMarkers {
 
     private final FilePaths paths;
     private final Set<String> marked = ConcurrentHashMap.newKeySet();
+    private final Set<String> dirtyWritten = ConcurrentHashMap.newKeySet();
     private final ReentrantLock loadLock = new ReentrantLock();
     private volatile String loadedFor;
 
@@ -69,20 +70,42 @@ public final class IndexMarkers {
         return result;
     }
 
-    public void markDirty(String dbName, String collName) {
+    public void markDirty(String dbName, String collName) throws IOException {
         final var marker = dirtyFile(dbName, collName);
-        try {
-            if (marker.getParentFile().exists()) {
-                touch(marker);
-            }
-        } catch (IOException e) {
-            logger.warning(
-                    "Could not write the index-dirty marker for " + dbName + "|" + collName + ": " + e.getMessage());
+        if (marker.getParentFile().exists()) {
+            dirtyWritten.add(dbName + "|" + collName);
+            touch(marker);
         }
     }
 
     public void clearDirty(String dbName, String collName) {
-        delete(dirtyFile(dbName, collName), dbName + "|" + collName);
+        if (dirtyWritten.contains(dbName + "|" + collName)) {
+            retireDirty(dbName, collName);
+        }
+    }
+
+    public void retireDirty(String dbName, String collName) {
+        final var owner = dbName + "|" + collName;
+        final var marker = dirtyFile(dbName, collName);
+        if (marker.exists() && !indexLogsForced(dbName, collName)) {
+            return;
+        }
+        if (delete(marker, owner)) {
+            dirtyWritten.remove(owner);
+        }
+    }
+
+    private boolean indexLogsForced(String dbName, String collName) {
+        final var group = new ForceGroup();
+        FieldIndexLog.forceUnforced(paths.collectionFolder(dbName, collName), group);
+        try {
+            group.force();
+            return true;
+        } catch (IOException e) {
+            logger.warning("Kept the index-dirty marker of " + dbName + "|" + collName + ": its field-index logs could"
+                    + " not be forced, so the next startup still repairs that work: " + e.getMessage());
+            return false;
+        }
     }
 
     public void clearUncleanStop(String dbName, String collName) {
@@ -97,7 +120,7 @@ public final class IndexMarkers {
             final var marker = dirtyFile(dbName, collName);
             final var uncleanStop = uncleanStopFile(dbName, collName);
             if (marker.exists()) {
-                if (uncleanStop.exists() || marker.renameTo(uncleanStop)) {
+                if (uncleanStop.exists() || retain(marker, uncleanStop)) {
                     delete(marker, dbName + "|" + collName);
                 } else {
                     logger.warning("Could not retain the unclean-stop marker for " + dbName + "|" + collName
@@ -162,10 +185,20 @@ public final class IndexMarkers {
         return result;
     }
 
+    private static boolean retain(File marker, File uncleanStop) {
+        if (!marker.renameTo(uncleanStop)) {
+            return false;
+        }
+        SyncedWrites.entriesOfLanded(uncleanStop.getAbsoluteFile().getParentFile().toPath(),
+                "Retaining the unclean-stop marker " + uncleanStop.getName());
+        return true;
+    }
+
     private static void touch(File marker) throws IOException {
         if (!marker.exists()) {
             OwnerOnly.ensureOwnerOnlyFile(marker.toPath());
             Files.writeString(marker.toPath(), Long.toString(System.currentTimeMillis()));
+            SyncedWrites.content(marker.toPath());
         }
     }
 

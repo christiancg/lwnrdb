@@ -78,6 +78,12 @@ public class FilterOperatorHelper {
         if (buffered != null) {
             return combineBuffered(operator, buffered, dbName, collName, context);
         }
+        final var candidates = ConjunctionCandidates.of(operator, dbName, collName, context);
+        if (candidates != null) {
+            try (var survivors = context.watch(fetched(dbName, collName, candidates, context))) {
+                return combineBuffered(operator, survivors.toList(), dbName, collName, context);
+            }
+        }
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
             combinationResult.add(processConjunctionStep(step, null, dbName, collName, context));
@@ -386,8 +392,8 @@ public class FilterOperatorHelper {
 
     // Documents committed but not yet indexed have untrustworthy index membership, so they are dropped and
     // re-added by re-testing the operator against the current document, keeping the result exact.
-    private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName,
-            PipelineContext context) throws IOException {
+    static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName, PipelineContext context)
+            throws IOException {
         if (JsonUtils.isPrimaryKeyPath(operator.getField())) {
             return PrimaryKeyIndexResolver.resolve(operator, dbName, collName, context);
         }
@@ -428,6 +434,9 @@ public class FilterOperatorHelper {
 
     private static Set<String> resolveConjunctionIds(ConjunctionOperator operator, String dbName, String collName,
             PipelineContext context) throws IOException {
+        if (operator.getConjunctionType() == ConjunctionOperatorType.AND) {
+            return ConjunctionCandidates.exactAndIds(operator, dbName, collName, context);
+        }
         final var childSets = new ArrayList<Set<String>>();
         for (var child : operator.getOperators()) {
             final var ids = resolveIdsViaIndex(child, dbName, collName, context);

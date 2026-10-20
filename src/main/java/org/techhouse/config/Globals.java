@@ -21,6 +21,8 @@ public final class Globals {
     public static final long FIELD_INDEX_LOG_MIN_BYTES = 64 * 1024;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String VACUUM_FILE_EXTENSION = ".vacuum";
+    public static final String INTENT_LOG_EXTENSION = ".intents";
+    public static final String WAL_EXTENSION = ".wal";
     public static final String JSON_FILE_EXTENSION = ".json";
     public static final String INDEX_FILE_EXTENSION = ".idx";
     public static final String INDEX_LOG_SUFFIX = "log";
@@ -104,5 +106,6 @@ public final class Globals {
     public static final int CLUSTER_MAX_UNAUTHENTICATED_PER_ADDRESS = 8;
     public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
     public static final long HANDSHAKE_DEADLINE_GRACE_MS = 1000L;
+    public static final long PAGE_ROWS_WRITE_BACK_MS = 1000L;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
 }

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
@@ -98,7 +99,6 @@ public final class AdminPageHelper {
                 return;
             }
             final var pagesPerCollectionName = AdminPageEntry.pagesCollectionName(dbName, collName);
-            fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
             final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(EntityRef::page));
             final var existingPageEntries = cache.getAdminPageEntries(dbName, collName);
             final var workingPageEntries = existingPageEntries != null
@@ -135,15 +135,56 @@ public final class AdminPageHelper {
                     newPages.add(newEntry);
                 }
             }
-            if (!newPages.isEmpty()) {
-                insertAdminPages(pagesPerCollectionName, newPages);
-            }
-            if (!deltas.isEmpty()) {
-                updateTouchedPagesInFileSystem(pagesPerCollectionName,
-                        deltas.stream().map(PageDelta::pending).toList());
+            if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+                writeRows(pagesPerCollectionName, newPages, deltas);
             }
             cache.addAdminPageEntries(dbName, collName, newPages);
             deltas.forEach(PageDelta::publish);
+            if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
+                PageRowWriteBack.touched(dbName, collName, incarnation, touchedPages(newPages, deltas),
+                        System.currentTimeMillis());
+            }
+        } finally {
+            releaseAdminPageCollection(dbName, collName);
+        }
+    }
+
+    private static void writeRows(String pagesPerCollectionName, List<AdminPageEntry> newPages, List<PageDelta> deltas)
+            throws IOException {
+        fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
+        if (!newPages.isEmpty()) {
+            insertAdminPages(pagesPerCollectionName, newPages);
+        }
+        if (!deltas.isEmpty()) {
+            updateTouchedPagesInFileSystem(pagesPerCollectionName, deltas.stream().map(PageDelta::pending).toList());
+        }
+    }
+
+    private static List<Long> touchedPages(List<AdminPageEntry> newPages, List<PageDelta> deltas) {
+        final var pages = new ArrayList<Long>(newPages.size() + deltas.size());
+        newPages.forEach(entry -> pages.add(entry.getPage()));
+        deltas.forEach(delta -> pages.add(delta.live().getPage()));
+        return pages;
+    }
+
+    static void writeBackRows(String dbName, String collName, long incarnation, Set<Long> pages)
+            throws IOException, InterruptedException {
+        lockAdminPageCollection(dbName, collName);
+        try {
+            if (!CollectionIncarnation.isCurrent(dbName, collName, incarnation)) {
+                return;
+            }
+            final var pagesPerCollectionName = AdminPageEntry.pagesCollectionName(dbName, collName);
+            final var live = cache.getAdminPageEntries(dbName, collName);
+            if (live == null) {
+                return;
+            }
+            final var touched = live.stream().filter(entry -> pages.contains(entry.getPage()))
+                    .map(entry -> pendingCopy(dbName, collName, entry, 0, 0L)).toList();
+            if (!touched.isEmpty()) {
+                fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
+                updateTouchedPagesInFileSystem(pagesPerCollectionName, touched);
+            }
         } finally {
             releaseAdminPageCollection(dbName, collName);
         }
@@ -283,6 +324,7 @@ public final class AdminPageHelper {
 
     public static void deletePageCollections(String dbName, String collName) {
         final var pagesCollName = AdminPageEntry.pagesCollectionName(dbName, collName);
+        PageRowWriteBack.forget(dbName, collName);
         final var exclusive = lockAdminPagesForDrop(dbName, collName);
         try {
             if (sharesPageFolder(dbName, collName)) {

@@ -18,11 +18,11 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_the_dirty_marker_is_set_on_enqueue_and_cleared_on_drain() throws Exception {
+    public void test_a_recovered_mark_sets_the_dirty_marker_and_the_drain_clears_it() throws Exception {
         org.techhouse.test.TestUtils.standardInitialSetup();
         org.techhouse.test.TestUtils.createTestDatabaseAndCollection();
         try {
-            pending.mark(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, "1");
+            pending.markRecovered(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, List.of("1"));
             assertEquals(List.of(org.techhouse.test.TestGlobals.DB + "|" + org.techhouse.test.TestGlobals.COLL),
                     TestUtils.dirtyIndexCollections(),
                     "queued index work must leave an on-disk marker an unclean stop can be seen by");
@@ -146,10 +146,10 @@ public class PendingIndexWritesTest {
             fs.indexMarkers().clearDirty(db, coll);
             pending.clearCollection(db, coll);
 
-            pending.mark(db, coll, "new");
+            pending.markRecovered(db, coll, List.of("new"));
 
             assertEquals(List.of(db + "|" + coll), TestUtils.dirtyIndexCollections(),
-                    "the first write of the new life must write the marker the old life's drop deleted");
+                    "the first unlogged mark of the new life must write the marker the old life's drop deleted");
         } finally {
             org.techhouse.test.TestUtils.standardTearDown();
         }

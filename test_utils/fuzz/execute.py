@@ -56,7 +56,7 @@ class Executor:
 
     def start(self) -> None:
         bu.write_config(self.work_dir, self.port, maxMemory=MAX_MEMORY, maxPageSize=MAX_PAGE_SIZE,
-                        maxEntrySize=MAX_ENTRY_SIZE)
+                        maxEntrySize=MAX_ENTRY_SIZE, syncWrites=True)
         self.proc = bu.start_server(self.work_dir, self.log_path, port=self.port,
                                     jar=os.environ.get("FUZZ_JAR"))
 

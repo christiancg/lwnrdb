@@ -17,6 +17,9 @@ CHURN_COLL = "intent_churn"
 CHURN_DOCS = 50
 CHURN_SAVES = 2000
 PK_LOG_MIN_DEAD_ROWS = 1024
+GROUP_WRITERS = 8
+CONCURRENT_COLL = "group_writers"
+CONCURRENT_SAVES = 40
 
 
 def doc(i: int, value: str, pad: str = PAD) -> dict:
@@ -31,6 +34,10 @@ class KillCase:
     write: Callable[[object], None]
     expected: Callable[["KillCase"], dict]
     indexed: bool = False
+    repairs_index: bool = False
+    intents_while_paused: int = 0
+    logged_while_paused: bool = True
+    writers: int = 1
     observed: dict = field(default_factory=dict)
     acknowledged: list = field(default_factory=list)
 
@@ -63,6 +70,30 @@ def update_k1(value: str, pad: str = PAD):
     return lambda conn: save(conn, conn.coll, doc(1, value, pad))
 
 
+def insert_new(case_docs: int):
+    return lambda conn: save(conn, conn.coll, doc(case_docs, "unacknowledged"))
+
+
+def with_new(value: str):
+    return lambda case: {**all_acknowledged(case), f"k{case.seed_docs}": f"{value}-{case.seed_docs}"}
+
+
+def update_own_doc(conn):
+    save(conn, conn.coll, doc(conn.writer, "grouped"))
+
+
+def acknowledged_or_grouped(case: KillCase) -> dict:
+    return {f"k{i}": {f"acknowledged-{i}", f"grouped-{i}"} for i in range(case.seed_docs)}
+
+
+def retype_k1(conn):
+    save(conn, conn.coll, {"_id": "k1", "v": 1, "pad": PAD})
+
+
+def with_k1_retyped(case: KillCase) -> dict:
+    return {**all_acknowledged(case), "k1": 1}
+
+
 def delete_k1(conn):
     conn.send({"type": "DELETE", "databaseName": DB, "collectionName": conn.coll, "_id": "k1"})
 
@@ -84,27 +115,72 @@ def churn_k1_until_paused(case: KillCase):
 
 
 def cases() -> list:
-    vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None, last_acknowledged_k1)
+    vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None, last_acknowledged_k1,
+                      intents_while_paused=1, logged_while_paused=False)
     vacuum.write = churn_k1_until_paused(vacuum)
+    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None, last_acknowledged_k1,
+                          logged_while_paused=False)
+    checkpoint.write = churn_k1_until_paused(checkpoint)
     return [
-        [KillCase("intent_update_appended", "PAGE_COPY_APPENDED", KILLED_DOCS, update_k1("unacknowledged"),
-                  all_acknowledged),
-         KillCase("intent_delete_committed", "PK_ROW_COMMITTED", KILLED_DOCS, delete_k1, without_k1, indexed=True),
+        [KillCase("wal_update_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, update_k1("unacknowledged"),
+                  with_k1("unacknowledged")),
+         KillCase("wal_delete_applied", "PK_ROW_COMMITTED", KILLED_DOCS, delete_k1, without_k1, indexed=True),
          vacuum],
-        [KillCase("intent_relocate_appended", "PAGE_COPY_APPENDED", 11, update_k1("unacknowledged", GROWN),
-                  all_acknowledged),
-         KillCase("intent_update_committed", "PK_ROW_COMMITTED", KILLED_DOCS, update_k1("unacknowledged"),
-                  with_k1("unacknowledged"))],
-        [KillCase("intent_bulk_appended", "PAGE_COPY_APPENDED", KILLED_DOCS, bulk_update, all_acknowledged),
-         KillCase("intent_relocate_committed", "PK_ROW_COMMITTED", 11, update_k1("unacknowledged", GROWN),
-                  with_k1("unacknowledged"))],
-        [KillCase("intent_bulk_committed", "PK_ROW_COMMITTED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged"))],
+        [KillCase("wal_relocate_logged", "PAGE_COPY_APPENDED", 11, update_k1("unacknowledged", GROWN),
+                  with_k1("unacknowledged")),
+         KillCase("wal_update_applied", "PK_ROW_COMMITTED", KILLED_DOCS, update_k1("unacknowledged"),
+                  with_k1("unacknowledged")),
+         checkpoint],
+        [KillCase("wal_bulk_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged")),
+         KillCase("wal_relocate_applied", "PK_ROW_COMMITTED", 11, update_k1("unacknowledged", GROWN),
+                  with_k1("unacknowledged")),
+         KillCase("wal_insert_appended", "WAL_APPENDED", KILLED_DOCS, insert_new(KILLED_DOCS),
+                  with_new("unacknowledged"))],
+        [KillCase("wal_bulk_applied", "PK_ROW_COMMITTED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged")),
+         KillCase("wal_delete_appended", "WAL_APPENDED", KILLED_DOCS, delete_k1, without_k1, indexed=True)],
+        [KillCase("wal_index_repaired", "INDEX_BATCH_FLUSHED", KILLED_DOCS, retype_k1, with_k1_retyped,
+                  indexed=True, repairs_index=True)],
+        [KillCase("wal_group_appended", "WAL_GROUP_APPENDED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
+                  indexed=True, writers=GROUP_WRITERS),
+         KillCase("wal_group_forced", "WAL_GROUP_FORCED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
+                  indexed=True, writers=GROUP_WRITERS)],
     ]
 
 
+def collection_folder(work_dir: str, coll: str) -> str:
+    return os.path.join(work_dir, "db", DB, coll)
+
+
+def index_ids_by_key(path: str) -> dict:
+    ids = {}
+    for suffix in ("", "log"):
+        file = path + suffix
+        if not os.path.exists(file):
+            continue
+        with open(file, "rb") as fp:
+            lines = fp.read().decode("utf-8", errors="replace").split("\n")
+        for line in (line for line in lines if line):
+            fields = line.split(bu.PK_FIELD_SEPARATOR)
+            if suffix == "":
+                ids.setdefault(fields[0], set()).update(fields[1:])
+            elif fields[0] == "+":
+                ids.setdefault(fields[1], set()).update(fields[2:])
+            else:
+                ids.get(fields[1], set()).difference_update(fields[2:])
+    return ids
+
+
+def indexed_types_of(work_dir: str, coll: str, field: str, doc_id: str) -> list:
+    folder = collection_folder(work_dir, coll)
+    prefix = f"{coll}-{field}-"
+    types = sorted({name[len(prefix):].split(".")[0] for name in os.listdir(folder)
+                    if name.startswith(prefix) and name.endswith((".idx", ".idxlog"))})
+    return [kind for kind in types
+            if any(doc_id in held for held in index_ids_by_key(os.path.join(folder, f"{prefix}{kind}.idx")).values())]
+
+
 def intents_left(work_dir: str, coll: str) -> list:
-    folder = os.path.join(work_dir, "db", DB, coll)
-    return [name for name in os.listdir(folder) if name.endswith(".intent")] if os.path.isdir(folder) else []
+    return bu.open_intents(collection_folder(work_dir, coll))
 
 
 def seed(conn, rounds: list):
@@ -120,9 +196,15 @@ def seed(conn, rounds: list):
 
 
 def run_writer(conn_factory, case: KillCase):
+    for writer in range(case.writers):
+        threading.Thread(target=write_once, args=(conn_factory, case, writer), daemon=True).start()
+
+
+def write_once(conn_factory, case: KillCase, writer: int):
     try:
         conn = conn_factory()
         conn.coll = case.coll
+        conn.writer = writer
         case.write(conn)
     except Exception:
         pass
@@ -139,6 +221,7 @@ def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
             check_status(f"the write to {case.coll} reached {case.point}",
                          conn.send({"type": "AWAIT_FAULT", "point": case.point, "timeoutMs": 30000}), "OK")
             case.observed["intents"] = len(intents_left(work_dir, case.coll))
+            case.observed["logged"] = bu.logged_writes(collection_folder(work_dir, case.coll))
     proc.kill()
     proc.wait(timeout=30)
 
@@ -180,11 +263,40 @@ def indexed_count(conn, coll: str, value: str):
                                   "aggregationSteps": [bu.filter_step("v", "EQUALS", value), {"type": "COUNT"}]}))
 
 
-def test_every_killed_write_recovers_to_what_its_pk_index_committed(conn, work_dir: str, rounds: list):
+def index_agrees(conn, coll: str, found: dict, allowed: dict) -> bool:
+    for doc_id, value in found.items():
+        if indexed_count(conn, coll, value) != 1:
+            return False
+        if any(indexed_count(conn, coll, other) != 0 for other in allowed[doc_id] - {value}):
+            return False
+    return True
+
+
+def test_a_killed_group_recovers_whole_documents(conn, case: KillCase):
+    section(f"{case.writers} writers grouped behind one force in {case.coll}, killed at {case.point}, leave every"
+            f" document whole")
+    allowed = case.expected(case)
+    found = values_by_id(conn, case.coll, sorted(allowed))
+    check("every document is its acknowledged version or its grouped one, never missing or torn",
+          set(found) == set(allowed) and all(found[doc_id] in allowed[doc_id] for doc_id in allowed), f"found {found}")
+    check("a full scan lists every document once", scanned_ids(conn, case.coll) == sorted(allowed),
+          f"scan={scanned_ids(conn, case.coll)}")
+    check("the index-only COUNT agrees", pk_count(conn, case.coll) == len(allowed))
+    check("the paused group was already in the write-ahead log", case.observed.get("logged", 0) >= 1,
+          f"saw {case.observed.get('logged')}")
+    bu.wait_until(lambda: index_agrees(conn, case.coll, found, allowed), timeout_s=15, interval_s=0.2)
+    check("the index holds every document under the value it kept, and nothing under the other",
+          index_agrees(conn, case.coll, found, allowed))
+
+
+def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list):
     for case in (case for kill_round in rounds for case in kill_round):
-        section(f"A write killed at {case.point} in {case.coll} recovers to what pk.idx committed")
+        if case.writers > 1:
+            test_a_killed_group_recovers_whole_documents(conn, case)
+            continue
+        section(f"A write killed at {case.point} in {case.coll} recovers to what its write-ahead log committed")
         expected = case.expected(case)
-        ids = [f"k{i}" for i in range(case.seed_docs)]
+        ids = sorted({f"k{i}" for i in range(case.seed_docs)} | set(expected))
         found = values_by_id(conn, case.coll, ids)
         check("FIND_BY_ID answers exactly the committed values", found == expected,
               f"expected {expected} got {found}")
@@ -193,12 +305,20 @@ def test_every_killed_write_recovers_to_what_its_pk_index_committed(conn, work_d
         check("the index-only COUNT agrees", pk_count(conn, case.coll) == len(expected))
         check("no write intent is left", not intents_left(work_dir, case.coll),
               f"left: {intents_left(work_dir, case.coll)}")
-        if case.point != "PAGE_VACUUM_RENAMED":
-            check("the paused write had exactly one intent on disk", case.observed.get("intents") == 1,
-                  f"saw {case.observed.get('intents')}")
+        check(f"the paused write had {case.intents_while_paused} intent(s) on disk",
+              case.observed.get("intents") == case.intents_while_paused, f"saw {case.observed.get('intents')}")
+        if case.logged_while_paused:
+            check("the paused write was already in the write-ahead log", case.observed.get("logged", 0) >= 1,
+                  f"saw {case.observed.get('logged')}")
         if case.indexed:
             bu.wait_until(lambda: indexed_count(conn, case.coll, "acknowledged-1") == 0, timeout_s=15, interval_s=0.2)
-            check("the deleted id left no field-index entry", indexed_count(conn, case.coll, "acknowledged-1") == 0)
+            check("the old value left no field-index entry", indexed_count(conn, case.coll, "acknowledged-1") == 0)
+        if case.repairs_index:
+            bu.wait_until(lambda: indexed_types_of(work_dir, case.coll, "v", "k1") == ["Number"], timeout_s=15,
+                          interval_s=0.2)
+            check("startup re-queued the replayed write's index work, so the index files hold k1 only as a Number",
+                  indexed_types_of(work_dir, case.coll, "v", "k1") == ["Number"],
+                  f"held under {indexed_types_of(work_dir, case.coll, 'v', 'k1')}")
 
 
 def churn(conn) -> dict:
@@ -261,3 +381,53 @@ def test_page_rows_equal_live_bytes_after_a_restart(work_dir: str, recorded_page
     holes = sum(page_lengths(work_dir, CHURN_COLL).values()) - sum(live.values())
     check("the churn left holes for the rows to tell apart from the file lengths", holes > 0,
           json.dumps(page_lengths(work_dir, CHURN_COLL)))
+
+
+def write_concurrently(conn_factory, generation: int) -> dict:
+    section(f"{GROUP_WRITERS} writers save and delete concurrently in {CONCURRENT_COLL} (pass {generation})")
+    if generation == 1:
+        with conn_factory() as setup_conn:
+            check_status("create the concurrent-writers collection", setup_conn.send(
+                {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CONCURRENT_COLL}), "OK")
+            check_status("index v", setup_conn.send({"type": "CREATE_INDEX", "databaseName": DB,
+                                                      "collectionName": CONCURRENT_COLL, "fieldName": "v"}), "OK")
+    acknowledged = {}
+    guard = threading.Lock()
+
+    def writer(number: int):
+        with conn_factory() as writer_conn:
+            for n in range(CONCURRENT_SAVES):
+                doc_id = f"w{number}-{n % 10}"
+                if n % 7 == 6:
+                    response = writer_conn.send({"type": "DELETE", "databaseName": DB,
+                                                 "collectionName": CONCURRENT_COLL, "_id": doc_id})
+                    value = None
+                else:
+                    value = f"g{generation}-w{number}-n{n}"
+                    response = save(writer_conn, CONCURRENT_COLL, {"_id": doc_id, "v": value, "pad": PAD})
+                if response.get("status") == "OK":
+                    with guard:
+                        acknowledged[doc_id] = value
+
+    threads = [threading.Thread(target=writer, args=(number,)) for number in range(GROUP_WRITERS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+    check("every concurrent write was answered", len(acknowledged) == GROUP_WRITERS * 10, f"{len(acknowledged)}")
+    return acknowledged
+
+
+def test_every_concurrent_write_landed(conn, acknowledged: dict):
+    section(f"Every write the {GROUP_WRITERS} concurrent writers were told succeeded is there after a restart")
+    expected = {doc_id: value for doc_id, value in acknowledged.items() if value is not None}
+    found = values_by_id(conn, CONCURRENT_COLL, sorted(acknowledged))
+    check("FIND_BY_ID answers exactly the acknowledged values", found == expected,
+          f"missing or wrong: {sorted(set(expected.items()) ^ set(found.items()))[:6]}")
+    check("a full scan lists exactly the acknowledged documents", scanned_ids(conn, CONCURRENT_COLL) == sorted(expected))
+    check("the index-only COUNT agrees", pk_count(conn, CONCURRENT_COLL) == len(expected))
+    bu.wait_until(lambda: all(indexed_count(conn, CONCURRENT_COLL, value) == 1 for value in expected.values()),
+                  timeout_s=30, interval_s=0.5)
+    check("the index finds every acknowledged value once",
+          all(indexed_count(conn, CONCURRENT_COLL, value) == 1 for value in expected.values()))
+

@@ -30,7 +30,7 @@ public class OwnerOnlyTest {
     }
 
     @Test
-    public void a_default_permissions_fallback_is_logged_once() {
+    public void a_default_permissions_fallback_is_logged_once() throws IOException {
         final var unreachable = tmp.resolve("missing").resolve("page.dat");
         try (var logWriter = mockStatic(LogWriter.class)) {
             OwnerOnly.ensureOwnerOnlyFile(unreachable);
