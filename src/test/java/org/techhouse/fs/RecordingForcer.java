@@ -66,11 +66,11 @@ public final class RecordingForcer implements Forcer, AutoCloseable {
         return List.copyOf(forced);
     }
 
-    List<String> forcedNames() {
+    public List<String> forcedNames() {
         return forced.stream().map(path -> String.valueOf(path.getFileName())).toList();
     }
 
-    void clear() {
+    public void clear() {
         forced.clear();
     }
 

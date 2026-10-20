@@ -240,7 +240,7 @@ public class DropRecreateDatabaseTest {
     }
 
     @Test
-    public void test_a_dropped_collection_leaves_no_pending_ids_for_its_next_life() throws IOException {
+    public void test_a_dropped_collection_leaves_no_pending_ids_for_its_next_life() {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "old_life");
 
         assertEquals(OperationStatus.OK,
@@ -249,20 +249,20 @@ public class DropRecreateDatabaseTest {
 
         assertEquals(OperationStatus.OK,
                 processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL)).getStatus());
-        pending.mark(TestGlobals.DB, TestGlobals.COLL, "new_life");
+        pending.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("new_life"));
         assertTrue(TestUtils.dirtyIndexCollections().contains(TestGlobals.DB + "|" + TestGlobals.COLL),
-                "the re-created collection's first pending write must write its own dirty marker");
+                "the re-created collection's first unlogged mark must write its own dirty marker");
     }
 
     @Test
-    public void test_a_dropped_database_leaves_no_pending_ids_for_its_next_life() throws IOException {
+    public void test_a_dropped_database_leaves_no_pending_ids_for_its_next_life() {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "old_life");
 
         assertEquals(OperationStatus.OK, processor.processMessage(new DropDatabaseRequest(TestGlobals.DB)).getStatus());
         assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
 
         recreateCollection();
-        pending.mark(TestGlobals.DB, TestGlobals.COLL, "new_life");
+        pending.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("new_life"));
         assertEquals(List.of("new_life"), List.copyOf(pending.idsFor(TestGlobals.DB, TestGlobals.COLL)));
         assertTrue(TestUtils.dirtyIndexCollections().contains(TestGlobals.DB + "|" + TestGlobals.COLL));
     }

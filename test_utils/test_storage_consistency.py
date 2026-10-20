@@ -76,6 +76,7 @@ bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSW
 MAX_PAGE_SIZE = "4kb"
 MAX_PAGE_BYTES = 4096
 MAX_ENTRY_SIZE = "1kb"
+WAL_CHECKPOINT_BYTES = "16kb"
 SEEDED_DOCS = 40
 PAD = "p" * 300
 
@@ -134,7 +135,8 @@ admin_conn = Conn.authenticated
 
 def write_config(work_dir: str, max_memory: str = "256mb", faults: bool = False):
     bu.write_config(work_dir, PORT, maxMemory=max_memory, maxPageSize=MAX_PAGE_SIZE,
-                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True, faultInjectionEnabled=faults, syncWrites=True)
+                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True, faultInjectionEnabled=faults, syncWrites=True,
+                    walCheckpointBytes=WAL_CHECKPOINT_BYTES)
 
 
 DURABILITY_WARNING = "DURABILITY WARNING: syncWrites=false"

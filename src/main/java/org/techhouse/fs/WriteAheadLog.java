@@ -21,6 +21,7 @@ import org.techhouse.log.Logger;
 final class WriteAheadLog {
     private static final Logger logger = Logger.logFor(WriteAheadLog.class);
     private static final Map<String, LogState> states = new ConcurrentHashMap<>();
+    private static volatile CheckpointGuard guard = CheckpointGuard.NO_INDEX_WORK;
     private final Configuration configuration = Configuration.getInstance();
     private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
 
@@ -123,10 +124,29 @@ final class WriteAheadLog {
         }
     }
 
-    void checkpointIfFull(String dbName, String collName) throws IOException {
+    void track(String dbName, String collName) throws IOException {
+        final var log = paths.writeAheadLog(dbName, collName);
+        final var lock = FileLocks.lockWrite(log);
+        try {
+            stateOf(log, dbName, collName);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    static void guardWith(CheckpointGuard checkpointGuard) {
+        guard = checkpointGuard;
+    }
+
+    void checkpointIfFull(String dbName, String collName) {
         final var state = states.get(paths.writeAheadLog(dbName, collName).getAbsolutePath());
         if (state != null && state.knownLength > configuration.getWalCheckpointBytes()) {
-            checkpoint(dbName, collName);
+            try {
+                checkpoint(dbName, collName);
+            } catch (IOException e) {
+                logger.error("Could not checkpoint the full write-ahead log of " + subject(dbName, collName)
+                        + "; it keeps its records and the next write or the shutdown retries", e);
+            }
         }
     }
 
@@ -143,6 +163,9 @@ final class WriteAheadLog {
             final var state = stateOf(log, dbName, collName);
             if (state.knownLength > 0L && state.recordsSinceCheckpoint == 0) {
                 return;
+            }
+            if (state.recordsSinceCheckpoint > 0) {
+                guard.persistIndexWork(dbName, collName);
             }
             final var group = new ForceGroup();
             for (final var page : state.touchedPages) {
@@ -177,6 +200,12 @@ final class WriteAheadLog {
                 continue;
             }
             final var state = entry.getValue();
+            if (guard.holdsIndexWork(state.dbName, state.collName)) {
+                logger.info("Leaving the write-ahead log of " + subject(state.dbName, state.collName) + " as it is:"
+                        + " its field-index work is still pending, so the next startup replays it and finishes that"
+                        + " work");
+                continue;
+            }
             try {
                 checkpoint(state.dbName, state.collName);
             } catch (IOException e) {

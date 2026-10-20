@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -109,5 +110,44 @@ public class WriteAheadLogTest {
         new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
 
         assertFalse(folder.exists());
+    }
+
+    @Test
+    public void test_a_full_log_whose_checkpoint_fails_does_not_fail_the_write() throws Exception {
+        TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", 1L);
+        try (var recorder = RecordingForcer.install(true)) {
+            recorder.failingFor(".wal.repair");
+
+            final var updated = rf.replace("b", "new-b", 0, PagePlacement.APPEND);
+
+            assertEquals(StorageFixture.record("b", "new-b"), rf.fx.readAt(updated));
+            assertFalse(decoded().records().isEmpty(), "the log keeps the records its checkpoint could not drop");
+        }
+    }
+
+    @Test
+    public void test_the_guard_runs_only_when_the_log_has_records() throws Exception {
+        final var original = TestUtils.getPrivateStaticField(WriteAheadLog.class, "guard", CheckpointGuard.class);
+        final var persisted = new AtomicInteger();
+        WriteAheadLog.guardWith(new CheckpointGuard() {
+            @Override
+            public boolean holdsIndexWork(String dbName, String collName) {
+                return false;
+            }
+
+            @Override
+            public void persistIndexWork(String dbName, String collName) {
+                persisted.incrementAndGet();
+            }
+        });
+        try {
+            final var log = new WriteAheadLog(rf.fx.paths);
+            log.checkpoint(DB, COLL);
+            log.checkpoint(DB, COLL);
+
+            assertEquals(1, persisted.get(), "the second checkpoint drops nothing, so it has nothing to protect");
+        } finally {
+            WriteAheadLog.guardWith(original);
+        }
     }
 }

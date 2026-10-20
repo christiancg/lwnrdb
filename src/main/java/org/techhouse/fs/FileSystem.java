@@ -43,6 +43,10 @@ public class FileSystem {
         pageVacuum.onVacuum(listener);
     }
 
+    public void guardCheckpoints(CheckpointGuard guard) {
+        WriteAheadLog.guardWith(guard);
+    }
+
     public void createBaseDbPath() {
         paths.useDbPath(configuration.getFilePath());
         final var directory = new File(paths.dbPath());

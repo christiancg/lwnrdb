@@ -182,6 +182,30 @@ public class WalRedoTest {
     }
 
     @Test
+    public void test_replay_reports_every_id_written_since_the_checkpoint() throws Exception {
+        insert("d");
+        rf.replace("b", "moved-b", 1, null);
+        rf.replacer.delete(rf.fx.indexed("c"));
+        power.powerLoss();
+
+        final var written = redo();
+
+        assertEquals(List.of("d", "b", "c"), written.stream().map(PkIndexEntry::getValue).toList());
+        assertEquals(List.of(0L, 1L, 0L), written.stream().map(PkIndexEntry::getPage).toList());
+    }
+
+    @Test
+    public void test_a_replayed_log_keeps_its_records() throws Exception {
+        insert("d");
+        power.powerLoss();
+
+        redo();
+
+        assertEquals(1, WalCodec.decodeAll(Files.readAllBytes(log().toPath())).records().size(),
+                "the records cover the replayed ids until a checkpoint finds their index work done");
+    }
+
+    @Test
     public void test_without_synced_writes_unlogged_bytes_are_kept() throws Exception {
         final var page = rf.fx.page(0);
         Files.writeString(page.toPath(), StorageFixture.record("z", "maybe-acknowledged"), StandardCharsets.UTF_8,

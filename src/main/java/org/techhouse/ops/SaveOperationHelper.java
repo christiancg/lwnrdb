@@ -1,6 +1,5 @@
 package org.techhouse.ops;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -358,14 +357,8 @@ public final class SaveOperationHelper {
         final var line = encodedLine != null ? encodedLine : entry.encodeLine();
         final var targetPage = cache.selectPageForInsert(dbName, collName, line.length);
         final var deleteGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        final long createGeneration;
+        final var createGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
         final PkIndexEntry relocatedPkIndexEntry;
-        try {
-            createGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        } catch (IOException e) {
-            pendingIndexWrites.clear(dbName, collName, entry.get_id(), deleteGeneration);
-            throw e;
-        }
         try {
             relocatedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
                     deleteGeneration, () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex));

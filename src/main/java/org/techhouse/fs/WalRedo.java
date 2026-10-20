@@ -11,7 +11,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.log.Logger;
@@ -59,12 +58,12 @@ final class WalRedo {
         if (SyncedWrites.enabled()) {
             cutPastLoggedEnds(paths, checkpoint, records);
         }
-        new WriteAheadLog(paths).checkpoint(dbName, collName);
+        new WriteAheadLog(paths).track(dbName, collName);
         if (!records.isEmpty()) {
             logger.warning("Replayed " + records.size() + " logged write(s) of " + dbName
                     + Globals.COLL_IDENTIFIER_SEPARATOR + collName + " from its write-ahead log");
         }
-        return completedDeletes(dbName, collName, records);
+        return writtenIds(dbName, collName, records);
     }
 
     static void replay(FilePaths paths, String dbName, String collName, List<WalRecord> records) throws IOException {
@@ -134,18 +133,17 @@ final class WalRedo {
                 + ": they were written by a write whose log record never became durable");
     }
 
-    private static List<PkIndexEntry> completedDeletes(String dbName, String collName, List<WalRecord> records) {
-        final var deleted = new LinkedHashMap<String, PkIndexEntry>();
+    private static List<PkIndexEntry> writtenIds(String dbName, String collName, List<WalRecord> records) {
+        final var written = new LinkedHashMap<String, PkIndexEntry>();
         for (final var record : records) {
             final var blankedPage = blankedPageOf(record);
             for (final var change : record.changes()) {
                 if (change.target() == WalTarget.PK_WRITE) {
-                    collectRows(dbName, collName, change.bytes(), blankedPage, deleted);
+                    collectRows(dbName, collName, change.bytes(), blankedPage, written);
                 }
             }
         }
-        deleted.values().removeIf(Objects::isNull);
-        return List.copyOf(deleted.values());
+        return List.copyOf(written.values());
     }
 
     private static long blankedPageOf(WalRecord record) {
@@ -157,17 +155,20 @@ final class WalRedo {
         return 0L;
     }
 
-    private static void collectRows(String dbName, String collName, byte[] bytes, long page,
-            Map<String, PkIndexEntry> deleted) {
+    private static void collectRows(String dbName, String collName, byte[] bytes, long blankedPage,
+            Map<String, PkIndexEntry> written) {
         var start = 0;
         while (start < bytes.length) {
             final var end = FileLocks.lineEnd(bytes, start);
             if (end > start) {
                 final var deletedId = PkIndexEntry.deletedIdOf(bytes, start, end);
                 if (deletedId == null) {
-                    deleted.put(PkIndexEntry.fromIndexFileBytes(dbName, collName, bytes, start, end).getValue(), null);
+                    final var row = PkIndexEntry.fromIndexFileBytes(dbName, collName, bytes, start, end);
+                    written.remove(row.getValue());
+                    written.put(row.getValue(), row);
                 } else {
-                    deleted.put(deletedId, new PkIndexEntry(dbName, collName, deletedId, 0L, 0L, page, 0L));
+                    written.remove(deletedId);
+                    written.put(deletedId, new PkIndexEntry(dbName, collName, deletedId, 0L, 0L, blankedPage, 0L));
                 }
             }
             start = FileLocks.nextLineStart(bytes, end);

@@ -1988,7 +1988,7 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Not guaranteed, by design**
 
 - **Device durability with `syncWrites=false`.** A write is then acknowledged once the operating system has it, so a power loss or an operating-system crash can lose recently acknowledged writes; the server says so in a startup warning. Turn it off only on storage with power-loss protection, or in a [cluster](#clustering-multi-node) where a second node holds the write.
-- **Field indexes after a crash with index work pending.** The index can miss entries written just before the crash, so an index-backed query can omit those documents until a full [`REINDEX`](#reindex). Startup logs a warning naming each collection in that state, and the `-indexes.unclean` marker behind it stays until a `REINDEX` rebuilds every registered index of the collection.
+- **Field indexes after a crash with index work pending.** Work for writes still in the collection's write-ahead log is re-queued at startup and needs nothing from you. Work the log no longer covers (a checkpoint dropped the records while it was pending, or it came from a startup heal or a `REINDEX` with `"primaryKey": true`) can miss entries, so an index-backed query can omit those documents until a full [`REINDEX`](#reindex). Startup logs a warning naming each collection in that state, and the `-indexes.unclean` marker behind it stays until a `REINDEX` rebuilds every registered index of the collection.
 - **Exact vector search by default.** `nearest` is an approximate (ANN) search unless `"exact":true` is passed (see [custom operators](#custom-operators-type-specific)).
 - **Catching up on schedules.** A scheduled procedure fires at most once per due instant, and runs missed while the node was down are skipped (see [`SAVE_SCHEDULE`](#save_schedule)).
 - **Isolation for dirty reads.** A read with `"dirtyRead":true` can observe a write half-way through (see [Concurrency & locking](#concurrency--locking)).
@@ -2006,8 +2006,12 @@ its last logged end, so an acknowledged write is redone and an unacknowledged on
 `syncWrites=false` there is no cut, since the bytes past a logged end may then be an acknowledged write whose record
 did not reach the disk. A write whose
 record is logged but whose files cannot be written is taken back and marked aborted in the log; when even that fails,
-it is applied before the next write to the collection, or by the next startup. Clearing an index marker is not
-forced, because a power loss that undoes it leaves a journal behind that startup already settles. A
+it is applied before the next write to the collection, or by the next startup. A write does not write the
+collection's index-dirty marker either: its log record is what tells startup that its field-index work may be
+unfinished, so startup re-queues that work for every id the replayed log wrote. Only a checkpoint that drops records
+while index work is still pending writes the marker, and shutdown leaves such a collection's log in place for the
+next startup to replay instead. Clearing an index marker is not forced, because a power loss that undoes it leaves a
+journal behind that startup already settles. A
 force costs what the disk makes it cost, and the per-collection write lock is held across them, so it bounds the
 write rate of one collection. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
 Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed

@@ -59,7 +59,7 @@ public class ServerMainStartupOrderTest {
     @Test
     public void test_the_write_ahead_logs_are_replayed_before_any_other_recovery_reads_a_page() throws IOException {
         final var body = mainBody();
-        final var redo = positionOf(body, "fs.redoWriteAheadLogs();");
+        final var redo = positionOf(body, "fs.redoWriteAheadLogs()");
 
         assertTrue(positionOf(body, "fs.createAdminDatabase();") < redo, "redo walks the folders it creates");
         assertTrue(redo < positionOf(body, "fs.recoverWriteIntents();"),
@@ -97,7 +97,9 @@ public class ServerMainStartupOrderTest {
         final var body = mainBody();
         final var warning = positionOf(body, "StartupWarnings.retainAndReportUncleanStops();");
 
-        assertTrue(positionOf(body, "cache.loadAdminData();") < warning);
+        assertTrue(positionOf(body, "fs.createAdminDatabase();") < warning, "the report walks the folders it creates");
+        assertTrue(warning < positionOf(body, "fs.redoWriteAheadLogs()"),
+                "a checkpoint during startup persists a marker for replayed ids, which is not an unclean stop");
         assertTrue(warning < positionOf(body, "PageOccupancyReconciler.reconcileAll();"),
                 "adopting an orphaned record marks it pending, and its event clears the marker of the unclean stop");
         assertTrue(warning < positionOf(body, "cleanupOrphanedTransactions();"),
@@ -107,10 +109,13 @@ public class ServerMainStartupOrderTest {
     }
 
     @Test
-    public void test_recovered_deletes_are_cleaned_after_page_rows_are_reconciled() throws IOException {
+    public void test_replayed_ids_are_repaired_after_page_rows_are_reconciled() throws IOException {
         final var body = mainBody();
-        final var cleanup = positionOf(body, "PageOccupancyReconciler.scheduleIndexCleanupFor(recoveredDeletes);");
+        final var cleanup = positionOf(body, "PageOccupancyReconciler.scheduleIndexRepairFor(replayed);");
+        final var marked = positionOf(body, "PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());");
 
+        assertTrue(marked < positionOf(body, "fs.recoverWriteIntents();"),
+                "a vacuum-intent recovery can checkpoint, and the checkpoint must already see the replayed ids pending");
         assertTrue(positionOf(body, "fs.recoverWriteIntents();") < cleanup);
         assertTrue(positionOf(body, "PageOccupancyReconciler.reconcileAll();") < cleanup,
                 "the cleanup events carry no page delta because the rows were just rebuilt from the page files");

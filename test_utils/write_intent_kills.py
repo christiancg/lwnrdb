@@ -31,6 +31,7 @@ class KillCase:
     write: Callable[[object], None]
     expected: Callable[["KillCase"], dict]
     indexed: bool = False
+    repairs_index: bool = False
     intents_while_paused: int = 0
     logged_while_paused: bool = True
     observed: dict = field(default_factory=dict)
@@ -71,6 +72,14 @@ def insert_new(case_docs: int):
 
 def with_new(value: str):
     return lambda case: {**all_acknowledged(case), f"k{case.seed_docs}": f"{value}-{case.seed_docs}"}
+
+
+def retype_k1(conn):
+    save(conn, conn.coll, {"_id": "k1", "v": 1, "pad": PAD})
+
+
+def with_k1_retyped(case: KillCase) -> dict:
+    return {**all_acknowledged(case), "k1": 1}
 
 
 def delete_k1(conn):
@@ -117,11 +126,41 @@ def cases() -> list:
                   with_new("unacknowledged"))],
         [KillCase("wal_bulk_applied", "PK_ROW_COMMITTED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged")),
          KillCase("wal_delete_appended", "WAL_APPENDED", KILLED_DOCS, delete_k1, without_k1, indexed=True)],
+        [KillCase("wal_index_repaired", "INDEX_BATCH_FLUSHED", KILLED_DOCS, retype_k1, with_k1_retyped,
+                  indexed=True, repairs_index=True)],
     ]
 
 
 def collection_folder(work_dir: str, coll: str) -> str:
     return os.path.join(work_dir, "db", DB, coll)
+
+
+def index_ids_by_key(path: str) -> dict:
+    ids = {}
+    for suffix in ("", "log"):
+        file = path + suffix
+        if not os.path.exists(file):
+            continue
+        with open(file, "rb") as fp:
+            lines = fp.read().decode("utf-8", errors="replace").split("\n")
+        for line in (line for line in lines if line):
+            fields = line.split(bu.PK_FIELD_SEPARATOR)
+            if suffix == "":
+                ids.setdefault(fields[0], set()).update(fields[1:])
+            elif fields[0] == "+":
+                ids.setdefault(fields[1], set()).update(fields[2:])
+            else:
+                ids.get(fields[1], set()).difference_update(fields[2:])
+    return ids
+
+
+def indexed_types_of(work_dir: str, coll: str, field: str, doc_id: str) -> list:
+    folder = collection_folder(work_dir, coll)
+    prefix = f"{coll}-{field}-"
+    types = sorted({name[len(prefix):].split(".")[0] for name in os.listdir(folder)
+                    if name.startswith(prefix) and name.endswith((".idx", ".idxlog"))})
+    return [kind for kind in types
+            if any(doc_id in held for held in index_ids_by_key(os.path.join(folder, f"{prefix}{kind}.idx")).values())]
 
 
 def intents_left(work_dir: str, coll: str) -> list:
@@ -220,11 +259,15 @@ def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: s
         if case.logged_while_paused:
             check("the paused write was already in the write-ahead log", case.observed.get("logged", 0) >= 1,
                   f"saw {case.observed.get('logged')}")
-        check("startup replayed the log and left it a bare checkpoint",
-              bu.logged_writes(collection_folder(work_dir, case.coll)) == 0)
         if case.indexed:
             bu.wait_until(lambda: indexed_count(conn, case.coll, "acknowledged-1") == 0, timeout_s=15, interval_s=0.2)
-            check("the deleted id left no field-index entry", indexed_count(conn, case.coll, "acknowledged-1") == 0)
+            check("the old value left no field-index entry", indexed_count(conn, case.coll, "acknowledged-1") == 0)
+        if case.repairs_index:
+            bu.wait_until(lambda: indexed_types_of(work_dir, case.coll, "v", "k1") == ["Number"], timeout_s=15,
+                          interval_s=0.2)
+            check("startup re-queued the replayed write's index work, so the index files hold k1 only as a Number",
+                  indexed_types_of(work_dir, case.coll, "v", "k1") == ["Number"],
+                  f"held under {indexed_types_of(work_dir, case.coll, 'v', 'k1')}")
 
 
 def churn(conn) -> dict:

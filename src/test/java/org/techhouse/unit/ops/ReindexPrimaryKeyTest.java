@@ -314,7 +314,7 @@ public class ReindexPrimaryKeyTest {
     public void test_primary_key_reindex_clears_the_dirty_marker_after_a_full_field_rebuild() throws Exception {
         save("a");
         index(TAG);
-        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "a");
+        pendingIndexWrites.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("a"));
         final var identifier = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(TestUtils.dirtyIndexCollections().contains(identifier));
         writeGarbagePk();

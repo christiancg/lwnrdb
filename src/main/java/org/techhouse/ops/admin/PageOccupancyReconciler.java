@@ -31,6 +31,9 @@ public final class PageOccupancyReconciler {
     private static final int LIVE_BYTES = 1;
     private static final long[] NOTHING_LIVE = new long[2];
 
+    public record ReplayedCollection(String dbName, String collName, List<PkIndexEntry> rows, long generation) {
+    }
+
     private PageOccupancyReconciler() {
     }
 
@@ -51,17 +54,58 @@ public final class PageOccupancyReconciler {
             if (isAdminDatabase(dbName) || cache.getAdminCollectionEntry(dbName, collName) == null) {
                 continue;
             }
-            final var data = new JsonObject();
-            data.addProperty(Globals.PK_FIELD, deleted.getValue());
-            final var entry = DbEntry.fromJsonObject(dbName, collName, data);
-            entry.setPage(deleted.getPage());
             byCollection.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
-                    .add(entry);
+                    .add(stubOf(deleted));
         }
         for (final var entries : byCollection.values()) {
             final var first = entries.getFirst();
             scheduleIndexMaintenanceFor(first.getDatabaseName(), first.getCollectionName(), entries);
         }
+    }
+
+    public static List<ReplayedCollection> markReplayed(List<PkIndexEntry> written) {
+        final var byCollection = new LinkedHashMap<String, List<PkIndexEntry>>();
+        for (final var row : written) {
+            if (!isAdminDatabase(row.getDatabaseName())) {
+                byCollection
+                        .computeIfAbsent(Cache.getCollectionIdentifier(row.getDatabaseName(), row.getCollectionName()),
+                                _ -> new ArrayList<>())
+                        .add(row);
+            }
+        }
+        final var replayed = new ArrayList<ReplayedCollection>(byCollection.size());
+        for (final var rows : byCollection.values()) {
+            final var dbName = rows.getFirst().getDatabaseName();
+            final var collName = rows.getFirst().getCollectionName();
+            replayed.add(new ReplayedCollection(dbName, collName, rows,
+                    pendingIndexWrites.mark(dbName, collName, idsOf(rows))));
+        }
+        return replayed;
+    }
+
+    public static void scheduleIndexRepairFor(List<ReplayedCollection> replayed) {
+        for (final var collection : replayed) {
+            final var dbName = collection.dbName();
+            final var collName = collection.collName();
+            if (cache.getAdminCollectionEntry(dbName, collName) == null) {
+                pendingIndexWrites.clear(dbName, collName, idsOf(collection.rows()), collection.generation());
+                continue;
+            }
+            submitUpdates(dbName, collName, collection.rows().stream().map(PageOccupancyReconciler::stubOf).toList(),
+                    collection.generation());
+        }
+    }
+
+    private static List<String> idsOf(List<PkIndexEntry> rows) {
+        return rows.stream().map(PkIndexEntry::getValue).toList();
+    }
+
+    private static DbEntry stubOf(PkIndexEntry row) {
+        final var data = new JsonObject();
+        data.addProperty(Globals.PK_FIELD, row.getValue());
+        final var entry = DbEntry.fromJsonObject(row.getDatabaseName(), row.getCollectionName(), data);
+        entry.setPage(row.getPage());
+        return entry;
     }
 
     private static boolean isAdminDatabase(String dbName) {
@@ -144,10 +188,13 @@ public final class PageOccupancyReconciler {
     }
 
     public static void scheduleIndexMaintenanceFor(String dbName, String collName, List<DbEntry> adopted) {
-        final var generation = pendingIndexWrites.markRecovered(dbName, collName,
-                adopted.stream().map(DbEntry::get_id).toList());
+        submitUpdates(dbName, collName, adopted,
+                pendingIndexWrites.markRecovered(dbName, collName, adopted.stream().map(DbEntry::get_id).toList()));
+    }
+
+    private static void submitUpdates(String dbName, String collName, List<DbEntry> entries, long generation) {
         final var incarnation = CollectionIncarnation.current(dbName, collName);
-        for (final var entry : adopted) {
+        for (final var entry : entries) {
             entry.setPreviousByteSize(entry.byteSize());
             taskManager.submitBackgroundTask(
                     new EntityEvent(EventType.UPDATED, dbName, collName, entry, incarnation, generation));
