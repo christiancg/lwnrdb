@@ -31,6 +31,8 @@ class KillCase:
     write: Callable[[object], None]
     expected: Callable[["KillCase"], dict]
     indexed: bool = False
+    intents_while_paused: int = 0
+    logged_while_paused: bool = True
     observed: dict = field(default_factory=dict)
     acknowledged: list = field(default_factory=list)
 
@@ -63,6 +65,14 @@ def update_k1(value: str, pad: str = PAD):
     return lambda conn: save(conn, conn.coll, doc(1, value, pad))
 
 
+def insert_new(case_docs: int):
+    return lambda conn: save(conn, conn.coll, doc(case_docs, "unacknowledged"))
+
+
+def with_new(value: str):
+    return lambda case: {**all_acknowledged(case), f"k{case.seed_docs}": f"{value}-{case.seed_docs}"}
+
+
 def delete_k1(conn):
     conn.send({"type": "DELETE", "databaseName": DB, "collectionName": conn.coll, "_id": "k1"})
 
@@ -84,26 +94,38 @@ def churn_k1_until_paused(case: KillCase):
 
 
 def cases() -> list:
-    vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None, last_acknowledged_k1)
+    vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None, last_acknowledged_k1,
+                      intents_while_paused=1, logged_while_paused=False)
     vacuum.write = churn_k1_until_paused(vacuum)
+    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None, last_acknowledged_k1,
+                          logged_while_paused=False)
+    checkpoint.write = churn_k1_until_paused(checkpoint)
     return [
-        [KillCase("intent_update_appended", "PAGE_COPY_APPENDED", KILLED_DOCS, update_k1("unacknowledged"),
-                  all_acknowledged),
-         KillCase("intent_delete_committed", "PK_ROW_COMMITTED", KILLED_DOCS, delete_k1, without_k1, indexed=True),
+        [KillCase("wal_update_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, update_k1("unacknowledged"),
+                  with_k1("unacknowledged")),
+         KillCase("wal_delete_applied", "PK_ROW_COMMITTED", KILLED_DOCS, delete_k1, without_k1, indexed=True),
          vacuum],
-        [KillCase("intent_relocate_appended", "PAGE_COPY_APPENDED", 11, update_k1("unacknowledged", GROWN),
-                  all_acknowledged),
-         KillCase("intent_update_committed", "PK_ROW_COMMITTED", KILLED_DOCS, update_k1("unacknowledged"),
-                  with_k1("unacknowledged"))],
-        [KillCase("intent_bulk_appended", "PAGE_COPY_APPENDED", KILLED_DOCS, bulk_update, all_acknowledged),
-         KillCase("intent_relocate_committed", "PK_ROW_COMMITTED", 11, update_k1("unacknowledged", GROWN),
-                  with_k1("unacknowledged"))],
-        [KillCase("intent_bulk_committed", "PK_ROW_COMMITTED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged"))],
+        [KillCase("wal_relocate_logged", "PAGE_COPY_APPENDED", 11, update_k1("unacknowledged", GROWN),
+                  with_k1("unacknowledged")),
+         KillCase("wal_update_applied", "PK_ROW_COMMITTED", KILLED_DOCS, update_k1("unacknowledged"),
+                  with_k1("unacknowledged")),
+         checkpoint],
+        [KillCase("wal_bulk_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged")),
+         KillCase("wal_relocate_applied", "PK_ROW_COMMITTED", 11, update_k1("unacknowledged", GROWN),
+                  with_k1("unacknowledged")),
+         KillCase("wal_insert_appended", "WAL_APPENDED", KILLED_DOCS, insert_new(KILLED_DOCS),
+                  with_new("unacknowledged"))],
+        [KillCase("wal_bulk_applied", "PK_ROW_COMMITTED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged")),
+         KillCase("wal_delete_appended", "WAL_APPENDED", KILLED_DOCS, delete_k1, without_k1, indexed=True)],
     ]
 
 
+def collection_folder(work_dir: str, coll: str) -> str:
+    return os.path.join(work_dir, "db", DB, coll)
+
+
 def intents_left(work_dir: str, coll: str) -> list:
-    return bu.open_intents(os.path.join(work_dir, "db", DB, coll))
+    return bu.open_intents(collection_folder(work_dir, coll))
 
 
 def seed(conn, rounds: list):
@@ -138,6 +160,7 @@ def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
             check_status(f"the write to {case.coll} reached {case.point}",
                          conn.send({"type": "AWAIT_FAULT", "point": case.point, "timeoutMs": 30000}), "OK")
             case.observed["intents"] = len(intents_left(work_dir, case.coll))
+            case.observed["logged"] = bu.logged_writes(collection_folder(work_dir, case.coll))
     proc.kill()
     proc.wait(timeout=30)
 
@@ -179,11 +202,11 @@ def indexed_count(conn, coll: str, value: str):
                                   "aggregationSteps": [bu.filter_step("v", "EQUALS", value), {"type": "COUNT"}]}))
 
 
-def test_every_killed_write_recovers_to_what_its_pk_index_committed(conn, work_dir: str, rounds: list):
+def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list):
     for case in (case for kill_round in rounds for case in kill_round):
-        section(f"A write killed at {case.point} in {case.coll} recovers to what pk.idx committed")
+        section(f"A write killed at {case.point} in {case.coll} recovers to what its write-ahead log committed")
         expected = case.expected(case)
-        ids = [f"k{i}" for i in range(case.seed_docs)]
+        ids = sorted({f"k{i}" for i in range(case.seed_docs)} | set(expected))
         found = values_by_id(conn, case.coll, ids)
         check("FIND_BY_ID answers exactly the committed values", found == expected,
               f"expected {expected} got {found}")
@@ -192,9 +215,13 @@ def test_every_killed_write_recovers_to_what_its_pk_index_committed(conn, work_d
         check("the index-only COUNT agrees", pk_count(conn, case.coll) == len(expected))
         check("no write intent is left", not intents_left(work_dir, case.coll),
               f"left: {intents_left(work_dir, case.coll)}")
-        if case.point != "PAGE_VACUUM_RENAMED":
-            check("the paused write had exactly one intent on disk", case.observed.get("intents") == 1,
-                  f"saw {case.observed.get('intents')}")
+        check(f"the paused write had {case.intents_while_paused} intent(s) on disk",
+              case.observed.get("intents") == case.intents_while_paused, f"saw {case.observed.get('intents')}")
+        if case.logged_while_paused:
+            check("the paused write was already in the write-ahead log", case.observed.get("logged", 0) >= 1,
+                  f"saw {case.observed.get('logged')}")
+        check("startup replayed the log and left it a bare checkpoint",
+              bu.logged_writes(collection_folder(work_dir, case.coll)) == 0)
         if case.indexed:
             bu.wait_until(lambda: indexed_count(conn, case.coll, "acknowledged-1") == 0, timeout_s=15, interval_s=0.2)
             check("the deleted id left no field-index entry", indexed_count(conn, case.coll, "acknowledged-1") == 0)

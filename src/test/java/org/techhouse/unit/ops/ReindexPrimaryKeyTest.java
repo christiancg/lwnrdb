@@ -374,8 +374,8 @@ public class ReindexPrimaryKeyTest {
     public void test_a_stale_marker_with_a_readable_pk_index_is_refused() throws Exception {
         save("a");
         save("b");
-        final var intent = StaleWriteIntent.writeReplaceIntent(new File(TestGlobals.PATH).getAbsolutePath(),
-                TestGlobals.DB, TestGlobals.COLL, "a");
+        final var intent = StaleWriteIntent.writeVacuumIntent(new File(TestGlobals.PATH).getAbsolutePath(),
+                TestGlobals.DB, TestGlobals.COLL, 0L);
         save("c");
         final var page = Files.readAllBytes(collectionFile("-0.dat").toPath());
 

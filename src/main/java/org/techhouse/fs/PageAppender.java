@@ -1,16 +1,12 @@
 package org.techhouse.fs;
 
-import java.io.BufferedOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.locks.Lock;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
@@ -29,56 +25,32 @@ final class PageAppender {
     <T extends DbEntry> List<IndexedDbEntry> bulkInsert(String dbName, String collName, List<T> entries,
             Function<? super T, Long> storagePageResolver, Function<? super T, byte[]> encodedLines)
             throws IOException {
-        final var indexEntries = new ArrayList<IndexedDbEntry>();
-        final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
-        final var lengthsBeforeAppend = new LinkedHashMap<File, Long>();
-        final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
-        final var forceGroup = new ForceGroup();
+        final var groups = entries.stream()
+                .collect(Collectors.groupingBy(storagePageResolver, TreeMap::new, Collectors.toList()));
+        final var locks = new ArrayList<Lock>(groups.size());
         try {
-            for (var groupedEntry : entrySet) {
-                final var page = groupedEntry.getKey();
-                final var file = paths.collectionPage(dbName, collName, page);
-                OwnerOnly.ensureOwnerOnlyFile(file.toPath());
-                final var lock = FileLocks.lockWrite(file);
-                try {
-                    vacuum.vacuumIfNeeded(dbName, collName, page, appendedBytes(groupedEntry.getValue()), null, null);
-                    lengthsBeforeAppend.putIfAbsent(file, file.length());
-                    appendGroup(dbName, collName, page, file, groupedEntry.getValue(), encodedLines, pkEntriesToIndex,
-                            indexEntries);
-                    forceGroup.add(file.toPath());
-                } finally {
-                    lock.unlock();
+            for (final var group : groups.entrySet()) {
+                locks.add(FileLocks.lockWrite(paths.collectionPage(dbName, collName, group.getKey())));
+                vacuum.vacuumIfNeeded(dbName, collName, group.getKey(), appendedBytes(group.getValue()), null, null);
+            }
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var indexEntries = new ArrayList<IndexedDbEntry>(entries.size());
+            for (final var group : groups.entrySet()) {
+                for (final var entry : group.getValue()) {
+                    final var line = encodedLines.apply(entry);
+                    final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(),
+                            plan.append(group.getKey(), line), line.length, group.getKey(), entry.getVersion());
+                    plan.insertRow(pkEntry);
+                    indexEntries.add(indexed(dbName, collName, entry, pkEntry));
                 }
             }
-            forceGroup.force();
-            pkIndexStore.appendRows(dbName, collName, pkEntriesToIndex);
-        } catch (IOException e) {
-            rollBackBulkAppends(lengthsBeforeAppend);
-            throw e;
-        }
-        return indexEntries;
-    }
-
-    private static <T extends DbEntry> void appendGroup(String dbName, String collName, long page, File file,
-            List<T> entries, Function<? super T, byte[]> encodedLines, List<PkIndexEntry> pkEntriesToIndex,
-            List<IndexedDbEntry> indexEntries) throws IOException {
-        var lastLine = new byte[0];
-        try (var out = new BufferedOutputStream(new FileOutputStream(file, true), Globals.BUFFER_SIZE)) {
-            final var separator = PageTails.separatorBefore(file);
-            var currentOffset = file.length() + separator.length;
-            out.write(separator);
-            for (var entry : entries) {
-                final var line = encodedLines.apply(entry);
-                out.write(line);
-                lastLine = line;
-                final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, line.length, page,
-                        entry.getVersion());
-                pkEntriesToIndex.add(pkEntry);
-                indexEntries.add(indexed(dbName, collName, entry, pkEntry));
-                currentOffset += line.length;
+            plan.commit();
+            return indexEntries;
+        } finally {
+            for (var index = locks.size() - 1; index >= 0; index--) {
+                locks.get(index).unlock();
             }
         }
-        PageTails.appended(file, lastLine);
     }
 
     private static long appendedBytes(List<? extends DbEntry> entries) {
@@ -100,49 +72,21 @@ final class PageAppender {
         return indexedEntry;
     }
 
-    private static void rollBackBulkAppends(Map<File, Long> lengthsBeforeAppend) {
-        for (final var appended : lengthsBeforeAppend.entrySet()) {
-            final var lock = FileLocks.lockWrite(appended.getKey());
-            try {
-                FileLocks.truncateTo(appended.getKey(), appended.getValue());
-            } finally {
-                lock.unlock();
-            }
-        }
-    }
-
     PkIndexEntry insert(DbEntry entry, byte[] line) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
-        final var file = paths.collectionPage(dbName, collName, page);
-        final var lock = FileLocks.lockWrite(file);
+        final var lock = FileLocks.lockWrite(paths.collectionPage(dbName, collName, page));
         try {
             vacuum.vacuumIfNeeded(dbName, collName, page, line.length, null, null);
-            final var totalFileLength = file.length();
-            final var separator = PageTails.separatorBefore(file);
-            try {
-                appendToPage(file, separator, line);
-                PageTails.appended(file, line);
-                return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(),
-                        totalFileLength + separator.length, line.length, page, entry.getVersion());
-            } catch (IOException e) {
-                FileLocks.truncateTo(file, totalFileLength);
-                throw e;
-            }
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var row = new PkIndexEntry(dbName, collName, entry.get_id(), plan.append(page, line), line.length,
+                    page, entry.getVersion());
+            plan.insertRow(row);
+            plan.commit();
+            return row;
         } finally {
             lock.unlock();
-        }
-    }
-
-    private static void appendToPage(File file, byte[] separator, byte[] line) throws IOException {
-        OwnerOnly.ensureOwnerOnlyFile(file.toPath());
-        try (var out = new FileOutputStream(file, true)) {
-            if (separator.length > 0) {
-                out.write(separator);
-            }
-            out.write(line);
-            SyncedWrites.content(out.getChannel(), file.toPath());
         }
     }
 }

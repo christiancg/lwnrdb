@@ -34,6 +34,10 @@ final class FilePaths {
                 + Globals.DB_FILE_EXTENSION);
     }
 
+    File writeAheadLog(String dbName, String collectionName) {
+        return new File(collectionPrefix(dbName, collectionName) + Globals.WAL_EXTENSION);
+    }
+
     File intentLog(String dbName, String collectionName) {
         return new File(collectionPrefix(dbName, collectionName) + Globals.INTENT_LOG_EXTENSION);
     }

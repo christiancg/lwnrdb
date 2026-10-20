@@ -59,6 +59,7 @@ public class ConfigReaderTest {
         expectedConfig.put("maxLogFiles", "7");
         expectedConfig.put("maxPageSize", "2Mb");
         expectedConfig.put("syncWrites", "true");
+        expectedConfig.put("walCheckpointBytes", "8Mb");
         expectedConfig.put("maxEntrySize", "1Mb");
         expectedConfig.put("schemaValidationBudget", "5000000");
         expectedConfig.put("schemaMaxPatternLength", "4096");

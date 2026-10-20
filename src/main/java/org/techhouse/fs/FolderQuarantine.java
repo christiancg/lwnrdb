@@ -59,6 +59,7 @@ public final class FolderQuarantine {
             return false;
         }
         WriteIntentJournal.forgetUnder(folder);
+        WriteAheadLog.forgetUnder(folder);
         SyncedWrites.entriesOfLanded(target.getAbsoluteFile().getParentFile().toPath(),
                 "Moving " + folder.getName() + " aside");
         return true;

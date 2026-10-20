@@ -57,6 +57,18 @@ public class ServerMainStartupOrderTest {
     }
 
     @Test
+    public void test_the_write_ahead_logs_are_replayed_before_any_other_recovery_reads_a_page() throws IOException {
+        final var body = mainBody();
+        final var redo = positionOf(body, "fs.redoWriteAheadLogs();");
+
+        assertTrue(positionOf(body, "fs.createAdminDatabase();") < redo, "redo walks the folders it creates");
+        assertTrue(redo < positionOf(body, "fs.recoverWriteIntents();"),
+                "a vacuum intent re-derives rows from a page the log may still have to finish");
+        assertTrue(redo < positionOf(body, "cache.loadAdminData();"),
+                "admin collections are logged too, and loading them first would cache what a power loss left");
+    }
+
+    @Test
     public void test_trigger_recovery_runs_after_the_node_joins_the_cluster() throws IOException {
         final var body = mainBody();
 

@@ -21,7 +21,7 @@ final class ReplacerFixture {
         fx = new StorageFixture(root, dbName, collName);
         vacuum = new PageVacuum(fx.paths, fx.store, fx.journal);
         vacuum.onVacuum(vacuumed::add);
-        replacer = new RecordReplacer(fx.paths, fx.store, fx.journal, vacuum);
+        replacer = new RecordReplacer(fx.paths, fx.store, vacuum);
         appender = new PageAppender(fx.paths, fx.store, vacuum);
     }
 

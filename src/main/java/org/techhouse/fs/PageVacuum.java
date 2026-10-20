@@ -26,6 +26,7 @@ final class PageVacuum {
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
     private final WriteIntentJournal journal;
+    private final WriteAheadLog wal;
     private volatile Consumer<VacuumedPage> listener = _ -> {
     };
 
@@ -33,6 +34,7 @@ final class PageVacuum {
         this.paths = paths;
         this.pkIndexStore = pkIndexStore;
         this.journal = journal;
+        this.wal = new WriteAheadLog(paths);
     }
 
     void onVacuum(Consumer<VacuumedPage> vacuumListener) {
@@ -64,6 +66,7 @@ final class PageVacuum {
         final var bytes = Files.readAllBytes(page.toPath());
         final var lines = PageLines.recordsOf(bytes, 0L);
         requireEveryLineNamed(page, lines, pageRows);
+        wal.checkpoint(dbName, collName);
         final var intent = journal.begin(dbName, collName, List.of(new WriteIntent.Vacuum(pageNumber)));
         final var temp = paths.vacuumFile(dbName, collName, pageNumber);
         final var moves = new LinkedHashMap<String, VacuumedPage.Move>();
@@ -86,7 +89,17 @@ final class PageVacuum {
             throw e;
         }
         journal.end(intent);
+        checkpointAfter(dbName, collName, page);
         return vacuumed;
+    }
+
+    private void checkpointAfter(String dbName, String collName, File page) {
+        try {
+            wal.checkpoint(dbName, collName);
+        } catch (IOException e) {
+            logger.warning("Vacuumed " + page.getName() + " but could not checkpoint the write-ahead log after it;"
+                    + " the writes logged after the vacuum already address the page as it is now: " + e.getMessage());
+        }
     }
 
     private static void requireEveryLineNamed(File page, List<PageLines.Line> lines, List<PkIndexEntry> pageRows)

@@ -1,41 +1,25 @@
 package org.techhouse.fs;
 
-import java.io.BufferedOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Function;
-import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
-import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
-import org.techhouse.ioc.IocContainer;
-import org.techhouse.log.Logger;
 
 final class RecordReplacer {
-    private static final Logger logger = Logger.logFor(RecordReplacer.class);
-    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
-
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
-    private final WriteIntentJournal journal;
     private final PageVacuum vacuum;
 
-    RecordReplacer(FilePaths paths, PkIndexStore pkIndexStore, WriteIntentJournal journal, PageVacuum vacuum) {
+    RecordReplacer(FilePaths paths, PkIndexStore pkIndexStore, PageVacuum vacuum) {
         this.paths = paths;
         this.pkIndexStore = pkIndexStore;
-        this.journal = journal;
         this.vacuum = vacuum;
     }
 
@@ -54,29 +38,13 @@ final class RecordReplacer {
                 oldPosition = positionAfter(vacuumed, oldRow.getValue(), oldPosition);
             }
             requireWithinPage(oldRow, oldPosition, source.length());
-            final var targetLengthBefore = target.exists() ? target.length() : 0L;
-            final var group = new ForceGroup();
-            final var intent = journal.begin(dbName, collName,
-                    List.of(WriteIntent.Replace.of(oldRow, oldPosition, targetPage, targetLengthBefore)), group);
-            final PkIndexEntry newRow;
-            try {
-                final var separator = PageTails.separatorBefore(target);
-                appendToPage(target, separator, line, group);
-                PageTails.appended(target, line);
-                group.force();
-                faultInjector.at(FaultPoint.PAGE_COPY_APPENDED, subject(dbName, collName));
-                newRow = new PkIndexEntry(dbName, collName, oldRow.getValue(), targetLengthBefore + separator.length,
-                        line.length, targetPage, entry.getVersion());
-                pkIndexStore.appendReplacements(dbName, collName, List.of(newRow));
-            } catch (IOException e) {
-                if (cutBack(target, targetLengthBefore)) {
-                    journal.end(intent);
-                }
-                throw e;
-            }
-            faultInjector.at(FaultPoint.PK_ROW_COMMITTED, subject(dbName, collName));
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var newRow = new PkIndexEntry(dbName, collName, oldRow.getValue(), plan.append(targetPage, line),
+                    line.length, targetPage, entry.getVersion());
+            plan.replaceRow(newRow);
+            plan.blank(oldRow.getPage(), oldPosition, oldRow.getLength());
+            plan.commit(FaultPoint.PAGE_COPY_APPENDED, FaultPoint.PK_ROW_COMMITTED);
             entry.setPreviousByteSize(oldRow.getLength());
-            blankCommitted(intent, Map.of(source, new long[][]{{oldPosition, oldRow.getLength()}}));
             return newRow;
         } finally {
             unlock(locks);
@@ -90,17 +58,10 @@ final class RecordReplacer {
         final var lock = FileLocks.lockWrite(page);
         try {
             requireWithinPage(oldRow, oldRow.getPosition(), page.length());
-            final var group = new ForceGroup();
-            final var intent = journal.begin(dbName, collName, List.of(WriteIntent.Delete.of(oldRow)), group);
-            try {
-                group.force();
-                pkIndexStore.appendDeletes(dbName, collName, List.of(oldRow.getValue()));
-            } catch (IOException e) {
-                journal.end(intent);
-                throw e;
-            }
-            faultInjector.at(FaultPoint.PK_ROW_COMMITTED, subject(dbName, collName));
-            blankCommitted(intent, Map.of(page, new long[][]{{oldRow.getPosition(), oldRow.getLength()}}));
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            plan.deleteRow(oldRow.getValue());
+            plan.blank(oldRow.getPage(), oldRow.getPosition(), oldRow.getLength());
+            plan.commit(null, FaultPoint.PK_ROW_COMMITTED);
         } finally {
             lock.unlock();
         }
@@ -128,31 +89,19 @@ final class RecordReplacer {
         }
         try {
             final var positions = positionsAfterVacuums(dbName, collName, entries, lines, groups, files, residentRows);
-            final var lengthsBefore = new HashMap<Long, Long>();
-            final var items = new ArrayList<WriteIntent>(entries.size());
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var newRows = new PkIndexEntry[entries.size()];
             for (final var group : groups.entrySet()) {
-                final var lengthBefore = files.get(group.getKey()).length();
-                lengthsBefore.put(group.getKey(), lengthBefore);
+                final var page = group.getKey();
                 for (final var index : group.getValue()) {
-                    final var oldRow = entries.get(index).getIndex();
-                    items.add(WriteIntent.Replace.of(oldRow, positions[index], group.getKey(), lengthBefore));
+                    final var entry = entries.get(index);
+                    newRows[index] = new PkIndexEntry(dbName, collName, entry.get_id(), plan.append(page, lines[index]),
+                            lines[index].length, page, entry.getVersion());
+                    plan.replaceRow(newRows[index]);
+                    plan.blank(page, positions[index], entry.getIndex().getLength());
                 }
             }
-            final var forceGroup = new ForceGroup();
-            final var intent = journal.begin(dbName, collName, items, forceGroup);
-            final var newRows = appendAndCommit(dbName, collName, entries, lines, groups, files, lengthsBefore, intent,
-                    forceGroup);
-            faultInjector.at(FaultPoint.PK_ROW_COMMITTED, subject(dbName, collName));
-            final var superseded = new HashMap<File, long[][]>();
-            for (final var group : groups.entrySet()) {
-                final var regions = new long[group.getValue().size()][];
-                var at = 0;
-                for (final var index : group.getValue()) {
-                    regions[at++] = new long[]{positions[index], entries.get(index).getIndex().getLength()};
-                }
-                superseded.put(files.get(group.getKey()), regions);
-            }
-            blankCommitted(intent, superseded);
+            plan.commit(FaultPoint.PAGE_COPY_APPENDED, FaultPoint.PK_ROW_COMMITTED);
             return updatedEntries(dbName, collName, entries, newRows);
         } finally {
             for (var index = locks.size() - 1; index >= 0; index--) {
@@ -184,45 +133,6 @@ final class RecordReplacer {
         return positions;
     }
 
-    private PkIndexEntry[] appendAndCommit(String dbName, String collName, List<IndexedDbEntry> entries, byte[][] lines,
-            TreeMap<Long, List<Integer>> groups, TreeMap<Long, File> files, Map<Long, Long> lengthsBefore,
-            WriteIntentJournal.Intent intent, ForceGroup forceGroup) throws IOException {
-        final var newRows = new PkIndexEntry[entries.size()];
-        try {
-            for (final var group : groups.entrySet()) {
-                final var file = files.get(group.getKey());
-                final var separator = PageTails.separatorBefore(file);
-                var offset = lengthsBefore.get(group.getKey()) + separator.length;
-                OwnerOnly.ensureOwnerOnlyFile(file.toPath());
-                try (var out = new BufferedOutputStream(new FileOutputStream(file, true), Globals.BUFFER_SIZE)) {
-                    out.write(separator);
-                    for (final var index : group.getValue()) {
-                        final var entry = entries.get(index);
-                        out.write(lines[index]);
-                        newRows[index] = new PkIndexEntry(dbName, collName, entry.get_id(), offset, lines[index].length,
-                                group.getKey(), entry.getVersion());
-                        offset += lines[index].length;
-                    }
-                }
-                forceGroup.add(file.toPath());
-                PageTails.appended(file, lines[group.getValue().getLast()]);
-            }
-            forceGroup.force();
-            faultInjector.at(FaultPoint.PAGE_COPY_APPENDED, subject(dbName, collName));
-            pkIndexStore.appendReplacements(dbName, collName, Arrays.asList(newRows));
-            return newRows;
-        } catch (IOException e) {
-            var everyPageCutBack = true;
-            for (final var page : groups.keySet()) {
-                everyPageCutBack &= cutBack(files.get(page), lengthsBefore.get(page));
-            }
-            if (everyPageCutBack) {
-                journal.end(intent);
-            }
-            throw e;
-        }
-    }
-
     private static List<IndexedDbEntry> updatedEntries(String dbName, String collName, List<IndexedDbEntry> entries,
             PkIndexEntry[] newRows) {
         final var updated = new ArrayList<IndexedDbEntry>(entries.size());
@@ -241,30 +151,9 @@ final class RecordReplacer {
         return updated;
     }
 
-    private static boolean cutBack(File page, long lengthBefore) {
-        return page.length() == lengthBefore || FileLocks.truncateTo(page, lengthBefore);
-    }
-
     static long positionAfter(VacuumedPage vacuumed, String id, long position) {
         final var move = vacuumed.moves().get(id);
         return move != null && move.from() == position ? move.to() : position;
-    }
-
-    private void blankCommitted(WriteIntentJournal.Intent intent, Map<File, long[][]> regionsByPage) {
-        for (final var page : regionsByPage.entrySet()) {
-            try (var channel = FileChannel.open(page.getKey().toPath(), StandardOpenOption.WRITE)) {
-                for (final var region : page.getValue()) {
-                    PageHoles.blank(channel, region[0], region[1]);
-                }
-            } catch (IOException e) {
-                PageTails.forget(page.getKey());
-                logger.error("Committed a write to " + page.getKey().getName() + " but could not blank the copies it"
-                        + " superseded; its intent is kept and the next startup blanks them", e);
-                return;
-            }
-            PageTails.blanked(page.getKey());
-        }
-        journal.endOnceDurable(intent, List.copyOf(regionsByPage.keySet()));
     }
 
     static void requireWithinPage(PkIndexEntry entry, long position, long pageLength) throws IOException {
@@ -273,21 +162,6 @@ final class RecordReplacer {
                     + entry.getLength() + " on page " + entry.getPage() + ", past its " + pageLength
                     + "-byte end; refusing to write around a record that is not there");
         }
-    }
-
-    static String subject(String dbName, String collName) {
-        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
-    }
-
-    private static void appendToPage(File file, byte[] separator, byte[] line, ForceGroup group) throws IOException {
-        OwnerOnly.ensureOwnerOnlyFile(file.toPath());
-        try (var out = new FileOutputStream(file, true)) {
-            if (separator.length > 0) {
-                out.write(separator);
-            }
-            out.write(line);
-        }
-        group.add(file.toPath());
     }
 
     private static Lock[] lockInPageOrder(long firstPage, File first, long secondPage, File second) {

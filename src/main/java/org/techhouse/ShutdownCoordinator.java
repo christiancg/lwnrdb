@@ -79,7 +79,7 @@ public class ShutdownCoordinator {
         step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));
         step("drain background tasks", () -> backgroundTaskManager.drain(remaining(deadline)));
         step("stop listen workers", listenManager::stopWorkers);
-        step("sync the pages the last writes blanked", () -> fileSystem.settleDeferredIntentEnds(deadline));
+        step("checkpoint every write-ahead log", fileSystem::checkpointWriteAheadLogs);
         step("leave the cluster", () -> {
             if (clusterConfig.isEnabled()) {
                 membershipService.stop();

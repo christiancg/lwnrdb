@@ -95,7 +95,8 @@ public class ServerMain {
         fs.createBaseDbPath();
         DeviceSyncGuard.refuseUnsyncablePlatform(fs);
         fs.createAdminDatabase();
-        final var recoveredDeletes = fs.recoverWriteIntents();
+        final var recoveredDeletes = fs.redoWriteAheadLogs();
+        fs.recoverWriteIntents();
         cache.loadAdminData();
         AdminPasswordGuard.refuseUnsetPasswordWhenBootstrapping(cache);
         seedHybridClock();

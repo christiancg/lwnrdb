@@ -1,5 +1,6 @@
 package org.techhouse.fs;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -7,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -26,6 +28,7 @@ public class SyncedWriteOrderTest {
     private static final String PAGE = COLL + "-0.dat";
     private static final String PK = COLL + "-pk.idx";
     private static final String INTENTS = COLL + Globals.INTENT_LOG_EXTENSION;
+    private static final String WAL = COLL + Globals.WAL_EXTENSION;
 
     @TempDir
     File tmp;
@@ -55,120 +58,104 @@ public class SyncedWriteOrderTest {
         }
     }
 
-    private static int count(List<String> forced, String name) {
-        return (int) forced.stream().filter(name::equals).count();
-    }
-
     private static List<String> filesOnly(List<String> forced) {
         return forced.stream().filter(name -> !name.equals(COLL) && !name.equals(DB)).toList();
     }
 
-    private int openIntents() throws IOException {
-        return rf.fx.openIntents();
+    private static List<String> writeAheadLogOnly() {
+        return List.of(WAL);
     }
 
     @Test
-    public void test_insert_forces_marker_then_page_then_pk() throws Exception {
+    public void test_insert_forces_the_marker_then_only_the_log() throws Exception {
         new IndexMarkers(rf.fx.paths).markDirty(DB, COLL);
         rf.appender.insert(rf.entry("d", "new-d", 0), ReplacerFixture.line("d", "new-d"));
 
-        assertInOrder(recorder.forcedNames(), COLL + "-indexes.dirty", PAGE, PK);
+        assertEquals(List.of(COLL + "-indexes.dirty", WAL), filesOnly(recorder.forcedNames()));
     }
 
     @Test
-    public void test_update_forces_intent_and_page_together_then_pk_and_defers_the_blank() throws Exception {
+    public void test_update_forces_only_the_log() throws Exception {
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
-        final var forced = filesOnly(recorder.forcedNames());
-        assertEquals(Set.of(INTENTS, PAGE), Set.copyOf(forced.subList(0, 2)), forced.toString());
-        assertEquals(List.of(PK), forced.subList(2, forced.size()), "the blank is not forced before the OK");
-        assertEquals(1, openIntents(), "the intent stays open until its blank is durable");
+        assertEquals(writeAheadLogOnly(), filesOnly(recorder.forcedNames()));
+        assertEquals(0, rf.fx.openIntents(), "an update writes no intent");
     }
 
     @Test
-    public void test_delete_forces_intent_then_pk_and_defers_the_blank() throws Exception {
+    public void test_delete_forces_only_the_log() throws Exception {
         rf.replacer.delete(rf.fx.indexed("b"));
 
-        assertEquals(List.of(INTENTS, PK), filesOnly(recorder.forcedNames()));
-        assertEquals(1, openIntents());
+        assertEquals(writeAheadLogOnly(), filesOnly(recorder.forcedNames()));
+        assertEquals(0, rf.fx.openIntents());
     }
 
     @Test
-    public void test_the_next_write_forces_the_previous_blank_and_ends_its_intent() throws Exception {
+    public void test_a_relocation_forces_only_the_log() throws Exception {
         rf.replace("b", "moved-b", 1, null);
-        recorder.clear();
 
-        rf.replace("c", "new-c", 1, PagePlacement.APPEND);
-
-        final var forced = filesOnly(recorder.forcedNames());
-        assertEquals(Set.of(INTENTS, COLL + "-1.dat", PAGE), Set.copyOf(forced.subList(0, 3)), forced.toString());
-        assertEquals(PK, forced.get(3));
-        assertEquals(1, openIntents(), "the earlier intent ended once its blank was forced; only the new one is open");
+        assertEquals(writeAheadLogOnly(), filesOnly(recorder.forcedNames()));
     }
 
     @Test
-    public void test_a_blank_on_the_page_the_next_write_appends_to_costs_no_extra_force() throws Exception {
-        rf.replace("b", "new-b", 0, PagePlacement.APPEND);
-        recorder.clear();
+    public void test_bulk_insert_forces_only_the_log_once() throws Exception {
+        final var entries = new ArrayList<>(List.of(rf.entry("x", "x", 0), rf.entry("y", "y", 1)));
 
-        rf.replace("c", "new-c", 0, PagePlacement.APPEND);
+        rf.appender.bulkInsert(DB, COLL, entries, DbEntry::getPage,
+                entry -> ReplacerFixture.line(entry.get_id(), entry.get_id()));
 
-        assertEquals(1, count(recorder.forcedNames(), PAGE));
+        assertEquals(writeAheadLogOnly(), filesOnly(recorder.forcedNames()));
     }
 
     @Test
-    public void test_shutdown_settles_every_deferred_blank() throws Exception {
-        rf.replace("b", "new-b", 0, PagePlacement.APPEND);
-        rf.replacer.delete(rf.fx.indexed("c"));
-        recorder.clear();
+    public void test_bulk_update_forces_only_the_log_once() throws Exception {
+        rf.bulk(List.of(rf.indexed("a", "bulk-a"), rf.indexed("c", "bulk-c")));
 
-        WriteIntentJournal.settleEveryDeferredEnd(Long.MAX_VALUE);
-
-        assertEquals(List.of(PAGE), filesOnly(recorder.forcedNames()));
-        assertEquals(0, openIntents());
-        assertEquals(0L, rf.fx.paths.intentLog(DB, COLL).length());
+        assertEquals(writeAheadLogOnly(), filesOnly(recorder.forcedNames()));
     }
 
     @Test
-    public void test_shutdown_out_of_time_leaves_the_deferred_blanks_to_startup() throws Exception {
-        rf.replacer.delete(rf.fx.indexed("b"));
-        recorder.clear();
-
-        WriteIntentJournal.settleEveryDeferredEnd(0L);
-
-        assertEquals(List.of(), filesOnly(recorder.forcedNames()));
-        assertEquals(1, openIntents());
-    }
-
-    @Test
-    public void test_a_collection_settles_its_deferred_blanks_on_demand() throws Exception {
-        rf.replacer.delete(rf.fx.indexed("b"));
-
-        rf.fx.journal.settleDeferredEnds(DB, COLL);
-
-        assertEquals(0, openIntents());
-    }
-
-    @Test
-    public void test_a_dropped_collection_discards_its_deferred_blanks() throws Exception {
-        rf.replacer.delete(rf.fx.indexed("b"));
-        final var folder = rf.fx.paths.collectionFolder(DB, COLL);
-        assertTrue(FileTreeDeleter.delete(folder));
-
-        WriteIntentJournal.settleEveryDeferredEnd(Long.MAX_VALUE);
-
-        assertFalse(folder.exists(), "settling must not recreate a dropped collection's intent log");
-    }
-
-    @Test
-    public void test_unsynced_writes_end_the_intent_at_once() throws Exception {
+    public void test_unsynced_writes_force_nothing() throws Exception {
         recorder.close();
         recorder = RecordingForcer.install(false);
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
-        assertEquals(0, openIntents());
         assertEquals(List.of(), recorder.forced());
+    }
+
+    @Test
+    public void test_a_checkpoint_forces_the_touched_pages_and_pk_before_it_rewrites_the_log() throws Exception {
+        rf.replace("b", "moved-b", 1, null);
+        recorder.clear();
+
+        new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
+
+        final var forced = filesOnly(recorder.forcedNames());
+        assertEquals(Set.of(PAGE, COLL + "-1.dat", PK), Set.copyOf(forced.subList(0, 3)), forced.toString());
+        assertEquals(WAL + ".repair", forced.get(3));
+    }
+
+    @Test
+    public void test_a_checkpoint_of_an_empty_log_forces_nothing() throws Exception {
+        final var log = new WriteAheadLog(rf.fx.paths);
+        log.checkpoint(DB, COLL);
+        recorder.clear();
+
+        log.checkpoint(DB, COLL);
+
+        assertEquals(List.of(), recorder.forced());
+    }
+
+    @Test
+    public void test_a_vacuum_checkpoints_before_and_after() throws Exception {
+        rf.replace("b", "new-b", 0, PagePlacement.APPEND);
+        recorder.clear();
+
+        rf.vacuum.vacuumIfNeeded(DB, COLL, 0, 10, PagePlacement.VACUUM_THEN_APPEND, null);
+
+        assertInOrder(recorder.forcedNames(), PAGE, WAL + ".repair", INTENTS,
+                COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, WAL, WAL + ".repair");
     }
 
     @Test
@@ -194,19 +181,6 @@ public class SyncedWriteOrderTest {
         group.force();
 
         assertEquals(0L, inFlight.getCount());
-    }
-
-    @Test
-    public void test_bulk_save_forces_pages_before_the_single_pk_append() throws Exception {
-        final var entries = new ArrayList<>(List.of(rf.entry("x", "x", 0), rf.entry("y", "y", 1)));
-
-        rf.appender.bulkInsert(DB, COLL, entries, DbEntry::getPage,
-                entry -> ReplacerFixture.line(entry.get_id(), entry.get_id()));
-
-        final var forced = recorder.forcedNames();
-        assertEquals(1, count(forced, PK));
-        assertInOrder(forced, PAGE, PK);
-        assertInOrder(forced, COLL + "-1.dat", PK);
     }
 
     @Test
@@ -279,16 +253,15 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
-    public void test_truncate_on_failure_is_forced() {
-        final var pageBefore = rf.fx.page(0).length();
-        recorder.failingFor(PK);
+    public void test_a_log_that_cannot_be_forced_fails_the_write_before_any_file_is_touched() throws Exception {
+        final var pageBefore = Files.readAllBytes(rf.fx.page(0).toPath());
+        final var pkBefore = Files.readAllBytes(rf.fx.paths.pkIndexFile(DB, COLL).toPath());
+        recorder.failingFor(WAL);
 
         assertThrows(IOException.class,
                 () -> rf.appender.insert(rf.entry("d", "new-d", 0), ReplacerFixture.line("d", "new-d")));
 
-        assertEquals(pageBefore, rf.fx.page(0).length());
-        final var forced = recorder.forcedNames();
-        assertEquals(PAGE, forced.getLast(), "the page is cut back and that cut is forced: " + forced);
-        assertEquals(2, count(forced, PAGE));
+        assertArrayEquals(pageBefore, Files.readAllBytes(rf.fx.page(0).toPath()));
+        assertArrayEquals(pkBefore, Files.readAllBytes(rf.fx.paths.pkIndexFile(DB, COLL).toPath()));
     }
 }

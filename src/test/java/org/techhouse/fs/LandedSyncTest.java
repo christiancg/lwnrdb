@@ -81,7 +81,8 @@ public class LandedSyncTest {
     @Test
     public void test_a_vacuum_whose_folder_sync_fails_still_moves_its_rows_and_tells_the_cache() throws Exception {
         rf.replacer.delete(rf.fx.indexed("b"));
-        WriteIntentJournal.settleEveryDeferredEnd(Long.MAX_VALUE);
+        new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
+        rf.fx.journal.end(rf.fx.journal.begin(DB, COLL, List.of(new WriteIntent.Vacuum(0))));
         recorder.failingTheSecondFolderSync();
 
         final var vacuumed = rf.vacuum.vacuum(DB, COLL, 0, PageRows.of(rf.fx.store, null, DB, COLL, 0));
@@ -89,14 +90,5 @@ public class LandedSyncTest {
         assertEquals(List.of(vacuumed), rf.vacuumed);
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
         assertEquals(0, rf.fx.openIntents());
-    }
-
-    @Test
-    public void test_a_rollback_that_cannot_cut_its_copy_back_keeps_the_intent() throws IOException {
-        recorder.failingFor(".dat");
-
-        assertThrows(IOException.class, () -> rf.replace("b", "new-b", 0, PagePlacement.APPEND));
-
-        assertEquals(1, rf.fx.openIntents(), "the copy may still be on the page, so startup must settle it");
     }
 }

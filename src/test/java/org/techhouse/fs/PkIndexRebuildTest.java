@@ -116,7 +116,7 @@ public class PkIndexRebuildTest {
     @Test
     public void test_an_entry_with_no_record_is_dropped() throws IOException {
         f.seed(0, "a", "b");
-        f.store.indexNewPKValue(DB, COLL, "ghost", 0, 5, 0, StorageFixture.OLD_VERSION);
+        f.store.appendRows(DB, COLL, List.of(new PkIndexEntry(DB, COLL, "ghost", 0, 5, 0, StorageFixture.OLD_VERSION)));
 
         final var rebuild = rebuild();
 
@@ -198,59 +198,21 @@ public class PkIndexRebuildTest {
         return f.journal.begin(DB, COLL, List.of(item));
     }
 
-    private void blank(PkIndexEntry row) throws IOException {
-        try (var channel = java.nio.channels.FileChannel.open(f.page(row.getPage()).toPath(),
-                StandardOpenOption.WRITE)) {
-            PageHoles.blank(channel, row.getPosition(), row.getLength());
-        }
-    }
-
     @Test
-    public void test_a_leftover_delete_intent_is_completed_before_the_rebuild() throws IOException {
+    public void test_a_leftover_vacuum_intent_is_completed_before_the_rebuild() throws IOException {
         f.seed(0, "a", "b", "c");
-        intentFor(WriteIntent.Delete.of(f.indexed("b")));
+        intentFor(new WriteIntent.Vacuum(0));
+        final var temp = f.paths.vacuumFile(DB, COLL, 0);
+        Files.writeString(temp.toPath(), "partial", StandardCharsets.UTF_8);
         writeGarbagePk();
 
         assertEquals(1, f.recovery.recoverPagesOf(DB, COLL));
         rebuild();
 
         assertEquals(0, f.openIntents());
-        assertEquals(List.of("a", "c"), f.indexedRows().stream().map(PkIndexEntry::getValue).toList());
+        assertFalse(temp.exists());
+        assertEquals(List.of("a", "b", "c"), f.indexedRows().stream().map(PkIndexEntry::getValue).toList());
         assertTrue(f.everyRowReadsItsOwnRecord());
-    }
-
-    @Test
-    public void test_a_leftover_replace_intent_with_its_old_copy_intact_is_undone() throws IOException {
-        f.seed(0, "a", "b");
-        f.seed(1, "x");
-        final var b = f.indexed("b");
-        intentFor(WriteIntent.Replace.of(b, b.getPosition(), 1, f.page(1).length()));
-        f.appendUpdatedCopy("b", 1);
-        writeGarbagePk();
-
-        f.recovery.recoverPagesOf(DB, COLL);
-        rebuild();
-
-        assertEquals(0, f.openIntents());
-        assertEquals(0L, f.indexed("b").getPage(), "the uncommitted copy on page 1 was blanked");
-        assertEquals(StorageFixture.record("b", "old-b"), f.readAt(f.indexed("b")));
-    }
-
-    @Test
-    public void test_a_leftover_replace_intent_whose_old_copy_is_blank_keeps_the_new_copy() throws IOException {
-        f.seed(0, "a", "b");
-        f.seed(1, "x");
-        final var b = f.indexed("b");
-        intentFor(WriteIntent.Replace.of(b, b.getPosition(), 1, f.page(1).length()));
-        f.appendUpdatedCopy("b", 1);
-        blank(b);
-        writeGarbagePk();
-
-        f.recovery.recoverPagesOf(DB, COLL);
-        rebuild();
-
-        assertEquals(1L, f.indexed("b").getPage());
-        assertEquals(StorageFixture.record("b", "new-b"), f.readAt(f.indexed("b")));
     }
 
     @Test
@@ -282,7 +244,7 @@ public class PkIndexRebuildTest {
     public void test_a_torn_leftover_intent_is_discarded_without_touching_the_page() throws IOException {
         f.seed(0, "a");
         final var page = f.firstPageText();
-        final var intent = intentFor(WriteIntent.Delete.of(f.indexed("a")));
+        final var intent = intentFor(new WriteIntent.Vacuum(0));
         Files.writeString(intent.log().toPath(), "torn", StandardCharsets.UTF_8);
 
         assertEquals(0, f.recovery.recoverPagesOf(DB, COLL));

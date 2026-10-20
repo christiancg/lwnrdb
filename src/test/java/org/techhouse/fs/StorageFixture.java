@@ -44,8 +44,8 @@ final class StorageFixture {
             final var text = record(id, "old-" + id);
             Files.writeString(page(page).toPath(), text, StandardCharsets.UTF_8, StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
-            store.indexNewPKValue(dbName, collName, id, position, text.getBytes(StandardCharsets.UTF_8).length, page,
-                    OLD_VERSION);
+            store.appendRows(dbName, collName, List.of(new PkIndexEntry(dbName, collName, id, position,
+                    text.getBytes(StandardCharsets.UTF_8).length, page, OLD_VERSION)));
         }
     }
 
@@ -65,14 +65,6 @@ final class StorageFixture {
 
     String firstPageText() throws IOException {
         return Files.readString(page(0).toPath(), StandardCharsets.UTF_8);
-    }
-
-    long appendUpdatedCopy(String id, long page) throws IOException {
-        final var text = record(id, "new-" + id);
-        final var position = page(page).exists() ? page(page).length() : 0L;
-        Files.writeString(page(page).toPath(), text, StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-                StandardOpenOption.APPEND);
-        return position;
     }
 
     boolean everyRowReadsItsOwnRecord() throws IOException {

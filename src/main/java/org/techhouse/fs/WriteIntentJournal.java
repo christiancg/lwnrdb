@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
 
@@ -21,7 +20,6 @@ final class WriteIntentJournal {
     static final long COMPACTION_BYTES = 64 * 1024;
     private static final Logger logger = Logger.logFor(WriteIntentJournal.class);
     private static final Map<String, LogState> states = new ConcurrentHashMap<>();
-    private static final Map<String, List<Deferred>> deferredEnds = new ConcurrentHashMap<>();
     private static final int LOG_SEARCH_DEPTH = 4;
 
     private final FilePaths paths;
@@ -30,9 +28,6 @@ final class WriteIntentJournal {
         String label() {
             return log.getName() + "#" + seq;
         }
-    }
-
-    private record Deferred(Intent intent, List<File> pages) {
     }
 
     private static final class LogState {
@@ -46,8 +41,20 @@ final class WriteIntentJournal {
     }
 
     Intent begin(String dbName, String collName, List<WriteIntent> items) throws IOException {
+        final var log = paths.intentLog(dbName, collName);
+        final Intent intent;
+        final var lock = FileLocks.lockWrite(log);
+        try {
+            final var state = stateOf(log);
+            intent = new Intent(log, state.nextSeq, dbName, collName, List.copyOf(items));
+            append(log, state, IntentLogCodec.encode(intent));
+            state.nextSeq++;
+            state.open.add(intent.seq());
+        } finally {
+            lock.unlock();
+        }
         final var group = new ForceGroup();
-        final var intent = begin(dbName, collName, items, group);
+        group.add(log.toPath());
         try {
             group.force();
         } catch (IOException e) {
@@ -57,88 +64,12 @@ final class WriteIntentJournal {
         return intent;
     }
 
-    Intent begin(String dbName, String collName, List<WriteIntent> items, ForceGroup group) throws IOException {
-        final var log = paths.intentLog(dbName, collName);
-        final var lock = FileLocks.lockWrite(log);
-        try {
-            final var state = stateOf(log);
-            final var intent = new Intent(log, state.nextSeq, dbName, collName, List.copyOf(items));
-            append(log, state, IntentLogCodec.encode(intent));
-            state.nextSeq++;
-            state.open.add(intent.seq());
-            group.add(log.toPath());
-            joinDeferredEnds(log, group);
-            return intent;
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    void endOnceDurable(Intent intent, List<File> pages) {
-        if (!SyncedWrites.enabled()) {
-            end(intent);
-            return;
-        }
-        deferredEnds.computeIfAbsent(intent.log().getAbsolutePath(), _ -> new CopyOnWriteArrayList<>())
-                .add(new Deferred(intent, List.copyOf(pages)));
-    }
-
-    void settleDeferredEnds(String dbName, String collName) throws IOException {
-        settleDeferredEnds(paths.intentLog(dbName, collName));
-    }
-
-    static void settleEveryDeferredEnd(long deadlineMillis) {
-        for (final var log : List.copyOf(deferredEnds.keySet())) {
-            if (System.currentTimeMillis() > deadlineMillis) {
-                logger.warning("Out of shutdown time before syncing every blanked page; the intents left open are"
-                        + " completed by the next startup");
-                return;
-            }
-            try {
-                settleDeferredEnds(new File(log));
-            } catch (IOException e) {
-                logger.error("Could not sync the pages blanked under " + log + "; their intents stay open and the"
-                        + " next startup blanks them again", e);
-            }
-        }
-    }
-
     static void forgetUnder(File folder) {
         final var prefix = folder.getAbsolutePath() + File.separator;
         states.keySet().removeIf(path -> path.startsWith(prefix));
-        deferredEnds.keySet().removeIf(path -> path.startsWith(prefix));
-    }
-
-    private static void settleDeferredEnds(File log) throws IOException {
-        final var group = new ForceGroup();
-        joinDeferredEnds(log, group);
-        group.force();
-    }
-
-    private static void joinDeferredEnds(File log, ForceGroup group) {
-        final var waiting = deferredEnds.get(log.getAbsolutePath());
-        if (waiting == null || waiting.isEmpty()) {
-            return;
-        }
-        final var joined = List.copyOf(waiting);
-        for (final var deferred : joined) {
-            deferred.pages().stream().filter(File::exists).forEach(page -> group.add(page.toPath()));
-        }
-        group.onceForced(() -> {
-            waiting.removeAll(joined);
-            for (final var deferred : joined) {
-                if (deferred.intent().log().getAbsoluteFile().getParentFile().isDirectory()) {
-                    endAfterSync(deferred.intent());
-                }
-            }
-        });
     }
 
     void end(Intent intent) {
-        endAfterSync(intent);
-    }
-
-    private static void endAfterSync(Intent intent) {
         final var log = intent.log();
         final var lock = FileLocks.lockWrite(log);
         try {
@@ -253,7 +184,7 @@ final class WriteIntentJournal {
         return file.getName().endsWith(Globals.INTENT_LOG_EXTENSION);
     }
 
-    private static boolean isUnderLiveFolders(File root, File log) {
+    static boolean isUnderLiveFolders(File root, File log) {
         for (var folder = log.getParentFile(); folder != null
                 && !folder.equals(root); folder = folder.getParentFile()) {
             if (!FolderQuarantine.isLiveFolder(folder)) {

@@ -30,8 +30,12 @@ NOTIFIER_SOURCE = ("import db from 'db'; import args from 'args';"
 ROLLUP_SOURCE = "import args from 'args'; return args.limit;"
 
 
+COLD_RUNNER_HOOK_TIMEOUT_MS = 5000
+
+
 def write_config(work_dir: str, port: int, **extra):
     bu.write_config(work_dir, port, scriptsEnabled=True, triggersEnabled=True, schedulesEnabled=True,
+                    beforeHookTimeoutMs=COLD_RUNNER_HOOK_TIMEOUT_MS,
                     scriptRunHistoryKinds="RUN_SCRIPT,CALL_PROCEDURE,TRIGGER,SCHEDULE", **extra)
 
 

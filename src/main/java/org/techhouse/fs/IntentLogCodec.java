@@ -12,14 +12,10 @@ final class IntentLogCodec {
     private static final String HEADER = "INTENT";
     private static final String END = "END";
     private static final String DONE = "DONE";
-    private static final String REPLACE = "REPLACE";
-    private static final String DELETE = "DELETE";
     private static final String VACUUM = "VACUUM";
     private static final char LINE_END = '\n';
     private static final int HEADER_FIELDS = 5;
     private static final int DONE_FIELDS = 2;
-    private static final int REPLACE_FIELDS = 8;
-    private static final int DELETE_FIELDS = 6;
     private static final int VACUUM_FIELDS = 2;
     private static final int LINE_BYTES_HINT = 96;
 
@@ -37,16 +33,6 @@ final class IntentLogCodec {
         field(text, intent.items().size()).append(LINE_END);
         for (final var item : intent.items()) {
             switch (item) {
-                case WriteIntent.Replace replace -> {
-                    field(text.append(REPLACE), token(replace.id()));
-                    field(field(field(text, replace.page()), replace.position()), replace.length());
-                    field(field(field(text, replace.version()), replace.targetPage()), replace.targetLengthBefore());
-                }
-                case WriteIntent.Delete delete -> {
-                    field(text.append(DELETE), token(delete.id()));
-                    field(field(field(field(text, delete.page()), delete.position()), delete.length()),
-                            delete.version());
-                }
                 case WriteIntent.Vacuum vacuum -> field(text.append(VACUUM), vacuum.page());
             }
             text.append(LINE_END);
@@ -129,19 +115,9 @@ final class IntentLogCodec {
     }
 
     private static WriteIntent decodeItem(String[] fields) {
-        return switch (fields[0]) {
-            case REPLACE -> fields.length != REPLACE_FIELDS
-                    ? null
-                    : new WriteIntent.Replace(FieldIndexEntry.unescapeIndexToken(fields[1]), Long.parseLong(fields[2]),
-                            Long.parseLong(fields[3]), Long.parseLong(fields[4]), Long.parseLong(fields[5]),
-                            Long.parseLong(fields[6]), Long.parseLong(fields[7]));
-            case DELETE -> fields.length != DELETE_FIELDS
-                    ? null
-                    : new WriteIntent.Delete(FieldIndexEntry.unescapeIndexToken(fields[1]), Long.parseLong(fields[2]),
-                            Long.parseLong(fields[3]), Long.parseLong(fields[4]), Long.parseLong(fields[5]));
-            case VACUUM -> fields.length != VACUUM_FIELDS ? null : new WriteIntent.Vacuum(Long.parseLong(fields[1]));
-            default -> null;
-        };
+        return VACUUM.equals(fields[0]) && fields.length == VACUUM_FIELDS
+                ? new WriteIntent.Vacuum(Long.parseLong(fields[1]))
+                : null;
     }
 
     private static String[] fields(String line) {

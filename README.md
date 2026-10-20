@@ -401,11 +401,11 @@ Returns `404-6` if a named field has no registered index.
 `"primaryKey": true` also rebuilds the collection's primary-key index (`pk.idx`) from its page files, which are
 authoritative, and then its page-occupancy metadata. It is the repair for a `pk.idx` that cannot be read (every
 read and write of the collection answers an error until then), that points at the wrong bytes, or that lost or
-kept a record the pages say otherwise about. When the old `pk.idx` cannot be read, a write intent (`.intent`) that startup left for that reason is settled on
-the page side first: an update whose old copy is still on its page has its new copies blanked, a delete
-is blanked, and a vacuum's temporary file is removed. When it can be read, any intent still on disk was left by a
-write this process could not clean up after, so the rebuild refuses with `409-15` and names it; a restart
-recovers it. The page scan skips holes, the blank lines an update or delete leaves behind.
+kept a record the pages say otherwise about. The rebuild first checkpoints the collection's write-ahead log, so every
+logged write is on the pages it scans. When the old `pk.idx` cannot be read, a vacuum intent (`.intents`) that startup
+left for that reason is settled first by removing the vacuum's temporary file. When it can be read, any intent still
+on disk was left by a vacuum this process could not clean up after, so the rebuild refuses with `409-15` and names
+it; a restart recovers it. The page scan skips holes, the blank lines an update or delete leaves behind.
 ```json
 {"type":"REINDEX","databaseName":"my_db","collectionName":"my_coll","primaryKey":true}
 ```
@@ -1280,9 +1280,11 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
 | `PK_INDEX_REPLACED` | A `REINDEX` with `"primaryKey": true` wrote the rebuilt `pk.idx` and has not rebuilt the page rows or field indexes yet | `<db>\|<collection>` |
 | `INDEX_BATCH_FLUSHED` | A background field-index batch appended to the first of the type logs it changed and has not appended to the others yet | `<db>\|<collection>` |
-| `PAGE_COPY_APPENDED` | An update, relocation or bulk update appended its new copies to their page and has not committed them in `pk.idx` yet | `<db>\|<collection>` |
-| `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete committed its rows in `pk.idx` and has not blanked the copies they supersede yet | `<db>\|<collection>` |
+| `PAGE_COPY_APPENDED` | An update, relocation or bulk update logged its record in the write-ahead log and has not written its copies, `pk.idx` rows or blanks yet | `<db>\|<collection>` |
+| `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete wrote everything its logged record describes: the new copies, the `pk.idx` rows and the blanks of the copies they supersede | `<db>\|<collection>` |
 | `PAGE_VACUUM_RENAMED` | A page vacuum moved its rewritten page into place and has not appended the moved records' rows to `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log (and forced it with `syncWrites`) and has not written the pages or `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_CHECKPOINT_FORCED` | A checkpoint forced the pages and `pk.idx` the log touched and has not rewritten the log as a single checkpoint yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
 
 | Action | Effect |
@@ -1618,7 +1620,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxLogFiles` | Valid number ≥ 1 |
 | `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
-| `syncWrites` | `true` or `false` (default `true`). Sync every write step to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory refuses to start |
+| `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory refuses to start |
+| `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, the pages and `pk.idx` its records touched are synced together and the log is rewritten as a single checkpoint. Larger means fewer checkpoints and a longer replay after a crash |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
 | `schemaMaxPatterns` | Valid number > 0 (default `256`). Most regular expressions (`pattern` values plus `patternProperties` keys, counted through `$ref`s) one schema may hold; `SAVE_SCHEMA` refuses more with `400-39` before compiling any. A stored or replicated schema with more still loads, with a warning. Keep it equal on every node of a cluster |
@@ -1725,6 +1728,7 @@ filePath=db
 logPath=logs
 maxPageSize=2Mb
 syncWrites=true
+walCheckpointBytes=8Mb
 maxEntrySize=1Mb
 # schema evaluation steps one write request may spend before it is refused (400-23)
 schemaValidationBudget=5000000
@@ -1975,8 +1979,8 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Guaranteed**
 
 - **An acknowledged write survives a process crash.** Writes go to the files before the response is sent, so a `kill -9` or a JVM crash loses nothing that was acknowledged.
-- **An acknowledged write survives a power loss** while `syncWrites` is on (the default). Each step of a write — the intent, the page append, the `pk.idx` row, the blank of the old copy — is synced to the device before the next one starts, and a created, renamed or deleted file has its folder synced too, so a power loss leaves exactly the state a process kill at a step boundary would, which startup already recovers. On a platform that cannot sync a directory the server refuses to start with `syncWrites=true`. See [Durability](#durability) for what it costs.
-- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, commits it with one appended `pk.idx` row, then blanks the old copy into a hole, all under an intent appended first to the collection's `.intents` log. An interrupted one is kept or undone at startup according to whether its `pk.idx` row landed, and an interrupted page vacuum re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
+- **An acknowledged write survives a power loss** while `syncWrites` is on (the default). Every write is first appended to its collection's write-ahead log as the exact bytes it puts at each offset of each page and of `pk.idx`, and that record is synced to the device before the pages and `pk.idx` are touched; a created, renamed or deleted file has its folder synced too. Startup replays the log over whatever the files hold, so a power loss leaves every acknowledged write and no unacknowledged one. On a platform that cannot sync a directory the server refuses to start with `syncWrites=true`. See [Durability](#durability) for what it costs.
+- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, appends its `pk.idx` row, then blanks the old copy into a hole, and the whole write is one record in the collection's write-ahead log (`.wal`), logged before any of it. Startup replays every logged record and cuts the bytes past a logged end, so an interrupted write is either whole or absent. An interrupted page vacuum, which rewrites a page outside the log, keeps an intent in the collection's `.intents` log and re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.
@@ -1991,15 +1995,19 @@ What a single node promises, and what it deliberately does not. The multi-node m
 
 ### Durability
 
-With `syncWrites=true` a write is acknowledged only once the steps that make it recoverable are on the device. An
-insert forces the page append, then the `pk.idx` row. An update forces its intent and the new copy together, then
-the `pk.idx` row; a delete forces its intent, then the `pk.idx` row. Files forced together are flushed in parallel,
-so they cost one wait, not two. The blank of the superseded copy is not forced before the reply: its intent stays
-open until the next write to that collection forces the blanked page alongside its own files (free when it is the
-same page) or until shutdown, and a power loss in between leaves an open intent that startup recovery completes. A
-bulk write forces all the pages it touched together, then its single `pk.idx` append. Ending an intent and clearing
-an index marker are not forced, because a power loss that undoes either leaves a journal behind that startup
-already settles. A
+With `syncWrites=true` a write is acknowledged once its record in the collection's write-ahead log
+(`{collection}.wal`) is on the device: one sequential append and one force, whatever the write is. An insert, an
+update, a delete, a relocation and a whole bulk write each log one record holding the exact bytes they put on each
+page and in `pk.idx`, then write those files without forcing them. A checkpoint forces every page and `pk.idx` the log
+touched since the last one, in parallel, then rewrites the log as a single checkpoint record; it runs once the log
+passes `walCheckpointBytes`, before a page vacuum or a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`,
+and at shutdown. After a power loss startup replays the log over whatever the files hold and cuts each file back to
+its last logged end, so an acknowledged write is redone and an unacknowledged one leaves nothing. With
+`syncWrites=false` there is no cut, since the bytes past a logged end may then be an acknowledged write whose record
+did not reach the disk. A write whose
+record is logged but whose files cannot be written is taken back and marked aborted in the log; when even that fails,
+it is applied before the next write to the collection, or by the next startup. Clearing an index marker is not
+forced, because a power loss that undoes it leaves a journal behind that startup already settles. A
 force costs what the disk makes it cost, and the per-collection write lock is held across them, so it bounds the
 write rate of one collection. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
 Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed

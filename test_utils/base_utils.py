@@ -393,6 +393,32 @@ def open_intents(folder: str) -> list:
     return found
 
 
+WAL_HEADER_BYTES = 18
+
+
+def damage_after_the_last_checkpoint(folder: str):
+    for name in (n for n in os.listdir(folder) if n.endswith(".wal")):
+        os.remove(os.path.join(folder, name))
+
+
+def logged_writes(folder: str) -> int:
+    if not os.path.isdir(folder):
+        return 0
+    logged = 0
+    for name in (n for n in os.listdir(folder) if n.endswith(".wal")):
+        with open(os.path.join(folder, name), "rb") as fp:
+            data = fp.read()
+        at = 0
+        while at + WAL_HEADER_BYTES <= len(data) and data[at:at + 1] == b"W":
+            kind = data[at + 1:at + 2]
+            length = int.from_bytes(data[at + 10:at + 14], "big")
+            if at + WAL_HEADER_BYTES + length > len(data):
+                break
+            logged = 0 if kind == b"C" else logged + (1 if kind == b"R" else -1)
+            at += WAL_HEADER_BYTES + length
+    return logged
+
+
 def read_pk_log(pk_path: str) -> list:
     with open(pk_path, "rb") as fp:
         lines = fp.read().decode("utf-8", errors="replace").split("\n")

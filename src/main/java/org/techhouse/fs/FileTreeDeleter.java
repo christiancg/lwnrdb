@@ -15,6 +15,7 @@ final class FileTreeDeleter {
         for (var sweep = 0; sweep < SWEEPS; sweep++) {
             if (sweep(root)) {
                 WriteIntentJournal.forgetUnder(root);
+                WriteAheadLog.forgetUnder(root);
                 SyncedWrites.entriesOfLanded(root.getAbsoluteFile().getParentFile().toPath(),
                         "Deleting " + root.getName());
                 return true;

@@ -480,4 +480,8 @@ public final class Configuration {
         return booleanValue(ConfigKey.SYNC_WRITES);
     }
 
+    public long getWalCheckpointBytes() {
+        return sizeValue(ConfigKey.WAL_CHECKPOINT_BYTES);
+    }
+
 }

@@ -22,6 +22,7 @@ public final class Globals {
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String VACUUM_FILE_EXTENSION = ".vacuum";
     public static final String INTENT_LOG_EXTENSION = ".intents";
+    public static final String WAL_EXTENSION = ".wal";
     public static final String JSON_FILE_EXTENSION = ".json";
     public static final String INDEX_FILE_EXTENSION = ".idx";
     public static final String INDEX_LOG_SUFFIX = "log";

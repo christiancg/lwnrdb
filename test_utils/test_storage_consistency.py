@@ -266,6 +266,7 @@ def pk_index_ids(index_file: str) -> set:
 
 
 def append_torn_pk_line(work_dir: str, db=DB, coll=COLL) -> None:
+    bu.damage_after_the_last_checkpoint(os.path.dirname(pk_index_file(work_dir, db, coll)))
     with open(pk_index_file(work_dir, db, coll), "a", encoding="utf-8") as fp:
         fp.write("torn pk index line\n")
 
@@ -515,6 +516,7 @@ def seed_a_collection_whose_page_tail_will_tear(conn: Conn):
 
 def tear_the_page_tail(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, TORN_COLL)
+    bu.damage_after_the_last_checkpoint(folder)
     last = last_page(page_files(work_dir, DB, TORN_COLL))
     with open(os.path.join(folder, last), "ab") as page:
         page.write(TORN_BYTES.encode("utf-8"))
@@ -545,6 +547,7 @@ def seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn: Conn):
 
 def lose_the_last_record(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, DANGLING_COLL)
+    bu.damage_after_the_last_checkpoint(folder)
     path = os.path.join(folder, page_files(work_dir, DB, DANGLING_COLL)[0])
     with open(path, "rb+") as page:
         content = page.read()
@@ -556,6 +559,7 @@ def old_grammar_pk_index(work_dir: str) -> str:
 
 
 def plant_an_old_grammar_pk_index(work_dir: str):
+    bu.damage_after_the_last_checkpoint(os.path.dirname(old_grammar_pk_index(work_dir)))
     shutil.copyfile(old_grammar_pk_index(work_dir), old_grammar_pk_index(work_dir) + ".original")
     with open(old_grammar_pk_index(work_dir), "w") as index:
         index.write(OLD_GRAMMAR_PK)
@@ -616,6 +620,8 @@ def seed_collections_for_primary_key_rebuilds(conn: Conn):
 
 
 def damage_the_pk_indexes_to_rebuild(work_dir: str):
+    for coll in (REBUILD_UNREADABLE_COLL, REBUILD_SWAPPED_COLL, REBUILD_LOST_ROW_COLL):
+        bu.damage_after_the_last_checkpoint(os.path.dirname(pk_index_file(work_dir, DB, coll)))
     with open(pk_index_file(work_dir, DB, REBUILD_UNREADABLE_COLL), "w") as index:
         index.write(OLD_GRAMMAR_PK)
     swapped_path = pk_index_file(work_dir, DB, REBUILD_SWAPPED_COLL)
@@ -630,6 +636,7 @@ def damage_the_pk_indexes_to_rebuild(work_dir: str):
 
 
 def append_a_copy_of_the_first_record(work_dir: str, coll: str, after: bytes = b""):
+    bu.damage_after_the_last_checkpoint(os.path.join(work_dir, "db", DB, coll))
     page = os.path.join(work_dir, "db", DB, coll, page_files(work_dir, DB, coll)[0])
     with open(page, "rb") as fp:
         first_record = fp.read().split(b"\n")[0] + b"\n"
@@ -728,6 +735,7 @@ def seed_collections_for_a_lost_line_end_and_a_half_built_index(conn: Conn):
 
 def lose_the_last_line_end(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, LINE_END_COLL)
+    bu.damage_after_the_last_checkpoint(folder)
     last = last_page(page_files(work_dir, DB, LINE_END_COLL))
     path = os.path.join(folder, last)
     with open(path, "rb+") as page:
@@ -774,6 +782,7 @@ def seed_a_collection_that_will_hold_an_unindexed_record(conn: Conn):
 
 def leave_an_unindexed_record(work_dir: str):
     folder = os.path.join(work_dir, "db", DB, ORPHAN_COLL)
+    bu.damage_after_the_last_checkpoint(folder)
     last = last_page(page_files(work_dir, DB, ORPHAN_COLL))
     record = json.dumps({"_id": ORPHAN_ID, ORPHAN_FIELD: "same"}, separators=(",", ":")) + "\n"
     with open(os.path.join(folder, last), "ab") as page:
@@ -921,6 +930,7 @@ def admin_databases_folder(work_dir: str) -> str:
 
 def tear_an_admin_page_tail(work_dir: str):
     folder = admin_databases_folder(work_dir)
+    bu.damage_after_the_last_checkpoint(folder)
     last = last_page([name for name in os.listdir(folder) if name.endswith(".dat")])
     with open(os.path.join(folder, last), "ab") as page:
         page.write(TORN_BYTES.encode("utf-8"))
@@ -2364,7 +2374,7 @@ def main():
         proc, kill_rounds = write_intent_kills.run(work_dir, log_path, admin_conn,
                                                    lambda: write_config(work_dir, faults=True))
         with admin_conn() as conn:
-            write_intent_kills.test_every_killed_write_recovers_to_what_its_pk_index_committed(conn, work_dir,
+            write_intent_kills.test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir,
                                                                                                kill_rounds)
             latest = write_intent_kills.churn(conn)
             write_intent_kills.test_update_churn_keeps_every_page_within_a_quarter_of_dead_space(conn, work_dir, latest,

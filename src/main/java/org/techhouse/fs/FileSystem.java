@@ -32,12 +32,12 @@ public class FileSystem {
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
     private final WriteIntentJournal writeIntentJournal = new WriteIntentJournal(paths);
     private final PageVacuum pageVacuum = new PageVacuum(paths, pkIndexStore, writeIntentJournal);
-    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, writeIntentJournal,
-            pageVacuum);
+    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, pageVacuum);
     private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore, pageVacuum);
     private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
             writeIntentJournal);
     private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
+    private final WriteAheadLog writeAheadLog = new WriteAheadLog(paths);
 
     public void onVacuum(Consumer<VacuumedPage> listener) {
         pageVacuum.onVacuum(listener);
@@ -285,10 +285,13 @@ public class FileSystem {
         return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows);
     }
 
-    public List<PkIndexEntry> recoverWriteIntents() throws IOException {
-        final var completedDeletes = writeIntentRecovery.recoverAll();
+    public List<PkIndexEntry> redoWriteAheadLogs() throws IOException {
+        return WalRedo.redoAll(paths);
+    }
+
+    public void recoverWriteIntents() throws IOException {
+        writeIntentRecovery.recoverAll();
         cutUncommittedAdminCopies();
-        return completedDeletes;
     }
 
     private void cutUncommittedAdminCopies() throws IOException {
@@ -395,12 +398,12 @@ public class FileSystem {
         return OrphanedPageRecords.retireDangling(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
     }
 
-    public void settleDeferredIntentEnds(long deadlineMillis) {
-        WriteIntentJournal.settleEveryDeferredEnd(deadlineMillis);
+    public void checkpointWriteAheadLogs() {
+        writeAheadLog.checkpointAll();
     }
 
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
-        writeIntentJournal.settleDeferredEnds(dbName, collName);
+        writeAheadLog.checkpoint(dbName, collName);
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
             writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
