@@ -200,6 +200,28 @@ def recorded_pages(work_dir: str, db=DB, coll=COLL) -> dict:
     return rows
 
 
+PAGE_ROW_REBUILD = "Rebuilt the page-occupancy metadata of"
+
+
+def page_row_rebuilds(log_path: str) -> int:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as fp:
+        lines = fp.readlines()
+    return sum(PAGE_ROW_REBUILD in line for line in lines)
+
+
+def test_a_clean_stop_leaves_no_page_row_to_rebuild(rebuilds_before: int, log_path: str):
+    section("A clean stop writes back every page row, so the next startup rebuilds none")
+    check("the restart after a clean stop rebuilt no page rows", page_row_rebuilds(log_path) == rebuilds_before,
+          f"{page_row_rebuilds(log_path) - rebuilds_before} rebuilt")
+
+
+def test_page_rows_equal_live_bytes_after_a_kill_with_dirty_rows(work_dir: str):
+    section("A kill inside the page-row write-back interval leaves rows the startup rebuilds from the page files")
+    drift = occupancy_drift(recorded_pages(work_dir, DB, write_intent_kills.CONCURRENT_COLL),
+                            actual_pages(work_dir, DB, write_intent_kills.CONCURRENT_COLL))
+    check("every page row equals its page's live bytes and entries", not drift, "; ".join(drift))
+
+
 def live_records(content: bytes) -> list:
     return [line + b"\n" for line in content.split(b"\n")[:-1] if line and not line.startswith(b" ")]
 
@@ -1605,9 +1627,32 @@ def kill_while_an_index_batch_is_half_flushed(conn: Conn, work_dir: str, proc) -
                                         for i in range(DIRTY_BATCH)]}), "OK")
     check_status("the worker reached the flush point and is parked there",
                  conn.send({"type": "AWAIT_FAULT", "point": "INDEX_BATCH_FLUSHED", "timeoutMs": 30000}), "OK")
-    marked = bool(dirty_markers(work_dir))
+    unmarked = not dirty_markers(work_dir)
     proc.kill()
-    return marked and bool(dirty_markers(work_dir))
+    return unmarked and not dirty_markers(work_dir)
+
+
+def plant_an_unlogged_index_marker(work_dir: str):
+    marker = os.path.join(work_dir, "db", DB, DIRTY_COLL, f"{DIRTY_COLL}-indexes.dirty")
+    with open(marker, "w", encoding="utf-8"):
+        pass
+
+
+def test_the_parked_batch_is_indexed_after_the_restart(conn: Conn):
+    section("A batch whose index work a kill interrupted is indexed by the next startup, with no REINDEX")
+    probes = (7, 150)
+
+    def agrees() -> bool:
+        return all(sorted(conn.ids(DIRTY_COLL, [bu.filter_step("n", "EQUALS", probe)]))
+                   == sorted(conn.ids(DIRTY_COLL, [{"type": "SKIP", "skip": 0}, bu.filter_step("n", "EQUALS", probe)]))
+                   for probe in probes)
+
+    bu.wait_until(agrees, timeout_s=30, interval_s=0.5)
+    for n in probes:
+        by_index = sorted(conn.ids(DIRTY_COLL, [bu.filter_step("n", "EQUALS", n)]))
+        by_scan = sorted(conn.ids(DIRTY_COLL, [{"type": "SKIP", "skip": 0}, bu.filter_step("n", "EQUALS", n)]))
+        check(f"the index answers n={n} exactly as a scan does", by_index == by_scan and by_index,
+              f"index={by_index} scan={by_scan}")
 
 
 def wait_for_drained_markers(work_dir: str, coll: str, deadline_s: float) -> float:
@@ -1641,7 +1686,7 @@ def test_bulk_insert_with_two_indexes_converges_quickly(conn: Conn, work_dir: st
 
 
 def test_an_unclean_stop_is_reported_at_the_next_startup(log_path: str, log_offset: int):
-    section("Startup names a collection whose field-index work never drained")
+    section("Startup names a collection an unlogged index marker was left on")
 
     with open(log_path, "rb") as fp:
         fp.seek(log_offset)
@@ -1655,7 +1700,7 @@ def test_an_unclean_stop_is_reported_at_the_next_startup(log_path: str, log_offs
 def test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn: Conn, work_dir: str):
     section("REINDEX retires the index-dirty marker the startup warning told the operator to act on")
 
-    check("the marker survived the unclean stop", dirty_markers(work_dir),
+    check("the planted marker survived the restart", dirty_markers(work_dir),
           "without a marker there is nothing for REINDEX to retire and the rest of this case proves nothing")
     check_status("add a second index so a partial rebuild is possible",
                  conn.create_index("pad", coll=DIRTY_COLL), "OK")
@@ -2300,9 +2345,9 @@ def main():
             arrange_a_killed_commit_with_repeated_ids(interrupted, work_dir)
 
             print("\n  Killing the server without a drain ...")
-            check("the unclean stop left an index-dirty marker on disk",
+            check("the unclean stop left no index-dirty marker: the log names the parked batch's ids",
                   kill_while_an_index_batch_is_half_flushed(conn, work_dir, proc),
-                  "the index batch was not parked at INDEX_BATCH_FLUSHED when the kill landed")
+                  "a marker is now written only by unlogged work; a logged write's pending ids live in the log")
         proc.wait(timeout=30)
         log_offset = os.path.getsize(log_path)
         proc = None
@@ -2321,12 +2366,14 @@ def main():
         interrupt_the_drops(work_dir)
         unlist_the_collection(work_dir)
         tear_an_admin_page_tail(work_dir)
+        plant_an_unlogged_index_marker(work_dir)
         linked = link_the_collection_folder_elsewhere(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
         proc = bu.start_server(work_dir, log_path)
         test_an_unclean_stop_is_reported_at_the_next_startup(log_path, log_offset)
         with admin_conn() as conn:
+            test_the_parked_batch_is_indexed_after_the_restart(conn)
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_pk_index_rewritten_from_memory_survives_restart(conn, memory_pk_written)
             test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn, pk_order_written)
@@ -2382,12 +2429,26 @@ def main():
             write_intent_kills.test_update_churn_keeps_every_page_within_a_quarter_of_dead_space(conn, work_dir, latest,
                                                                                                 MAX_PAGE_BYTES)
             write_intent_kills.test_pk_idx_compacts_under_update_churn(work_dir, latest)
+        acknowledged = write_intent_kills.write_concurrently(admin_conn, 1)
+        rebuilds_before = page_row_rebuilds(log_path)
         bu.stop_server(proc)
         proc = None
 
         print(f"  Restarting server on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)
+        test_a_clean_stop_leaves_no_page_row_to_rebuild(rebuilds_before, log_path)
         write_intent_kills.test_page_rows_equal_live_bytes_after_a_restart(work_dir, recorded_pages)
+        with admin_conn() as conn:
+            write_intent_kills.test_every_concurrent_write_landed(conn, acknowledged)
+        acknowledged.update(write_intent_kills.write_concurrently(admin_conn, 2))
+        proc.kill()
+        proc.wait(timeout=30)
+
+        print(f"  Restarting server on {HOST}:{PORT} after a kill with page rows still unwritten ...")
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            write_intent_kills.test_every_concurrent_write_landed(conn, acknowledged)
+        test_page_rows_equal_live_bytes_after_a_kill_with_dirty_rows(work_dir)
         bu.stop_server(proc)
         proc = None
 

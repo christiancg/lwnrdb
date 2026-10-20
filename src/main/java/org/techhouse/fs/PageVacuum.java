@@ -63,10 +63,10 @@ final class PageVacuum {
     VacuumedPage vacuum(String dbName, String collName, long pageNumber, List<PkIndexEntry> pageRows)
             throws IOException {
         final var page = paths.collectionPage(dbName, collName, pageNumber);
+        wal.checkpoint(dbName, collName);
         final var bytes = Files.readAllBytes(page.toPath());
         final var lines = PageLines.recordsOf(bytes, 0L);
         requireEveryLineNamed(page, lines, pageRows);
-        wal.checkpoint(dbName, collName);
         final var intent = journal.begin(dbName, collName, List.of(new WriteIntent.Vacuum(pageNumber)));
         final var temp = paths.vacuumFile(dbName, collName, pageNumber);
         final var moves = new LinkedHashMap<String, VacuumedPage.Move>();

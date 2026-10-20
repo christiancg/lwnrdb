@@ -289,6 +289,11 @@ public final class TriggerHelper {
         return !hasNotTriggerFor(dbName, collName, EventType.DELETED, depth);
     }
 
+    public static boolean firesOnSave(String dbName, String collName, int depth) {
+        return !hasNotTriggerFor(dbName, collName, EventType.CREATED, depth)
+                || !hasNotTriggerFor(dbName, collName, EventType.UPDATED, depth);
+    }
+
     private static boolean hasNotTriggerFor(String dbName, String collName, EventType type, int depth) {
         return matchingTriggers(dbName, collName, type, depth).isEmpty();
     }

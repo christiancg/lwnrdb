@@ -3,6 +3,7 @@ package org.techhouse.fs;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -11,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -293,5 +295,148 @@ public class WalRedoTest {
 
         assertFalse(Files.readString(new File(aside, rf.fx.page(0).getName()).toPath(), StandardCharsets.UTF_8)
                 .contains("old-d"), "a quarantined collection is evidence, never replayed into");
+    }
+
+    @Test
+    public void test_a_lost_group_keeps_every_acknowledged_version() throws Exception {
+        final var wal = new WriteAheadLog(rf.fx.paths);
+        final var page = rf.fx.page(0);
+        final var pk = rf.fx.paths.pkIndexFile(DB, COLL);
+        wal.openGroup(DB, COLL);
+        rf.replace("b", "new-b", 0, PagePlacement.APPEND);
+        rf.replacer.delete(rf.fx.indexed("c"));
+        power.powerLoss(Map.of(page, page.length(), pk, pk.length()));
+
+        redo();
+
+        assertHolds(original());
+    }
+
+    @Test
+    public void test_a_group_whose_log_prefix_landed_keeps_only_that_prefix() throws Exception {
+        final var wal = new WriteAheadLog(rf.fx.paths);
+        final var page = rf.fx.page(0);
+        final var pk = rf.fx.paths.pkIndexFile(DB, COLL);
+        wal.openGroup(DB, COLL);
+        rf.replace("a", "new-a", 0, PagePlacement.APPEND);
+        final var firstRecordEnd = log().length();
+        rf.replace("b", "new-b", 0, PagePlacement.APPEND);
+        power.powerLoss(Map.of(log(), firstRecordEnd, page, page.length(), pk, pk.length()));
+
+        redo();
+
+        assertHolds(originalWith("a", "new-a"));
+    }
+
+    @Test
+    public void test_ids_a_checkpoint_logged_as_pending_are_reported_for_repair() throws Exception {
+        final var original = TestUtils.getPrivateStaticField(WriteAheadLog.class, "guard", CheckpointGuard.class);
+        WriteAheadLog.guardWith(new CheckpointGuard() {
+            @Override
+            public boolean holdsIndexWork(String dbName, String collName) {
+                return true;
+            }
+
+            @Override
+            public Collection<String> pendingIds(String dbName, String collName) {
+                return List.of("b", "gone");
+            }
+        });
+        try {
+            insert("d");
+            new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
+        } finally {
+            WriteAheadLog.guardWith(original);
+        }
+        power.powerLoss();
+
+        final var reported = redo().stream().map(PkIndexEntry::getValue).toList();
+
+        assertEquals(List.of("b", "gone"), reported, "the checkpoint dropped d's record because d was not pending");
+    }
+
+    @Test
+    public void test_a_lost_group_cuts_pk_idx_back_to_its_logged_base() throws Exception {
+        final var wal = new WriteAheadLog(rf.fx.paths);
+        final var page = rf.fx.page(0);
+        final var pk = rf.fx.paths.pkIndexFile(DB, COLL);
+        final var base = pk.length();
+        wal.openGroup(DB, COLL);
+        rf.replace("b", "new-b", 0, PagePlacement.APPEND);
+        power.powerLoss(Map.of(page, page.length(), pk, pk.length()));
+
+        redo();
+
+        assertEquals(base, pk.length(), "no durable record touched pk.idx, so the base is what bounds it");
+        assertHolds(original());
+    }
+
+    @Test
+    public void test_a_longer_rebuilt_pk_idx_is_kept_when_no_group_ran() throws Exception {
+        final var rebuilt = writeALongerPkIndex();
+        power.powerLoss();
+
+        redo();
+
+        assertEquals(rebuilt, Files.readString(rf.fx.paths.pkIndexFile(DB, COLL).toPath(), StandardCharsets.UTF_8),
+                "without a group base only a durable record that touched pk.idx can cut it");
+    }
+
+    @Test
+    public void test_a_rebuild_after_a_group_interval_is_kept() throws Exception {
+        final var wal = new WriteAheadLog(rf.fx.paths);
+        wal.openGroup(DB, COLL);
+        rf.replace("b", "new-b", 0, PagePlacement.APPEND);
+        wal.closeGroup(DB, COLL);
+        wal.checkpoint(DB, COLL);
+        final var rebuilt = writeALongerPkIndex();
+        power.powerLoss();
+
+        redo();
+
+        assertEquals(rebuilt, Files.readString(rf.fx.paths.pkIndexFile(DB, COLL).toPath(), StandardCharsets.UTF_8),
+                "the rebuild's leading checkpoint dropped the base, so the longer file survives");
+    }
+
+    private String writeALongerPkIndex() throws IOException {
+        final var pk = rf.fx.paths.pkIndexFile(DB, COLL);
+        final var rebuilt = Files.readString(pk.toPath(), StandardCharsets.UTF_8) + "a\u001f0\u001f0\u001f0\u001f1\n";
+        Files.writeString(pk.toPath(), rebuilt, StandardCharsets.UTF_8);
+        power.force(null, pk.toPath());
+        return rebuilt;
+    }
+
+    private File appendIndexLineOfD() throws IOException {
+        final var folder = rf.fx.paths.collectionFolder(DB, COLL);
+        final var idxlog = new File(folder, COLL + "-v-String.idxlog");
+        FieldIndexLog.append(new File(folder, COLL + "-v-String.idx"), idxlog,
+                List.of(new IndexLogChange("old-d", List.of("d"), List.of())));
+        return idxlog;
+    }
+
+    @Test
+    public void test_an_index_line_lost_with_its_record_is_named_for_repair() throws Exception {
+        insert("d");
+        final var idxlog = appendIndexLineOfD();
+        power.powerLoss();
+        assertFalse(idxlog.exists() && Files.readString(idxlog.toPath(), StandardCharsets.UTF_8).contains("d"),
+                "the power loss took the unforced index line");
+
+        final var written = redo();
+
+        assertEquals(List.of("d"), written.stream().map(PkIndexEntry::getValue).toList(),
+                "the replay names the id, so startup re-queues its index work");
+    }
+
+    @Test
+    public void test_a_checkpoint_makes_the_index_lines_it_drops_the_records_of_durable() throws Exception {
+        insert("d");
+        final var idxlog = appendIndexLineOfD();
+        new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
+        power.powerLoss();
+
+        assertEquals(List.of(), redo());
+
+        assertTrue(Files.readString(idxlog.toPath(), StandardCharsets.UTF_8).contains("d"));
     }
 }

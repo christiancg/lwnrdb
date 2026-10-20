@@ -2,9 +2,12 @@ package org.techhouse.bckg_ops;
 
 import java.util.ArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.PageRowWriteBack;
 
 public class BackgroundProcessorThread implements Runnable {
     private static final int MAX_BATCH = 256;
@@ -41,12 +44,16 @@ public class BackgroundProcessorThread implements Runnable {
             final Event first;
             parked.incrementAndGet();
             try {
-                first = queue.take();
+                first = queue.poll(Globals.PAGE_ROWS_WRITE_BACK_MS, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             } finally {
                 parked.decrementAndGet();
+            }
+            if (first == null) {
+                flushPageRows();
+                continue;
             }
             batch.clear();
             batch.add(first);
@@ -70,6 +77,15 @@ public class BackgroundProcessorThread implements Runnable {
                 inFlight.addAndGet(requeued - batch.size());
                 idleSignal.signal();
             }
+            flushPageRows();
+        }
+    }
+
+    private void flushPageRows() {
+        try {
+            PageRowWriteBack.flushDue(System.currentTimeMillis());
+        } catch (Exception | Error e) {
+            logger.error("Error while writing back page-occupancy rows: ", e);
         }
     }
 }

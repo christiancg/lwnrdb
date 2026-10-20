@@ -25,8 +25,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ShutdownCoordinator;
+import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
+import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.config.Configuration;
@@ -34,12 +37,16 @@ import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.data.DbEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -367,6 +374,23 @@ public class ShutdownCoordinatorTest {
         } finally {
             TransactionOperationHelper.cleanupOnDisconnect(clientId);
             clientTracker.removeById(clientId);
+        }
+    }
+
+    @Test
+    public void test_shutdown_writes_back_the_dirty_page_rows() throws Exception {
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, document("rowed"));
+        entry.setPage(9);
+        EventProcessorHelper.processEvent(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry,
+                CollectionIncarnation.current(TestGlobals.DB, TestGlobals.COLL)));
+        final var pagesCollection = AdminPageEntry.pagesCollectionName(TestGlobals.DB, TestGlobals.COLL);
+        final var row = AdminPageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, 9);
+        final var fs = IocContainer.get(FileSystem.class);
+
+        coordinator().shutdown(null, null);
+
+        try (var rows = fs.streamEntries(Globals.ADMIN_PAGES_DB_NAME, pagesCollection)) {
+            assertTrue(rows.anyMatch(stored -> stored.get_id().equals(row)), "the row the drain left dirty is on disk");
         }
     }
 }

@@ -406,6 +406,14 @@ public class FileSystem {
         writeAheadLog.checkpointAll();
     }
 
+    public void openWriteGroup(String dbName, String collName) throws IOException {
+        writeAheadLog.openGroup(dbName, collName);
+    }
+
+    public boolean settleWriteGroup(String dbName, String collName) throws IOException {
+        return writeAheadLog.closeGroup(dbName, collName);
+    }
+
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
         writeAheadLog.checkpoint(dbName, collName);
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {

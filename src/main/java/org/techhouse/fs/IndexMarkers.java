@@ -77,7 +77,24 @@ public final class IndexMarkers {
     }
 
     public void clearDirty(String dbName, String collName) {
-        delete(dirtyFile(dbName, collName), dbName + "|" + collName);
+        final var marker = dirtyFile(dbName, collName);
+        if (marker.exists() && !indexLogsForced(dbName, collName)) {
+            return;
+        }
+        delete(marker, dbName + "|" + collName);
+    }
+
+    private boolean indexLogsForced(String dbName, String collName) {
+        final var group = new ForceGroup();
+        FieldIndexLog.forceUnforced(paths.collectionFolder(dbName, collName), group);
+        try {
+            group.force();
+            return true;
+        } catch (IOException e) {
+            logger.warning("Kept the index-dirty marker of " + dbName + "|" + collName + ": its field-index logs could"
+                    + " not be forced, so the next startup still repairs that work: " + e.getMessage());
+            return false;
+        }
     }
 
     public void clearUncleanStop(String dbName, String collName) {

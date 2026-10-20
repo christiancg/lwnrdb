@@ -56,14 +56,27 @@ final class WalRedo {
         final var records = decoded.records();
         replay(paths, dbName, collName, records);
         if (SyncedWrites.enabled()) {
-            cutPastLoggedEnds(paths, checkpoint, records);
+            cutPastLoggedEnds(paths, checkpoint, records, decoded.groupBase());
         }
         new WriteAheadLog(paths).track(dbName, collName);
         if (!records.isEmpty()) {
             logger.warning("Replayed " + records.size() + " logged write(s) of " + dbName
                     + Globals.COLL_IDENTIFIER_SEPARATOR + collName + " from its write-ahead log");
         }
-        return writtenIds(dbName, collName, records);
+        return withPendingIds(dbName, collName, writtenIds(dbName, collName, records), decoded.pendingIds());
+    }
+
+    private static List<PkIndexEntry> withPendingIds(String dbName, String collName, List<PkIndexEntry> written,
+            List<String> pendingIds) {
+        if (pendingIds.isEmpty()) {
+            return written;
+        }
+        final var rows = new LinkedHashMap<String, PkIndexEntry>();
+        for (final var id : pendingIds) {
+            rows.put(id, new PkIndexEntry(dbName, collName, id, 0L, 0L, 0L, 0L));
+        }
+        written.forEach(row -> rows.put(row.getValue(), row));
+        return List.copyOf(rows.values());
     }
 
     static void replay(FilePaths paths, String dbName, String collName, List<WalRecord> records) throws IOException {
@@ -98,8 +111,8 @@ final class WalRedo {
         }
     }
 
-    private static void cutPastLoggedEnds(FilePaths paths, WalCheckpoint checkpoint, List<WalRecord> records)
-            throws IOException {
+    private static void cutPastLoggedEnds(FilePaths paths, WalCheckpoint checkpoint, List<WalRecord> records,
+            long groupBase) throws IOException {
         final var dbName = checkpoint.dbName();
         final var collName = checkpoint.collName();
         final var loggedEnds = new HashMap<Long, Long>();
@@ -114,10 +127,11 @@ final class WalRedo {
                     loggedEnds.getOrDefault(page.getKey(), 0L));
             cutTo(paths.collectionPage(dbName, collName, page.getKey()), page.getValue(), keep);
         }
+        final var pkIndex = paths.pkIndexFile(dbName, collName);
         final var pkEnd = loggedEnds.get(NO_PAGE);
-        if (pkEnd != null) {
-            final var pkIndex = paths.pkIndexFile(dbName, collName);
-            cutTo(pkIndex, pkIndex.length(), Math.max(checkpoint.pkIndexLength(), pkEnd));
+        if (pkIndex.exists() && (pkEnd != null || groupBase != WalCodec.NO_GROUP_BASE)) {
+            final var logged = Math.max(groupBase, pkEnd == null ? 0L : pkEnd);
+            cutTo(pkIndex, pkIndex.length(), Math.max(checkpoint.pkIndexLength(), logged));
         }
     }
 

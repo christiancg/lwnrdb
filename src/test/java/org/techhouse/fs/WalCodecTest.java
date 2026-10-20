@@ -127,4 +127,42 @@ public class WalCodecTest {
 
         assertNull(decoded.checkpoint());
     }
+
+    @Test
+    public void test_a_group_base_round_trips_without_counting_as_a_record() {
+        final var bytes = log(WalCodec.encode(checkpoint()), WalCodec.encodeGroupBase(2L, 4321L));
+
+        final var decoded = WalCodec.decodeAll(bytes);
+
+        assertEquals(4321L, decoded.groupBase());
+        assertEquals(0, decoded.framesSinceCheckpoint());
+        assertEquals(List.of(), decoded.records());
+        assertEquals(2L, decoded.lastSeq());
+        assertEquals(bytes.length, decoded.cleanLength());
+    }
+
+    @Test
+    public void test_a_later_checkpoint_clears_the_group_base_and_a_record_keeps_it() {
+        final var kept = WalCodec.decodeAll(
+                log(WalCodec.encode(checkpoint()), WalCodec.encodeGroupBase(2L, 77L), WalCodec.encode(record(3L))));
+        final var cleared = WalCodec.decodeAll(log(WalCodec.encode(checkpoint()), WalCodec.encodeGroupBase(2L, 77L),
+                WalCodec.encode(new WalCheckpoint(4L, "walDb", "walColl", 42L, new TreeMap<>()))));
+
+        assertEquals(77L, kept.groupBase());
+        assertEquals(1, kept.records().size());
+        assertEquals(WalCodec.NO_GROUP_BASE, cleared.groupBase());
+    }
+
+    @Test
+    public void test_pending_ids_round_trip_and_a_later_checkpoint_clears_them() {
+        final var kept = WalCodec.decodeAll(log(WalCodec.encode(checkpoint()),
+                WalCodec.encodePending(2L, List.of("a", "ü-id")), WalCodec.encode(record(3L))));
+        final var cleared = WalCodec
+                .decodeAll(log(WalCodec.encode(checkpoint()), WalCodec.encodePending(2L, List.of("a")),
+                        WalCodec.encode(new WalCheckpoint(4L, "walDb", "walColl", 42L, new TreeMap<>()))));
+
+        assertEquals(List.of("a", "ü-id"), kept.pendingIds());
+        assertEquals(1, kept.framesSinceCheckpoint(), "pending ids are not a record");
+        assertEquals(List.of(), cleared.pendingIds());
+    }
 }

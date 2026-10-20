@@ -60,6 +60,7 @@ public final class FolderQuarantine {
         }
         WriteIntentJournal.forgetUnder(folder);
         WriteAheadLog.forgetUnder(folder);
+        FieldIndexLog.forgetUnder(folder);
         SyncedWrites.entriesOfLanded(target.getAbsoluteFile().getParentFile().toPath(),
                 "Moving " + folder.getName() + " aside");
         return true;

@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.zip.CRC32;
@@ -15,12 +16,15 @@ final class WalCodec {
     private static final byte CHECKPOINT = 'C';
     private static final byte WRITE = 'R';
     private static final byte ABORT = 'A';
+    private static final byte GROUP_BASE = 'G';
+    private static final byte PENDING = 'I';
+    static final long NO_GROUP_BASE = -1L;
     static final int HEADER_BYTES = 1 + 1 + Long.BYTES + Integer.BYTES + Integer.BYTES;
     private static final int CHANGE_HEADER_BYTES = 1 + Long.BYTES + Long.BYTES + Long.BYTES;
     private static final int RECORD_BYTES_HINT = 256;
 
     record Decoded(WalCheckpoint checkpoint, List<WalRecord> records, int framesSinceCheckpoint, long lastSeq,
-            long cleanLength) {
+            long cleanLength, long groupBase, List<String> pendingIds) {
     }
 
     static final class RecordBuffer extends OutputStream {
@@ -123,6 +127,23 @@ final class WalCodec {
         return frame(ABORT, seq, ByteBuffer.allocate(Long.BYTES).putLong(abortedSeq).array());
     }
 
+    static byte[] encodePending(long seq, Collection<String> ids) {
+        final var encoded = new ArrayList<byte[]>(ids.size());
+        var size = Integer.BYTES;
+        for (final var id : ids) {
+            final var bytes = id.getBytes(StandardCharsets.UTF_8);
+            encoded.add(bytes);
+            size += Integer.BYTES + bytes.length;
+        }
+        final var payload = ByteBuffer.allocate(size).putInt(encoded.size());
+        encoded.forEach(bytes -> payload.putInt(bytes.length).put(bytes));
+        return frame(PENDING, seq, payload.array());
+    }
+
+    static byte[] encodeGroupBase(long seq, long pkIndexLength) {
+        return frame(GROUP_BASE, seq, ByteBuffer.allocate(Long.BYTES).putLong(pkIndexLength).array());
+    }
+
     private static byte[] frame(byte kind, long seq, byte[] payload) {
         return ByteBuffer.allocate(HEADER_BYTES + payload.length).put(header(kind, seq, payload, payload.length))
                 .put(payload).array();
@@ -148,6 +169,8 @@ final class WalCodec {
         var framesSinceCheckpoint = 0;
         var lastSeq = 0L;
         var cleanLength = 0L;
+        var groupBase = NO_GROUP_BASE;
+        List<String> pendingIds = List.of();
         while (buffer.remaining() >= HEADER_BYTES) {
             final var start = buffer.position();
             final var magic = buffer.get();
@@ -163,28 +186,48 @@ final class WalCodec {
             if (crcOf(kind, seq, payload, length) != crc) {
                 break;
             }
+            final boolean recognised;
             try {
-                if (kind == CHECKPOINT) {
-                    checkpoint = decodeCheckpoint(seq, payload);
-                    records.clear();
-                    framesSinceCheckpoint = -1;
-                } else if (kind == WRITE) {
-                    records.add(decodeRecord(seq, payload));
-                } else if (kind == ABORT) {
-                    final var aborted = ByteBuffer.wrap(payload).getLong();
-                    records.removeIf(record -> record.seq() == aborted);
-                } else {
-                    break;
-                }
+                recognised = switch (kind) {
+                    case CHECKPOINT -> {
+                        checkpoint = decodeCheckpoint(seq, payload);
+                        records.clear();
+                        framesSinceCheckpoint = -1;
+                        groupBase = NO_GROUP_BASE;
+                        pendingIds = List.of();
+                        yield true;
+                    }
+                    case WRITE -> records.add(decodeRecord(seq, payload));
+                    case ABORT -> {
+                        final var aborted = ByteBuffer.wrap(payload).getLong();
+                        records.removeIf(record -> record.seq() == aborted);
+                        yield true;
+                    }
+                    case PENDING -> {
+                        pendingIds = decodePending(payload);
+                        yield true;
+                    }
+                    case GROUP_BASE -> {
+                        groupBase = ByteBuffer.wrap(payload).getLong();
+                        yield true;
+                    }
+                    default -> false;
+                };
             } catch (BufferUnderflowException | IllegalArgumentException | ArithmeticException e) {
                 buffer.position(start);
                 break;
             }
-            framesSinceCheckpoint++;
+            if (!recognised) {
+                break;
+            }
+            if (kind != GROUP_BASE && kind != PENDING) {
+                framesSinceCheckpoint++;
+            }
             lastSeq = Math.max(lastSeq, seq);
             cleanLength = buffer.position();
         }
-        return new Decoded(checkpoint, List.copyOf(records), framesSinceCheckpoint, lastSeq, cleanLength);
+        return new Decoded(checkpoint, List.copyOf(records), framesSinceCheckpoint, lastSeq, cleanLength, groupBase,
+                pendingIds);
     }
 
     private static WalCheckpoint decodeCheckpoint(long seq, byte[] payload) {
@@ -201,6 +244,19 @@ final class WalCodec {
             lengths.put(buffer.getLong(), buffer.getLong());
         }
         return new WalCheckpoint(seq, db, coll, pkLength, lengths);
+    }
+
+    private static List<String> decodePending(byte[] payload) {
+        final var buffer = ByteBuffer.wrap(payload);
+        final var count = buffer.getInt();
+        if (count < 0) {
+            throw new IllegalArgumentException("negative pending id count");
+        }
+        final var ids = new ArrayList<String>(Math.min(count, payload.length));
+        for (var index = 0; index < count; index++) {
+            ids.add(readString(buffer));
+        }
+        return List.copyOf(ids);
     }
 
     private static String readString(ByteBuffer buffer) {

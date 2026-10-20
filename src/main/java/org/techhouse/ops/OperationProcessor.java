@@ -353,24 +353,26 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
-            final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName, collName);
-            if (ownershipError != null) {
-                return ownershipError;
-            }
-            final var schemaError = SchemaValidationHelper.check(saveRequest);
-            if (schemaError != null) {
-                return schemaError;
-            }
-            final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
-            if (hookError != null) {
-                return hookError;
-            }
-            final var local = TriggerHelper.runStaged(TriggerHelper.stageSave(saveRequest, actingUser), dbName,
-                    collName, actingUser, saveRequest.getTriggerDepth(),
-                    () -> SaveOperationHelper.executeSave(saveRequest));
-            return ClusterWriteHelper.afterSave(dbName, collName, local);
-        });
+        return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING,
+                GroupCommit.forSave(saveRequest), () -> {
+                    final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return ownershipError;
+                    }
+                    final var schemaError = SchemaValidationHelper.check(saveRequest);
+                    if (schemaError != null) {
+                        return schemaError;
+                    }
+                    final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
+                    if (hookError != null) {
+                        return hookError;
+                    }
+                    final var local = TriggerHelper.runStaged(TriggerHelper.stageSave(saveRequest, actingUser), dbName,
+                            collName, actingUser, saveRequest.getTriggerDepth(),
+                            () -> SaveOperationHelper.executeSave(saveRequest));
+                    return ClusterWriteHelper.afterSave(dbName, collName, local);
+                });
     }
 
     private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction,
@@ -384,8 +386,8 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
-                () -> {
+        return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.DELETE,
+                ErrorCode.ERROR_DELETING, GroupCommit.forDelete(deleteRequest), () -> {
                     final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.DELETE, dbName,
                             collName);
                     if (ownershipError != null) {

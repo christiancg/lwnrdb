@@ -108,7 +108,11 @@ final class WalPlan {
             try {
                 final var seq = wal.append(dbName, collName, record, pages.keySet());
                 fire(afterLog);
-                applyOrAbort(seq, record, pk, pkSlice);
+                final var group = wal.openGroupOf(dbName, collName);
+                if (group != null) {
+                    rememberLengths(group, pk);
+                }
+                applyOrAbort(seq, record, pk, pkSlice, group);
                 fire(afterApply);
             } finally {
                 walLock.unlock();
@@ -186,8 +190,27 @@ final class WalPlan {
         return new PkSlice(start, length);
     }
 
-    private void applyOrAbort(long seq, WalCodec.RecordBuffer record, PkIndexStore.PkAppend pk, PkSlice pkSlice)
-            throws IOException {
+    private void rememberLengths(WalWriteGroup group, PkIndexStore.PkAppend pk) {
+        for (final var changes : pages.values()) {
+            if (changes.appends()) {
+                group.rememberLength(changes.file, changes.lengthBefore);
+            }
+        }
+        if (pk != null) {
+            group.rememberLength(pk.file(), pk.offset());
+        }
+    }
+
+    private void deferBlanks(WalWriteGroup group) {
+        for (final var changes : pages.values()) {
+            if (!changes.blanks.isEmpty()) {
+                group.deferBlanks(changes.file, changes.blanks);
+            }
+        }
+    }
+
+    private void applyOrAbort(long seq, WalCodec.RecordBuffer record, PkIndexStore.PkAppend pk, PkSlice pkSlice,
+            WalWriteGroup group) throws IOException {
         try {
             for (final var changes : pages.values()) {
                 if (changes.appends()) {
@@ -204,7 +227,11 @@ final class WalPlan {
             abort(seq, pk, e);
             throw e;
         }
-        applyBlanks();
+        if (group != null) {
+            deferBlanks(group);
+        } else {
+            applyBlanks();
+        }
     }
 
     private void abort(long seq, PkIndexStore.PkAppend pk, IOException failure) {

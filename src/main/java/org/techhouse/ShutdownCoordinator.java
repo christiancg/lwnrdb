@@ -20,6 +20,7 @@ import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.admin.PageRowWriteBack;
 
 /**
  * The step order is the contract: refuse new work before draining so the queues can reach empty, release open
@@ -78,6 +79,7 @@ public class ShutdownCoordinator {
         // After the triggers and before the background queue: a scheduled run enqueues into both.
         step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));
         step("drain background tasks", () -> backgroundTaskManager.drain(remaining(deadline)));
+        step("flush page rows", PageRowWriteBack::flushAll);
         step("stop listen workers", listenManager::stopWorkers);
         step("checkpoint every write-ahead log", fileSystem::checkpointWriteAheadLogs);
         step("leave the cluster", () -> {

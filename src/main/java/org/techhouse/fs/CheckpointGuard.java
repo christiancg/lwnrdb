@@ -1,6 +1,7 @@
 package org.techhouse.fs;
 
-import java.io.IOException;
+import java.util.Collection;
+import java.util.List;
 
 public interface CheckpointGuard {
     CheckpointGuard NO_INDEX_WORK = new CheckpointGuard() {
@@ -10,11 +11,12 @@ public interface CheckpointGuard {
         }
 
         @Override
-        public void persistIndexWork(String dbName, String collName) {
+        public Collection<String> pendingIds(String dbName, String collName) {
+            return List.of();
         }
     };
 
     boolean holdsIndexWork(String dbName, String collName);
 
-    void persistIndexWork(String dbName, String collName) throws IOException;
+    Collection<String> pendingIds(String dbName, String collName);
 }

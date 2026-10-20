@@ -106,5 +106,6 @@ public final class Globals {
     public static final int CLUSTER_MAX_UNAUTHENTICATED_PER_ADDRESS = 8;
     public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
     public static final long HANDSHAKE_DEADLINE_GRACE_MS = 1000L;
+    public static final long PAGE_ROWS_WRITE_BACK_MS = 1000L;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
 }

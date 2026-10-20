@@ -2008,12 +2008,26 @@ did not reach the disk. A write whose
 record is logged but whose files cannot be written is taken back and marked aborted in the log; when even that fails,
 it is applied before the next write to the collection, or by the next startup. A write does not write the
 collection's index-dirty marker either: its log record is what tells startup that its field-index work may be
-unfinished, so startup re-queues that work for every id the replayed log wrote. Only a checkpoint that drops records
-while index work is still pending writes the marker, and shutdown leaves such a collection's log in place for the
-next startup to replay instead. Clearing an index marker is not forced, because a power loss that undoes it leaves a
-journal behind that startup already settles. A
-force costs what the disk makes it cost, and the per-collection write lock is held across them, so it bounds the
-write rate of one collection. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
+unfinished, so startup re-queues that work for every id the replayed log wrote. A checkpoint that drops records whose
+index work is still pending writes those ids into the new log, so startup re-queues them too, and shutdown leaves a
+collection with pending work's log in place for the next startup to replay. Clearing an index marker is not forced, because a power loss that undoes it leaves a
+journal behind that startup already settles. A field index's `.idxlog` appends are not forced either: the log record
+of the write still covers that work, so a checkpoint forces the `.idxlog` files it touched together with the pages and
+`pk.idx` before it drops records, and clearing an index marker forces them before the marker goes. The page-occupancy
+rows of a user collection are kept in memory and written back within a second (and at shutdown); startup rebuilds them
+from the page files anyway, so a crash costs nothing there.
+
+Concurrent single-document `SAVE`s and `DELETE`s on one collection share one force (group commit): each writer queues
+its write and takes the collection lock; the first one in runs every queued write, appends their records without
+forcing, forces the log once, and answers them all, so the others find their answer ready. A write's page appends
+and `pk.idx` rows are written before that force, but the blanks of the copies it supersedes wait for it, because a
+blank cannot be undone; startup cuts every page and `pk.idx` back to their logged ends, so an append whose record never
+reached the disk leaves nothing. When the force fails, every write of the group is taken back and answered with its
+error. Writes inside a transaction, on a collection with triggers or before-hooks, nested in a trigger, with
+`syncWrites=false` or with clustering on take the one-force-per-write path. A dirty read (`"dirtyRead":true`) can see a
+grouped write before its force. A force costs what the disk makes it cost, and the per-collection write lock is held
+across it, so it bounds the write rate of one collection: with 8 clients the Docker bench measured 3-4k synced inserts
+and updates and 5-7k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
 Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed
 there; the Docker image on Linux is the production target). Different collections write in parallel. Logs and the generated TLS keystore are not forced.
 

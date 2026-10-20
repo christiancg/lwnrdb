@@ -1,6 +1,7 @@
 package org.techhouse.bckg_ops;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +33,8 @@ public class PendingIndexWrites {
         }
 
         @Override
-        public void persistIndexWork(String dbName, String collName) throws IOException {
-            IocContainer.get(PendingIndexWrites.class).persistIndexWork(dbName, collName);
+        public Collection<String> pendingIds(String dbName, String collName) {
+            return IocContainer.get(PendingIndexWrites.class).idsFor(dbName, collName);
         }
     }
 
@@ -71,18 +72,6 @@ public class PendingIndexWrites {
     public boolean holdsIndexWork(String dbName, String collName) {
         final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
         return byId != null && !byId.isEmpty();
-    }
-
-    public void persistIndexWork(String dbName, String collName) throws IOException {
-        final var markerLock = markerLockFor(Cache.getCollectionIdentifier(dbName, collName));
-        markerLock.lock();
-        try {
-            if (holdsIndexWork(dbName, collName)) {
-                fs.indexMarkers().markDirty(dbName, collName);
-            }
-        } finally {
-            markerLock.unlock();
-        }
     }
 
     private long mark(String dbName, String collName, Iterable<String> ids, boolean unlogged) {

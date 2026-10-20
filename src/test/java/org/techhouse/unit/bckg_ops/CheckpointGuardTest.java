@@ -4,11 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.RecordingForcer;
@@ -59,19 +62,26 @@ public class CheckpointGuardTest {
         TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", 1L);
     }
 
+    private Set<String> idsTheReplayReports() throws Exception {
+        return fs.redoWriteAheadLogs().stream().filter(
+                row -> TestGlobals.DB.equals(row.getDatabaseName()) && TestGlobals.COLL.equals(row.getCollectionName()))
+                .map(PkIndexEntry::getValue).collect(Collectors.toSet());
+    }
+
     @Test
-    public void test_a_checkpoint_with_pending_ids_forces_the_marker_before_it_rewrites_the_log() throws Exception {
+    public void test_a_checkpoint_with_pending_ids_logs_them_instead_of_writing_a_marker() throws Exception {
         checkpointEveryWrite();
 
         save("pending");
 
-        final var forced = recorder.forcedNames();
-        assertTrue(forced.contains(DIRTY_MARKER), forced.toString());
-        assertTrue(forced.indexOf(DIRTY_MARKER) < forced.lastIndexOf(LOG_REWRITE), forced.toString());
+        assertFalse(recorder.forcedNames().contains(DIRTY_MARKER), recorder.forcedNames().toString());
+        assertTrue(recorder.forcedNames().contains(LOG_REWRITE), recorder.forcedNames().toString());
+        assertEquals(Set.of("pending"), idsTheReplayReports(),
+                "the checkpoint dropped the record, so its log must still name the id for startup to repair");
     }
 
     @Test
-    public void test_a_checkpoint_with_nothing_pending_writes_no_marker() {
+    public void test_a_checkpoint_with_nothing_pending_writes_no_marker() throws Exception {
         save("indexed");
         pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
         recorder.clear();
@@ -80,19 +90,28 @@ public class CheckpointGuardTest {
 
         assertTrue(recorder.forcedNames().contains(LOG_REWRITE), recorder.forcedNames().toString());
         assertFalse(recorder.forcedNames().contains(DIRTY_MARKER), recorder.forcedNames().toString());
+        assertEquals(Set.of(), idsTheReplayReports());
     }
 
     @Test
-    public void test_a_checkpoint_whose_marker_cannot_be_forced_keeps_the_log() throws Exception {
-        save("first");
+    public void test_an_id_still_pending_is_carried_into_every_later_checkpoint() throws Exception {
         checkpointEveryWrite();
-        recorder.failingFor("-indexes.dirty");
-        recorder.clear();
+        save("first");
 
-        save("pending");
+        save("second");
 
-        assertFalse(recorder.forcedNames().contains(LOG_REWRITE),
-                "a checkpoint that could not persist the pending work must not drop the records covering it");
+        assertEquals(Set.of("first", "second"), idsTheReplayReports());
+    }
+
+    @Test
+    public void test_an_id_whose_index_work_finished_leaves_the_next_checkpoint() throws Exception {
+        checkpointEveryWrite();
+        save("drained");
+        pendingIndexWrites.clear(TestGlobals.DB, TestGlobals.COLL, "drained", Long.MAX_VALUE);
+
+        save("later");
+
+        assertEquals(Set.of("later"), idsTheReplayReports());
     }
 
     @Test
@@ -107,24 +126,13 @@ public class CheckpointGuardTest {
     }
 
     @Test
-    public void test_the_drain_deletes_a_marker_a_checkpoint_wrote() throws Exception {
-        checkpointEveryWrite();
-        save("pending");
-        assertTrue(TestUtils.dirtyIndexCollections().contains(TestGlobals.DB + "|" + TestGlobals.COLL));
-
-        pendingIndexWrites.clear(TestGlobals.DB, TestGlobals.COLL, "pending", Long.MAX_VALUE);
-
-        assertFalse(TestUtils.dirtyIndexCollections().contains(TestGlobals.DB + "|" + TestGlobals.COLL));
-    }
-
-    @Test
     public void test_a_second_instance_does_not_take_over_the_guard() throws Exception {
         assertTrue(new PendingIndexWrites().idsFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
         checkpointEveryWrite();
 
         save("pending");
 
-        assertTrue(recorder.forcedNames().contains(DIRTY_MARKER),
+        assertEquals(Set.of("pending"), idsTheReplayReports(),
                 "the checkpoint must ask the published singleton, which holds the pending id, not the latest instance");
     }
 }

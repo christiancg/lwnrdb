@@ -12,6 +12,8 @@ public enum FaultPoint {
     PAGE_VACUUM_RENAMED(false),
     WAL_APPENDED(false),
     WAL_CHECKPOINT_FORCED(false),
+    WAL_GROUP_APPENDED(false),
+    WAL_GROUP_FORCED(false),
     PEER_REPLY(true);
     // @formatter:on
 
