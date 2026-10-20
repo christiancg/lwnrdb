@@ -4,7 +4,6 @@ import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +33,7 @@ final class PageAppender {
         final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
         final var lengthsBeforeAppend = new LinkedHashMap<File, Long>();
         final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
+        final var forceGroup = new ForceGroup();
         try {
             for (var groupedEntry : entrySet) {
                 final var page = groupedEntry.getKey();
@@ -45,10 +45,12 @@ final class PageAppender {
                     lengthsBeforeAppend.putIfAbsent(file, file.length());
                     appendGroup(dbName, collName, page, file, groupedEntry.getValue(), encodedLines, pkEntriesToIndex,
                             indexEntries);
+                    forceGroup.add(file.toPath());
                 } finally {
                     lock.unlock();
                 }
             }
+            forceGroup.force();
             pkIndexStore.appendRows(dbName, collName, pkEntriesToIndex);
         } catch (IOException e) {
             rollBackBulkAppends(lengthsBeforeAppend);
@@ -60,13 +62,15 @@ final class PageAppender {
     private static <T extends DbEntry> void appendGroup(String dbName, String collName, long page, File file,
             List<T> entries, Function<? super T, byte[]> encodedLines, List<PkIndexEntry> pkEntriesToIndex,
             List<IndexedDbEntry> indexEntries) throws IOException {
+        var lastLine = new byte[0];
         try (var out = new BufferedOutputStream(new FileOutputStream(file, true), Globals.BUFFER_SIZE)) {
-            final var separator = separatorBytes(file);
+            final var separator = PageTails.separatorBefore(file);
             var currentOffset = file.length() + separator.length;
             out.write(separator);
             for (var entry : entries) {
                 final var line = encodedLines.apply(entry);
                 out.write(line);
+                lastLine = line;
                 final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, line.length, page,
                         entry.getVersion());
                 pkEntriesToIndex.add(pkEntry);
@@ -74,6 +78,7 @@ final class PageAppender {
                 currentOffset += line.length;
             }
         }
+        PageTails.appended(file, lastLine);
     }
 
     private static long appendedBytes(List<? extends DbEntry> entries) {
@@ -115,9 +120,10 @@ final class PageAppender {
         try {
             vacuum.vacuumIfNeeded(dbName, collName, page, line.length, null, null);
             final var totalFileLength = file.length();
-            final var separator = separatorBytes(file);
+            final var separator = PageTails.separatorBefore(file);
             try {
                 appendToPage(file, separator, line);
+                PageTails.appended(file, line);
                 return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(),
                         totalFileLength + separator.length, line.length, page, entry.getVersion());
             } catch (IOException e) {
@@ -129,10 +135,6 @@ final class PageAppender {
         }
     }
 
-    private static byte[] separatorBytes(File file) throws IOException {
-        return FileLocks.separatorBeforeAppend(file).getBytes(StandardCharsets.UTF_8);
-    }
-
     private static void appendToPage(File file, byte[] separator, byte[] line) throws IOException {
         OwnerOnly.ensureOwnerOnlyFile(file.toPath());
         try (var out = new FileOutputStream(file, true)) {
@@ -140,6 +142,7 @@ final class PageAppender {
                 out.write(separator);
             }
             out.write(line);
+            SyncedWrites.content(out.getChannel(), file.toPath());
         }
     }
 }

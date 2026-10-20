@@ -2,6 +2,7 @@ package org.techhouse.unit.bckg_ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,7 +37,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_mark_then_clear_lifecycle() {
+    public void test_mark_then_clear_lifecycle() throws IOException {
         pending.mark("db", "coll", "1");
         assertEquals(Set.of("1"), pending.idsFor("db", "coll"));
         pending.clear("db", "coll", "1", 0L);
@@ -44,7 +45,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_double_mark_needs_double_clear() {
+    public void test_double_mark_needs_double_clear() throws IOException {
         pending.mark("db", "coll", "1");
         pending.mark("db", "coll", "1");
         pending.clear("db", "coll", "1", 0L);
@@ -54,7 +55,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_clear_unmarked_is_no_op() {
+    public void test_clear_unmarked_is_no_op() throws IOException {
         pending.clear("db", "coll", "ghost", 0L);
         assertTrue(pending.idsFor("db", "coll").isEmpty());
         pending.mark("db", "coll", "ghost");
@@ -64,7 +65,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_ids_for_returns_detached_snapshot() {
+    public void test_ids_for_returns_detached_snapshot() throws IOException {
         pending.mark("db", "coll", "1");
         final var snapshot = pending.idsFor("db", "coll");
         snapshot.add("2");
@@ -72,7 +73,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_bulk_mark_and_clear() {
+    public void test_bulk_mark_and_clear() throws IOException {
         pending.mark("db", "coll", List.of("1", "2", "3"));
         assertEquals(Set.of("1", "2", "3"), pending.idsFor("db", "coll"));
         pending.clear("db", "coll", List.of("1", "2"), 0L);
@@ -80,7 +81,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_pending_is_per_collection() {
+    public void test_pending_is_per_collection() throws IOException {
         pending.mark("db", "collA", "1");
         assertTrue(pending.idsFor("db", "collB").isEmpty());
         assertEquals(Set.of("1"), pending.idsFor("db", "collA"));
@@ -92,7 +93,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_mark_returns_the_current_generation() {
+    public void test_mark_returns_the_current_generation() throws IOException {
         assertEquals(0L, pending.mark("db", "coll", "1"));
         pending.clearCollection("db", "coll");
         assertEquals(1L, pending.mark("db", "coll", "2"));
@@ -101,7 +102,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_a_clear_from_an_older_generation_is_ignored() {
+    public void test_a_clear_from_an_older_generation_is_ignored() throws IOException {
         final var before = pending.mark("db", "coll", "x");
         pending.clearCollection("db", "coll");
         pending.mark("db", "coll", "x");
@@ -113,7 +114,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_a_clear_from_the_current_generation_decrements() {
+    public void test_a_clear_from_the_current_generation_decrements() throws IOException {
         pending.clearCollection("db", "coll");
         final var generation = pending.mark("db", "coll", "x");
 
@@ -123,13 +124,13 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_clear_collection_without_any_mark_still_advances_the_generation() {
+    public void test_clear_collection_without_any_mark_still_advances_the_generation() throws IOException {
         pending.clearCollection("db", "fresh");
         assertEquals(1L, pending.mark("db", "fresh", "x"));
     }
 
     @Test
-    public void test_mark_of_no_ids_returns_the_current_generation() {
+    public void test_mark_of_no_ids_returns_the_current_generation() throws IOException {
         pending.clearCollection("db", "coll");
         assertEquals(1L, pending.mark("db", "coll", List.of()));
     }
@@ -156,7 +157,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_clear_database_clears_only_that_database() {
+    public void test_clear_database_clears_only_that_database() throws IOException {
         pending.mark("db", "a", "1");
         pending.mark("db", "b", "2");
         pending.mark("dbx", "a", "3");
@@ -169,7 +170,7 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_a_clear_from_before_the_drop_is_ignored() {
+    public void test_a_clear_from_before_the_drop_is_ignored() throws IOException {
         final var oldGeneration = pending.mark("db", "coll", "1");
         pending.clearDatabase("db");
         final var newGeneration = pending.mark("db", "coll", "1");

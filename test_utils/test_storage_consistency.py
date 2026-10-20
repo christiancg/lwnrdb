@@ -58,6 +58,7 @@ REBUILD_UNREADABLE_COLL = "rebuild_unreadable_pk_docs"
 REBUILD_SWAPPED_COLL = "rebuild_swapped_offset_docs"
 REBUILD_LOST_ROW_COLL = "rebuild_lost_row_docs"
 REBUILD_DUPLICATE_COLL = "rebuild_duplicate_docs"
+REBUILD_STRAY_COLL = "rebuild_stray_copy_docs"
 REBUILD_IDS = ("alpha", "bravo", "charlie")
 UNLISTED_DB = "unlisted_db"
 UNLISTED_COLL = "unlisted_docs"
@@ -82,6 +83,8 @@ CACHE_DISABLED = "-1"
 
 HEAL_SEEDED = 1000
 RACE_SECONDS = 3.0
+RACE_MAX_SECONDS = 30.0
+RACE_MIN_WRITES = 100
 
 PERM_USER_PREFIX = "page_grow_user_"
 PERM_FILL_PREFIX = "page_fill_user_"
@@ -131,7 +134,32 @@ admin_conn = Conn.authenticated
 
 def write_config(work_dir: str, max_memory: str = "256mb", faults: bool = False):
     bu.write_config(work_dir, PORT, maxMemory=max_memory, maxPageSize=MAX_PAGE_SIZE,
-                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True, faultInjectionEnabled=faults)
+                    maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True, faultInjectionEnabled=faults, syncWrites=True)
+
+
+DURABILITY_WARNING = "DURABILITY WARNING: syncWrites=false"
+
+
+def test_the_durability_warning_follows_sync_writes():
+    section("synced-writes startup: syncWrites=false warns, syncWrites=true does not")
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-synced-")
+    log_path = os.path.join(work_dir, "server.log")
+    try:
+        for synced in (False, True):
+            offset = len(bu.read_log(log_path))
+            bu.write_config(work_dir, PORT, syncWrites=synced)
+            proc = bu.start_server(work_dir, log_path)
+            try:
+                with admin_conn() as conn:
+                    check_status(f"a write is acknowledged with syncWrites={synced}",
+                                 conn.send({"type": "CREATE_DATABASE", "databaseName": f"synced{int(synced)}"}), "OK")
+            finally:
+                bu.stop_server(proc)
+            warned = DURABILITY_WARNING in bu.read_log(log_path)[offset:]
+            check(f"the durability warning is {'absent' if synced else 'logged'} with syncWrites={synced}",
+                  warned != synced)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def page_files(work_dir: str, db=DB, coll=COLL):
@@ -579,7 +607,8 @@ def reindex_primary_key(conn: Conn, coll: str) -> dict:
 
 def seed_collections_for_primary_key_rebuilds(conn: Conn):
     section("Seed collections whose pk.idx will be unreadable, misaddressed, short a row, or face a duplicated record")
-    for coll in (REBUILD_UNREADABLE_COLL, REBUILD_SWAPPED_COLL, REBUILD_LOST_ROW_COLL, REBUILD_DUPLICATE_COLL):
+    for coll in (REBUILD_UNREADABLE_COLL, REBUILD_SWAPPED_COLL, REBUILD_LOST_ROW_COLL, REBUILD_DUPLICATE_COLL,
+                 REBUILD_STRAY_COLL):
         check_status(f"create {coll}", conn.create_coll(coll), "OK")
         check_status(f"index pad on {coll}", conn.create_index("pad", coll=coll), "OK")
         for doc_id in REBUILD_IDS:
@@ -596,11 +625,27 @@ def damage_the_pk_indexes_to_rebuild(work_dir: str):
     bu.write_pk_rows(swapped_path, rows)
     lost_row_path = pk_index_file(work_dir, DB, REBUILD_LOST_ROW_COLL)
     bu.write_pk_rows(lost_row_path, [row for row in bu.read_pk_rows(lost_row_path) if row[0] != "bravo"])
-    page = os.path.join(work_dir, "db", DB, REBUILD_DUPLICATE_COLL, page_files(work_dir, DB, REBUILD_DUPLICATE_COLL)[0])
+    append_a_copy_of_the_first_record(work_dir, REBUILD_DUPLICATE_COLL, b'{"_id":"delta","pad":"delta"}\n')
+    append_a_copy_of_the_first_record(work_dir, REBUILD_STRAY_COLL)
+
+
+def append_a_copy_of_the_first_record(work_dir: str, coll: str, after: bytes = b""):
+    page = os.path.join(work_dir, "db", DB, coll, page_files(work_dir, DB, coll)[0])
     with open(page, "rb") as fp:
         first_record = fp.read().split(b"\n")[0] + b"\n"
     with open(page, "ab") as fp:
-        fp.write(first_record)
+        fp.write(first_record + after)
+
+
+def test_a_stray_copy_of_a_held_id_is_cut_at_startup(conn: Conn, work_dir: str):
+    section("A copy of an indexed id past the page's last indexed record is cut at startup")
+    page = os.path.join(work_dir, "db", DB, REBUILD_STRAY_COLL, page_files(work_dir, DB, REBUILD_STRAY_COLL)[0])
+    with open(page, "rb") as fp:
+        records = [line for line in fp.read().split(b"\n") if line.startswith(b"{")]
+    check("the stray copy is gone from the page", len(records) == len(REBUILD_IDS), f"records={records}")
+    scanned = sorted(doc["_id"] for doc in conn.aggregate(REBUILD_STRAY_COLL, []).get("results") or [])
+    check("a scan returns every id once", scanned == sorted(REBUILD_IDS), f"ids={scanned}")
+    check_status("the indexed version still reads", conn.find("alpha", coll=REBUILD_STRAY_COLL), "OK")
 
 
 def pad_of(response: dict):
@@ -741,8 +786,7 @@ def leftover_rows_folder(work_dir: str) -> str:
 
 def page_rows_mid_compaction(work_dir: str, coll: str) -> bool:
     folder = os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{coll}")
-    return os.path.isdir(folder) and any(name.endswith((".intent", ".vacuum"))
-                                         for name in os.listdir(folder))
+    return os.path.isdir(folder) and any(name.endswith(".vacuum") for name in os.listdir(folder))
 
 
 def wait_for_settled_page_rows(work_dir: str, coll: str, timeout_s=15.0):
@@ -777,7 +821,7 @@ def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
     copy = os.path.join(work_dir, LEFTOVER_ROWS_COPY)
     shutil.rmtree(copy, ignore_errors=True)
     shutil.copytree(leftover_rows_folder(work_dir), copy,
-                    ignore=shutil.ignore_patterns("*.intent", "*.vacuum"))
+                    ignore=shutil.ignore_patterns("*.intents", "*.vacuum"))
     check_status("drop it", conn.send({"type": "DROP_COLLECTION", "databaseName": DB,
                                        "collectionName": LEFTOVER_ROWS_COLL}), "OK")
 
@@ -1732,16 +1776,20 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
     threads = [threading.Thread(target=reader, daemon=True) for _ in range(2)]
     threads += [threading.Thread(target=writer, args=(n,), daemon=True) for n in range(3)]
     threads.append(threading.Thread(target=corrupter, daemon=True))
+    started = time.monotonic()
     for thread in threads:
         thread.start()
     time.sleep(RACE_SECONDS)
+    while len(committed) <= RACE_MIN_WRITES and time.monotonic() - started < RACE_MAX_SECONDS:
+        time.sleep(0.2)
+    raced_for = time.monotonic() - started
     stop.set()
     for thread in threads:
         thread.join(timeout=60)
 
     check("every racing client finished cleanly", not errors, "; ".join(errors))
-    check("the race committed enough writes to be worth asserting on", len(committed) > 100,
-          f"only {len(committed)} writes committed in {RACE_SECONDS}s")
+    check("the race committed enough writes to be worth asserting on", len(committed) > RACE_MIN_WRITES,
+          f"only {len(committed)} writes committed in {raced_for:.1f}s")
 
     with open(log_path, "rb") as fp:
         fp.seek(log_offset)
@@ -2182,6 +2230,7 @@ def main():
 
     proc = None
     try:
+        test_the_durability_warning_follows_sync_writes()
         write_config(work_dir, faults=True)
         print(f"  Starting server on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)
@@ -2278,6 +2327,7 @@ def main():
             test_reindex_primary_key_repairs_swapped_offsets(conn)
             test_reindex_primary_key_restores_a_record_pk_idx_lost(conn)
             test_reindex_primary_key_refuses_a_duplicated_record(conn, work_dir)
+            test_a_stray_copy_of_a_held_id_is_cut_at_startup(conn, work_dir)
             test_an_unindexed_record_is_adopted_at_startup(conn)
             test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn)
             test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn, work_dir)

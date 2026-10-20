@@ -100,6 +100,7 @@ final class PkIndexStore {
                 OwnerOnly.ensureOwnerOnlyFile(indexFile.toPath());
                 try (var out = new FileOutputStream(indexFile, true)) {
                     content.writeTo(out);
+                    SyncedWrites.content(out.getChannel(), indexFile.toPath());
                 }
                 appended = true;
             } finally {

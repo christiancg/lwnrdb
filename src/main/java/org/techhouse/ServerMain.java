@@ -93,6 +93,7 @@ public class ServerMain {
         FetchPinningGuard.refuseUnpinnedFetch();
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
+        DeviceSyncGuard.refuseUnsyncablePlatform(fs);
         fs.createAdminDatabase();
         final var recoveredDeletes = fs.recoverWriteIntents();
         cache.loadAdminData();
@@ -127,6 +128,7 @@ public class ServerMain {
         StartupWarnings.warnIfProtectiveLimitsAreOff();
         StartupWarnings.warnIfStorageIsReadableByOthers();
         StartupWarnings.warnIfFaultInjectionEnabled();
+        StartupWarnings.warnIfWritesAreNotSynced();
         StartupWarnings.warnIfClusterWithoutTls();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();

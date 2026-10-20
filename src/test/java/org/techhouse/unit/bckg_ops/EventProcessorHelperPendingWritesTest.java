@@ -49,7 +49,7 @@ public class EventProcessorHelperPendingWritesTest {
         return DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
     }
 
-    private EntityEvent markedEvent(String id) {
+    private EntityEvent markedEvent(String id) throws IOException {
         final var generation = pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, id);
         return new EntityEvent(EventType.UPDATED, TestGlobals.DB, TestGlobals.COLL, entryWithId(id), 0L, generation);
     }
@@ -59,7 +59,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_an_interrupted_index_rebuild_leaves_the_write_pending() {
+    public void test_an_interrupted_index_rebuild_leaves_the_write_pending() throws IOException {
         final var event = markedEvent("interrupted");
         try (var mocked = mockStatic(IndexHelper.class)) {
             mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
@@ -73,7 +73,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_a_failed_index_rebuild_leaves_the_write_pending() {
+    public void test_a_failed_index_rebuild_leaves_the_write_pending() throws IOException {
         final var event = markedEvent("failed");
         try (var mocked = mockStatic(IndexHelper.class)) {
             mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
@@ -84,7 +84,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_a_failed_entry_count_update_leaves_the_write_pending() {
+    public void test_a_failed_entry_count_update_leaves_the_write_pending() throws IOException {
         final var event = markedEvent("counted");
         try (var ignoredIndexes = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
@@ -112,7 +112,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_a_failed_group_leaves_every_id_in_the_group_pending() {
+    public void test_a_failed_group_leaves_every_id_in_the_group_pending() throws IOException {
         final var batch = List.of(markedEvent("group-a"), markedEvent("group-b"));
         try (var mocked = mockStatic(IndexHelper.class)) {
             mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any(), anyLong()))
@@ -124,7 +124,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_earlier_ids_in_a_group_clear_even_when_a_later_entry_count_update_fails() {
+    public void test_earlier_ids_in_a_group_clear_even_when_a_later_entry_count_update_fails() throws IOException {
         final var batch = List.of(markedEvent("group-a"), markedEvent("group-b"), markedEvent("group-c"));
         try (var ignoredIndexes = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
@@ -139,7 +139,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_a_failed_bulk_event_leaves_inserted_and_updated_ids_pending() {
+    public void test_a_failed_bulk_event_leaves_inserted_and_updated_ids_pending() throws IOException {
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "bulk-new");
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "bulk-old");
         final var event = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, List.of(entryWithId("bulk-new")),
@@ -154,7 +154,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_clear_collection_removes_every_pending_id() {
+    public void test_clear_collection_removes_every_pending_id() throws IOException {
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "one");
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "two");
         pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
@@ -162,7 +162,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_clear_collection_leaves_the_dirty_marker_for_reindex_to_retire() {
+    public void test_clear_collection_leaves_the_dirty_marker_for_reindex_to_retire() throws IOException {
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "marked");
         Assertions.assertFalse(TestUtils.dirtyIndexCollections().isEmpty());
 
@@ -178,7 +178,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_an_index_failure_still_applies_the_page_delta() {
+    public void test_an_index_failure_still_applies_the_page_delta() throws IOException {
         final var event = markedEvent("delta-kept");
         try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
@@ -194,7 +194,7 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_a_group_index_failure_still_applies_every_page_delta() {
+    public void test_a_group_index_failure_still_applies_every_page_delta() throws IOException {
         final var batch = List.of(markedEvent("delta-a"), markedEvent("delta-b"));
         try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();

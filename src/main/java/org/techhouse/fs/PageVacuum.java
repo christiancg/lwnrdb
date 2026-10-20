@@ -2,9 +2,9 @@ package org.techhouse.fs;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -113,8 +113,7 @@ final class PageVacuum {
     private static void writeLiveRecords(File temp, byte[] bytes, List<PageLines.Line> lines,
             LinkedHashMap<String, VacuumedPage.Move> moves) throws IOException {
         OwnerOnly.ensureOwnerOnlyFile(temp.toPath());
-        try (var out = new BufferedOutputStream(Files.newOutputStream(temp.toPath(), StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE), Globals.BUFFER_SIZE)) {
+        try (var stream = new FileOutputStream(temp); var out = new BufferedOutputStream(stream, Globals.BUFFER_SIZE)) {
             var next = 0L;
             for (final var line : lines) {
                 out.write(bytes, (int) line.position(), line.length());
@@ -123,6 +122,8 @@ final class PageVacuum {
                 }
                 next += line.length();
             }
+            out.flush();
+            SyncedWrites.content(stream.getChannel(), temp.toPath());
         }
     }
 

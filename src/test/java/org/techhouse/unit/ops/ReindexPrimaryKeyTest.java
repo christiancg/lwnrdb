@@ -30,6 +30,7 @@ import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -38,6 +39,7 @@ import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.IntentLogs;
 import org.techhouse.fs.StaleWriteIntent;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
@@ -372,7 +374,7 @@ public class ReindexPrimaryKeyTest {
     public void test_a_stale_marker_with_a_readable_pk_index_is_refused() throws Exception {
         save("a");
         save("b");
-        final var marker = StaleWriteIntent.writeReplaceIntent(new File(TestGlobals.PATH).getAbsolutePath(),
+        final var intent = StaleWriteIntent.writeReplaceIntent(new File(TestGlobals.PATH).getAbsolutePath(),
                 TestGlobals.DB, TestGlobals.COLL, "a");
         save("c");
         final var page = Files.readAllBytes(collectionFile("-0.dat").toPath());
@@ -380,17 +382,18 @@ public class ReindexPrimaryKeyTest {
         final var response = reindex();
 
         assertEquals(ErrorCode.PRIMARY_KEY_REBUILD_REFUSED.getCode(), response.getErrorCode());
-        assertTrue(response.getMessage().contains(marker.getName()), response.getMessage());
+        assertTrue(response.getMessage().contains(intent), response.getMessage());
         assertArrayEquals(page, Files.readAllBytes(collectionFile("-0.dat").toPath()),
                 "a stale tail must never be replayed over records written since");
-        assertTrue(marker.exists());
+        assertEquals(1,
+                IntentLogs.openIntents(new File(TestGlobals.PATH).getAbsolutePath(), TestGlobals.DB, TestGlobals.COLL));
         assertEquals(OperationStatus.OK, find("c"));
     }
 
     @Test
-    public void test_an_emptied_intent_does_not_block_the_rebuild() throws Exception {
+    public void test_an_empty_intent_log_does_not_block_the_rebuild() throws Exception {
         save("a");
-        Files.writeString(collectionFile("-0000000000001-000000001.intent").toPath(), "", StandardCharsets.UTF_8);
+        Files.writeString(collectionFile(Globals.INTENT_LOG_EXTENSION).toPath(), "", StandardCharsets.UTF_8);
 
         assertEquals(OperationStatus.OK, reindex().getStatus());
     }

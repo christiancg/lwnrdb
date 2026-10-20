@@ -31,7 +31,7 @@ public class PendingWriteRaceTest {
     }
 
     @Test
-    public void test_an_id_cleared_between_the_two_reads_is_still_reconciled() {
+    public void test_an_id_cleared_between_the_two_reads_is_still_reconciled() throws IOException {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "racer");
         final var before = PendingWriteReconciler.pendingIds(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(before.contains("racer"));
@@ -45,7 +45,7 @@ public class PendingWriteRaceTest {
     }
 
     @Test
-    public void test_an_id_marked_after_the_first_read_is_still_reconciled() {
+    public void test_an_id_marked_after_the_first_read_is_still_reconciled() throws IOException {
         final var before = PendingWriteReconciler.pendingIds(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(before.isEmpty());
 
@@ -56,7 +56,7 @@ public class PendingWriteRaceTest {
     }
 
     @Test
-    public void test_both_directions_are_covered_at_once() {
+    public void test_both_directions_are_covered_at_once() throws IOException {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "early");
         final var before = PendingWriteReconciler.pendingIds(TestGlobals.DB, TestGlobals.COLL);
         pending.clear(TestGlobals.DB, TestGlobals.COLL, "early", 0L);
@@ -76,7 +76,7 @@ public class PendingWriteRaceTest {
     }
 
     @Test
-    public void test_an_id_pending_across_both_reads_appears_once() {
+    public void test_an_id_pending_across_both_reads_appears_once() throws IOException {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "steady");
         final var before = PendingWriteReconciler.pendingIds(TestGlobals.DB, TestGlobals.COLL);
 
@@ -86,7 +86,7 @@ public class PendingWriteRaceTest {
     }
 
     @Test
-    public void test_the_union_does_not_mutate_the_earlier_snapshot() {
+    public void test_the_union_does_not_mutate_the_earlier_snapshot() throws IOException {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "first");
         final var before = PendingWriteReconciler.pendingIds(TestGlobals.DB, TestGlobals.COLL);
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "second");

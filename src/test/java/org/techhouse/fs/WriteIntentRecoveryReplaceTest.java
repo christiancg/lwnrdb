@@ -143,13 +143,13 @@ public class WriteIntentRecoveryReplaceTest {
     @Test
     public void recoveryRunTwiceEndsTheSame() throws Exception {
         final var intent = it.replaceSubject(1);
-        final var bytes = Files.readAllBytes(intent.file().toPath());
+        final var bytes = Files.readAllBytes(intent.log().toPath());
         it.commit(it.appendCopy("b", 1));
         it.recover();
         final var pages = it.page(0) + it.page(1);
         final var rows = it.fx.indexedRows().stream().map(PkIndexEntry::toFileEntry).toList();
 
-        Files.write(intent.file().toPath(), bytes);
+        Files.write(intent.log().toPath(), bytes);
         it.recover();
 
         assertEquals(pages, it.page(0) + it.page(1));
@@ -232,6 +232,6 @@ public class WriteIntentRecoveryReplaceTest {
 
         assertEquals(pages, it.page(0) + it.page(1));
         assertEquals(1, it.intents());
-        assertEquals(1, it.fx.recovery.replayableMarkersOf(DB, COLL).size());
+        assertEquals(1, it.fx.recovery.replayableIntentsOf(DB, COLL).size());
     }
 }

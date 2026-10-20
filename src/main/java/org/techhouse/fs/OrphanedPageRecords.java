@@ -66,6 +66,25 @@ final class OrphanedPageRecords {
         return adopted;
     }
 
+    static void cutUncommittedCopies(FilePaths paths, PkIndexStore pkIndexStore, String dbName, String collName,
+            Iterable<Long> pages) throws IOException {
+        final var recognised = pkIndexStore.readRecognisedPkIndex(dbName, collName);
+        if (recognised.isEmpty() || !SyncedWrites.enabled()) {
+            return;
+        }
+        final var entries = recognised.get();
+        final var indexedIds = entries.stream().map(PkIndexEntry::getValue).collect(Collectors.toSet());
+        for (final var page : pages) {
+            final var file = paths.collectionPage(dbName, collName, page);
+            final var scan = scanRecords(file, dbName, collName, page, indexedEndOf(entries, page));
+            final var copies = scan.records();
+            if (scan.readable() && !copies.isEmpty()
+                    && copies.stream().allMatch(copy -> indexedIds.contains(copy.entry().get_id()))) {
+                cutUncommittedCopies(file, copies);
+            }
+        }
+    }
+
     static List<PkIndexEntry> retireDangling(PkIndexStore pkIndexStore, String dbName, String collName,
             Map<Long, Long> pageLengths) throws IOException {
         final var recognised = pkIndexStore.readRecognisedPkIndex(dbName, collName);
@@ -111,13 +130,37 @@ final class OrphanedPageRecords {
     static List<Orphan> orphansOf(File page, String dbName, String collName, long pageNumber, long indexedEnd,
             Set<String> indexedIds) throws IOException {
         final var scan = scanRecords(page, dbName, collName, pageNumber, indexedEnd);
-        if (!scan.readable()
-                || scan.records().stream().anyMatch(orphan -> indexedIds.contains(orphan.entry().get_id()))) {
-            logger.error("Page " + page.getName() + " holds bytes past its last indexed record that are"
-                    + " not whole records of unindexed ids; leaving the page untouched");
+        final var held = scan.records().stream().filter(orphan -> indexedIds.contains(orphan.entry().get_id()))
+                .toList();
+        if (scan.readable() && held.isEmpty()) {
+            return scan.records();
+        }
+        if (scan.readable() && held.size() == scan.records().size() && SyncedWrites.enabled()) {
+            cutUncommittedCopies(page, held);
             return List.of();
         }
-        return scan.records();
+        logger.error("Page " + page.getName() + " holds bytes past its last indexed record that are"
+                + " not whole records of unindexed ids; leaving the page untouched");
+        return List.of();
+    }
+
+    private static void cutUncommittedCopies(File page, List<Orphan> copies) {
+        final boolean cut;
+        final var lock = FileLocks.lockWrite(page);
+        try {
+            cut = FileLocks.truncateTo(page, copies.getFirst().position(),
+                    "Could not cut the uncommitted copies past" + " the last indexed record of " + page.getName()
+                            + "; a scan may answer them until the next" + " startup");
+        } finally {
+            lock.unlock();
+        }
+        if (!cut) {
+            return;
+        }
+        logger.warning("Cut " + copies.size() + " uncommitted cop" + (copies.size() == 1 ? "y" : "ies") + " from "
+                + page.getName() + ": records of ids the PK index already holds elsewhere, appended by a write whose"
+                + " intent a power loss lost, so the indexed versions are kept: "
+                + copies.stream().map(copy -> copy.entry().get_id()).toList());
     }
 
     static PageRecordScan scanRecords(File page, String dbName, String collName, long pageNumber, long fromOffset)

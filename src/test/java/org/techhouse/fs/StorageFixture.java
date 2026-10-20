@@ -84,9 +84,7 @@ final class StorageFixture {
         return true;
     }
 
-    File[] markers() {
-        final var found = paths.collectionFolder(dbName, collName)
-                .listFiles((_, name) -> name.endsWith(WriteIntentJournal.MARKER_EXTENSION));
-        return found == null ? new File[0] : found;
+    int openIntents() throws IOException {
+        return journal.openIntents(dbName, collName).size();
     }
 }

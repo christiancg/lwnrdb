@@ -74,7 +74,7 @@ public class RecordReplacerTest {
         assertEquals(updated.toFileEntry(), rf.fx.indexed("b").toFileEntry());
         final var hole = " ".repeat((int) old.getLength() - 1) + "\n";
         assertEquals(hole, rf.fx.readAt(old));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -98,7 +98,7 @@ public class RecordReplacerTest {
         assertTrue(rf.fx.readAt(old).isBlank());
         assertEquals(PkIndexEntry.toDeleteRow("b"),
                 Files.readAllLines(rf.fx.paths.pkIndexFile(DB, COLL).toPath()).getLast());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -127,7 +127,7 @@ public class RecordReplacerTest {
         }
 
         assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length, "a write that failed before its commit ends its own intent");
+        assertEquals(0, rf.intents(), "a write that failed before its commit ends its own intent");
     }
 
     @Test
@@ -141,7 +141,7 @@ public class RecordReplacerTest {
         assertThrows(IOException.class, () -> rf.replacer.delete(dangling));
 
         assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test

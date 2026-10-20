@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -77,7 +78,7 @@ public class ReindexPendingWritesTest {
     }
 
     @Test
-    public void test_a_full_reindex_clears_the_overlay_and_the_marker() {
+    public void test_a_full_reindex_clears_the_overlay_and_the_marker() throws IOException {
         seedIndexedNameAndLabel();
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "stranded");
         assertTrue(markerPresent());
@@ -91,7 +92,7 @@ public class ReindexPendingWritesTest {
     }
 
     @Test
-    public void test_a_partial_reindex_leaves_the_overlay_and_the_marker() {
+    public void test_a_partial_reindex_leaves_the_overlay_and_the_marker() throws IOException {
         seedIndexedNameAndLabel();
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "stranded");
         final var request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("name"));
@@ -105,7 +106,7 @@ public class ReindexPendingWritesTest {
     }
 
     @Test
-    public void test_an_event_queued_before_a_full_reindex_does_not_consume_a_later_writes_mark() {
+    public void test_an_event_queued_before_a_full_reindex_does_not_consume_a_later_writes_mark() throws IOException {
         seedIndexedNameAndLabel();
         final var queuedGeneration = pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "doc-1");
         processor.processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of()));

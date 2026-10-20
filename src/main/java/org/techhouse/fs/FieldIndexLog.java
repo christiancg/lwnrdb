@@ -39,6 +39,7 @@ final class FieldIndexLog {
                 OwnerOnly.ensureOwnerOnlyFile(log.toPath());
                 try (var out = new FileOutputStream(log, true)) {
                     content.writeTo(out);
+                    SyncedWrites.content(out.getChannel(), log.toPath());
                 }
                 appended = true;
             } finally {

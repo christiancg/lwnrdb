@@ -79,6 +79,9 @@ final class TornPageTail {
             }
             writer.seek(writer.length());
             writer.write(lineEnd, present, (int) missing);
+            SyncedWrites.content(writer.getChannel(), page.toPath());
+        } finally {
+            PageTails.forget(page);
         }
         logger.warning("Restored the missing line end of the last record in " + page.getName()
                 + ": the record was indexed, so only its terminator was lost");

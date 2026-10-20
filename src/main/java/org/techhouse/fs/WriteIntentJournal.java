@@ -1,42 +1,44 @@
 package org.techhouse.fs;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.techhouse.config.Globals;
-import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.log.Logger;
 
 final class WriteIntentJournal {
-    static final String MARKER_EXTENSION = ".intent";
+    static final long COMPACTION_BYTES = 64 * 1024;
     private static final Logger logger = Logger.logFor(WriteIntentJournal.class);
-    private static final AtomicLong counter = new AtomicLong();
-    private static final String HEADER = "INTENT";
-    private static final String END = "END";
-    private static final String REPLACE = "REPLACE";
-    private static final String DELETE = "DELETE";
-    private static final String VACUUM = "VACUUM";
-    private static final char LINE_END = '\n';
-    private static final int HEADER_FIELDS = 4;
-    private static final int REPLACE_FIELDS = 8;
-    private static final int DELETE_FIELDS = 6;
-    private static final int VACUUM_FIELDS = 2;
-    private static final int MARKER_SEARCH_DEPTH = 4;
-    private static final int MILLIS_DIGITS = 13;
-    private static final int COUNTER_DIGITS = 9;
-    private static final int LINE_BYTES_HINT = 96;
+    private static final Map<String, LogState> states = new ConcurrentHashMap<>();
+    private static final Map<String, List<Deferred>> deferredEnds = new ConcurrentHashMap<>();
+    private static final int LOG_SEARCH_DEPTH = 4;
 
     private final FilePaths paths;
 
-    record Intent(File file, String dbName, String collName, List<WriteIntent> items) {
+    record Intent(File log, long seq, String dbName, String collName, List<WriteIntent> items) {
+        String label() {
+            return log.getName() + "#" + seq;
+        }
+    }
+
+    private record Deferred(Intent intent, List<File> pages) {
+    }
+
+    private static final class LogState {
+        private final Set<Long> open = new HashSet<>();
+        private long nextSeq = 1L;
+        private long knownLength;
     }
 
     WriteIntentJournal(FilePaths paths) {
@@ -44,153 +46,215 @@ final class WriteIntentJournal {
     }
 
     Intent begin(String dbName, String collName, List<WriteIntent> items) throws IOException {
-        final var file = new File(paths.collectionFolder(dbName, collName),
-                collName + Globals.FILE_PAGE_SEPARATOR + padded(System.currentTimeMillis(), MILLIS_DIGITS)
-                        + Globals.FILE_PAGE_SEPARATOR + padded(counter.incrementAndGet(), COUNTER_DIGITS)
-                        + MARKER_EXTENSION);
-        final var intent = new Intent(file, dbName, collName, List.copyOf(items));
-        final var path = file.toPath();
-        OwnerOnly.ensureOwnerOnlyFile(path);
-        Files.write(path, encode(intent), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                StandardOpenOption.WRITE);
+        final var group = new ForceGroup();
+        final var intent = begin(dbName, collName, items, group);
+        try {
+            group.force();
+        } catch (IOException e) {
+            end(intent);
+            throw e;
+        }
         return intent;
     }
 
+    Intent begin(String dbName, String collName, List<WriteIntent> items, ForceGroup group) throws IOException {
+        final var log = paths.intentLog(dbName, collName);
+        final var lock = FileLocks.lockWrite(log);
+        try {
+            final var state = stateOf(log);
+            final var intent = new Intent(log, state.nextSeq, dbName, collName, List.copyOf(items));
+            append(log, state, IntentLogCodec.encode(intent));
+            state.nextSeq++;
+            state.open.add(intent.seq());
+            group.add(log.toPath());
+            joinDeferredEnds(log, group);
+            return intent;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    void endOnceDurable(Intent intent, List<File> pages) {
+        if (!SyncedWrites.enabled()) {
+            end(intent);
+            return;
+        }
+        deferredEnds.computeIfAbsent(intent.log().getAbsolutePath(), _ -> new CopyOnWriteArrayList<>())
+                .add(new Deferred(intent, List.copyOf(pages)));
+    }
+
+    void settleDeferredEnds(String dbName, String collName) throws IOException {
+        settleDeferredEnds(paths.intentLog(dbName, collName));
+    }
+
+    static void settleEveryDeferredEnd(long deadlineMillis) {
+        for (final var log : List.copyOf(deferredEnds.keySet())) {
+            if (System.currentTimeMillis() > deadlineMillis) {
+                logger.warning("Out of shutdown time before syncing every blanked page; the intents left open are"
+                        + " completed by the next startup");
+                return;
+            }
+            try {
+                settleDeferredEnds(new File(log));
+            } catch (IOException e) {
+                logger.error("Could not sync the pages blanked under " + log + "; their intents stay open and the"
+                        + " next startup blanks them again", e);
+            }
+        }
+    }
+
+    static void forgetUnder(File folder) {
+        final var prefix = folder.getAbsolutePath() + File.separator;
+        states.keySet().removeIf(path -> path.startsWith(prefix));
+        deferredEnds.keySet().removeIf(path -> path.startsWith(prefix));
+    }
+
+    private static void settleDeferredEnds(File log) throws IOException {
+        final var group = new ForceGroup();
+        joinDeferredEnds(log, group);
+        group.force();
+    }
+
+    private static void joinDeferredEnds(File log, ForceGroup group) {
+        final var waiting = deferredEnds.get(log.getAbsolutePath());
+        if (waiting == null || waiting.isEmpty()) {
+            return;
+        }
+        final var joined = List.copyOf(waiting);
+        for (final var deferred : joined) {
+            deferred.pages().stream().filter(File::exists).forEach(page -> group.add(page.toPath()));
+        }
+        group.onceForced(() -> {
+            waiting.removeAll(joined);
+            for (final var deferred : joined) {
+                if (deferred.intent().log().getAbsoluteFile().getParentFile().isDirectory()) {
+                    endAfterSync(deferred.intent());
+                }
+            }
+        });
+    }
+
     void end(Intent intent) {
-        end(intent.file());
+        endAfterSync(intent);
     }
 
-    static void end(File file) {
+    private static void endAfterSync(Intent intent) {
+        final var log = intent.log();
+        final var lock = FileLocks.lockWrite(log);
         try {
-            Files.deleteIfExists(file.toPath());
-        } catch (IOException deleteFailure) {
-            emptyInPlace(file, deleteFailure);
+            final var state = stateOf(log);
+            append(log, state, IntentLogCodec.encodeDone(intent.seq()));
+            state.open.remove(intent.seq());
+            settle(log, state);
+        } catch (IOException e) {
+            logger.error("Could not mark the write intent " + intent.label() + " done; the next startup recovers it"
+                    + " again", e);
+        } finally {
+            lock.unlock();
         }
     }
 
-    private static void emptyInPlace(File file, IOException deleteFailure) {
-        OwnerOnly.ensureOwnerOnlyFile(file.toPath());
-        try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            writer.setLength(0);
-            logger.warning("Could not remove the write intent " + file.getName()
-                    + "; emptied it instead, which the next startup discards: " + deleteFailure.getMessage());
-        } catch (IOException emptyFailure) {
-            deleteFailure.addSuppressed(emptyFailure);
-            logger.error("Could not remove or empty the write intent " + file.getName() + "; the next startup"
-                    + " recovers it again", deleteFailure);
-        }
+    List<Intent> openIntents(String dbName, String collName) throws IOException {
+        return openIntents(paths.intentLog(dbName, collName));
     }
 
-    private static String padded(long value, int digits) {
-        final var text = Long.toString(value);
-        return text.length() >= digits ? text : "0".repeat(digits - text.length()) + text;
-    }
-
-    static byte[] encode(Intent intent) {
-        final var text = new StringBuilder(LINE_BYTES_HINT * (intent.items().size() + 2)).append(HEADER);
-        field(text, token(intent.dbName()));
-        field(text, token(intent.collName()));
-        field(text, intent.items().size()).append(LINE_END);
-        for (final var item : intent.items()) {
-            switch (item) {
-                case WriteIntent.Replace replace -> {
-                    field(text.append(REPLACE), token(replace.id()));
-                    field(field(field(text, replace.page()), replace.position()), replace.length());
-                    field(field(field(text, replace.version()), replace.targetPage()), replace.targetLengthBefore());
-                }
-                case WriteIntent.Delete delete -> {
-                    field(text.append(DELETE), token(delete.id()));
-                    field(field(field(field(text, delete.page()), delete.position()), delete.length()),
-                            delete.version());
-                }
-                case WriteIntent.Vacuum vacuum -> field(text.append(VACUUM), vacuum.page());
-            }
-            text.append(LINE_END);
-        }
-        return text.append(END).append(LINE_END).toString().getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static void field(StringBuilder text, String value) {
-        text.append(Globals.ID_SEPARATOR).append(value);
-    }
-
-    private static StringBuilder field(StringBuilder text, long value) {
-        return text.append(Globals.ID_SEPARATOR).append(value);
-    }
-
-    private static String token(String value) {
-        return FieldIndexEntry.escapeIndexToken(value);
-    }
-
-    static Intent decode(File file, byte[] bytes) {
-        final var lines = new String(bytes, StandardCharsets.UTF_8).split(String.valueOf(LINE_END), -1);
-        if (lines.length < 3 || !lines[lines.length - 1].isEmpty() || !END.equals(lines[lines.length - 2])) {
-            return null;
-        }
+    List<Intent> openIntents(File log) throws IOException {
+        final var lock = FileLocks.lockWrite(log);
         try {
-            final var header = fields(lines[0]);
-            if (header.length != HEADER_FIELDS || !HEADER.equals(header[0])
-                    || Integer.parseInt(header[3]) != lines.length - 3) {
-                return null;
-            }
-            final var items = new ArrayList<WriteIntent>();
-            for (var index = 1; index < lines.length - 2; index++) {
-                final var item = decodeItem(fields(lines[index]));
-                if (item == null) {
-                    return null;
-                }
-                items.add(item);
-            }
-            return new Intent(file, FieldIndexEntry.unescapeIndexToken(header[1]),
-                    FieldIndexEntry.unescapeIndexToken(header[2]), List.copyOf(items));
-        } catch (IllegalArgumentException e) {
-            return null;
+            stateOf(log);
+            return log.exists() ? IntentLogCodec.parse(log, Files.readAllBytes(log.toPath())).open() : List.of();
+        } finally {
+            lock.unlock();
         }
     }
 
-    private static String[] fields(String line) {
-        return line.split(Globals.ID_SEPARATOR, -1);
-    }
-
-    private static WriteIntent decodeItem(String[] fields) {
-        return switch (fields[0]) {
-            case REPLACE -> fields.length != REPLACE_FIELDS
-                    ? null
-                    : new WriteIntent.Replace(FieldIndexEntry.unescapeIndexToken(fields[1]), Long.parseLong(fields[2]),
-                            Long.parseLong(fields[3]), Long.parseLong(fields[4]), Long.parseLong(fields[5]),
-                            Long.parseLong(fields[6]), Long.parseLong(fields[7]));
-            case DELETE -> fields.length != DELETE_FIELDS
-                    ? null
-                    : new WriteIntent.Delete(FieldIndexEntry.unescapeIndexToken(fields[1]), Long.parseLong(fields[2]),
-                            Long.parseLong(fields[3]), Long.parseLong(fields[4]), Long.parseLong(fields[5]));
-            case VACUUM -> fields.length != VACUUM_FIELDS ? null : new WriteIntent.Vacuum(Long.parseLong(fields[1]));
-            default -> null;
-        };
-    }
-
-    List<File> findMarkerFiles() throws IOException {
+    List<File> findLogs() throws IOException {
         final var root = new File(paths.dbPath()).toPath();
         if (!Files.isDirectory(root)) {
             return List.of();
         }
-        try (var walk = Files.walk(root, MARKER_SEARCH_DEPTH)) {
-            return walk.map(Path::toFile).filter(file -> file.isFile() && isMarker(file))
+        try (var walk = Files.walk(root, LOG_SEARCH_DEPTH)) {
+            return walk.map(Path::toFile).filter(file -> file.isFile() && isLog(file))
                     .filter(file -> isUnderLiveFolders(root.toFile(), file)).sorted().toList();
         }
     }
 
-    List<File> findMarkerFiles(String dbName, String collName) {
-        final var markers = paths.collectionFolder(dbName, collName).listFiles(file -> file.isFile()
-                && file.getName().startsWith(collName + Globals.FILE_PAGE_SEPARATOR) && isMarker(file));
-        return markers == null ? List.of() : Arrays.stream(markers).sorted().toList();
+    private static LogState stateOf(File log) throws IOException {
+        final var state = states.computeIfAbsent(log.getAbsolutePath(), _ -> new LogState());
+        final var length = log.exists() ? log.length() : 0L;
+        if (length != state.knownLength) {
+            reseed(log, state);
+        }
+        return state;
     }
 
-    private static boolean isMarker(File file) {
-        return file.getName().endsWith(MARKER_EXTENSION);
+    private static void reseed(File log, LogState state) throws IOException {
+        state.open.clear();
+        if (!log.exists()) {
+            state.knownLength = 0L;
+            return;
+        }
+        final var bytes = Files.readAllBytes(log.toPath());
+        final var parsed = IntentLogCodec.parse(log, bytes);
+        if (parsed.cleanLength() != bytes.length) {
+            logger.warning("Discarding the torn end of the write intent log " + log.getPath() + ": it was torn while"
+                    + " being written, which happens before any page is touched");
+            FileLocks.truncateTo(log, parsed.cleanLength(), "Could not cut the torn end of the write intent log "
+                    + log.getPath() + "; the next startup cuts it again");
+        }
+        parsed.open().forEach(intent -> state.open.add(intent.seq()));
+        state.nextSeq = Math.max(state.nextSeq, parsed.lastSeq() + 1);
+        state.knownLength = log.length();
     }
 
-    private static boolean isUnderLiveFolders(File root, File marker) {
-        for (var folder = marker.getParentFile(); folder != null
+    private static void append(File log, LogState state, byte[] bytes) throws IOException {
+        if (state.knownLength == 0L) {
+            OwnerOnly.ensureOwnerOnlyFile(log.toPath());
+        }
+        var appended = false;
+        try {
+            try (var out = new FileOutputStream(log, true)) {
+                out.write(bytes);
+            }
+            appended = true;
+        } finally {
+            if (!appended && log.length() != state.knownLength) {
+                FileLocks.truncateTo(log, state.knownLength, "Could not roll back a partial append to the write"
+                        + " intent log " + log.getPath() + "; the next startup cuts it");
+            }
+        }
+        state.knownLength += bytes.length;
+    }
+
+    private static void settle(File log, LogState state) throws IOException {
+        if (state.open.isEmpty()) {
+            try (var channel = FileChannel.open(log.toPath(), StandardOpenOption.WRITE)) {
+                channel.truncate(0L);
+            }
+            state.knownLength = log.length();
+        } else if (state.knownLength > COMPACTION_BYTES) {
+            compact(log, state);
+        }
+    }
+
+    private static void compact(File log, LogState state) throws IOException {
+        final var open = IntentLogCodec.parse(log, Files.readAllBytes(log.toPath())).open();
+        final var content = new ByteArrayOutputStream();
+        for (final var intent : open) {
+            content.write(IntentLogCodec.encode(intent));
+        }
+        FileLocks.rewriteFileAtomically(log.toPath(), content.toByteArray());
+        state.open.clear();
+        open.forEach(intent -> state.open.add(intent.seq()));
+        state.knownLength = content.size();
+    }
+
+    private static boolean isLog(File file) {
+        return file.getName().endsWith(Globals.INTENT_LOG_EXTENSION);
+    }
+
+    private static boolean isUnderLiveFolders(File root, File log) {
+        for (var folder = log.getParentFile(); folder != null
                 && !folder.equals(root); folder = folder.getParentFile()) {
             if (!FolderQuarantine.isLiveFolder(folder)) {
                 return false;

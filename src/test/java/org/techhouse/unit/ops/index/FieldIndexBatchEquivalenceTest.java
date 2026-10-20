@@ -43,7 +43,18 @@ public class FieldIndexBatchEquivalenceTest {
         runAgainstLegacy(seed, true);
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {1, 40, 300})
+    public void bothSidesOfThePointEditLimitMatchLegacy(int batchSize) throws Exception {
+        runAgainstLegacy(20261019L + batchSize, true, batchSize, batchSize * 2);
+    }
+
     private void runAgainstLegacy(long seed, boolean holdingTheCollection) throws Exception {
+        runAgainstLegacy(seed, holdingTheCollection, 0, ID_POOL);
+    }
+
+    private void runAgainstLegacy(long seed, boolean holdingTheCollection, int fixedBatchSize, int idPool)
+            throws Exception {
         final var random = new Random(seed);
         final var support = new FieldIndexBatchSupport();
         final var legacy = new LegacyIndexMaintenance(IocContainer.get(FileSystem.class), FieldIndexBatchSupport.DB,
@@ -51,8 +62,8 @@ public class FieldIndexBatchEquivalenceTest {
         var operations = 0;
         var batches = 0;
         while (operations < OPERATIONS) {
-            final var size = 1 + random.nextInt(random.nextBoolean() ? 3 : 60);
-            final var ids = FieldIndexBatchSupport.randomIds(random, size, ID_POOL);
+            final var size = fixedBatchSize > 0 ? fixedBatchSize : 1 + random.nextInt(random.nextBoolean() ? 3 : 60);
+            final var ids = FieldIndexBatchSupport.randomIds(random, size, idPool);
             for (final var id : ids) {
                 support.mutate(id, random);
             }
@@ -73,7 +84,7 @@ public class FieldIndexBatchEquivalenceTest {
             assertEquals(FieldIndexBatchSupport.snapshot(LEGACY_FIELD), FieldIndexBatchSupport.snapshot(BATCH_FIELD),
                     "seed " + seed + ", batch " + batches + " of ids " + ids);
             assertNull(support.residentMismatch(BATCH_FIELD), "seed " + seed + ", batch " + batches);
-            assertNull(support.lookupMismatch(BATCH_FIELD, ID_POOL), "seed " + seed + ", batch " + batches);
+            assertNull(support.lookupMismatch(BATCH_FIELD, idPool), "seed " + seed + ", batch " + batches);
         }
     }
 }

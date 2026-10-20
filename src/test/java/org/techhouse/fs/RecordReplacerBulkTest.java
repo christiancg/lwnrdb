@@ -79,14 +79,14 @@ public class RecordReplacerBulkTest {
         });
         assertTrue(faultInjector.awaitReached(FaultPoint.PAGE_COPY_APPENDED, 5_000));
 
-        assertEquals(1, rf.intents().length, "one intent covers every item of the bulk");
+        assertEquals(1, rf.intents(), "one intent covers every item of the bulk");
         assertEquals(linesBefore, pkLines(), "nothing is committed until every copy is appended");
         faultInjector.release(FaultPoint.PAGE_COPY_APPENDED);
         final var result = bulk.get(5, TimeUnit.SECONDS);
 
         assertEquals(3, result.size());
         assertEquals(linesBefore + 3, pkLines());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
         for (final var id : List.of("a", "c", "y")) {
             assertEquals(StorageFixture.record(id, "bulk-" + id), rf.fx.readAt(rf.fx.indexed(id)));
         }
@@ -121,7 +121,7 @@ public class RecordReplacerBulkTest {
         assertArrayEquals(page0, Files.readAllBytes(rf.fx.page(0).toPath()));
         assertArrayEquals(page1Bytes, Files.readAllBytes(page1.toPath()));
         assertEquals(linesBefore, pkLines());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -160,6 +160,6 @@ public class RecordReplacerBulkTest {
         assertTrue(rf.bulk(List.of()).isEmpty());
 
         assertEquals(linesBefore, pkLines());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 }

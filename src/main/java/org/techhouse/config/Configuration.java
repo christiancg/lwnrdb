@@ -476,4 +476,8 @@ public final class Configuration {
         return booleanValue(ConfigKey.FAULT_INJECTION_ENABLED);
     }
 
+    public boolean isSyncWrites() {
+        return booleanValue(ConfigKey.SYNC_WRITES);
+    }
+
 }

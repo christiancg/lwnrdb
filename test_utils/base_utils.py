@@ -375,6 +375,24 @@ def local_commit_markers(work_dir: str) -> int:
     return total
 
 
+def open_intents(folder: str) -> list:
+    if not os.path.isdir(folder):
+        return []
+    found = []
+    for name in sorted(n for n in os.listdir(folder) if n.endswith(".intents")):
+        with open(os.path.join(folder, name), "rb") as fp:
+            lines = fp.read().decode("utf-8", errors="replace").split("\n")
+        begun, done = [], set()
+        for line in lines:
+            fields = line.split(PK_FIELD_SEPARATOR)
+            if fields[0] == "INTENT" and len(fields) > 1:
+                begun.append(fields[1])
+            elif fields[0] == "DONE" and len(fields) == 2:
+                done.add(fields[1])
+        found += [f"{name}#{seq}" for seq in begun if seq not in done]
+    return found
+
+
 def read_pk_log(pk_path: str) -> list:
     with open(pk_path, "rb") as fp:
         lines = fp.read().decode("utf-8", errors="replace").split("\n")

@@ -49,11 +49,18 @@ public final class FolderQuarantine {
     }
 
     private static boolean moveAside(File folder, String targetPrefix) {
+        PageTails.forgetUnder(folder);
         final var stamp = targetPrefix + System.currentTimeMillis();
         var target = new File(folder.getParentFile(), stamp);
         for (var attempt = 1; target.exists(); attempt++) {
             target = new File(folder.getParentFile(), stamp + "-" + attempt);
         }
-        return folder.renameTo(target);
+        if (!folder.renameTo(target)) {
+            return false;
+        }
+        WriteIntentJournal.forgetUnder(folder);
+        SyncedWrites.entriesOfLanded(target.getAbsoluteFile().getParentFile().toPath(),
+                "Moving " + folder.getName() + " aside");
+        return true;
     }
 }

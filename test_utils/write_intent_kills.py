@@ -103,8 +103,7 @@ def cases() -> list:
 
 
 def intents_left(work_dir: str, coll: str) -> list:
-    folder = os.path.join(work_dir, "db", DB, coll)
-    return [name for name in os.listdir(folder) if name.endswith(".intent")] if os.path.isdir(folder) else []
+    return bu.open_intents(os.path.join(work_dir, "db", DB, coll))
 
 
 def seed(conn, rounds: list):

@@ -34,10 +34,12 @@ final class NodeIdStore {
         final var tmp = path.resolveSibling(path.getFileName() + ".tmp");
         OwnerOnly.ensureOwnerOnlyFile(tmp);
         Files.writeString(tmp, nodeId, StandardCharsets.UTF_8);
+        SyncedWrites.content(tmp);
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
+        SyncedWrites.entriesOfLanded(path.toAbsolutePath().getParent(), "Writing the node id");
     }
 }

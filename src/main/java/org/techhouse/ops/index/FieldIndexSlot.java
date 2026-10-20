@@ -22,6 +22,7 @@ import org.techhouse.fs.IndexLogChange;
 import org.techhouse.ioc.IocContainer;
 
 final class FieldIndexSlot {
+    static final int POINT_EDIT_LIMIT = 64;
     private static final Cache cache = IocContainer.get(Cache.class);
     @SuppressWarnings("FieldMayBeFinal")
     private static FileSystem fs = IocContainer.get(FileSystem.class);
@@ -35,6 +36,7 @@ final class FieldIndexSlot {
     private final Loader loader;
     private final Map<String, FieldIndexEntry<Object>> created = new HashMap<>();
     private final Map<FieldIndexEntry<Object>, Boolean> touched = new IdentityHashMap<>();
+    private final Map<FieldIndexEntry<Object>, Boolean> emptied = new IdentityHashMap<>();
     private Map<String, Map<String, Boolean>> logged;
     private List<FieldIndexEntry<Object>> resident;
     private boolean onDisk;
@@ -156,6 +158,9 @@ final class FieldIndexSlot {
         if (entry.getIds().remove(id)) {
             log(FieldIndexEntry.fileKeyOf(entry.getValue()), id, false);
             dirty = true;
+            if (entry.getIds().isEmpty()) {
+                emptied.put(entry, Boolean.TRUE);
+            }
         }
     }
 
@@ -198,14 +203,66 @@ final class FieldIndexSlot {
     }
 
     private void applyInPlace() {
-        entries.removeIf(entry -> entry.getIds().isEmpty());
-        for (final var entry : created.values()) {
+        final var removed = Collections.newSetFromMap(new IdentityHashMap<FieldIndexEntry<Object>, Boolean>());
+        for (final var entry : emptied.keySet()) {
             if (entry.getIds().isEmpty()) {
-                continue;
+                removed.add(entry);
             }
+        }
+        final var added = new ArrayList<FieldIndexEntry<Object>>(created.size());
+        for (final var entry : created.values()) {
+            if (!entry.getIds().isEmpty()) {
+                added.add(entry);
+            }
+        }
+        if (removed.size() + added.size() > POINT_EDIT_LIMIT) {
+            mergeInOnePass(removed, added);
+            return;
+        }
+        for (final var entry : removed) {
+            removeExact(entry);
+        }
+        for (final var entry : added) {
             final var at = Collections.binarySearch(entries, entry, order);
             entries.add(at < 0 ? -at - 1 : at, entry);
         }
+    }
+
+    private void removeExact(FieldIndexEntry<Object> entry) {
+        final var at = Collections.binarySearch(entries, entry, order);
+        if (at < 0) {
+            return;
+        }
+        for (var i = at; i >= 0 && order.compare(entries.get(i), entry) == 0; i--) {
+            if (entries.get(i) == entry) {
+                entries.remove(i);
+                return;
+            }
+        }
+        for (var i = at + 1; i < entries.size() && order.compare(entries.get(i), entry) == 0; i++) {
+            if (entries.get(i) == entry) {
+                entries.remove(i);
+                return;
+            }
+        }
+    }
+
+    private void mergeInOnePass(Set<FieldIndexEntry<Object>> removed, List<FieldIndexEntry<Object>> added) {
+        added.sort(order);
+        final var merged = new ArrayList<FieldIndexEntry<Object>>(entries.size() - removed.size() + added.size());
+        var next = 0;
+        for (final var entry : entries) {
+            if (removed.contains(entry)) {
+                continue;
+            }
+            while (next < added.size() && order.compare(added.get(next), entry) < 0) {
+                merged.add(added.get(next++));
+            }
+            merged.add(entry);
+        }
+        merged.addAll(added.subList(next, added.size()));
+        entries.clear();
+        entries.addAll(merged);
     }
 
     void publish() {

@@ -23,6 +23,18 @@ public class ServerMainStartupOrderTest {
     }
 
     @Test
+    public void test_the_device_sync_probe_runs_before_anything_is_written() throws IOException {
+        final var body = mainBody();
+        final var probe = positionOf(body, "DeviceSyncGuard.refuseUnsyncablePlatform(fs);");
+
+        assertTrue(positionOf(body, "fs.createBaseDbPath();") < probe,
+                "the probe syncs the db folder, so it must exist");
+        assertTrue(probe < positionOf(body, "fs.createAdminDatabase();"),
+                "a platform that cannot sync a folder must be refused before the first write");
+        assertTrue(probe < positionOf(body, "backgroundTaskManager.startBackgroundWorkers();"));
+    }
+
+    @Test
     public void test_the_clock_is_seeded_before_transaction_recovery() throws IOException {
         final var body = mainBody();
 

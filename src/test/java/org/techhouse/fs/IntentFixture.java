@@ -71,7 +71,7 @@ final class IntentFixture {
         return Files.readString(fx.page(page).toPath(), StandardCharsets.UTF_8);
     }
 
-    int intents() {
-        return fx.markers().length;
+    int intents() throws IOException {
+        return fx.openIntents();
     }
 }

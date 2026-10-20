@@ -1,5 +1,6 @@
 package org.techhouse.ops;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -357,9 +358,21 @@ public final class SaveOperationHelper {
         final var line = encodedLine != null ? encodedLine : entry.encodeLine();
         final var targetPage = cache.selectPageForInsert(dbName, collName, line.length);
         final var deleteGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        final var relocatedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName,
-                List.of(entry.get_id()), deleteGeneration,
-                () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex));
+        final long createGeneration;
+        final PkIndexEntry relocatedPkIndexEntry;
+        try {
+            createGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
+        } catch (IOException e) {
+            pendingIndexWrites.clear(dbName, collName, entry.get_id(), deleteGeneration);
+            throw e;
+        }
+        try {
+            relocatedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
+                    deleteGeneration, () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex));
+        } catch (Exception e) {
+            pendingIndexWrites.clear(dbName, collName, entry.get_id(), createGeneration);
+            throw e;
+        }
         cache.evictEntry(dbName, collName, entry.get_id());
         submit(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
                 CollectionIncarnation.current(dbName, collName), deleteGeneration), followOn);
@@ -367,7 +380,6 @@ public final class SaveOperationHelper {
                 relocatedPkIndexEntry.getLength());
         replaceRow(primaryKeyIndex, relocatedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
-        final var createGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
         submit(new EntityEvent(EventType.CREATED, dbName, collName, entry,
                 CollectionIncarnation.current(dbName, collName), createGeneration), followOn);
         return relocatedPkIndexEntry;

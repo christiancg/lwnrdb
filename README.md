@@ -1618,6 +1618,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxLogFiles` | Valid number ≥ 1 |
 | `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
+| `syncWrites` | `true` or `false` (default `true`). Sync every write step to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory refuses to start |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
 | `schemaMaxPatterns` | Valid number > 0 (default `256`). Most regular expressions (`pattern` values plus `patternProperties` keys, counted through `$ref`s) one schema may hold; `SAVE_SCHEMA` refuses more with `400-39` before compiling any. A stored or replicated schema with more still loads, with a warning. Keep it equal on every node of a cluster |
@@ -1723,6 +1724,7 @@ maxConcurrentPasswordChecks=0
 filePath=db
 logPath=logs
 maxPageSize=2Mb
+syncWrites=true
 maxEntrySize=1Mb
 # schema evaluation steps one write request may spend before it is refused (400-23)
 schemaValidationBudget=5000000
@@ -1973,18 +1975,35 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Guaranteed**
 
 - **An acknowledged write survives a process crash.** Writes go to the files before the response is sent, so a `kill -9` or a JVM crash loses nothing that was acknowledged.
-- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, commits it with one appended `pk.idx` row, then blanks the old copy into a hole, all under a `.intent` file written first. An interrupted one is kept or undone at startup according to whether its `pk.idx` row landed, and an interrupted page vacuum re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
+- **An acknowledged write survives a power loss** while `syncWrites` is on (the default). Each step of a write — the intent, the page append, the `pk.idx` row, the blank of the old copy — is synced to the device before the next one starts, and a created, renamed or deleted file has its folder synced too, so a power loss leaves exactly the state a process kill at a step boundary would, which startup already recovers. On a platform that cannot sync a directory the server refuses to start with `syncWrites=true`. See [Durability](#durability) for what it costs.
+- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, commits it with one appended `pk.idx` row, then blanks the old copy into a hole, all under an intent appended first to the collection's `.intents` log. An interrupted one is kept or undone at startup according to whether its `pk.idx` row landed, and an interrupted page vacuum re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.
 
 **Not guaranteed, by design**
 
-- **Device durability.** Writes are not synced to the device. A power loss or an operating-system crash can lose recently acknowledged writes, whatever the engine does afterwards. If that matters, run on storage with power-loss protection, or run a [cluster](#clustering-multi-node) so a second node holds the write.
+- **Device durability with `syncWrites=false`.** A write is then acknowledged once the operating system has it, so a power loss or an operating-system crash can lose recently acknowledged writes; the server says so in a startup warning. Turn it off only on storage with power-loss protection, or in a [cluster](#clustering-multi-node) where a second node holds the write.
 - **Field indexes after a crash with index work pending.** The index can miss entries written just before the crash, so an index-backed query can omit those documents until a full [`REINDEX`](#reindex). Startup logs a warning naming each collection in that state, and the `-indexes.unclean` marker behind it stays until a `REINDEX` rebuilds every registered index of the collection.
 - **Exact vector search by default.** `nearest` is an approximate (ANN) search unless `"exact":true` is passed (see [custom operators](#custom-operators-type-specific)).
 - **Catching up on schedules.** A scheduled procedure fires at most once per due instant, and runs missed while the node was down are skipped (see [`SAVE_SCHEDULE`](#save_schedule)).
 - **Isolation for dirty reads.** A read with `"dirtyRead":true` can observe a write half-way through (see [Concurrency & locking](#concurrency--locking)).
+
+### Durability
+
+With `syncWrites=true` a write is acknowledged only once the steps that make it recoverable are on the device. An
+insert forces the page append, then the `pk.idx` row. An update forces its intent and the new copy together, then
+the `pk.idx` row; a delete forces its intent, then the `pk.idx` row. Files forced together are flushed in parallel,
+so they cost one wait, not two. The blank of the superseded copy is not forced before the reply: its intent stays
+open until the next write to that collection forces the blanked page alongside its own files (free when it is the
+same page) or until shutdown, and a power loss in between leaves an open intent that startup recovery completes. A
+bulk write forces all the pages it touched together, then its single `pk.idx` append. Ending an intent and clearing
+an index marker are not forced, because a power loss that undoes either leaves a journal behind that startup
+already settles. A
+force costs what the disk makes it cost, and the per-collection write lock is held across them, so it bounds the
+write rate of one collection. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
+Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed
+there; the Docker image on Linux is the production target). Different collections write in parallel. Logs and the generated TLS keystore are not forced.
 
 ## Q&A
 

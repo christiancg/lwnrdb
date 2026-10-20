@@ -13,6 +13,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.LogWriter;
@@ -33,6 +34,7 @@ public class ShutdownCoordinator {
     private final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private final FileSystem fileSystem = IocContainer.get(FileSystem.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -77,6 +79,7 @@ public class ShutdownCoordinator {
         step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));
         step("drain background tasks", () -> backgroundTaskManager.drain(remaining(deadline)));
         step("stop listen workers", listenManager::stopWorkers);
+        step("sync the pages the last writes blanked", () -> fileSystem.settleDeferredIntentEnds(deadline));
         step("leave the cluster", () -> {
             if (clusterConfig.isEnabled()) {
                 membershipService.stop();

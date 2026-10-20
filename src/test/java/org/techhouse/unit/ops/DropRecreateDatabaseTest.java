@@ -240,7 +240,7 @@ public class DropRecreateDatabaseTest {
     }
 
     @Test
-    public void test_a_dropped_collection_leaves_no_pending_ids_for_its_next_life() {
+    public void test_a_dropped_collection_leaves_no_pending_ids_for_its_next_life() throws IOException {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "old_life");
 
         assertEquals(OperationStatus.OK,
@@ -255,7 +255,7 @@ public class DropRecreateDatabaseTest {
     }
 
     @Test
-    public void test_a_dropped_database_leaves_no_pending_ids_for_its_next_life() {
+    public void test_a_dropped_database_leaves_no_pending_ids_for_its_next_life() throws IOException {
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "old_life");
 
         assertEquals(OperationStatus.OK, processor.processMessage(new DropDatabaseRequest(TestGlobals.DB)).getStatus());

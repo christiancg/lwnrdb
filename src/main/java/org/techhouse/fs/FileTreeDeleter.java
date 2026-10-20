@@ -11,8 +11,12 @@ final class FileTreeDeleter {
     }
 
     static boolean delete(File root) {
+        PageTails.forgetUnder(root);
         for (var sweep = 0; sweep < SWEEPS; sweep++) {
             if (sweep(root)) {
+                WriteIntentJournal.forgetUnder(root);
+                SyncedWrites.entriesOfLanded(root.getAbsoluteFile().getParentFile().toPath(),
+                        "Deleting " + root.getName());
                 return true;
             }
         }

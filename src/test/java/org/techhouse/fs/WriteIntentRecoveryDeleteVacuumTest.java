@@ -187,8 +187,8 @@ public class WriteIntentRecoveryDeleteVacuumTest {
     @Test
     public void aTornIntentIsDiscardedWithoutTouchingAnything() throws Exception {
         final var intent = it.deleteSubject();
-        final var bytes = Files.readAllBytes(intent.file().toPath());
-        Files.write(intent.file().toPath(), java.util.Arrays.copyOf(bytes, bytes.length - 2));
+        final var bytes = Files.readAllBytes(intent.log().toPath());
+        Files.write(intent.log().toPath(), java.util.Arrays.copyOf(bytes, bytes.length - 2));
 
         assertEquals(List.of(), it.recover());
 
@@ -199,9 +199,9 @@ public class WriteIntentRecoveryDeleteVacuumTest {
     @Test
     public void aTornIntentIsNotReplayable() throws Exception {
         final var intent = it.deleteSubject();
-        Files.writeString(intent.file().toPath(), "", StandardCharsets.UTF_8);
+        Files.writeString(intent.log().toPath(), "", StandardCharsets.UTF_8);
 
-        assertTrue(it.fx.recovery.replayableMarkersOf(DB, COLL).isEmpty());
+        assertTrue(it.fx.recovery.replayableIntentsOf(DB, COLL).isEmpty());
         assertEquals(0, it.fx.recovery.recoverPagesOf(DB, COLL));
         assertNull(it.fx.indexed("zzz"));
     }

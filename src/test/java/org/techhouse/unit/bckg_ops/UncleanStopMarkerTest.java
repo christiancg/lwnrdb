@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mockStatic;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,18 +55,18 @@ public class UncleanStopMarkerTest {
         return Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
     }
 
-    private List<String> stopUncleanlyAndRestart() {
+    private List<String> stopUncleanlyAndRestart() throws IOException {
         fs.indexMarkers().markDirty(TestGlobals.DB, TestGlobals.COLL);
         return fs.indexMarkers().retainUncleanStops();
     }
 
-    private void writeAndDrain(String id) {
+    private void writeAndDrain(String id) throws IOException {
         final var generation = pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, id);
         pendingIndexWrites.clear(TestGlobals.DB, TestGlobals.COLL, id, generation);
     }
 
     @Test
-    public void test_startup_retains_the_marker_an_unclean_stop_left_and_reports_it() {
+    public void test_startup_retains_the_marker_an_unclean_stop_left_and_reports_it() throws IOException {
         assertEquals(List.of(identifier()), stopUncleanlyAndRestart());
 
         assertTrue(uncleanStopMarker().isFile());
@@ -74,7 +75,7 @@ public class UncleanStopMarkerTest {
     }
 
     @Test
-    public void test_a_write_drained_after_the_restart_does_not_retire_the_unclean_stop() {
+    public void test_a_write_drained_after_the_restart_does_not_retire_the_unclean_stop() throws IOException {
         stopUncleanlyAndRestart();
 
         writeAndDrain("after-restart");
@@ -84,14 +85,14 @@ public class UncleanStopMarkerTest {
     }
 
     @Test
-    public void test_a_second_restart_without_reindex_still_reports_the_collection() {
+    public void test_a_second_restart_without_reindex_still_reports_the_collection() throws IOException {
         stopUncleanlyAndRestart();
 
         assertEquals(List.of(identifier()), fs.indexMarkers().retainUncleanStops());
     }
 
     @Test
-    public void test_a_partial_reindex_keeps_the_unclean_stop_and_a_full_one_retires_it() {
+    public void test_a_partial_reindex_keeps_the_unclean_stop_and_a_full_one_retires_it() throws IOException {
         stopUncleanlyAndRestart();
 
         assertEquals(OperationStatus.OK, processor
@@ -105,7 +106,7 @@ public class UncleanStopMarkerTest {
     }
 
     @Test
-    public void test_a_collection_whose_work_drained_before_the_stop_is_not_reported() {
+    public void test_a_collection_whose_work_drained_before_the_stop_is_not_reported() throws IOException {
         writeAndDrain("doc-1");
 
         assertTrue(fs.indexMarkers().retainUncleanStops().isEmpty());

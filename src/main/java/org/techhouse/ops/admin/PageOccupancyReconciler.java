@@ -144,7 +144,7 @@ public final class PageOccupancyReconciler {
     }
 
     public static void scheduleIndexMaintenanceFor(String dbName, String collName, List<DbEntry> adopted) {
-        final var generation = pendingIndexWrites.mark(dbName, collName,
+        final var generation = pendingIndexWrites.markRecovered(dbName, collName,
                 adopted.stream().map(DbEntry::get_id).toList());
         final var incarnation = CollectionIncarnation.current(dbName, collName);
         for (final var entry : adopted) {

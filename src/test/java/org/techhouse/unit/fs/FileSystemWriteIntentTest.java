@@ -5,21 +5,18 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.IntentLogs;
 import org.techhouse.test.TestGlobals;
 
 public class FileSystemWriteIntentTest extends FileSystemTestBase {
 
-    private static List<Path> writeIntents() throws IOException {
-        try (var files = Files.walk(Path.of(TestGlobals.PATH))) {
-            return files.filter(path -> path.getFileName().toString().endsWith(".intent")).toList();
-        }
+    private static int openIntents() throws IOException {
+        return IntentLogs.openIntentsUnder(TestGlobals.PATH);
     }
 
     private PkIndexEntry insert(String id, String value) throws Exception {
@@ -61,7 +58,7 @@ public class FileSystemWriteIntentTest extends FileSystemTestBase {
 
         fs.deleteFromCollection(first);
 
-        assertTrue(writeIntents().isEmpty());
+        assertEquals(0, openIntents());
     }
 
     @Test
@@ -74,7 +71,7 @@ public class FileSystemWriteIntentTest extends FileSystemTestBase {
         assertThrows(IOException.class, () -> fs.deleteFromCollection(first));
 
         assertEquals(before, Files.readString(page0().toPath()));
-        assertTrue(writeIntents().isEmpty());
+        assertEquals(0, openIntents());
     }
 
     @Test
@@ -84,7 +81,7 @@ public class FileSystemWriteIntentTest extends FileSystemTestBase {
 
         fs.updateFromCollection(updated(first), first);
 
-        assertTrue(writeIntents().isEmpty());
+        assertEquals(0, openIntents());
     }
 
     @Test
@@ -97,7 +94,7 @@ public class FileSystemWriteIntentTest extends FileSystemTestBase {
         assertThrows(Exception.class, () -> fs.updateFromCollection(updated(first), first));
 
         assertEquals(before, Files.readString(page0().toPath()));
-        assertTrue(writeIntents().isEmpty());
+        assertEquals(0, openIntents());
     }
 
     @Test
@@ -108,7 +105,7 @@ public class FileSystemWriteIntentTest extends FileSystemTestBase {
 
         final var relocated = fs.relocate(moved, first, 1, moved.encodeLine(), null);
 
-        assertTrue(writeIntents().isEmpty());
+        assertEquals(0, openIntents());
         assertEquals(1L, relocated.getPage());
         assertEquals("uno", fs.getById(relocated).getData().get("v").asJsonString().getValue());
         final var page = Files.readAllBytes(page0().toPath());

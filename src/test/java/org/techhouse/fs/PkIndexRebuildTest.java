@@ -214,7 +214,7 @@ public class PkIndexRebuildTest {
         assertEquals(1, f.recovery.recoverPagesOf(DB, COLL));
         rebuild();
 
-        assertEquals(0, f.markers().length);
+        assertEquals(0, f.openIntents());
         assertEquals(List.of("a", "c"), f.indexedRows().stream().map(PkIndexEntry::getValue).toList());
         assertTrue(f.everyRowReadsItsOwnRecord());
     }
@@ -231,7 +231,7 @@ public class PkIndexRebuildTest {
         f.recovery.recoverPagesOf(DB, COLL);
         rebuild();
 
-        assertEquals(0, f.markers().length);
+        assertEquals(0, f.openIntents());
         assertEquals(0L, f.indexed("b").getPage(), "the uncommitted copy on page 1 was blanked");
         assertEquals(StorageFixture.record("b", "old-b"), f.readAt(f.indexed("b")));
     }
@@ -258,9 +258,9 @@ public class PkIndexRebuildTest {
         f.seed(0, "a");
         final var kept = intentFor(new WriteIntent.Vacuum(0));
         final var emptied = intentFor(new WriteIntent.Vacuum(0));
-        Files.writeString(emptied.file().toPath(), "", StandardCharsets.UTF_8);
+        f.journal.end(emptied);
 
-        assertEquals(List.of(kept.file().getName()), f.recovery.replayableMarkersOf(DB, COLL));
+        assertEquals(List.of(kept.label()), f.recovery.replayableIntentsOf(DB, COLL));
     }
 
     @Test
@@ -283,11 +283,11 @@ public class PkIndexRebuildTest {
         f.seed(0, "a");
         final var page = f.firstPageText();
         final var intent = intentFor(WriteIntent.Delete.of(f.indexed("a")));
-        Files.writeString(intent.file().toPath(), "torn", StandardCharsets.UTF_8);
+        Files.writeString(intent.log().toPath(), "torn", StandardCharsets.UTF_8);
 
         assertEquals(0, f.recovery.recoverPagesOf(DB, COLL));
 
-        assertEquals(0, f.markers().length);
+        assertEquals(0, f.openIntents());
         assertEquals(page, f.firstPageText());
     }
 }

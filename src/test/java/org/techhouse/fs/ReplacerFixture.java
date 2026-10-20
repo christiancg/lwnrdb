@@ -65,7 +65,7 @@ final class ReplacerFixture {
         return fx.readAt(row);
     }
 
-    File[] intents() {
-        return fx.markers();
+    int intents() throws IOException {
+        return fx.openIntents();
     }
 }

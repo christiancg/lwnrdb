@@ -139,7 +139,7 @@ public class EventProcessorHelperTest {
     }
 
     @Test
-    public void processEntityEventSkipsVanishedCollection() {
+    public void processEntityEventSkipsVanishedCollection() throws IOException {
         final var pending = IocContainer.get(PendingIndexWrites.class);
         final var entry = new DbEntry();
         entry.set_id("ghost");

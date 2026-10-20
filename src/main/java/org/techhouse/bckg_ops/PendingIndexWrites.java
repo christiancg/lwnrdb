@@ -1,5 +1,7 @@
 package org.techhouse.bckg_ops;
 
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +11,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 
 /**
  * A pending document's field-index entry is untrustworthy: index-backed reads must re-evaluate it
@@ -16,12 +19,13 @@ import org.techhouse.ioc.IocContainer;
  * all of their index updates have completed.
  */
 public class PendingIndexWrites {
+    private static final Logger logger = Logger.logFor(PendingIndexWrites.class);
     private final Map<String, Map<String, Integer>> pending = new ConcurrentHashMap<>();
     private final Map<String, java.util.concurrent.locks.ReentrantLock> markerLocks = new ConcurrentHashMap<>();
     private final Map<String, Long> generations = new ConcurrentHashMap<>();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
 
-    public long mark(String dbName, String collName, String id) {
+    public long mark(String dbName, String collName, String id) throws IOException {
         return mark(dbName, collName, List.of(id));
     }
 
@@ -40,22 +44,52 @@ public class PendingIndexWrites {
         }
     }
 
-    public long mark(String dbName, String collName, Iterable<String> ids) {
+    public long markRecovered(String dbName, String collName, Iterable<String> ids) {
+        try {
+            return mark(dbName, collName, ids, false);
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    public long mark(String dbName, String collName, Iterable<String> ids) throws IOException {
+        return mark(dbName, collName, ids, true);
+    }
+
+    private long mark(String dbName, String collName, Iterable<String> ids, boolean durableMarkerRequired)
+            throws IOException {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         final var byId = pending.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         final var markerLock = markerLockFor(collId);
+        final var marked = new ArrayList<String>();
         markerLock.lock();
         try {
             for (var id : ids) {
                 final var wasEmpty = byId.isEmpty();
                 byId.merge(id, 1, Integer::sum);
+                marked.add(id);
                 if (wasEmpty) {
-                    fs.indexMarkers().markDirty(dbName, collName);
+                    markDirty(dbName, collName, durableMarkerRequired);
                 }
             }
             return generations.getOrDefault(collId, 0L);
+        } catch (IOException e) {
+            marked.forEach(id -> byId.computeIfPresent(id, (_, count) -> count == 1 ? null : count - 1));
+            throw e;
         } finally {
             markerLock.unlock();
+        }
+    }
+
+    private void markDirty(String dbName, String collName, boolean durableMarkerRequired) throws IOException {
+        try {
+            fs.indexMarkers().markDirty(dbName, collName);
+        } catch (IOException e) {
+            if (durableMarkerRequired) {
+                throw e;
+            }
+            logger.warning("Could not make the index-dirty marker of " + dbName + "|" + collName + " durable while"
+                    + " scheduling startup recovery; the ids stay pending in memory: " + e.getMessage());
         }
     }
 

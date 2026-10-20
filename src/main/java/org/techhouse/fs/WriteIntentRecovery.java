@@ -1,6 +1,5 @@
 package org.techhouse.fs;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -33,22 +32,20 @@ final class WriteIntentRecovery {
 
     List<PkIndexEntry> recoverAll() throws IOException {
         final var completedDeletes = new ArrayList<PkIndexEntry>();
-        for (final var file : journal.findMarkerFiles()) {
-            recoverIntent(file, completedDeletes);
+        for (final var log : journal.findLogs()) {
+            for (final var intent : journal.openIntents(log)) {
+                recoverIntent(intent, completedDeletes);
+            }
         }
         return completedDeletes;
     }
 
-    private void recoverIntent(File file, List<PkIndexEntry> completedDeletes) throws IOException {
-        final var intent = WriteIntentJournal.decode(file, Files.readAllBytes(file.toPath()));
-        if (intent == null) {
-            discardTorn(file);
-            return;
-        }
+    private void recoverIntent(WriteIntentJournal.Intent intent, List<PkIndexEntry> completedDeletes)
+            throws IOException {
         final var label = intent.dbName() + Globals.COLL_IDENTIFIER_SEPARATOR + intent.collName();
         final var rows = pkIndexStore.readRecognisedPkIndex(intent.dbName(), intent.collName());
         if (rows.isEmpty()) {
-            logger.error("Leaving the interrupted write " + file.getName() + " of " + label + " unrecovered: no line of"
+            logger.error("Leaving the interrupted write " + intent.label() + " of " + label + " unrecovered: no line of"
                     + " its pk index could be read. Run REINDEX with \"primaryKey\": true on the collection, which"
                     + " recovers this intent and rebuilds the pk index, or repair or restore the pk index; the intent"
                     + " is recovered at the next startup");
@@ -56,7 +53,7 @@ final class WriteIntentRecovery {
         }
         final var recovered = recover(intent, byId(rows.get()));
         if (recovered == null) {
-            logger.error("Leaving the interrupted vacuum " + file.getName() + " of " + label + " unrecovered: a page"
+            logger.error("Leaving the interrupted vacuum " + intent.label() + " of " + label + " unrecovered: a page"
                     + " it rewrote holds one _id twice. Repair the page, then restart or run REINDEX with"
                     + " \"primaryKey\": true");
             return;
@@ -64,7 +61,7 @@ final class WriteIntentRecovery {
         pkIndexStore.appendReplacements(intent.dbName(), intent.collName(), recovered.corrections());
         completedDeletes.addAll(recovered.completedDeletes());
         journal.end(intent);
-        logger.warning("Recovered the interrupted write " + file.getName() + " of " + label + " ("
+        logger.warning("Recovered the interrupted write " + intent.label() + " of " + label + " ("
                 + intent.items().size() + " item(s)): what its pk index commits was kept, the rest undone");
     }
 
@@ -110,15 +107,10 @@ final class WriteIntentRecovery {
 
     int recoverPagesOf(String dbName, String collName) throws IOException {
         var recovered = 0;
-        for (final var file : journal.findMarkerFiles(dbName, collName)) {
-            final var intent = WriteIntentJournal.decode(file, Files.readAllBytes(file.toPath()));
-            if (intent == null) {
-                discardTorn(file);
-                continue;
-            }
+        for (final var intent : journal.openIntents(dbName, collName)) {
             recoverPageSide(intent);
             journal.end(intent);
-            logger.warning("Recovered the pages of the interrupted write " + file.getName() + " of " + dbName
+            logger.warning("Recovered the pages of the interrupted write " + intent.label() + " of " + dbName
                     + Globals.COLL_IDENTIFIER_SEPARATOR + collName + " ahead of a PK index rebuild");
             recovered++;
         }
@@ -148,14 +140,8 @@ final class WriteIntentRecovery {
         }
     }
 
-    List<String> replayableMarkersOf(String dbName, String collName) throws IOException {
-        final var replayable = new ArrayList<String>();
-        for (final var file : journal.findMarkerFiles(dbName, collName)) {
-            if (WriteIntentJournal.decode(file, Files.readAllBytes(file.toPath())) != null) {
-                replayable.add(file.getName());
-            }
-        }
-        return replayable;
+    List<String> replayableIntentsOf(String dbName, String collName) throws IOException {
+        return journal.openIntents(dbName, collName).stream().map(WriteIntentJournal.Intent::label).toList();
     }
 
     private void undoAppends(String dbName, String collName, long targetPage, List<WriteIntent.Replace> items,
@@ -197,6 +183,7 @@ final class WriteIntentRecovery {
                     PageHoles.blank(channel, line.position(), line.length());
                 }
             }
+            SyncedWrites.content(channel, page.toPath());
         } finally {
             lock.unlock();
         }
@@ -219,6 +206,7 @@ final class WriteIntentRecovery {
             }
             try (var channel = FileChannel.open(page.toPath(), StandardOpenOption.WRITE)) {
                 PageHoles.blank(channel, position, length);
+                SyncedWrites.content(channel, page.toPath());
             }
         } finally {
             lock.unlock();
@@ -260,11 +248,5 @@ final class WriteIntentRecovery {
             byId.put(row.getValue(), row);
         }
         return byId;
-    }
-
-    private static void discardTorn(File file) throws IOException {
-        logger.warning("Discarding the write intent " + file.getPath() + ": it was torn while being written, which"
-                + " happens before any page is touched");
-        Files.deleteIfExists(file.toPath());
     }
 }

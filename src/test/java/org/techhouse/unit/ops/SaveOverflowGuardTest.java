@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -24,6 +25,7 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.IntentLogs;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
@@ -281,9 +283,8 @@ public class SaveOverflowGuardTest {
         return ((FindByIdResponse) response).getObject().get("payload").asJsonString().getValue().length();
     }
 
-    private static String[] markers() {
-        final var found = collectionFolder().list((_, name) -> name.endsWith(".intent"));
-        return found == null ? new String[0] : found;
+    private static int openIntents() throws IOException {
+        return IntentLogs.openIntents(new File(TestGlobals.PATH).getAbsolutePath(), TestGlobals.DB, TestGlobals.COLL);
     }
 
     @Test
@@ -293,7 +294,7 @@ public class SaveOverflowGuardTest {
         assertEquals(OperationStatus.OK, saveStatus(RELOCATED, GROWN));
 
         assertEquals(GROWN, payloadLengthOfTheRelocatedDocument());
-        assertEquals(0, markers().length);
+        assertEquals(0, openIntents());
     }
 
     @Test
@@ -306,7 +307,7 @@ public class SaveOverflowGuardTest {
             assertNotEquals(OperationStatus.OK, saveStatus(RELOCATED, GROWN));
 
             assertEquals(SMALL, payloadLengthOfTheRelocatedDocument());
-            assertEquals(0, markers().length);
+            assertEquals(0, openIntents());
         } finally {
             assertTrue(blockedPage.delete());
         }
