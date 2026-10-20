@@ -195,4 +195,21 @@ public class CacheSizeEstimatorTest {
         assertEquals(0L, CacheSizeEstimator.estimatePageHeap(List.of()));
         assertEquals(0L, CacheSizeEstimator.estimatePageHeap(null));
     }
+
+    @Test
+    public void test_shell_and_id_sizes_add_up_to_the_full_estimate() {
+        for (final var count : List.of(0, 1, 5_000)) {
+            final var ids = new HashSet<String>();
+            for (var i = 0; i < count; i++) {
+                ids.add("id-" + i);
+            }
+            final var entry = new FieldIndexEntry<Object>(DB, COLL, "shared value", ids);
+            var pieces = CacheSizeEstimator.fieldEntryShellSize(entry.getValue(), ids.size());
+            for (final var id : ids) {
+                pieces += CacheSizeEstimator.fieldIndexIdSize(id);
+            }
+
+            assertEquals(CacheSizeEstimator.estimateFieldIndexSize(List.of(entry)), pieces, count + " ids");
+        }
+    }
 }

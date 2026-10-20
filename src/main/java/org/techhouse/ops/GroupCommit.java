@@ -160,7 +160,8 @@ final class GroupCommit {
     }
 
     private static void runGrouped(String dbName, String collName, List<GroupedWrite> writes) {
-        if (writes.isEmpty()) {
+        if (writes.size() < 2) {
+            writes.forEach(write -> write.serve(write.runAlone()));
             return;
         }
         try {

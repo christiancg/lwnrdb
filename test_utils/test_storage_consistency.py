@@ -2032,6 +2032,51 @@ def test_updates_on_a_large_collection_stay_fast(conn: Conn):
           f"scanned={len(scanned)} expected={len(expected)}")
 
 
+CHURN_COLL = "low_cardinality_docs"
+CHURN_DOCS = 20_000
+CHURN_FLIPS = 2_000
+
+
+def flagged(conn: Conn, flag: bool, force_scan: bool) -> list:
+    return sorted(conn.ids(CHURN_COLL, (FULL_SCAN if force_scan else []) + [bu.filter_step("flag", "EQUALS", flag)]))
+
+
+def test_a_low_cardinality_index_stays_exact_under_churn(conn: Conn) -> dict:
+    section(f"{CHURN_FLIPS} flips of an indexed boolean over {CHURN_DOCS} documents keep the index exact")
+    check_status(f"create {CHURN_COLL}", conn.create_coll(CHURN_COLL), "OK")
+    check_status("index the boolean", conn.create_index("flag", coll=CHURN_COLL), "OK")
+    flags = {}
+    for start in range(0, CHURN_DOCS, LARGE_BATCH):
+        objects = [{"_id": f"lc_{i:05d}", "flag": i % 2 == 0} for i in range(start, min(start + LARGE_BATCH,
+                                                                                          CHURN_DOCS))]
+        check_status(f"bulk insert {CHURN_COLL} from {start}",
+                     conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": CHURN_COLL,
+                                "objects": objects}), "OK")
+        flags.update({obj["_id"]: obj["flag"] for obj in objects})
+    refused = []
+    for flip in range(CHURN_FLIPS):
+        doc_id = f"lc_{(flip * 7919) % CHURN_DOCS:05d}"
+        flags[doc_id] = not flags[doc_id]
+        if conn.save({"_id": doc_id, "flag": flags[doc_id]}, coll=CHURN_COLL).get("status") != "OK":
+            refused.append(doc_id)
+    check("every flip was acknowledged", not refused, f"refused: {refused[:5]}")
+    expected = {flag: sorted(k for k, v in flags.items() if v is flag) for flag in (True, False)}
+    for flag in (True, False):
+        by_index = flagged(conn, flag, force_scan=False)
+        by_scan = flagged(conn, flag, force_scan=True)
+        check(f"the index answers flag={flag} exactly as a scan does", by_index == by_scan == expected[flag],
+              f"index={len(by_index)} scan={len(by_scan)} expected={len(expected[flag])}")
+    return expected
+
+
+def test_the_churned_index_is_exact_from_disk(conn: Conn, expected: dict):
+    section("The churned boolean index answers from its files after the restart")
+    for flag in (True, False):
+        by_index = flagged(conn, flag, force_scan=False)
+        check(f"flag={flag} from the index files names {len(expected[flag])} documents", by_index == expected[flag],
+              f"index={len(by_index)} expected={len(expected[flag])}")
+
+
 def rewrite_a_pk_index_from_memory(conn: Conn) -> tuple:
     section("Updates, deletes, relocations and inserts rewrite pk.idx from the resident rows")
     check_status(f"create {MEMORY_PK_COLL}", conn.create_coll(MEMORY_PK_COLL), "OK")
@@ -2330,6 +2375,7 @@ def main():
             test_non_finite_numbers_are_refused(conn)
             test_bulk_insert_with_two_indexes_converges_quickly(conn, work_dir)
             test_updates_on_a_large_collection_stay_fast(conn)
+            churned_flags = test_a_low_cardinality_index_stays_exact_under_churn(conn)
             memory_pk_written = rewrite_a_pk_index_from_memory(conn)
             pk_order_written = churn_relocations_deletes_and_inserts(conn)
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
@@ -2374,6 +2420,7 @@ def main():
         test_an_unclean_stop_is_reported_at_the_next_startup(log_path, log_offset)
         with admin_conn() as conn:
             test_the_parked_batch_is_indexed_after_the_restart(conn)
+            test_the_churned_index_is_exact_from_disk(conn, churned_flags)
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_pk_index_rewritten_from_memory_survives_restart(conn, memory_pk_written)
             test_relocations_deletes_and_inserts_keep_the_pk_index_sorted(conn, pk_order_written)

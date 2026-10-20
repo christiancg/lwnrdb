@@ -94,3 +94,19 @@ is in bold.
 - The data directory size includes each engine's logs (InnoDB redo, PostgreSQL WAL, Couchbase index files).
 - The client is Python. It runs in separate processes to avoid the GIL, but at very high rates the client, not the
   engine, may be the bottleneck — raise `--concurrency` and check the client CPUs are not saturated.
+
+## File syscall audit
+
+Throughput hides how much file work one operation does. `test_utils/tools/audit_file_syscalls.py` runs lwnrdb alone
+in a container with `strace` attached, seeds 10k documents with two indexes and synced writes, then traces each phase
+separately (single insert, update and delete, bulk insert and update, `FIND_BY_ID`, an indexed `FILTER`) and prints
+the file syscalls per operation by file kind (`.dat`, `.wal`, `-pk.idx`, `.idxlog`, `.idx`, admin files).
+
+```bash
+mvn clean package -DskipTests
+python3 test_utils/tools/audit_file_syscalls.py --check            # fail a phase over its budget
+python3 test_utils/tools/audit_file_syscalls.py --ops 1000 --keep  # more operations, keep the raw traces
+python3 test_utils/tools/audit_file_syscalls.py --budget update=36 --no-build
+```
+
+The budgets (`BUDGETS` in the script) are a ratchet: lower one when a change removes calls, never raise one to pass.

@@ -19,6 +19,7 @@ import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.CacheableResource;
+import org.techhouse.cache.Measure;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -83,10 +84,10 @@ public class UserCachePkAccountingTest {
         return cache;
     }
 
-    private void admitUnderLock(UserCache cache) throws InterruptedException, IOException {
+    private List<PkIndexEntry> admitUnderLock(UserCache cache) throws InterruptedException, IOException {
         locks.lock(DB, COLL);
         try {
-            cache.getPkIndexAndLoadIfNecessary(DB, COLL);
+            return cache.getPkIndexAndLoadIfNecessary(DB, COLL);
         } finally {
             locks.release(DB, COLL);
         }
@@ -99,13 +100,11 @@ public class UserCachePkAccountingTest {
 
     @Test
     public void test_sweep_never_iterates_the_pk_list() throws Exception {
-        final var rows = pkRows(5);
-        final var cache = cacheReading(rows);
-        admitUnderLock(cache);
+        final var cache = cacheReading(pkRows(5));
+        final var cached = admitUnderLock(cache);
         final var recordedPerEntry = CacheSizeEstimator.pkIndexBytesPerEntry(pkRows(5));
 
-        PK_LIST_ARMED.set(true);
-        rows.add(new PkIndexEntry(DB, COLL, "row-5", 50L, 10, 0));
+        cached.add(new PkIndexEntry(DB, COLL, "row-5-" + "x".repeat(58), 50L, 10, 0));
 
         assertEquals(6 * recordedPerEntry, pkBytes(cache), "the sweep charges size() times the recorded bytes per row");
     }
@@ -237,5 +236,19 @@ public class UserCachePkAccountingTest {
 
         assertEquals(CacheSizeEstimator.estimateFieldIndexSizeByCount(2),
                 fieldIndexBytesWhileItsWriterHoldsTheLock(cache));
+    }
+
+    @Test
+    public void test_the_footprint_is_the_sum_of_the_remembered_resources() throws Exception {
+        final var cache = cacheReading(pkRows(7));
+        admitUnderLock(cache);
+        final var footprint = UserCache.class.getDeclaredMethod("footprintBytes");
+        footprint.setAccessible(true);
+
+        final var remembered = cache.listCacheableResources(Measure.REMEMBERED).stream()
+                .mapToLong(CacheableResource::estimatedSizeBytes).sum();
+
+        assertTrue(remembered > 0L);
+        assertEquals(remembered, (long) footprint.invoke(cache));
     }
 }

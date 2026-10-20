@@ -47,7 +47,7 @@ final class PageVacuum {
             return null;
         }
         final var page = paths.collectionPage(dbName, collName, pageNumber);
-        final var fileLength = page.exists() ? page.length() : 0L;
+        final var fileLength = page.length();
         final var maxPageSize = configuration.getMaxPageSize();
         if (placement == null && fileLength + appendedBytes <= maxPageSize) {
             return null;

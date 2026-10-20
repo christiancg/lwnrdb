@@ -32,6 +32,7 @@ final class WalPlan {
         private final List<byte[]> lines = new ArrayList<>();
         private final List<long[]> blanks = new ArrayList<>();
         private long lengthBefore = -1L;
+        private boolean existed;
         private byte[] separator;
         private long next;
         private int payloadStart;
@@ -64,8 +65,10 @@ final class WalPlan {
     long append(long page, byte[] line) throws IOException {
         final var changes = changesOf(page);
         if (changes.lengthBefore < 0) {
-            changes.lengthBefore = changes.file.exists() ? changes.file.length() : 0L;
-            changes.separator = PageTails.separatorBefore(changes.file);
+            final var point = PageTails.appendPoint(changes.file);
+            changes.lengthBefore = point.length();
+            changes.existed = point.exists();
+            changes.separator = point.separator();
             changes.next = changes.lengthBefore + changes.separator.length;
         }
         final var offset = changes.next;
@@ -214,7 +217,9 @@ final class WalPlan {
         try {
             for (final var changes : pages.values()) {
                 if (changes.appends()) {
-                    OwnerOnly.ensureOwnerOnlyFile(changes.file.toPath());
+                    if (!changes.existed) {
+                        OwnerOnly.ensureOwnerOnlyFile(changes.file.toPath());
+                    }
                     writeAt(changes.file, changes.lengthBefore, record.bytes(), changes.payloadStart,
                             changes.payloadLength);
                     PageTails.appended(changes.file, changes.lines.getLast());

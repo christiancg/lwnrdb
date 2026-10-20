@@ -6,6 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mockStatic;
 
 import java.io.File;
 import java.io.IOException;
@@ -282,5 +285,60 @@ public class FieldIndexLogTest {
 
             assertEquals(List.of(), forcedBy(recorder));
         }
+    }
+
+    private static int tornLineChecksDuring(IoStep step) throws IOException {
+        final var checks = new java.util.concurrent.atomic.AtomicInteger();
+        try (var locks = mockStatic(FileLocks.class, CALLS_REAL_METHODS)) {
+            locks.when(() -> FileLocks.cutUnterminatedTail(any(File.class))).thenAnswer(invocation -> {
+                checks.incrementAndGet();
+                return invocation.callRealMethod();
+            });
+            step.run();
+        }
+        return checks.get();
+    }
+
+    @FunctionalInterface
+    private interface IoStep {
+        void run() throws IOException;
+    }
+
+    @Test
+    public void test_a_known_tail_skips_the_torn_line_check() throws IOException {
+        assertEquals(1, tornLineChecksDuring(() -> store.appendIndexLog(DB, COLL, FIELD, "String",
+                List.of(change("one", List.of("a"), List.of())), List.of(entry("one", "a")))));
+
+        assertEquals(0, tornLineChecksDuring(() -> store.appendIndexLog(DB, COLL, FIELD, "String",
+                List.of(change("two", List.of("b"), List.of())), List.of(entry("one", "a"), entry("two", "b")))));
+
+        assertEquals(Map.of("one", Set.of("a"), "two", Set.of("b")), loaded());
+        assertEquals(log.length(), PageTails.knownTerminatedLength(log));
+    }
+
+    @Test
+    public void test_an_externally_changed_log_is_checked_again() throws IOException {
+        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("kept", List.of("k"), List.of())),
+                List.of(entry("kept", "k")));
+        Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn", StandardCharsets.UTF_8,
+                StandardOpenOption.APPEND);
+
+        assertEquals(1, tornLineChecksDuring(() -> store.appendIndexLog(DB, COLL, FIELD, "String",
+                List.of(change("next", List.of("n"), List.of())), List.of(entry("kept", "k"), entry("next", "n")))));
+
+        assertFalse(Files.readString(log.toPath()).contains("torn"), "the torn line is cut before the append");
+        assertEquals(Map.of("kept", Set.of("k"), "next", Set.of("n")), loaded());
+    }
+
+    @Test
+    public void test_a_folded_log_is_forgotten() throws IOException {
+        store.appendIndexLog(DB, COLL, FIELD, "String", List.of(change("kept", List.of("k"), List.of())),
+                List.of(entry("kept", "k")));
+        assertTrue(PageTails.knownTerminatedLength(log) > 0);
+
+        FieldIndexStore.replaceType(base, log, List.of(entry("kept", "k")));
+
+        assertFalse(log.exists());
+        assertEquals(-1L, PageTails.knownTerminatedLength(log));
     }
 }

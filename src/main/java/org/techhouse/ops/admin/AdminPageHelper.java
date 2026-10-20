@@ -99,7 +99,6 @@ public final class AdminPageHelper {
                 return;
             }
             final var pagesPerCollectionName = AdminPageEntry.pagesCollectionName(dbName, collName);
-            fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
             final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(EntityRef::page));
             final var existingPageEntries = cache.getAdminPageEntries(dbName, collName);
             final var workingPageEntries = existingPageEntries != null
@@ -152,6 +151,7 @@ public final class AdminPageHelper {
 
     private static void writeRows(String pagesPerCollectionName, List<AdminPageEntry> newPages, List<PageDelta> deltas)
             throws IOException {
+        fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
         if (!newPages.isEmpty()) {
             insertAdminPages(pagesPerCollectionName, newPages);
         }

@@ -2,7 +2,6 @@ package org.techhouse.ops;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -218,15 +217,13 @@ public final class SaveOperationHelper {
             }
             updatedIndexEntries.addAll(bulkUpdated);
             applyUpdateSizeDeltas(dbName, collName, bulkUpdated);
-            final var updatedIds = idSetOf(updatedIndexEntries);
-            primaryKeyIndex.removeIf(pkIndexEntry -> updatedIds.contains(pkIndexEntry.getValue()));
+            PkIndexEdits.replaceAll(primaryKeyIndex, rowsOf(bulkUpdated));
         }
         final var idsToUpdate = idSetOf(indexedDbEntriesToUpdate);
         final var entriesToInsert = entries.stream().filter(dbEntry -> !idsToUpdate.contains(dbEntry.get_id()))
                 .toList();
         final var insertedIndexEntries = new ArrayList<IndexedDbEntry>();
         try {
-            primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
             if (!entriesToInsert.isEmpty()) {
                 final var sizes = new int[entriesToInsert.size()];
                 for (var index = 0; index < sizes.length; index++) {
@@ -240,7 +237,7 @@ public final class SaveOperationHelper {
                         DbEntry::getPage, inserted -> linesById.get(inserted.get_id())));
                 addInsertedPageSizes(dbName, collName, insertedIndexEntries);
             }
-            primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
+            PkIndexEdits.insertAll(primaryKeyIndex, rowsOf(insertedIndexEntries));
         } catch (Exception e) {
             final var committedUpdates = toDbEntries(updatedIndexEntries);
             final var committedInserts = toDbEntries(insertedIndexEntries);
@@ -249,14 +246,16 @@ public final class SaveOperationHelper {
             committed.addAll(committedInserts);
             clearUncommitted(dbName, collName, entries, committed, pendingGeneration);
             throw withCommittedPart(e, committedInserts, committedUpdates);
-        } finally {
-            primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
         }
         final var updatedDbEntries = toDbEntries(updatedIndexEntries);
         final var insertedDbEntries = toDbEntries(insertedIndexEntries);
         publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration, sink);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
+    }
+
+    private static List<PkIndexEntry> rowsOf(List<IndexedDbEntry> entries) {
+        return entries.stream().map(IndexedDbEntry::getIndex).toList();
     }
 
     private static void addInsertedPageSizes(String dbName, String collName, List<IndexedDbEntry> inserted) {

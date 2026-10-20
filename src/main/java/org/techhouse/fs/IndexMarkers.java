@@ -19,6 +19,7 @@ public final class IndexMarkers {
 
     private final FilePaths paths;
     private final Set<String> marked = ConcurrentHashMap.newKeySet();
+    private final Set<String> dirtyWritten = ConcurrentHashMap.newKeySet();
     private final ReentrantLock loadLock = new ReentrantLock();
     private volatile String loadedFor;
 
@@ -72,16 +73,26 @@ public final class IndexMarkers {
     public void markDirty(String dbName, String collName) throws IOException {
         final var marker = dirtyFile(dbName, collName);
         if (marker.getParentFile().exists()) {
+            dirtyWritten.add(dbName + "|" + collName);
             touch(marker);
         }
     }
 
     public void clearDirty(String dbName, String collName) {
+        if (dirtyWritten.contains(dbName + "|" + collName)) {
+            retireDirty(dbName, collName);
+        }
+    }
+
+    public void retireDirty(String dbName, String collName) {
+        final var owner = dbName + "|" + collName;
         final var marker = dirtyFile(dbName, collName);
         if (marker.exists() && !indexLogsForced(dbName, collName)) {
             return;
         }
-        delete(marker, dbName + "|" + collName);
+        if (delete(marker, owner)) {
+            dirtyWritten.remove(owner);
+        }
     }
 
     private boolean indexLogsForced(String dbName, String collName) {

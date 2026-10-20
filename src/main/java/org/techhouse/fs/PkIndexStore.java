@@ -3,6 +3,7 @@ package org.techhouse.fs;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
@@ -69,8 +70,11 @@ final class PkIndexStore {
     PkAppend prepareAppend(String dbName, String collName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collName);
         final var before = trustedOrHealed(dbName, collName, indexFile);
-        OwnerOnly.ensureOwnerOnlyFile(indexFile.toPath());
-        return new PkAppend(indexFile, before, indexFile.length());
+        if (before == null || before.modified() == null) {
+            OwnerOnly.ensureOwnerOnlyFile(indexFile.toPath());
+            return new PkAppend(indexFile, before, indexFile.length());
+        }
+        return new PkAppend(indexFile, before, before.length());
     }
 
     void appended(String dbName, String collName, PkAppend append, int rowCount, long liveDelta) {
@@ -282,21 +286,21 @@ final class PkIndexStore {
     }
 
     private static PkFileState trusted(File indexFile) {
-        if (!indexFile.exists()) {
+        final BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
+        } catch (NoSuchFileException e) {
             return new PkFileState(0L, null, 0L, 0L);
+        } catch (IOException e) {
+            return null;
         }
         final var known = fileStates.get(indexFile.getAbsolutePath());
         if (known == null || known.modified() == null) {
             return null;
         }
-        try {
-            final var attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
-            return attributes.size() == known.length() && attributes.lastModifiedTime().equals(known.modified())
-                    ? known
-                    : null;
-        } catch (IOException e) {
-            return null;
-        }
+        return attributes.size() == known.length() && attributes.lastModifiedTime().equals(known.modified())
+                ? known
+                : null;
     }
 
     private static PkFileState remember(File indexFile, long liveRows, long deadRows) {

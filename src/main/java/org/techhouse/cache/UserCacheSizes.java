@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.PkIndexEntry;
 
 final class UserCacheSizes {
     private final Map<String, AtomicLong> collectionBytes = new ConcurrentHashMap<>();
@@ -104,6 +105,23 @@ final class UserCacheSizes {
         collectionBytes.keySet().removeIf(key -> key.startsWith(prefix));
         pkBytesPerEntry.keySet().removeIf(key -> key.startsWith(prefix));
         fieldIndexBytesPerEntry.keySet().removeIf(key -> key.startsWith(prefix));
+    }
+
+    long rememberedFootprint(Map<String, List<PkIndexEntry>> pkIndexes, Map<String, Map<String, DbEntry>> collections,
+            Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexes) {
+        var total = 0L;
+        for (final var pk : pkIndexes.entrySet()) {
+            total += pkIndexBytes(pk.getKey(), pk.getValue().size());
+        }
+        for (final var collection : collections.entrySet()) {
+            total += trackedBytes(collection.getKey(), collection.getValue());
+        }
+        for (final var collection : fieldIndexes.entrySet()) {
+            for (final var index : collection.getValue().entrySet()) {
+                total += rememberedFieldIndexBytes(collection.getKey(), index.getKey(), index.getValue().size());
+            }
+        }
+        return total;
     }
 
     private static String fieldIndexKey(String collId, String indexKey) {

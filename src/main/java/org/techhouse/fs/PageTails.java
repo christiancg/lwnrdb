@@ -4,6 +4,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.Map;
@@ -20,20 +21,42 @@ final class PageTails {
     private PageTails() {
     }
 
-    static byte[] separatorBefore(File page) throws IOException {
-        final var remembered = terminated.get(page.getAbsolutePath());
-        if (remembered != null && remembered.equals(tailOf(page))) {
-            return NO_SEPARATOR;
+    record AppendPoint(long length, byte[] separator, boolean exists) {
+    }
+
+    static AppendPoint appendPoint(File page) throws IOException {
+        final BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(page.toPath(), BasicFileAttributes.class);
+        } catch (NoSuchFileException e) {
+            return new AppendPoint(0L, NO_SEPARATOR, false);
         }
-        return FileLocks.separatorBeforeAppend(page).getBytes(StandardCharsets.UTF_8);
+        final var tail = new Tail(attributes.size(), attributes.lastModifiedTime());
+        final var separator = tail.equals(terminated.get(page.getAbsolutePath()))
+                ? NO_SEPARATOR
+                : FileLocks.separatorBeforeAppend(page).getBytes(StandardCharsets.UTF_8);
+        return new AppendPoint(tail.size(), separator, true);
+    }
+
+    static long knownTerminatedLength(File file) {
+        final var remembered = terminated.get(file.getAbsolutePath());
+        return remembered != null && remembered.equals(tailOf(file)) ? remembered.size() : -1L;
     }
 
     static void appended(File page, byte[] lastLine) {
-        final var tail = lastLine.length > 0 && lastLine[lastLine.length - 1] == LINE_FEED ? tailOf(page) : null;
-        if (tail == null) {
-            forget(page);
+        if (lastLine.length > 0 && lastLine[lastLine.length - 1] == LINE_FEED) {
+            appendedWholeLines(page);
         } else {
-            terminated.put(page.getAbsolutePath(), tail);
+            forget(page);
+        }
+    }
+
+    static void appendedWholeLines(File file) {
+        final var tail = tailOf(file);
+        if (tail == null) {
+            forget(file);
+        } else {
+            terminated.put(file.getAbsolutePath(), tail);
         }
     }
 

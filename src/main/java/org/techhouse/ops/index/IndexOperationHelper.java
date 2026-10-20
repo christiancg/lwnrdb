@@ -186,7 +186,7 @@ public final class IndexOperationHelper {
             Set<String> registeredIndexes) {
         if (Set.copyOf(rebuiltFields).containsAll(registeredIndexes)) {
             pendingIndexWrites.clearCollection(dbName, collName);
-            fs.indexMarkers().clearDirty(dbName, collName);
+            fs.indexMarkers().retireDirty(dbName, collName);
             fs.indexMarkers().clearUncleanStop(dbName, collName);
         }
     }

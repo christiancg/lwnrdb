@@ -65,25 +65,35 @@ final class FieldIndexLog {
 
     static boolean append(File base, File log, List<IndexLogChange> changes) throws IOException {
         final var content = encode(changes);
+        final var knownLength = PageTails.knownTerminatedLength(log);
+        var logBytes = knownLength;
         if (content.size() > 0) {
-            FileLocks.cutUnterminatedTail(log);
-            final var lengthBeforeAppend = log.exists() ? log.length() : 0L;
+            if (knownLength < 0) {
+                FileLocks.cutUnterminatedTail(log);
+                logBytes = log.length();
+            }
+            final var lengthBeforeAppend = logBytes;
             var appended = false;
             try {
-                OwnerOnly.ensureOwnerOnlyFile(log.toPath());
+                if (knownLength < 0) {
+                    OwnerOnly.ensureOwnerOnlyFile(log.toPath());
+                }
                 try (var out = new FileOutputStream(log, true)) {
                     content.writeTo(out);
                 }
                 appended = true;
                 rememberUnforced(log);
+                PageTails.appendedWholeLines(log);
+                logBytes += content.size();
             } finally {
                 if (!appended && log.length() != lengthBeforeAppend) {
                     FileLocks.truncateTo(log, lengthBeforeAppend, APPEND_ROLLBACK_FAILURE);
                 }
             }
+        } else if (knownLength < 0) {
+            logBytes = log.length();
         }
-        final var baseBytes = base.exists() ? base.length() : 0L;
-        return log.exists() && log.length() >= Math.max(baseBytes, Globals.FIELD_INDEX_LOG_MIN_BYTES);
+        return logBytes >= Math.max(base.length(), Globals.FIELD_INDEX_LOG_MIN_BYTES);
     }
 
     private static ByteArrayOutputStream encode(List<IndexLogChange> changes) throws IOException {

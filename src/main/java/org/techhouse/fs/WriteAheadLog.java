@@ -1,8 +1,8 @@
 package org.techhouse.fs;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
@@ -188,11 +188,15 @@ final class WriteAheadLog {
             throws IOException {
         var appended = false;
         try {
-            try (var out = new FileOutputStream(log, true)) {
-                out.write(header);
-                out.write(payload, 0, payloadLength);
+            try (var channel = FileChannel.open(log.toPath(), StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                final var buffers = new ByteBuffer[]{ByteBuffer.wrap(header),
+                        ByteBuffer.wrap(payload, 0, payloadLength)};
+                var unwritten = (long) header.length + payloadLength;
+                while (unwritten > 0) {
+                    unwritten -= channel.write(buffers);
+                }
                 if (force) {
-                    SyncedWrites.content(out.getChannel(), log.toPath());
+                    SyncedWrites.content(channel, log.toPath());
                 }
             }
             appended = true;
@@ -357,8 +361,7 @@ final class WriteAheadLog {
 
     private static LogState stateOf(File log, String dbName, String collName) throws IOException {
         final var state = states.computeIfAbsent(log.getAbsolutePath(), _ -> new LogState(dbName, collName));
-        final var length = log.exists() ? log.length() : 0L;
-        if (length != state.knownLength) {
+        if (log.length() != state.knownLength) {
             reseed(log, state);
         }
         return state;

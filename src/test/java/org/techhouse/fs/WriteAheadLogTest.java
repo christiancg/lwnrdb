@@ -361,4 +361,30 @@ public class WriteAheadLogTest {
                     recorder.forcedNames().toString());
         }
     }
+
+    @Test
+    public void test_an_append_outside_a_group_is_one_forced_record() throws Exception {
+        try (var recorder = RecordingForcer.install(true)) {
+            final var lengthBefore = log().length();
+
+            rf.replace("a", "new-a", 0, PagePlacement.APPEND);
+
+            assertEquals(1L, wals(recorder));
+            final var records = decoded().records();
+            assertEquals(4, records.size());
+            assertFalse(records.getLast().changes().isEmpty(), "the header and the payload landed together");
+            assertEquals(log().length() - lengthBefore, WalCodec.encode(records.getLast()).length);
+        }
+    }
+
+    @Test
+    public void test_state_of_a_missing_log_is_empty() throws Exception {
+        assertTrue(log().delete());
+
+        rf.replace("a", "new-a", 0, PagePlacement.APPEND);
+
+        final var decoded = decoded();
+        assertEquals(DB, decoded.checkpoint().dbName(), "a log that is gone starts over with a checkpoint");
+        assertEquals(1, decoded.records().size());
+    }
 }
