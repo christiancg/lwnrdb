@@ -254,4 +254,26 @@ public class FilterCountFastPathAgreementTest extends FilterResolutionSupport {
         indexField(FIELD);
         assertThrows(ScriptCallableException.class, () -> AggregationOperationHelper.processAggregation(request));
     }
+
+    @Test
+    public void test_a_range_count_matches_the_rows_with_and_without_pending_ids() throws Exception {
+        seed();
+        indexField(FIELD);
+        final var queries = new LinkedHashMap<String, FilterAggregationStep>();
+        queries.put("bounded",
+                new FilterAggregationStep(new ConjunctionOperator(ConjunctionOperatorType.AND,
+                        List.of(new FieldOperator(FieldOperatorType.GREATER_THAN_EQUALS, FIELD, new JsonNumber(1.5)),
+                                new FieldOperator(FieldOperatorType.SMALLER_THAN_EQUALS, FIELD, new JsonNumber(2))))));
+        queries.put("one-sided", filter(FieldOperatorType.GREATER_THAN, FIELD, new JsonNumber(1.5)));
+        assertCountMatchesRows(queries);
+
+        insert("c", FIELD, new JsonNumber(9));
+        final var pending = org.techhouse.ioc.IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
+        pending.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("c"));
+        try {
+            assertCountMatchesRows(queries);
+        } finally {
+            pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
 }

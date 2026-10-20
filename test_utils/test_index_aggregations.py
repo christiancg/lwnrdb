@@ -232,6 +232,13 @@ FILTER_OBJECT_IN_STEPS = [{"type": "FILTER", "operator": {
     "value": [{"n": v, "category": category_for(v)} for v in range(3)]}}]
 FILTER_GEO_DISTANCE_STEPS = geo_distance_steps("SMALLER_THAN", 5000)
 FILTER_GEO_WITHIN_STEPS = geo_within_steps(GEO_CLUSTER_POLYGON)
+RANGE_LOW = NUM_DOCS // 4
+RANGE_WIDTH = 50
+RANGE_AND_FILTER = {"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+    {"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "score", "value": RANGE_LOW},
+    {"fieldOperatorType": "SMALLER_THAN", "field": "score", "value": RANGE_LOW + RANGE_WIDTH}]}}
+RANGE_AND_STEPS = [RANGE_AND_FILTER, {"type": "SORT", "fieldName": "score", "ascending": True},
+                   {"type": "LIMIT", "limit": 10}]
 
 
 def distinct_signature(r):
@@ -1981,6 +1988,24 @@ def join_cap_suite(c):
     c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": JOIN_CAP_COLL})
 
 
+def test_a_bounded_range_and_reads_only_its_documents(c):
+    section("An AND of two bounds on one indexed field reads only the documents inside the range")
+    r = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+                "aggregationSteps": RANGE_AND_STEPS, "analyze": True})
+    check_status("the bounded range query answers", r, "OK")
+    analysis = r.get("analyzeResult") or {}
+    check("it reads exactly the documents inside the range, not each bound's half of the collection",
+          analysis.get("documentsScanned") == RANGE_WIDTH, f"scanned {analysis.get('documentsScanned')}")
+    check("the rows match the same query on the scan path",
+          bu.ids_of(r) == bu.ids_of(agg(c, COLL, forced_scan(RANGE_AND_STEPS))))
+    counted = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+                      "aggregationSteps": [RANGE_AND_FILTER, {"type": "COUNT"}], "analyze": True})
+    check("COUNT of the range is answered from the index alone",
+          (counted.get("analyzeResult") or {}).get("documentsScanned") == 0, str(counted.get("analyzeResult")))
+    check("COUNT of the range equals its width", agg_count(c, COLL, [RANGE_AND_FILTER]) == RANGE_WIDTH,
+          f"count {agg_count(c, COLL, [RANGE_AND_FILTER])}")
+
+
 def test_wide_and_conjunction_stays_within_memory(c):
     section("A source AND of 2000 children keeps one tally per document, not one row per child")
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
@@ -2074,6 +2099,8 @@ def main():
          forced_scan(FILTER_GEO_DISTANCE_STEPS), bu.ids_of, False),
         ("FILTER geo within polygon", COLL, FILTER_GEO_WITHIN_STEPS, forced_scan(FILTER_GEO_WITHIN_STEPS),
          bu.ids_of, False),
+        ("FILTER AND range on score (+SORT +LIMIT 10)", COLL, RANGE_AND_STEPS, forced_scan(RANGE_AND_STEPS),
+         bu.ids_of, True),
     ]
 
     unindexed = {}
@@ -2118,6 +2145,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_wide_and_conjunction_stays_within_memory(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_a_bounded_range_and_reads_only_its_documents(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

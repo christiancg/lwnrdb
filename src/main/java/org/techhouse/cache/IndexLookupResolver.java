@@ -3,8 +3,10 @@ package org.techhouse.cache;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.Set;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
@@ -19,10 +21,12 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.RangeBounds;
 import org.techhouse.utils.SearchUtils;
 
 final class IndexLookupResolver {
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private static final ResourceLocking locking = IocContainer.get(ResourceLocking.class);
 
     private IndexLookupResolver() {
     }
@@ -43,6 +47,53 @@ final class IndexLookupResolver {
             };
             default -> scalarLookup(userCache, dbName, collName, fieldName, opType, value);
         };
+    }
+
+    static Set<String> idsInRange(UserCache userCache, String dbName, String collName, RangeBounds bounds)
+            throws IOException {
+        final var fieldName = bounds.fieldName();
+        return readingIndex(dbName, collName, fieldName, () -> {
+            final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
+            if (index == null) {
+                return null;
+            }
+            final var ids = SearchUtils.findingBetween(index, bounds);
+            userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+            return new HashSet<>(ids);
+        });
+    }
+
+    static OptionalLong countInRange(UserCache userCache, String dbName, String collName, RangeBounds bounds)
+            throws IOException {
+        final var fieldName = bounds.fieldName();
+        return readingIndex(dbName, collName, fieldName, () -> {
+            final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
+            if (index == null) {
+                return OptionalLong.empty();
+            }
+            userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+            return OptionalLong.of(SearchUtils.countBetween(index, bounds));
+        });
+    }
+
+    @FunctionalInterface
+    private interface IndexRead<R> {
+        R read() throws IOException;
+    }
+
+    private static <R> R readingIndex(String dbName, String collName, String fieldName, IndexRead<R> read)
+            throws IOException {
+        try {
+            locking.lockIndexRead(dbName, collName, fieldName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while acquiring index read lock", e);
+        }
+        try {
+            return read.read();
+        } finally {
+            locking.releaseIndexRead(dbName, collName, fieldName);
+        }
     }
 
     private static boolean isEquality(FieldOperatorType opType) {

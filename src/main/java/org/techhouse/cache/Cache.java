@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.techhouse.config.Globals;
@@ -17,6 +18,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.utils.RangeBounds;
 
 public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private static final String FIELD_LOOKUP_LABEL = "~lookup";
@@ -92,6 +94,14 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
             T value) throws IOException {
         return userCache.getIdsFromIndex(dbName, collName, fieldName, operator, value);
+    }
+
+    public Set<String> getIdsInRange(String dbName, String collName, RangeBounds bounds) throws IOException {
+        return IndexLookupResolver.idsInRange(userCache, dbName, collName, bounds);
+    }
+
+    public OptionalLong countInRange(String dbName, String collName, RangeBounds bounds) throws IOException {
+        return IndexLookupResolver.countInRange(userCache, dbName, collName, bounds);
     }
 
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {

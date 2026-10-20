@@ -7,9 +7,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.PendingWriteReconciler;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
@@ -43,6 +45,10 @@ public final class CountOperatorHelper {
         if (countIndex < 1 || AggregationStepValidator.canFailWhileRunning(steps.subList(0, countIndex))) {
             return null;
         }
+        final var rangeCount = countOfSingleRange(steps, countIndex, dbName, collName, context);
+        if (rangeCount != null) {
+            return rangeCount;
+        }
         final var filterSets = new ArrayList<Set<String>>();
         var documentsModified = false;
         for (var i = 0; i < countIndex; i++) {
@@ -70,6 +76,32 @@ public final class CountOperatorHelper {
         final var count = filterSets.isEmpty() ? wholeCollectionCount(dbName, collName) : intersectionSize(filterSets);
         final var result = new JsonObject();
         result.addProperty(COUNT_FIELD_NAME, (long) count);
+        return new FastCount(result, countIndex + 1);
+    }
+
+    private static FastCount countOfSingleRange(List<BaseAggregationStep> steps, int countIndex, String dbName,
+            String collName, PipelineContext context) throws IOException {
+        final var filters = steps.subList(0, countIndex).stream()
+                .filter(step -> step.getType() != AggregationStepType.SORT).toList();
+        if (filters.size() != 1 || filters.getFirst().getType() != AggregationStepType.FILTER) {
+            return null;
+        }
+        final var bounds = ConjunctionCandidates
+                .singleRange(((FilterAggregationStep) filters.getFirst()).getOperator());
+        if (bounds == null || cache.hasNoIndex(dbName, collName, bounds.fieldName())) {
+            return null;
+        }
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
+        if (!pendingBefore.isEmpty()) {
+            return null;
+        }
+        final var count = cache.countInRange(dbName, collName, bounds);
+        if (count.isEmpty() || !PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName).isEmpty()) {
+            return null;
+        }
+        context.indexUsed(bounds.fieldName(), AnalyzeContext.fieldLockId(dbName, collName, bounds.fieldName()));
+        final var result = new JsonObject();
+        result.addProperty(COUNT_FIELD_NAME, count.getAsLong());
         return new FastCount(result, countIndex + 1);
     }
 

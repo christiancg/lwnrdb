@@ -1,6 +1,7 @@
 import json
 import random
-from collections import Counter, namedtuple
+from collections import Counter
+from typing import NamedTuple
 
 from . import values
 from .execute import accepted
@@ -45,7 +46,12 @@ VECTOR_TARGET = "#vector(1.0,0.0,0.0)"
 NON_COMMUTATIVE_REDUCE_SCRIPT = "export default (acc, doc) => acc + '|' + doc._id;"
 ROW_FOLD_SCRIPT = "export default (acc, row) => acc + '|' + JSON.stringify(row);"
 
-Query = namedtuple("Query", "label steps ordered kind")
+
+class Query(NamedTuple):
+    label: str
+    steps: list
+    ordered: bool
+    kind: str
 
 
 class Stats:
@@ -195,6 +201,27 @@ def conjunction_queries(rng, fields: list) -> list:
     return queries
 
 
+LOWER_BOUNDS = ("GREATER_THAN", "GREATER_THAN_EQUALS")
+UPPER_BOUNDS = ("SMALLER_THAN", "SMALLER_THAN_EQUALS")
+
+
+def _numeric_bound(query, kinds: tuple):
+    if query.kind != FILTER_QUERY or len(query.steps) != 1 or "conjunctionType" in query.steps[0]["operator"]:
+        return None
+    operator = query.steps[0]["operator"]
+    value = operator.get("value")
+    numeric = isinstance(value, (int, float)) and not isinstance(value, bool)
+    return operator if numeric and operator.get("fieldOperatorType") in kinds else None
+
+
+def bounded_range_queries(queries: list) -> list:
+    lowers = [bound for bound in (_numeric_bound(query, LOWER_BOUNDS) for query in queries) if bound]
+    uppers = [bound for bound in (_numeric_bound(query, UPPER_BOUNDS) for query in queries) if bound]
+    return [Query(f"FILTER AND({label_of([lower, upper])})", [conjunction_step("AND", [lower, upper])], False,
+                  FILTER_QUERY)
+            for lower in lowers for upper in uppers if lower["field"] == upper["field"]]
+
+
 def map_queries(rng, fields: list) -> list:
     queries = []
     for field in fields:
@@ -297,6 +324,7 @@ def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
     queries.append(fold_order_query())
     queries.extend(conjunction_queries(rng, fields))
     queries.extend(map_queries(rng, fields))
+    queries.extend(bounded_range_queries(queries))
     queries.extend(custom_operator_queries(fields))
     queries.extend(fold_after_queries(queries, fields))
     return queries
