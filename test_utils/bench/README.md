@@ -110,3 +110,28 @@ python3 test_utils/tools/audit_file_syscalls.py --budget update=36 --no-build
 ```
 
 The budgets (`BUDGETS` in the script) are a ratchet: lower one when a change removes calls, never raise one to pass.
+
+## CPU and allocation profile per phase
+
+`test_utils/tools/profile_bench_cpu.py` runs the same workload against a lwnrdb recording with Java Flight Recorder
+(a `eclipse-temurin:27-jdk` image around the jar, because the bench image is jlinked without `jdk.jfr`), under the same
+CPU and memory limits, and keeps the recording plus a client log stamped line by line. `ProfileReport.java` splits the
+samples per phase with those stamps and prints, for each phase, the hottest frames by self time, the same time
+attributed to the nearest `org.techhouse` frame (a `HashMap.putVal` is reported under the method that called it),
+the inclusive share of project methods, the share of any pattern you name, and the sampled allocation by owner.
+
+```bash
+mvn clean package -DskipTests
+python3 test_utils/tools/profile_bench_cpu.py mine --docs 100000 --ops-scale 6 --phases insert,update_by_id
+java test_utils/tools/ProfileReport.java test_utils/bench/results/profiles/mine.jfr \
+    test_utils/bench/results/profiles/mine.log --top 10 CacheSizeEstimator BackgroundProcessorThread
+```
+
+`--jar` profiles another build and `--out` moves the files. Unrecognised flags go to `bench_client.py`.
+Use `--ops-scale 6` or more for the read and write phases, because one phase at the default scale lasts one or two
+seconds and yields a few hundred samples, and `--docs 400000 --phases bulk_insert` for the bulk path.
+
+To compare two builds, alternate them in a balanced order (for example A B B A A B) and run each at least three times:
+one phase of an untouched control (`get_by_id`) moved by 20% between identical runs on a laptop, and a build that always
+runs second can look slower or faster than it is. Treat a gap under about 10% with overlapping runs as unproven, and
+back a throughput difference with the change in a CPU share the profile names.

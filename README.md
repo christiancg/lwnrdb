@@ -2065,8 +2065,8 @@ reached the disk leaves nothing. When the force fails, every write of the group 
 error. Writes inside a transaction, on a collection with triggers or before-hooks, nested in a trigger, with
 `syncWrites=false` or with clustering on take the one-force-per-write path. A dirty read (`"dirtyRead":true`) can see a
 grouped write before its force. A force costs what the disk makes it cost, and the per-collection write lock is held
-across it, so it bounds the write rate of one collection: with 8 clients the Docker bench measured 3-4k synced inserts
-and updates and 5-7k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
+across it, so it bounds the write rate of one collection: with 8 clients the Docker bench measured 4-5k synced inserts
+and updates and 7-8k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
 Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed
 there; the Docker image on Linux is the production target). Different collections write in parallel. Logs and the generated TLS keystore are not forced.
 
