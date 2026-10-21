@@ -261,9 +261,13 @@ public class UserCacheFootprintTest {
     private static final long FINITE_BUDGET = 1L << 30;
 
     private static long withFiniteBudget(TestBody body) throws Exception {
+        return withBudget(FINITE_BUDGET, body);
+    }
+
+    private static long withBudget(long budget, TestBody body) throws Exception {
         final var configuration = Configuration.getInstance();
         final var original = configuration.getMaxMemoryBytes();
-        TestUtils.setPrivateField(configuration, "maxMemoryBytes", FINITE_BUDGET);
+        TestUtils.setPrivateField(configuration, "maxMemoryBytes", budget);
         try {
             FIELD_INDEX_ITERATIONS.set(0);
             body.run();
@@ -297,10 +301,28 @@ public class UserCacheFootprintTest {
         try {
             assertEquals(0, withFiniteBudget(() -> memoryManagement.ensureHeadroomForBytes(1L)),
                     "the write path's headroom check uses remembered sizes");
-            assertTrue(withFiniteBudget(memoryManagement::runEvictionSweep) > 0,
-                    "the 5 s sweep re-measures every resident index");
+            assertTrue(withBudget(rememberedBytesOf(userCache) * 2, memoryManagement::runEvictionSweep) > 0,
+                    "the 5 s sweep re-measures every resident index once the cache is half of its budget");
             assertTrue(withFiniteBudget(() -> userCache.listCacheableResources(Measure.FULL)) > 0);
             assertEquals(0, withFiniteBudget(() -> userCache.listCacheableResources(Measure.REMEMBERED)));
+        } finally {
+            userCache.evictCollection(DB, COLL);
+        }
+    }
+
+    private static long rememberedBytesOf(UserCache cache) {
+        return cache.listCacheableResources(Measure.REMEMBERED).stream()
+                .mapToLong(CacheableResource::estimatedSizeBytes).sum();
+    }
+
+    @Test
+    public void sweepSkipsTheFullMeasureWhileTheCacheIsFarBelowItsBudget() throws Exception {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var memoryManagement = IocContainer.get(MemoryManagement.class);
+        publishFieldIndex(userCache);
+        try {
+            assertEquals(0, withFiniteBudget(memoryManagement::runEvictionSweep),
+                    "a cache far below its budget has nothing to evict, so the sweep must not walk its indexes");
         } finally {
             userCache.evictCollection(DB, COLL);
         }

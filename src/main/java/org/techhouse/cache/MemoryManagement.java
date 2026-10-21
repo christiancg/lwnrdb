@@ -17,6 +17,7 @@ import org.techhouse.log.Logger;
 
 public class MemoryManagement {
     static final long SWEEP_INTERVAL_SECONDS = 5L;
+    static final long FULL_MEASURE_FROM_PERCENT = 50L;
     static final long USAGE_RETENTION_MILLIS = 24L * 60L * 60L * 1000L;
     static final long USAGE_CLEANUP_INTERVAL_SECONDS = 60L * 60L;
 
@@ -156,10 +157,17 @@ public class MemoryManagement {
             return;
         }
         try {
-            evictDownTo(config.getMaxMemoryBytes(), Measure.FULL);
+            final var maxBytes = config.getMaxMemoryBytes();
+            if (isWorthMeasuringInFull(maxBytes)) {
+                evictDownTo(maxBytes, Measure.FULL);
+            }
         } finally {
             sweepRunning.set(false);
         }
+    }
+
+    private boolean isWorthMeasuringInFull(long maxBytes) {
+        return userCacheBytes(Measure.REMEMBERED) * 100L >= maxBytes * FULL_MEASURE_FROM_PERCENT;
     }
 
     public void ensureHeadroomForBytes(long nextPageEstimateBytes) {
