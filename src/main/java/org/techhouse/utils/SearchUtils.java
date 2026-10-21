@@ -182,7 +182,11 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> toIdSet(List<FieldIndexEntry<T>> entries, int start, int foundIndex) {
-        final var ids = new HashSet<String>();
+        var total = 0;
+        for (var i = start; i < foundIndex; i++) {
+            total += entries.get(i).getIds().size();
+        }
+        final var ids = HashSet.<String>newHashSet(total);
         for (var i = start; i < foundIndex; i++) {
             ids.addAll(entries.get(i).getIds());
         }

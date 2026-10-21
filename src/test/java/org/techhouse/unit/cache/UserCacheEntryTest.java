@@ -401,4 +401,41 @@ public class UserCacheEntryTest {
         final var inner = collectionMap.get(collId);
         assertTrue(inner == null || !inner.containsKey("id2"));
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void test_getEntriesByIds_with_more_ids_than_the_initial_capacity_mixes_cached_hits_and_misses()
+            throws Exception {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var known = new ArrayList<PkIndexEntry>();
+        final var requested = new HashSet<String>();
+        for (var i = 0; i < 500; i++) {
+            final var id = "id%03d".formatted(i);
+            requested.add(id);
+            if (i < 350) {
+                known.add(new PkIndexEntry("userDb", "c1", id, i * 50L, 50, 0));
+            }
+            if (i < 250) {
+                final var object = new JsonObject();
+                object.addProperty(Globals.PK_FIELD, id);
+                injectCachedEntry(cache, collId, DbEntry.fromJsonObject("userDb", "c1", object));
+            }
+        }
+        injectPkIndex(cache, collId, known);
+        when(fsMock.getByIndexEntries(anyList()))
+                .thenAnswer(invocation -> ((List<PkIndexEntry>) invocation.getArgument(0)).stream().map(pk -> {
+                    final var object = new JsonObject();
+                    object.addProperty(Globals.PK_FIELD, pk.getValue());
+                    return DbEntry.fromJsonObject("userDb", "c1", object);
+                }).toList());
+
+        final var result = cache.getEntriesByIds("userDb", "c1", requested);
+
+        assertEquals(350, result.size());
+        assertEquals(350, result.stream().map(DbEntry::get_id).distinct().count());
+        verify(fsMock).getByIndexEntries(argThat(read -> read.size() == 100));
+    }
 }

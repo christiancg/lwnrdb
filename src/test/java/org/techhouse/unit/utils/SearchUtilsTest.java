@@ -334,4 +334,32 @@ public class SearchUtilsTest {
                 List.of("active", "active", "active"));
         assertEquals(Set.of("id2"), result);
     }
+
+    @Test
+    public void test_equals_result_is_detached_from_the_index_entries() {
+        final var live = new HashSet<>(Set.of("id1", "id2"));
+        List<FieldIndexEntry<String>> entries = List.of(new FieldIndexEntry<>("db", "col", "v", live));
+
+        final var result = SearchUtils.findingByOperator(entries, FieldOperatorType.EQUALS, "v");
+        live.add("late");
+        result.add("mine");
+
+        assertEquals(Set.of("id1", "id2", "mine"), result);
+        assertEquals(Set.of("id1", "id2", "late"), live);
+    }
+
+    @Test
+    public void test_a_range_over_empty_and_oversized_entries_collects_every_id() {
+        final var big = new HashSet<String>();
+        for (var i = 0; i < 100; i++) {
+            big.add("big" + i);
+        }
+        List<FieldIndexEntry<Integer>> entries = List.of(new FieldIndexEntry<>("db", "col", 1, Set.of("a")),
+                new FieldIndexEntry<>("db", "col", 2, Set.of()), new FieldIndexEntry<>("db", "col", 3, big));
+
+        final var result = SearchUtils.findingByOperator(entries, FieldOperatorType.GREATER_THAN, 1);
+
+        assertEquals(big, result);
+        assertEquals(100, result.size());
+    }
 }

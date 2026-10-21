@@ -26,6 +26,8 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -40,6 +42,7 @@ public class AllocationBudgetTest {
     private static final long COLD_SCAN_BUDGET_PER_DOC = 4 * KB;
     private static final long BATCH_OF_ONE_BUDGET = 11 * KB;
     private static final long BULK_UPDATE_BUDGET_PER_DOC = 4 * KB;
+    private static final long INDEXED_ID_LOOKUP_BUDGET = 21_580;
     private static final long SAVE_REQUEST_PARSE_BUDGET = 3_120;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """
@@ -214,6 +217,20 @@ public class AllocationBudgetTest {
                 () -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("d" + next[0]++ * 53)));
         assertTrue(measured <= BATCH_OF_ONE_BUDGET,
                 report("a background batch of one id", measured, BATCH_OF_ONE_BUDGET));
+    }
+
+    @Test
+    void indexedIdLookupAllocatesUnderBudget() throws Exception {
+        final var operator = new FieldOperator(FieldOperatorType.EQUALS, "cat", new JsonString("c3"));
+        assertTrue(locks.tryLockRead(TestGlobals.DB, TestGlobals.COLL, 5_000));
+        try {
+            final var measured = cheapestOf(
+                    () -> cache.getIdsFromIndex(TestGlobals.DB, TestGlobals.COLL, "cat", operator, "c3"));
+            assertTrue(measured <= INDEXED_ID_LOOKUP_BUDGET,
+                    report("an indexed lookup of 500 ids", measured, INDEXED_ID_LOOKUP_BUDGET));
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
     }
 
     @Test

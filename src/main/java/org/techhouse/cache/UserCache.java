@@ -3,7 +3,6 @@ package org.techhouse.cache;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -218,9 +217,8 @@ public class UserCache {
             if (result == null) {
                 return null;
             }
-            final var snapshot = new HashSet<>(result);
             recordFieldIndexAccess(dbName, collName, fieldName);
-            return snapshot;
+            return result;
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
         }
@@ -313,10 +311,10 @@ public class UserCache {
     }
 
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
-        final var result = new ArrayList<DbEntry>();
         if (ids == null || ids.isEmpty()) {
-            return result;
+            return new ArrayList<>();
         }
+        final var result = new ArrayList<DbEntry>(ids.size());
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var cachingDisabled = isCachingDisabled(dbName);
         final var cached = cachingDisabled ? null : collectionMap.get(collectionIdentifier);

@@ -59,7 +59,7 @@ final class IndexLookupResolver {
             }
             final var ids = SearchUtils.findingBetween(index, bounds);
             userCache.recordFieldIndexAccess(dbName, collName, fieldName);
-            return new HashSet<>(ids);
+            return ids;
         });
     }
 
