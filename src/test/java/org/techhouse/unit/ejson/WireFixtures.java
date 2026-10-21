@@ -43,7 +43,7 @@ final class WireFixtures {
         final var root = classesRoot();
         for (final var packagePath : List.of("org/techhouse/ops/req", "org/techhouse/ops/resp")) {
             try (Stream<Path> walk = Files.walk(root.resolve(packagePath))) {
-                walk.filter(path -> path.toString().endsWith(".class") && !path.getFileName().toString().contains("$"))
+                walk.filter(path -> path.toString().endsWith(".class") && !path.toString().contains("$"))
                         .map(path -> classNamed(root, path)).filter(WireFixtures::isWireClass).forEach(classes::add);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
