@@ -1,9 +1,10 @@
 package org.techhouse.ejson.internal;
 
-import java.lang.reflect.AccessFlag;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -12,8 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.ejson.elements.JsonBaseElement;
-import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.exceptions.NoConstructorException;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
 public class ReflectionUtils {
@@ -21,7 +20,6 @@ public class ReflectionUtils {
     }
 
     private static final Map<Class<?>, ClassSpecification> classSpecifications = new ConcurrentHashMap<>();
-    private static final Map<Class<?>, Method> enumValueOf = new ConcurrentHashMap<>();
 
     public static <T> Object getFieldValue(Field field, T instance) throws IllegalAccessException {
         return field.get(instance);
@@ -71,146 +69,95 @@ public class ReflectionUtils {
         return tClass.getDeclaredConstructors();
     }
 
-    public static <T> T createInstance(Class<T> tClass, JsonBaseElement parsed) throws Exception {
-        final var constructors = getConstructors(tClass);
-        for (var constructor : constructors) {
-            final var constructorModifiers = constructor.getModifiers();
-            if (constructor.getParameters().length == 0 && Modifier.isPublic(constructorModifiers)) {
-                return tClass.cast(constructor.newInstance());
-            }
-        }
-        final var fields = getFields(tClass);
-        final var finalFields = new ArrayList<Field>();
-        for (var field : fields) {
-            if (field.accessFlags().contains(AccessFlag.FINAL)) {
-                finalFields.add(field);
-            }
-        }
-        final var parsedObject = (JsonObject) parsed;
-        for (var constructor : constructors) {
-            final var parameters = constructor.getParameters();
-            if (parameters.length == finalFields.size()) {
-                final var parameterValues = new Object[parameters.length];
-                var shouldContinue = true;
-                for (int i = 0; i < parameters.length; i++) {
-                    final var parameter = parameters[i];
-                    final var finalField = finalFields.get(i);
-                    if (parameter.getType() != finalField.getType() || !parsedObject.has(finalField.getName())) {
-                        shouldContinue = false;
-                        break;
-                    } else {
-                        final var fieldValue = parsedObject.get(finalField.getName());
-                        final var actualValue = cast(parameter.getType(), fieldValue, null);
-                        parameterValues[i] = actualValue;
-                    }
-                }
-                if (shouldContinue) {
-                    constructor.setAccessible(true);
-                    return tClass.cast(constructor.newInstance(parameterValues));
-                }
-            }
-        }
-        try {
-            return UnsafeAllocator.INSTANCE.newInstance(tClass);
-        } catch (Exception e) {
-            throw new NoConstructorException(tClass);
-        }
-    }
-
-    public static <T> T createRecordInstance(Class<T> tClass, JsonObject parsed) throws Exception {
-        final var components = tClass.getRecordComponents();
-        final var componentTypes = new Class<?>[components.length];
-        final var arguments = new Object[components.length];
-        for (var i = 0; i < components.length; i++) {
-            final var componentType = components[i].getType();
-            componentTypes[i] = componentType;
-            final var name = components[i].getName();
-            final var value = parsed.has(name)
-                    ? cast(componentType, parsed.get(name), components[i].getGenericType())
-                    : null;
-            arguments[i] = value == null ? defaultComponentValue(componentType) : value;
-        }
-        final var constructor = tClass.getDeclaredConstructor(componentTypes);
-        constructor.setAccessible(true);
-        return tClass.cast(constructor.newInstance(arguments));
-    }
-
-    private static Object defaultComponentValue(Class<?> componentType) {
-        if (!componentType.isPrimitive()) {
-            return null;
-        }
-        return switch (componentType.getName()) {
-            case "boolean" -> false;
-            case "char" -> '\0';
-            case "byte" -> (byte) 0;
-            case "short" -> (short) 0;
-            case "int" -> 0;
-            case "long" -> 0L;
-            case "float" -> 0.0f;
-            default -> 0.0d;
-        };
-    }
-
+    @SuppressWarnings("unchecked")
     public static <T> T cast(Class<T> parameterType, JsonBaseElement fieldValue, Type genericType) throws Exception {
-        final var jsonType = fieldValue.getJsonType();
-        if (jsonType == JsonBaseElement.JsonType.NULL) {
-            return null;
-        }
-        final var jsonValue = switch (jsonType) {
-            case ARRAY -> fieldValue.asJsonArray();
-            case OBJECT -> fieldValue.asJsonObject();
-            case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
-            case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
-            case NUMBER -> fieldValue.asJsonNumber().getValue();
-            case SYNTAX -> null;
-            default -> throw new IllegalStateException("Unexpected value: " + jsonType);
-        };
-        if (parameterType.isEnum() && jsonValue instanceof String) {
-            Object value = valueOfFor(parameterType).invoke(null, jsonValue.toString());
-            return parameterType.cast(value);
-        } else if (genericType != null && parameterType.isAssignableFrom(List.class)) {
-            final var typeArguments = ((ParameterizedType) genericType).getActualTypeArguments();
-            if (typeArguments.length == 1) {
-                final var actualType = typeArguments[0];
-                final var actualClass = Class.forName(actualType.getTypeName());
-                List<Object> listInstance = new ArrayList<>();
-                fieldValue.asJsonArray().forEach((arrItem) -> {
-                    final var item = Assigner.assign(arrItem, actualClass);
-                    listInstance.add(item);
-                });
-                return parameterType.cast(listInstance);
-            }
-            return null;
-        } else if (jsonValue != null && !parameterType.isAssignableFrom(jsonValue.getClass())
-                && Number.class.isAssignableFrom(parameterType)) {
-            final var numberClass = Number.class;
-            if (parameterType == Integer.class) {
-                return parameterType.cast(numberClass.cast(jsonValue).intValue());
-            } else if (parameterType == Double.class) {
-                return parameterType.cast(numberClass.cast(jsonValue).doubleValue());
-            } else if (parameterType == Float.class) {
-                return parameterType.cast(numberClass.cast(jsonValue).floatValue());
-            } else if (parameterType == Long.class) {
-                return parameterType.cast(numberClass.cast(jsonValue).longValue());
-            }
-        } else if (parameterType.isPrimitive()) {
-            //noinspection unchecked
-            return (T) toPrimitiveValue(parameterType, jsonValue);
-        } else if (jsonValue != null && fieldValue.isJsonObject()) {
-            final var adapter = TypeAdapterFactory.getAdapter(parameterType);
-            return adapter.fromJson(fieldValue);
-        }
-        return parameterType.cast(jsonValue);
+        return (T) readerFor(parameterType, genericType).read(fieldValue);
     }
 
-    private static Method valueOfFor(Class<?> enumType) throws NoSuchMethodException {
-        final var cached = enumValueOf.get(enumType);
-        if (cached != null) {
-            return cached;
+    public static ValueReader readerFor(Class<?> parameterType, Type genericType) {
+        final var enumValueOf = parameterType.isEnum() ? enumValueOf(parameterType) : null;
+        final var listReader = genericType != null && parameterType.isAssignableFrom(List.class)
+                ? listReaderFor(genericType)
+                : null;
+        final var narrowsNumber = Number.class.isAssignableFrom(parameterType);
+        final var primitive = parameterType.isPrimitive();
+        return fieldValue -> {
+            final var jsonType = fieldValue.getJsonType();
+            if (jsonType == JsonBaseElement.JsonType.NULL) {
+                return null;
+            }
+            final var jsonValue = switch (jsonType) {
+                case ARRAY -> fieldValue.asJsonArray();
+                case OBJECT -> fieldValue.asJsonObject();
+                case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
+                case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
+                case NUMBER -> fieldValue.asJsonNumber().getValue();
+                case SYNTAX -> null;
+                default -> throw new IllegalStateException("Unexpected value: " + jsonType);
+            };
+            if (enumValueOf != null && jsonValue instanceof String name) {
+                return parameterType.cast(HandleInvoker.apply(enumValueOf, name));
+            } else if (listReader != null) {
+                return listReader.read(fieldValue);
+            } else if (jsonValue != null && !parameterType.isAssignableFrom(jsonValue.getClass()) && narrowsNumber) {
+                final var narrowed = narrowNumber(parameterType, jsonValue);
+                if (narrowed != null) {
+                    return narrowed;
+                }
+            } else if (primitive) {
+                return toPrimitiveValue(parameterType, jsonValue);
+            } else if (jsonValue != null && fieldValue.isJsonObject()) {
+                return TypeAdapterFactory.getAdapter(parameterType).fromJson(fieldValue);
+            }
+            return parameterType.cast(jsonValue);
+        };
+    }
+
+    private static Number narrowNumber(Class<?> parameterType, Object value) {
+        if (!(value instanceof Number jsonValue)) {
+            throw new ClassCastException("Cannot cast " + value.getClass().getName() + " to java.lang.Number");
         }
-        final var valueOf = enumType.getMethod("valueOf", String.class);
-        final var raced = enumValueOf.putIfAbsent(enumType, valueOf);
-        return raced != null ? raced : valueOf;
+        if (parameterType == Integer.class) {
+            return jsonValue.intValue();
+        } else if (parameterType == Double.class) {
+            return jsonValue.doubleValue();
+        } else if (parameterType == Float.class) {
+            return jsonValue.floatValue();
+        } else if (parameterType == Long.class) {
+            return jsonValue.longValue();
+        }
+        return null;
+    }
+
+    private static MethodHandle enumValueOf(Class<?> enumType) {
+        try {
+            final var valueOf = enumType.getMethod("valueOf", String.class);
+            valueOf.setAccessible(true);
+            return MethodHandles.lookup().unreflect(valueOf).asType(MethodType.methodType(Object.class, Object.class));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static ValueReader listReaderFor(Type genericType) {
+        try {
+            final var typeArguments = ((ParameterizedType) genericType).getActualTypeArguments();
+            if (typeArguments.length != 1) {
+                return _ -> null;
+            }
+            final var itemAdapter = TypeAdapterFactory.getAdapter(Class.forName(typeArguments[0].getTypeName()));
+            return fieldValue -> {
+                final var items = new ArrayList<>();
+                for (final var item : fieldValue.asJsonArray()) {
+                    items.add(itemAdapter.fromJson(item));
+                }
+                return items;
+            };
+        } catch (ClassCastException | ClassNotFoundException e) {
+            return _ -> {
+                throw e;
+            };
+        }
     }
 
     // Reflective field set only unboxes, so the box must already match the field's type: a double-valued

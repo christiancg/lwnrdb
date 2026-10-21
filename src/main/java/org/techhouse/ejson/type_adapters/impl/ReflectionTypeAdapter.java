@@ -1,37 +1,24 @@
 package org.techhouse.ejson.type_adapters.impl;
 
-import java.lang.reflect.Field;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.CharJsonOut;
+import org.techhouse.ejson.internal.ClassPlan;
+import org.techhouse.ejson.internal.FieldBinding;
 import org.techhouse.ejson.internal.JsonOut;
-import org.techhouse.ejson.internal.ReflectionUtils;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
-import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 
 public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
-    private static final Map<Class<?>, Boolean> genericTypes = new ConcurrentHashMap<>();
     private static final LogRateLimiter DESERIALISATION_FAILURE_LOG = new LogRateLimiter(
             Globals.LOG_RATE_LIMIT_PER_SECOND);
 
     private final Logger logger = Logger.logFor(ReflectionTypeAdapter.class);
     private final Class<T> clazz;
-
-    private static boolean isGeneric(Class<?> type) {
-        final var cached = genericTypes.get(type);
-        if (cached != null) {
-            return cached;
-        }
-        final var generic = type.getTypeParameters().length > 0;
-        genericTypes.putIfAbsent(type, generic);
-        return generic;
-    }
 
     public ReflectionTypeAdapter(Class<T> clazz) {
         if (clazz == null) {
@@ -51,22 +38,19 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     public void toJson(T value, JsonOut out) {
         out.append('{');
         final var actualClass = value.getClass();
-        final var fields = ReflectionUtils.getFields(actualClass);
-        for (var i = 0; i < fields.length; i++) {
-            out.append('"');
-            out.append(fields[i].getName());
-            out.append('"');
-            out.append(':');
+        final var bindings = ClassPlan.of(actualClass).bindings();
+        for (var i = 0; i < bindings.length; i++) {
+            out.append(bindings[i].nameToken());
             final var mark = out.mark();
             try {
-                appendFieldValue(fields[i], value, out);
+                appendFieldValue(bindings[i], value, out);
             } catch (Exception e) {
-                logger.error("Serialising " + actualClass.getName() + "." + fields[i].getName()
+                logger.error("Serialising " + actualClass.getName() + "." + bindings[i].name()
                         + " failed; emitting null in its place", e);
                 out.reset(mark);
                 out.append("null");
             }
-            if (i < fields.length - 1) {
+            if (i < bindings.length - 1) {
                 out.append(',');
             }
         }
@@ -75,6 +59,11 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
     @Override
     public T fromJson(JsonBaseElement value) {
+        return fromJson(value, Set.of());
+    }
+
+    @Override
+    public T fromJson(JsonBaseElement value, Set<String> skippedKeys) {
         JsonObject obj;
         if (value.getJsonType() == JsonBaseElement.JsonType.OBJECT) {
             obj = (JsonObject) value;
@@ -82,16 +71,10 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             return null;
         }
         try {
-            if (clazz.isRecord()) {
-                return ReflectionUtils.createRecordInstance(clazz, obj);
-            }
-            final var instance = ReflectionUtils.createInstance(clazz, obj);
-            final var fields = ReflectionUtils.getFields(clazz);
-            for (var field : fields) {
-                final var fieldName = field.getName();
-                if (obj.has(fieldName)) {
-                    assignValueToField(field, instance, obj.get(fieldName));
-                }
+            final var plan = ClassPlan.of(clazz);
+            final var instance = plan.newInstance(obj);
+            if (!plan.isRecord()) {
+                assignFields(plan, instance, obj, skippedKeys);
             }
             return clazz.cast(instance);
         } catch (Exception e) {
@@ -104,59 +87,31 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
         }
     }
 
-    private <U> void appendFieldValue(Field field, U instance, JsonOut out)
-            throws IllegalAccessException, ClassNotFoundException {
-        Object value = ReflectionUtils.getFieldValue(field, instance);
-        if (value != null) {
-            appendHardCast(value, field.getType(), field, out);
-        } else {
-            out.append("null");
+    private static void assignFields(ClassPlan plan, Object instance, JsonObject obj, Set<String> skippedKeys)
+            throws Exception {
+        for (var i = 0; i < obj.size(); i++) {
+            final var binding = plan.bindingNamed(obj.keyAt(i));
+            if (binding != null && !skippedKeys.contains(binding.name())) {
+                binding.assign(instance, obj.valueAt(i));
+            }
         }
     }
 
-    private <P> void appendHardCast(Object value, Class<P> pClass, Field field, JsonOut out)
-            throws ClassNotFoundException {
-        P casted;
-        if (field.getType().isPrimitive()) {
-            //noinspection unchecked
-            casted = (P) value;
-        } else {
-            casted = pClass.cast(value);
-        }
-        TypeAdapter<P> adapter;
-        if (isGeneric(field.getType())) {
-            adapter = TypeAdapterFactory.getAdapter(field.getGenericType());
-        } else {
-            adapter = TypeAdapterFactory.getAdapter(pClass);
-        }
-        if (adapter != null) {
-            adapter.toJson(casted, out);
-        } else {
-            logger.error("No type adapter for " + field.getDeclaringClass().getName() + "." + field.getName()
-                    + " of type " + pClass.getName() + "; emitting null in its place");
+    private void appendFieldValue(FieldBinding binding, Object instance, JsonOut out) throws Exception {
+        final var value = binding.get(instance);
+        if (value == null) {
             out.append("null");
-        }
-    }
-
-    private static <T> void assignValueToField(Field field, T obj, JsonBaseElement parsed) throws Exception {
-        final var isFinal = field.accessFlags().contains(java.lang.reflect.AccessFlag.FINAL);
-        final var fieldValue = ReflectionUtils.getFieldValue(field, obj);
-        // A final field already set by a constructor must not be reassigned; only the UnsafeAllocator
-        // path leaves it null.
-        if (isFinal && fieldValue != null) {
             return;
         }
-        TypeAdapter<?> typeAdapter;
-        if (isGeneric(field.getType())) {
-            typeAdapter = TypeAdapterFactory.getAdapter(field.getGenericType());
+        binding.requireAdapter();
+        final var adapter = binding.adapter();
+        if (adapter != null) {
+            adapter.toJson(value, out);
         } else {
-            typeAdapter = TypeAdapterFactory.getAdapter(field.getType());
-        }
-        if (typeAdapter != null) {
-            final var casted = ReflectionUtils.cast(field.getType(), parsed, field.getGenericType());
-            if (casted != null) {
-                ReflectionUtils.setFieldValue(field, obj, casted);
-            }
+            final var field = binding.field();
+            logger.error("No type adapter for " + field.getDeclaringClass().getName() + "." + field.getName()
+                    + " of type " + field.getType().getName() + "; emitting null in its place");
+            out.append("null");
         }
     }
 }

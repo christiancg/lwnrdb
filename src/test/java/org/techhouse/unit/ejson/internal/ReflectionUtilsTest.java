@@ -5,13 +5,18 @@ import static org.techhouse.ejson.internal.ReflectionUtils.cast;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.elements.JsonSyntaxToken;
+import org.techhouse.ejson.internal.ClassPlan;
 import org.techhouse.ejson.internal.ReflectionUtils;
 
 public class ReflectionUtilsTest {
@@ -128,7 +133,7 @@ public class ReflectionUtilsTest {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("someField", "someValue");
 
-        TestClass result = ReflectionUtils.createInstance(TestClass.class, jsonObject);
+        Object result = ClassPlan.of(TestClass.class).newInstance(jsonObject);
 
         assertNotNull(result);
         assertInstanceOf(TestClass.class, result);
@@ -145,7 +150,7 @@ public class ReflectionUtilsTest {
         jsonObject.addProperty("someField", "someValue");
 
         assertDoesNotThrow(() -> {
-            ReflectionUtils.createInstance(TestClass.class, jsonObject);
+            ClassPlan.of(TestClass.class).newInstance(jsonObject);
         });
     }
 
@@ -153,7 +158,7 @@ public class ReflectionUtilsTest {
     public void test_cast_invalid_enum_value() {
         JsonString invalidEnumValue = new JsonString("INVALID_VALUE");
 
-        assertThrows(InvocationTargetException.class, () -> cast(TestEnum.class, invalidEnumValue, null));
+        assertThrows(IllegalArgumentException.class, () -> cast(TestEnum.class, invalidEnumValue, null));
     }
 
     public enum TestEnum {
@@ -210,5 +215,31 @@ public class ReflectionUtilsTest {
     @Test
     public void test_cast_syntax_token_returns_null() throws Exception {
         assertNull(cast(String.class, JsonSyntaxToken.COMMA, null));
+    }
+
+    public static class Holder {
+        public List<String> names;
+    }
+
+    @Test
+    public void test_cast_and_reader_for_agree_for_every_supported_type() throws Exception {
+        final var namesType = Holder.class.getField("names").getGenericType();
+        final var cases = supportedConversions(namesType);
+        for (final var testCase : cases) {
+            final var type = (Class<?>) testCase[0];
+            final var element = (JsonBaseElement) testCase[1];
+            final var genericType = (Type) testCase[2];
+
+            assertEquals(cast(type, element, genericType), ReflectionUtils.readerFor(type, genericType).read(element));
+        }
+    }
+
+    private static Object[][] supportedConversions(Type namesType) {
+        final var array = new JsonArray();
+        array.add("a");
+        return new Object[][]{{String.class, new JsonString("s"), null}, {Integer.class, new JsonNumber(4.2), null},
+                {Double.class, new JsonNumber(4.2), null}, {long.class, new JsonNumber("10000000000"), null},
+                {TestEnum.class, new JsonString("VALUE2"), null}, {List.class, array, namesType},
+                {boolean.class, JsonBoolean.of(true), null}, {String.class, JsonNull.INSTANCE, null}};
     }
 }

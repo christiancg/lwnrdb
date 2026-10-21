@@ -1466,6 +1466,10 @@ echo "defaultAdminPassword=<choose-a-strong-password>" >> lwnrdb.cfg
 java -XX:+UseZGC -jar target/lwnrdb-1.0-SNAPSHOT.jar
 ```
 
+The jar's manifest enables final-field mutation (`Enable-Final-Field-Mutation: ALL-UNNAMED`, JEP 500): the EJson layer
+writes the `final` fields of its request and response classes reflectively, and the JDK blocks that by default in a
+future release. Launching from compiled classes instead of the jar needs `--enable-final-field-mutation=ALL-UNNAMED`.
+
 With Docker, the image copies the credential-free `lwnrdb.cfg`, so a container started without a mounted
 configuration stops at startup with the `FATAL` message instead of coming up with a known password. Mount your own
 `lwnrdb.cfg` over it; that is also how the TLS and cluster secrets are supplied:

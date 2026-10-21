@@ -7,14 +7,21 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 
 public class IndexLineWriterTest {
     private static final String DB = "writerDb";
     private static final String COLL = "writerColl";
+
+    @BeforeEach
+    public void registerTheExtendedTypes() {
+        new EJson();
+    }
 
     private static FieldIndexEntry<Object> entry(Object value, String... ids) {
         return new FieldIndexEntry<>(DB, COLL, value, new LinkedHashSet<>(List.of(ids)));

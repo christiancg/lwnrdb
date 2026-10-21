@@ -42,7 +42,10 @@ public final class TypeAdapterFactory {
 
     @SuppressWarnings("unchecked")
     public static <T> TypeAdapter<T> getAdapter(Class<T> type) {
-        return (TypeAdapter<T>) _adapters.computeIfAbsent(type, TypeAdapterFactory::createAdapter);
+        final var known = _adapters.get(type);
+        return (TypeAdapter<T>) (known != null
+                ? known
+                : _adapters.computeIfAbsent(type, TypeAdapterFactory::createAdapter));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

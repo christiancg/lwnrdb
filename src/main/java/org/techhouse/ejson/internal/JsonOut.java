@@ -1,6 +1,6 @@
 package org.techhouse.ejson.internal;
 
-public sealed interface JsonOut permits Utf8JsonOut, CharJsonOut {
+public sealed interface JsonOut permits Utf8JsonOut, CharJsonOut, Utf8CountingJsonOut {
     JsonOut append(char c);
 
     JsonOut append(String text, int start, int end);

@@ -18,10 +18,9 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
+import org.techhouse.ejson.internal.JsonElementWriter;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.AggregateRequest;
@@ -342,7 +341,7 @@ public final class AggregationOperationHelper {
     }
 
     private static long serialisedBytes(JsonArray joined) {
-        return EntrySizeGuard.utf8Length(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(joined));
+        return JsonElementWriter.utf8Length(joined);
     }
 
     private static void chargeJoinedRow(long joinedBytes, PipelineContext context) {

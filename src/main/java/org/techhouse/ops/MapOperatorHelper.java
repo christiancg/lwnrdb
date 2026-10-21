@@ -11,6 +11,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.JsonElementWriter;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ops.req.agg.BaseOperator;
@@ -136,7 +137,7 @@ public final class MapOperatorHelper {
         final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
         if (value != null) {
             context.guardResultValue(EJsonInterop.estimatedBytes(value));
-            budget.charge(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value));
+            budget.charge(JsonElementWriter.utf8Length(value));
             JsonUtils.setPath(toMap, addFieldName, value);
         }
         return toMap;

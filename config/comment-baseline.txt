@@ -42,7 +42,6 @@ src/main/java/org/techhouse/ejson/internal/JsonStrings.java 2
 src/main/java/org/techhouse/ejson/internal/NumberFormatter.java 2
 src/main/java/org/techhouse/ejson/internal/ReflectionUtils.java 4
 src/main/java/org/techhouse/ejson/internal/UnsafeAllocator.java 1
-src/main/java/org/techhouse/ejson/type_adapters/impl/ReflectionTypeAdapter.java 2
 src/main/java/org/techhouse/ejson/validate/MetaSchemaValidator.java 1
 src/main/java/org/techhouse/ejson/validate/SchemaKeywords.java 2
 src/main/java/org/techhouse/ejson/validate/SchemaValidator.java 1
