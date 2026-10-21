@@ -1,10 +1,12 @@
 FROM maven:3.10.0-eclipse-temurin-27-alpine AS build
 
+ARG REVISION=1.0-SNAPSHOT
+
 COPY src /app/src
 COPY pom.xml /app
 
 WORKDIR /app
-RUN mvn clean package -DskipTests
+RUN mvn clean package -DskipTests -Drevision=${REVISION}
 
 # Build a minimal custom runtime with only the modules the app needs:
 #   java.base        - core
@@ -32,11 +34,12 @@ ENV JAVA_HOME=/opt/jre
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 COPY --from=build /jre /opt/jre
-COPY --from=build /app/target/lwnrdb-1.0-SNAPSHOT.jar /app/app.jar
+COPY --from=build /app/target/lwnrdb.jar /app/app.jar
 
 WORKDIR /app
 
 COPY lwnrdb.cfg /app
+COPY --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
 
 RUN addgroup -S lwnrdb && adduser -S -G lwnrdb lwnrdb \
     && mkdir -p /app/db /app/logs /app/certs \
@@ -49,4 +52,5 @@ VOLUME /app/logs
 
 EXPOSE ${PORT}
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["java", "-XX:+UseZGC", "-jar", "app.jar"]

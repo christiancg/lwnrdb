@@ -16,7 +16,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import base_utils as b
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-JAR = REPO / "target" / "lwnrdb-1.0-SNAPSHOT.jar"
+JAR = REPO / "target" / "lwnrdb.jar"
 IMAGE = "lwnrdb-syscall-audit"
 CONTAINER = "lwnrdb-syscall-audit"
 DB, COLL = "audit", "docs"

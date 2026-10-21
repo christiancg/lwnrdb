@@ -26,7 +26,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: lwnrdb-jar
-          path: target/lwnrdb-1.0-SNAPSHOT.jar
+          path: target/lwnrdb.jar
           retention-days: 1
 
   integration:
@@ -207,7 +207,7 @@ jobs:
         if: ${{ matrix.start_server }}
         run: |
           sed -i "s/^maxMemory=.*/maxMemory=${{ matrix.max_memory }}/" lwnrdb.cfg
-          java -Xmx${{ matrix.xmx }} -jar target/lwnrdb-1.0-SNAPSHOT.jar > server.log 2>&1 &
+          java -Xmx${{ matrix.xmx }} -jar target/lwnrdb.jar > server.log 2>&1 &
           echo $! > server.pid
           for _ in $(seq 1 150); do
             nc -z 127.0.0.1 8989 && break
@@ -220,7 +220,7 @@ jobs:
         run: ${{ matrix.run }}
       - name: Stop server
         if: ${{ always() && matrix.start_server }}
-        run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
+        run: pkill -f lwnrdb.jar || true
 
   test262:
     name: test262 Conformance (${{ matrix.shard }}/4)
