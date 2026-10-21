@@ -13,10 +13,10 @@ import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
 public class IterableTypeAdapter<T> implements TypeAdapter<Iterable<T>> {
 
-    private final Class<T> tClass;
+    private final TypeAdapter<T> elementAdapter;
 
     public IterableTypeAdapter(Class<T> tClass) {
-        this.tClass = tClass;
+        this.elementAdapter = Objects.requireNonNull(TypeAdapterFactory.getAdapter(tClass));
     }
 
     @Override
@@ -28,7 +28,6 @@ public class IterableTypeAdapter<T> implements TypeAdapter<Iterable<T>> {
 
     @Override
     public void toJson(Iterable<T> value, JsonOut out) {
-        final var elementAdapter = Objects.requireNonNull(TypeAdapterFactory.getAdapter(tClass));
         out.append('[');
         var first = true;
         for (final var element : value) {
@@ -45,7 +44,7 @@ public class IterableTypeAdapter<T> implements TypeAdapter<Iterable<T>> {
     public Iterable<T> fromJson(JsonBaseElement value) {
         if (value instanceof JsonArray arr) {
             return StreamSupport.stream(Spliterators.spliteratorUnknownSize(arr.iterator(), Spliterator.ORDERED), false)
-                    .map(jsonBaseElement -> TypeAdapterFactory.getAdapter(tClass).fromJson(jsonBaseElement)).toList();
+                    .map(elementAdapter::fromJson).toList();
         } else {
             return null;
         }

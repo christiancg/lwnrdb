@@ -14,10 +14,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregateLimitException;
+import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.OperationProcessor;
@@ -28,6 +30,7 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.validations.AggregationStepValidator;
 import org.techhouse.ops.req.validations.RequestValidator;
+import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -208,5 +211,16 @@ public class AggregateBreadthLimitsTest {
         assertTrue(AggregationStepValidator.canFailWhileRunning(joinSteps));
         assertTrue(AggregationStepValidator.canFailWhileRunning(castSteps));
         assertFalse(AggregationStepValidator.canFailWhileRunning(sumSteps));
+    }
+
+    @Test
+    public void test_a_join_refusal_fires_at_the_exact_serialised_byte_count() throws Exception {
+        final var answered = (AggregateResponse) run(aggregate(join()));
+        final var joined = answered.getResults().getFirst().get("m").asJsonArray();
+        final var bytes = EntrySizeGuard.utf8Length(new EJson().toJson(joined));
+        TestUtils.setPrivateField(configuration, "maxEntrySize", bytes + "b");
+        assertEquals(OperationStatus.OK, run(aggregate(join())).getStatus());
+        TestUtils.setPrivateField(configuration, "maxEntrySize", (bytes - 1) + "b");
+        assertEquals(ErrorCode.MAP_RESULT_TOO_LARGE.getCode(), run(aggregate(join())).getErrorCode());
     }
 }

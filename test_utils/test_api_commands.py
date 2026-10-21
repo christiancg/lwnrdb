@@ -125,6 +125,7 @@ COLL_SHARED_RIGHT = "shared_right"
 COLL_DISTINCT = "distinct_rows"
 COLL_BUDGET = "result_budget"
 COLL_DELETES = "many_deletes"
+COLL_SHAPES = "shapes"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -346,6 +347,40 @@ def test_value_types(c):
     raw = c.f.readline().decode()
     check("Integer is serialized without a trailing .0 on the wire",
                '"v":42' in raw and '"v":42.0' not in raw, detail=raw.strip())
+
+
+def test_rows_of_different_shapes_round_trip(c):
+    section("Rows whose shared field holds a different JSON type each come back exactly as saved")
+    create_coll(c, COLL_SHAPES)
+    docs = [
+        {"_id": "s_string", "v": "text with \"quotes\" and \\ and \n and \u00e9"},
+        {"_id": "s_int", "v": 7},
+        {"_id": "s_fraction", "v": 2.5},
+        {"_id": "s_bool", "v": True},
+        {"_id": "s_null", "v": None},
+        {"_id": "s_object", "v": {"a": [1, {"b": None}], "c": "d"}},
+        {"_id": "s_array", "v": [1, "two", None, False, {"k": "v"}, []]},
+        {"_id": "s_geo", "v": "#geo(10.5,20.5)"},
+        {"_id": "s_missing", "other": 1},
+    ]
+    for doc in docs:
+        check_status(f"{doc['_id']} saved", save(c, COLL_SHAPES, doc), "OK")
+
+    def exact(value) -> str:
+        return json.dumps(value, sort_keys=True)
+
+    expected = {doc["_id"]: exact(doc) for doc in docs}
+    filtered = aggregate(c, COLL_SHAPES, [filter_step("_id", "NOT_EQUALS", "no-such-id")])
+    unfiltered = aggregate(c, COLL_SHAPES, [])
+    for label, response in (("FILTER", filtered), ("no step", unfiltered)):
+        rows = {row["_id"]: exact(row) for row in response.get("results", [])}
+        check(f"AGGREGATE with {label} returns every document exactly as saved, types included",
+              rows == expected, detail=f"differs: {sorted(k for k in expected if rows.get(k) != expected[k])}")
+    for doc in docs:
+        found = find_by_id(c, COLL_SHAPES, doc["_id"]).get("object")
+        check(f"FIND_BY_ID returns {doc['_id']} exactly as saved", exact(found) == expected[doc["_id"]],
+              detail=exact(found))
+    drop_coll(c, COLL_SHAPES)
 
 
 def check_client_refusal(label: str, response: dict, connection_kept: bool = False) -> bool:
@@ -1202,6 +1237,7 @@ def main():
         test_crud,
         test_top_level_id,
         test_value_types,
+        test_rows_of_different_shapes_round_trip,
         test_a_malformed_document_is_refused_as_a_client_error,
         test_a_line_with_a_second_value_or_a_nan_point_is_refused,
         test_deep_nesting_is_refused_not_dropped,

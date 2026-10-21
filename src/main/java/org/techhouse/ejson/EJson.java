@@ -2,6 +2,7 @@ package org.techhouse.ejson;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.Set;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonGeo;
@@ -125,6 +126,10 @@ public class EJson {
     public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass) {
         final var adapter = TypeAdapterFactory.getAdapter(tClass);
         return adapter.fromJson(jsonObject);
+    }
+
+    public <T> T fromJson(JsonObject jsonObject, Class<T> tClass, Set<String> skippedKeys) {
+        return TypeAdapterFactory.getAdapter(tClass).fromJson(jsonObject, skippedKeys);
     }
 
     @SuppressWarnings("unchecked")

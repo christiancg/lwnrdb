@@ -10,6 +10,7 @@
 
     <properties>
         <forkCount>4</forkCount>
+        <argLine/>
         <maven.compiler.source>27</maven.compiler.source>
         <maven.compiler.target>27</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -79,6 +80,9 @@
                             <addClasspath>true</addClasspath>
                             <mainClass>org.techhouse.Main</mainClass>
                         </manifest>
+                        <manifestEntries>
+                            <Enable-Final-Field-Mutation>ALL-UNNAMED</Enable-Final-Field-Mutation>
+                        </manifestEntries>
                     </archive>
                 </configuration>
             </plugin>
@@ -88,6 +92,7 @@
                 <version>3.5.6</version>
                 <configuration>
                     <reuseForks>true</reuseForks>
+                    <argLine>@{argLine} --enable-final-field-mutation=ALL-UNNAMED</argLine>
                     <systemPropertyVariables>
                         <lwnrdb.test.path>target/test-data-${surefire.forkNumber}</lwnrdb.test.path>
                         <lwnrdb.test.logPath>target/test-logs-${surefire.forkNumber}</lwnrdb.test.logPath>

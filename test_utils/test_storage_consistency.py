@@ -203,6 +203,14 @@ def recorded_pages(work_dir: str, db=DB, coll=COLL) -> dict:
 PAGE_ROW_REBUILD = "Rebuilt the page-occupancy metadata of"
 
 
+def test_no_final_field_is_mutated_reflectively(log_path: str):
+    section("The jar enables final-field mutation, so the JDK prints no reflective-mutation warning")
+    log = bu.read_log(log_path)
+    check("the server log holds no 'has been mutated reflectively' line",
+          "has been mutated reflectively" not in log and "Mutating final fields will be blocked" not in log,
+          detail="Enable-Final-Field-Mutation in the jar manifest is what silences it")
+
+
 def page_row_rebuilds(log_path: str) -> int:
     with open(log_path, "r", encoding="utf-8", errors="replace") as fp:
         lines = fp.readlines()
@@ -2338,6 +2346,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             seed(conn, work_dir)
+        test_no_final_field_is_mutated_reflectively(log_path)
         bu.stop_server(proc)
         proc = None
 

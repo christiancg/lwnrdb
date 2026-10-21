@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.conn.OutboundQueue;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -39,6 +40,7 @@ public class AllocationBudgetTest {
     private static final long COLD_SCAN_BUDGET_PER_DOC = 4 * KB;
     private static final long BATCH_OF_ONE_BUDGET = 11 * KB;
     private static final long BULK_UPDATE_BUDGET_PER_DOC = 4 * KB;
+    private static final long SAVE_REQUEST_PARSE_BUDGET = 3_120;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
@@ -225,6 +227,15 @@ public class AllocationBudgetTest {
         final var measured = cheapestOf(() -> size[0] = OutboundQueue.frameOf(response).length());
         final var budget = (long) (size[0] * RESPONSE_BUDGET_RATIO);
         assertTrue(measured <= budget, report("serialising a " + size[0] + "-byte response", measured, budget));
+    }
+
+    @Test
+    void parsingASaveRequestStaysSmall() throws Exception {
+        final var line = "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"object\":" + new EJson().toJson(document(1, 1)) + "}";
+        final var measured = cheapestOf(() -> RequestParser.parseRequest(line));
+        assertTrue(measured <= SAVE_REQUEST_PARSE_BUDGET,
+                report("parsing a " + line.length() + "-char SAVE request", measured, SAVE_REQUEST_PARSE_BUDGET));
     }
 
     @FunctionalInterface
