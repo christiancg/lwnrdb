@@ -46,7 +46,9 @@ jobs:
       - name: Create release
         run: |
           mv lwnrdb.jar "lwnrdb-${VERSION#v}.jar"
-          gh release create "${VERSION}" "lwnrdb-${VERSION#v}.jar" --title "${VERSION}" --generate-notes
+          PRERELEASE=""
+          case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "${VERSION}" "lwnrdb-${VERSION#v}.jar" --title "${VERSION}" --generate-notes ${PRERELEASE}
 
   docker:
     name: Docker image
@@ -60,6 +62,9 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Build and push
         run: |
-          docker build --build-arg REVISION="${VERSION#v}" -t ghcr.io/christiancg/lwnrdb:"${VERSION#v}" -t ghcr.io/christiancg/lwnrdb:latest .
-          docker push ghcr.io/christiancg/lwnrdb:"${VERSION#v}"
-          docker push ghcr.io/christiancg/lwnrdb:latest
+          IMAGE=ghcr.io/christiancg/lwnrdb
+          TAGS="-t ${IMAGE}:${VERSION#v}"
+          case "${VERSION}" in *-*) ;; *) TAGS="${TAGS} -t ${IMAGE}:latest" ;; esac
+          docker build --build-arg REVISION="${VERSION#v}" ${TAGS} .
+          docker push "${IMAGE}:${VERSION#v}"
+          case "${VERSION}" in *-*) ;; *) docker push "${IMAGE}:latest" ;; esac

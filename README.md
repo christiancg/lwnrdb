@@ -36,7 +36,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 ## Status
 
 LWNRDB is feature-complete for what it set out to be, and experimental in the sense the
-Q&A below means: a learning exercise, not something to put production data in.
+Q&A below means: a learning exercise, not something to put production data in. To try it, jump to the [Quickstart](#quickstart).
 
 **What it does.** Documents are stored as newline-delimited JSON across paged files, queried
 through an [aggregation pipeline](#aggregate) (the one exception is [`FIND_BY_ID`](#find_by_id))
