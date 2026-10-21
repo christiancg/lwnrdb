@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -16,6 +17,7 @@ import org.techhouse.test.TestUtils;
 final class PowerLossFixture implements Forcer, AutoCloseable {
     private final Map<Object, byte[]> forcedContent = new ConcurrentHashMap<>();
     private final Map<Path, Map<String, Object>> forcedEntries = new ConcurrentHashMap<>();
+    private final Map<Object, FileChannel> pinnedFiles = new ConcurrentHashMap<>();
     private final String previousSyncWrites = String.valueOf(Configuration.getInstance().isSyncWrites());
 
     private PowerLossFixture() {
@@ -34,13 +36,13 @@ final class PowerLossFixture implements Forcer, AutoCloseable {
             final var entries = new HashMap<String, Object>();
             try (var listing = Files.list(path)) {
                 for (final var entry : listing.filter(Files::isRegularFile).toList()) {
-                    entries.put(String.valueOf(entry.getFileName()), keyOf(entry));
+                    entries.put(String.valueOf(entry.getFileName()), pinnedKeyOf(entry));
                 }
             }
             forcedEntries.put(path.toAbsolutePath().normalize(), entries);
             return;
         }
-        forcedContent.put(keyOf(path), Files.readAllBytes(path));
+        forcedContent.put(pinnedKeyOf(path), Files.readAllBytes(path));
     }
 
     void powerLoss() throws IOException {
@@ -79,12 +81,19 @@ final class PowerLossFixture implements Forcer, AutoCloseable {
         PkIndexStore.forgetState(paths.pkIndexFile(dbName, collName));
     }
 
-    private static Object keyOf(Path path) throws IOException {
-        return Files.readAttributes(path, BasicFileAttributes.class).fileKey();
+    private synchronized Object pinnedKeyOf(Path path) throws IOException {
+        final var key = Files.readAttributes(path, BasicFileAttributes.class).fileKey();
+        if (!pinnedFiles.containsKey(key)) {
+            pinnedFiles.put(key, FileChannel.open(path, StandardOpenOption.READ));
+        }
+        return key;
     }
 
     @Override
     public void close() throws Exception {
+        for (final var pinned : pinnedFiles.values()) {
+            pinned.close();
+        }
         TestUtils.setPrivateStaticField(SyncedWrites.class, "forcer", Forcer.DEVICE);
         TestUtils.setPrivateField(Configuration.getInstance(), "syncWrites", previousSyncWrites);
     }
