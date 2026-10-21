@@ -11,7 +11,7 @@ public final class PkIndexList extends AbstractList<PkIndexEntry> implements Ran
     static final int CHUNK_ROWS = 512;
     private static final int SPLIT_ROWS = 2 * CHUNK_ROWS;
 
-    private final List<List<PkIndexEntry>> chunks = new ArrayList<>();
+    private List<List<PkIndexEntry>> chunks = new ArrayList<>();
     private int[] starts = new int[0];
     private int size;
     private int lastChunk;
@@ -64,6 +64,77 @@ public final class PkIndexList extends AbstractList<PkIndexEntry> implements Ran
             split(chunk);
         } else {
             shiftStartsAfter(chunk, 1);
+        }
+    }
+
+    public void insertSorted(List<PkIndexEntry> sorted) {
+        if (sorted.isEmpty()) {
+            return;
+        }
+        try {
+            chunks = mergedChunks(sorted);
+        } finally {
+            modCount++;
+            restart();
+            size = rowCount();
+        }
+    }
+
+    private List<List<PkIndexEntry>> mergedChunks(List<PkIndexEntry> sorted) {
+        final var source = chunks.isEmpty() ? List.of(new ArrayList<PkIndexEntry>()) : chunks;
+        final var rebuilt = new ArrayList<List<PkIndexEntry>>(source.size() + sorted.size() / CHUNK_ROWS + 1);
+        var next = 0;
+        for (var chunk = 0; chunk < source.size(); chunk++) {
+            final var rows = source.get(chunk);
+            final var end = chunk + 1 == source.size()
+                    ? sorted.size()
+                    : endOfRun(sorted, next, source.get(chunk + 1).getFirst().getValue());
+            if (end > next) {
+                mergeInto(rows, sorted.subList(next, end));
+                next = end;
+            }
+            addCut(rebuilt, rows);
+        }
+        return rebuilt;
+    }
+
+    private int rowCount() {
+        var total = 0;
+        for (final var rows : chunks) {
+            total += rows.size();
+        }
+        return total;
+    }
+
+    private static int endOfRun(List<PkIndexEntry> sorted, int from, String limit) {
+        var end = from;
+        while (end < sorted.size() && sorted.get(end).getValue().compareTo(limit) < 0) {
+            end++;
+        }
+        return end;
+    }
+
+    private static void mergeInto(List<PkIndexEntry> rows, List<PkIndexEntry> run) {
+        var existing = rows.size() - 1;
+        var incoming = run.size() - 1;
+        rows.addAll(run);
+        var write = rows.size() - 1;
+        while (incoming >= 0) {
+            if (existing >= 0 && rows.get(existing).getValue().compareTo(run.get(incoming).getValue()) > 0) {
+                rows.set(write--, rows.get(existing--));
+            } else {
+                rows.set(write--, run.get(incoming--));
+            }
+        }
+    }
+
+    private static void addCut(List<List<PkIndexEntry>> target, List<PkIndexEntry> rows) {
+        if (rows.size() <= SPLIT_ROWS) {
+            target.add(rows);
+            return;
+        }
+        for (var from = 0; from < rows.size(); from += CHUNK_ROWS) {
+            target.add(new ArrayList<>(rows.subList(from, Math.min(rows.size(), from + CHUNK_ROWS))));
         }
     }
 

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import org.techhouse.cache.PkIndexList;
 import org.techhouse.data.PkIndexEntry;
 
 final class PkIndexEdits {
@@ -34,6 +35,10 @@ final class PkIndexEdits {
         }
         final var sorted = new ArrayList<>(inserted);
         sorted.sort(BY_ID);
+        if (rows instanceof PkIndexList chunked) {
+            chunked.insertSorted(sorted);
+            return;
+        }
         final var merged = new ArrayList<PkIndexEntry>(rows.size() + sorted.size());
         var next = 0;
         for (final var row : rows) {
