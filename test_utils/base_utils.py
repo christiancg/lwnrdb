@@ -28,7 +28,7 @@ PORT = 8989
 USERNAME = "admin"
 PASSWORD = "Tst-Admin-9xQ2mV"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
+JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb.jar")
 
 
 def configure(host: Optional[str] = None, port: Optional[int] = None,

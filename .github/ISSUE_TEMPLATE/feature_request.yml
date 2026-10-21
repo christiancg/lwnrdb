@@ -1,0 +1,17 @@
+name: Feature request
+description: Something you would like LWNRDB to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How would you expect it to work
+      description: A sample request and response is the best way to explain it
+    validations:
+      required: false

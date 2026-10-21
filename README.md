@@ -1454,6 +1454,37 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-15` | `ERROR` | The server's listen registrations already keep `listenMaxRetainedBytes` of requests; retry once some end |
 | `503-16` | `ERROR` | The background index queue is full and nothing was written; retry shortly *(a `SAVE`, `BULK_SAVE`, `DELETE` or `COMMIT_TRANSACTION` that found `backgroundQueueMaxEvents` events queued and no room within `backgroundBacklogWaitMs`; a write forwarded to a full owner gets it at once. Writes inside a transaction are buffered and enqueue nothing, so only their commit is held back, and the transaction stays open)* |
 
+### Quickstart
+
+Docker is the easiest way to try it. The server refuses to start without a password for the admin user (more on that in [Bootstrap](#bootstrap)), so pass one when you run the container:
+
+```bash
+docker run -d --name lwnrdb -p 8989:8989 \
+  -e LWNRDB_ADMIN_PASSWORD=<choose-a-strong-password> \
+  -v lwnrdb-data:/app/db \
+  ghcr.io/christiancg/lwnrdb:latest
+```
+
+If you prefer to skip Docker, download the jar from the latest release and run it with Java 27 or newer. Here the password goes in a `lwnrdb.cfg` next to the jar:
+
+```bash
+echo "defaultAdminPassword=<choose-a-strong-password>" > lwnrdb.cfg
+java -XX:+UseZGC -jar lwnrdb.jar
+```
+
+The jar is also its own client, so from another terminal you can create a database and a collection, save a document and read it back without installing anything else. The user is `admin` unless you changed `defaultAdminUsername`:
+
+```bash
+export LWNRDB_PASSWORD=<the-password-you-chose>
+java -jar lwnrdb.jar \
+  --exec '{"type":"CREATE_DATABASE","databaseName":"my_db"}' \
+  --exec '{"type":"CREATE_COLLECTION","databaseName":"my_db","collectionName":"people"}' \
+  --exec '{"type":"SAVE","databaseName":"my_db","collectionName":"people","object":{"_id":"user-1","name":"Alice","age":31}}' \
+  --exec '{"type":"AGGREGATE","databaseName":"my_db","collectionName":"people","aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"GREATER_THAN","field":"age","value":30}}]}'
+```
+
+With Docker the client is already inside the container, so run the same thing through `docker exec -e LWNRDB_PASSWORD=<the-password-you-chose> lwnrdb java -jar app.jar` instead of `java -jar lwnrdb.jar`. Each request goes in its own `--exec`. Every reply is printed on its own line and the client stops at the first one that is not `OK`. If you would rather talk to the server directly, any TCP client works, since each request is one line of JSON. The full list of operations starts in the [Wire Protocol](#wire-protocol--message-reference) section.
+
 ### Running the server
 
 The server ships **without** an admin password: neither the bundled defaults nor the tracked `lwnrdb.cfg` set
@@ -1463,16 +1494,20 @@ in the `lwnrdb.cfg` of the working directory before the first start:
 ```bash
 mvn clean package -DskipTests
 echo "defaultAdminPassword=<choose-a-strong-password>" >> lwnrdb.cfg
-java -XX:+UseZGC -jar target/lwnrdb-1.0-SNAPSHOT.jar
+java -XX:+UseZGC -jar target/lwnrdb.jar
 ```
 
 The jar's manifest enables final-field mutation (`Enable-Final-Field-Mutation: ALL-UNNAMED`, JEP 500): the EJson layer
 writes the `final` fields of its request and response classes reflectively, and the JDK blocks that by default in a
 future release. Launching from compiled classes instead of the jar needs `--enable-final-field-mutation=ALL-UNNAMED`.
 
-With Docker, the image copies the credential-free `lwnrdb.cfg`, so a container started without a mounted
-configuration stops at startup with the `FATAL` message instead of coming up with a known password. Mount your own
-`lwnrdb.cfg` over it; that is also how the TLS and cluster secrets are supplied:
+With Docker, the image copies the credential-free `lwnrdb.cfg`, so a container started without a password stops at
+startup with the `FATAL` message instead of coming up with a known password. Set `LWNRDB_ADMIN_PASSWORD` and the
+entrypoint writes it into the container's `lwnrdb.cfg` as `defaultAdminPassword` before starting the server. There is
+deliberately no build argument for it, because a password given to `docker build` ends up in the image layers and
+shows in `docker history`. For anything beyond the password, mount your own `lwnrdb.cfg` over the image's; that is
+also how the TLS and cluster secrets are supplied (the variable cannot be combined with a read-only mounted config,
+put the password in that file instead):
 
 ```bash
 docker build -t lwnrdb .
@@ -2084,7 +2119,10 @@ lookups). Exclusions are documented inline in each config file.
 
 ## Contributing
 
-Pull requests are welcome! For major changes, please open an issue first
-to discuss what you would like to change.
+Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
+The details (how to build, what the build checks, and how a release is cut) are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Security problems go through [SECURITY.md](SECURITY.md) instead of a public issue.
 
-Please make sure to update tests as appropriate and add new ones if a new feature is developed or a big bug solved.
+## License
+
+MIT. Use it, change it, do whatever you want with it, just keep my name on it. See [LICENSE](LICENSE).
