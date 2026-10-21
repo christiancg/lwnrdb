@@ -8,12 +8,6 @@ COPY pom.xml /app
 WORKDIR /app
 RUN mvn clean package -DskipTests -Drevision=${REVISION}
 
-# Build a minimal custom runtime with only the modules the app needs:
-#   java.base        - core
-#   java.management  - heap usage budget (MemoryManagement / DatabaseStatsHelper)
-#   jdk.crypto.ec    - SunEC provider; ECDHE key exchange for TLS
-#   jdk.unsupported  - sun.misc.Unsafe, used by EJson's UnsafeAllocator fallback
-#                      to instantiate objects without a matching constructor
 RUN jlink \
         --add-modules java.base,java.management,java.net.http,jdk.crypto.ec,jdk.unsupported \
         --strip-debug \
@@ -27,7 +21,6 @@ FROM alpine:3.21
 ARG PORT=8989
 ENV PORT=${PORT}
 
-# JVM native deps (musl image links against libstdc++ / libgcc)
 RUN apk add --no-cache libstdc++
 
 ENV JAVA_HOME=/opt/jre
