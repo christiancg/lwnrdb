@@ -1,7 +1,6 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -13,6 +12,7 @@ import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.PkIndexList;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -89,7 +89,7 @@ public final class SaveOperationHelper {
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         var foundIndexEntry = -1;
         if (saveRequest.get_id() != null) {
-            foundIndexEntry = Collections.binarySearch(primaryKeyIndex, saveRequest.get_id());
+            foundIndexEntry = PkIndexList.positionOf(primaryKeyIndex, saveRequest.get_id());
         }
         var eventType = EventType.CREATED;
         PkIndexEntry savedPkIndexEntry;
@@ -190,7 +190,7 @@ public final class SaveOperationHelper {
             if (data.has(org.techhouse.config.Globals.PK_FIELD)) {
                 final var id = data.get(org.techhouse.config.Globals.PK_FIELD).asJsonString().getValue();
                 i.set_id(id);
-                final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
+                final var foundIndexEntry = PkIndexList.positionOf(primaryKeyIndex, id);
                 if (foundIndexEntry >= 0) {
                     final var foundIndex = primaryKeyIndex.get(foundIndexEntry);
                     final var indexedDbEntry = new IndexedDbEntry();
@@ -339,11 +339,11 @@ public final class SaveOperationHelper {
     }
 
     private static void replaceRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row) {
-        primaryKeyIndex.set(Collections.binarySearch(primaryKeyIndex, row.getValue()), row);
+        primaryKeyIndex.set(PkIndexList.positionOf(primaryKeyIndex, row.getValue()), row);
     }
 
     private static void insertRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row) {
-        final var found = Collections.binarySearch(primaryKeyIndex, row.getValue());
+        final var found = PkIndexList.positionOf(primaryKeyIndex, row.getValue());
         primaryKeyIndex.add(found < 0 ? -(found + 1) : found, row);
     }
 

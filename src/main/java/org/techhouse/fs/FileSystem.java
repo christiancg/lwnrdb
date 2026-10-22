@@ -116,6 +116,7 @@ public class FileSystem {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
         final var deleted = isAbsent(dbFolder) || FileTreeDeleter.delete(dbFolder);
         FileLocks.evictAllUnder(dbFolder);
+        paths.forgetDatabase(dbName);
         return deleted;
     }
 
@@ -141,6 +142,7 @@ public class FileSystem {
         final var collectionFolder = new File(collectionFile.getParent());
         final var deleted = isAbsent(collectionFolder) || FileTreeDeleter.delete(collectionFolder);
         FileLocks.evictAllUnder(collectionFolder);
+        paths.forgetCollection(dbName, collectionName);
         return deleted;
     }
 

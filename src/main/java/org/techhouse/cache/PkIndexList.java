@@ -2,6 +2,7 @@ package org.techhouse.cache;
 
 import java.util.AbstractList;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.RandomAccess;
@@ -32,6 +33,41 @@ public final class PkIndexList extends AbstractList<PkIndexEntry> implements Ran
     @Override
     public int size() {
         return size;
+    }
+
+    public static int positionOf(List<PkIndexEntry> index, String id) {
+        return index instanceof PkIndexList chunked ? chunked.search(id) : Collections.binarySearch(index, id);
+    }
+
+    public int search(String id) {
+        if (chunks.isEmpty()) {
+            return -1;
+        }
+        var low = 0;
+        var high = chunks.size() - 1;
+        while (low < high) {
+            final var middle = (low + high + 1) >>> 1;
+            if (chunks.get(middle).getFirst().getValue().compareTo(id) <= 0) {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        final var rows = chunks.get(low);
+        var from = 0;
+        var to = rows.size() - 1;
+        while (from <= to) {
+            final var middle = (from + to) >>> 1;
+            final var order = rows.get(middle).getValue().compareTo(id);
+            if (order < 0) {
+                from = middle + 1;
+            } else if (order > 0) {
+                to = middle - 1;
+            } else {
+                return starts[low] + middle;
+            }
+        }
+        return -(starts[low] + from) - 1;
     }
 
     @Override

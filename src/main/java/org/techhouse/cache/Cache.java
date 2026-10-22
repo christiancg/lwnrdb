@@ -57,7 +57,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public static String getCollectionIdentifier(String dbName, String collName) {
-        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
+        return CollectionIdentifiers.of(dbName, collName);
     }
 
     public static String getIndexIdentifier(String fieldName, Class<?> fieldType) {
@@ -116,6 +116,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public void evictDatabase(String dbName) {
+        CollectionIdentifiers.forgetDatabase(dbName);
         absentIndexTypes.forgetDatabase(dbName);
         userCache.evictDatabase(dbName);
         adminCache.removeCollectionSchemasForDatabase(dbName);
@@ -126,6 +127,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public void evictCollection(String dbName, String collName) {
         absentIndexTypes.forgetCollection(getCollectionIdentifier(dbName, collName));
+        CollectionIdentifiers.forget(dbName, collName);
         userCache.evictCollection(dbName, collName);
         adminCache.removeCollectionSchema(dbName, collName);
         adminCache.removeTriggers(dbName, collName);

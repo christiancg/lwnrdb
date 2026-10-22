@@ -192,4 +192,56 @@ public class PageRowWriteBackTest {
         assertTrue(pageRowsForced(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME),
                 recorder.forcedNames().toString());
     }
+
+    @Test
+    public void test_touches_racing_a_flush_never_lose_a_page() throws Exception {
+        final var pages = 40;
+        final var writers = 4;
+        final var running = new java.util.concurrent.atomic.AtomicBoolean(true);
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(writers + 1)) {
+            try {
+                final var flusher = pool.submit(() -> {
+                    while (running.get()) {
+                        PageRowWriteBack.flushAll();
+                    }
+                });
+                final var tasks = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+                for (var writer = 0; writer < writers; writer++) {
+                    final var offset = writer;
+                    tasks.add(pool.submit(() -> {
+                        for (var page = offset; page < pages; page += writers) {
+                            created(TestGlobals.COLL, "id-" + page, page);
+                        }
+                        return null;
+                    }));
+                }
+                for (final var task : tasks) {
+                    task.get(60, java.util.concurrent.TimeUnit.SECONDS);
+                }
+                running.set(false);
+                flusher.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            } finally {
+                running.set(false);
+            }
+        }
+
+        PageRowWriteBack.flushAll();
+
+        assertEquals(rowsInMemory(), rowsOnDisk(TestGlobals.COLL));
+        assertEquals(pages, rowsOnDisk(TestGlobals.COLL).size());
+    }
+
+    @Test
+    public void test_a_retry_keeps_pages_touched_while_the_write_back_was_failing() throws Exception {
+        created(TestGlobals.COLL, "a", 0);
+        recorder.failingFor(
+                AdminPageEntry.pagesCollectionName(TestGlobals.DB, TestGlobals.COLL) + Globals.WAL_EXTENSION);
+        PageRowWriteBack.flushAll();
+        created(TestGlobals.COLL, "b", 1);
+
+        recorder.failingFor(null);
+        PageRowWriteBack.flushAll();
+
+        assertEquals(Map.of(0L, 1, 1L, 1), rowsOnDisk(TestGlobals.COLL));
+    }
 }

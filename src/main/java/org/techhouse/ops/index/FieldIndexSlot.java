@@ -2,6 +2,7 @@ package org.techhouse.ops.index;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -34,6 +35,7 @@ final class FieldIndexSlot {
     private final String identifier;
     private final String fileLabel;
     private final Comparator<FieldIndexEntry<Object>> order;
+    private final boolean spellingMatters;
     private final Loader loader;
     private final Map<String, FieldIndexEntry<Object>> created = new HashMap<>();
     private final Map<FieldIndexEntry<Object>, Integer> touched = new IdentityHashMap<>();
@@ -52,26 +54,31 @@ final class FieldIndexSlot {
     }
 
     private FieldIndexSlot(String dbName, String collName, String fieldName, String identifier, String fileLabel,
-            Comparator<FieldIndexEntry<Object>> order, Loader loader) {
+            Comparator<FieldIndexEntry<Object>> order, boolean spellingMatters, Loader loader) {
         this.dbName = dbName;
         this.collName = collName;
         this.fieldName = fieldName;
         this.identifier = identifier;
         this.fileLabel = fileLabel;
         this.order = order;
+        this.spellingMatters = spellingMatters;
         this.loader = loader;
     }
 
     static FieldIndexSlot scalar(String dbName, String collName, String fieldName, Class<?> type) {
         return new FieldIndexSlot(dbName, collName, fieldName, Cache.getIndexIdentifier(fieldName, type),
-                IndexKind.fileLabel(type), cast(FieldIndexLoader.orderFor(type)),
+                IndexKind.fileLabel(type), cast(FieldIndexLoader.orderFor(type)), hasSpellings(type),
                 () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, type));
     }
 
     static FieldIndexSlot hash(String dbName, String collName, String fieldName, IndexKind kind) {
         return new FieldIndexSlot(dbName, collName, fieldName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
-                kind.label(), cast(FieldIndexLoader.hashOrder()),
+                kind.label(), cast(FieldIndexLoader.hashOrder()), true,
                 () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
+    }
+
+    private static boolean hasSpellings(Class<?> type) {
+        return !Number.class.isAssignableFrom(type) && type != Boolean.class;
     }
 
     @SuppressWarnings("unchecked")
@@ -126,6 +133,9 @@ final class FieldIndexSlot {
         if (at < 0) {
             return null;
         }
+        if (!spellingMatters && isAloneInItsRun(at, probe)) {
+            return entries.get(at);
+        }
         for (var i = at; i >= 0 && order.compare(entries.get(i), probe) == 0; i--) {
             if (FieldIndexEntry.fileKeyOf(entries.get(i).getValue()).equals(key)) {
                 return entries.get(i);
@@ -139,8 +149,13 @@ final class FieldIndexSlot {
         return null;
     }
 
-    FieldIndexEntry<Object> addId(String id, String key, Object value) {
-        var entry = find(key, value);
+    private boolean isAloneInItsRun(int at, FieldIndexEntry<Object> probe) {
+        return (at == 0 || order.compare(entries.get(at - 1), probe) != 0)
+                && (at + 1 == entries.size() || order.compare(entries.get(at + 1), probe) != 0);
+    }
+
+    FieldIndexEntry<Object> addId(String id, String key, Object value, FieldIndexEntry<Object> found) {
+        var entry = found;
         if (entry == null) {
             entry = new FieldIndexEntry<>(dbName, collName, value, new HashSet<>());
             created.put(key, entry);
@@ -238,40 +253,85 @@ final class FieldIndexSlot {
     }
 
     private void removeExact(FieldIndexEntry<Object> entry) {
+        final var at = indexOfExact(entry);
+        if (at >= 0) {
+            entries.remove(at);
+        }
+    }
+
+    private int indexOfExact(FieldIndexEntry<Object> entry) {
         final var at = Collections.binarySearch(entries, entry, order);
         if (at < 0) {
-            return;
+            return -1;
         }
         for (var i = at; i >= 0 && order.compare(entries.get(i), entry) == 0; i--) {
             if (entries.get(i) == entry) {
-                entries.remove(i);
-                return;
+                return i;
             }
         }
         for (var i = at + 1; i < entries.size() && order.compare(entries.get(i), entry) == 0; i++) {
             if (entries.get(i) == entry) {
-                entries.remove(i);
-                return;
+                return i;
             }
         }
+        return -1;
     }
 
     private void mergeInOnePass(Set<FieldIndexEntry<Object>> removed, List<FieldIndexEntry<Object>> added) {
         added.sort(order);
-        final var merged = new ArrayList<FieldIndexEntry<Object>>(entries.size() - removed.size() + added.size());
-        var next = 0;
-        for (final var entry : entries) {
-            if (removed.contains(entry)) {
-                continue;
-            }
-            while (next < added.size() && order.compare(added.get(next), entry) < 0) {
-                merged.add(added.get(next++));
-            }
+        final var removedAt = positionsOf(removed);
+        final var merged = new ArrayList<FieldIndexEntry<Object>>(entries.size() - removedAt.length + added.size());
+        var from = 0;
+        var removedCursor = 0;
+        for (final var entry : added) {
+            final var at = upperBound(entry, from);
+            removedCursor = copyWithout(merged, removedAt, removedCursor, from, at);
             merged.add(entry);
+            from = at;
         }
-        merged.addAll(added.subList(next, added.size()));
+        copyWithout(merged, removedAt, removedCursor, from, entries.size());
         entries.clear();
         entries.addAll(merged);
+    }
+
+    private int[] positionsOf(Set<FieldIndexEntry<Object>> removed) {
+        final var positions = new int[removed.size()];
+        var count = 0;
+        for (final var entry : removed) {
+            final var at = indexOfExact(entry);
+            if (at >= 0) {
+                positions[count++] = at;
+            }
+        }
+        final var found = Arrays.copyOf(positions, count);
+        Arrays.sort(found);
+        return found;
+    }
+
+    private int upperBound(FieldIndexEntry<Object> entry, int from) {
+        var low = from;
+        var high = entries.size();
+        while (low < high) {
+            final var middle = (low + high) >>> 1;
+            if (order.compare(entries.get(middle), entry) <= 0) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        return low;
+    }
+
+    private int copyWithout(List<FieldIndexEntry<Object>> target, int[] removedAt, int cursor, int from, int to) {
+        var start = from;
+        var next = cursor;
+        while (next < removedAt.length && removedAt[next] < to) {
+            final var gone = removedAt[next++];
+            target.addAll(entries.subList(start, gone));
+            start = gone + 1;
+        }
+        target.addAll(entries.subList(start, to));
+        return next;
     }
 
     void publish() {

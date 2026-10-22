@@ -139,7 +139,7 @@ public class FieldIndexPointEditTest {
     }
 
     @Test
-    public void test_large_batch_takes_one_merge_pass_and_keeps_the_list_object() throws Exception {
+    public void test_large_batch_merges_by_binary_search_and_keeps_the_list_object() throws Exception {
         final var counting = countingResidentIndex();
         final var ids = IntStream.range(100, 100 + POINT_EDIT_LIMIT * 2).mapToObj(FieldIndexPointEditTest::idOf)
                 .toList();
@@ -148,7 +148,7 @@ public class FieldIndexPointEditTest {
         support.applyBatchHoldingTheCollection(FIELD, ids);
 
         assertSame(counting, residentIndex());
-        assertEquals(1, SCANS.getOrDefault("iterator", 0), "the merge walks the list exactly once");
+        assertEquals(Map.of(), SCANS, "the merge finds its positions by binary search and scans nothing");
         assertNull(support.residentMismatch(FIELD));
     }
 

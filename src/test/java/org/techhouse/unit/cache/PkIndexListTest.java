@@ -270,4 +270,71 @@ public class PkIndexListTest {
         assertEquals("a-first", list.getFirst().getValue());
         assertEquals("zzz-last", list.getLast().getValue());
     }
+
+    private static void assertSameAnswer(List<PkIndexEntry> oracle, PkIndexList list, String id) {
+        assertEquals(Collections.binarySearch(oracle, id), list.search(id), "search " + id);
+        assertEquals(Collections.binarySearch(oracle, id), PkIndexList.positionOf(list, id), "positionOf " + id);
+    }
+
+    @Test
+    public void test_search_answers_exactly_like_binary_search_on_a_sorted_list() {
+        final var random = new Random(31L);
+        for (final var count : new int[]{0, 1, 2, 511, 512, 513, 1_024, 1_025, 5_000, 20_000}) {
+            final var oracle = new ArrayList<PkIndexEntry>();
+            for (var i = 0; i < count; i++) {
+                oracle.add(row(String.format("id-%06d", i * 2)));
+            }
+            final var list = PkIndexList.of(oracle);
+            for (var probe = -2; probe <= count * 2 + 2; probe += 1 + random.nextInt(37)) {
+                assertSameAnswer(oracle, list, String.format("id-%06d", Math.max(0, probe)));
+            }
+            assertSameAnswer(oracle, list, "");
+            assertSameAnswer(oracle, list, "zzz");
+            assertSameAnswer(oracle, list, "id-");
+            for (var i = 0; i < oracle.size(); i += 53) {
+                assertSameAnswer(oracle, list, oracle.get(i).getValue());
+            }
+        }
+    }
+
+    @Test
+    public void test_search_agrees_at_every_chunk_boundary() {
+        final var oracle = new ArrayList<>(sortedRows(5_000));
+        final var list = PkIndexList.of(oracle);
+        for (var boundary = 0; boundary < oracle.size(); boundary += 512) {
+            for (var offset = -2; offset <= 2; offset++) {
+                final var at = Math.clamp(boundary + offset, 0, oracle.size() - 1);
+                assertSameAnswer(oracle, list, oracle.get(at).getValue());
+                assertSameAnswer(oracle, list, oracle.get(at).getValue() + "0");
+                assertSameAnswer(oracle, list, oracle.get(at).getValue().substring(0, 8));
+            }
+        }
+    }
+
+    @Test
+    public void test_search_stays_exact_while_the_list_is_edited() {
+        final var random = new Random(77L);
+        final var oracle = new ArrayList<>(sortedRows(2_000));
+        final var list = PkIndexList.of(oracle);
+        for (var operation = 0; operation < 30_000; operation++) {
+            final var id = String.format("id-%06d", random.nextInt(8_000));
+            if (random.nextBoolean()) {
+                insertSorted(oracle, row(id));
+                insertSorted(list, row(id));
+            } else {
+                removeSorted(oracle, id);
+                removeSorted(list, id);
+            }
+            assertSameAnswer(oracle, list, String.format("id-%06d", random.nextInt(8_000)));
+        }
+    }
+
+    @Test
+    public void test_position_of_falls_back_to_binary_search_for_any_other_list() {
+        final var plain = new ArrayList<>(sortedRows(100));
+
+        assertEquals(Collections.binarySearch(plain, "id-000042"), PkIndexList.positionOf(plain, "id-000042"));
+        assertEquals(Collections.binarySearch(plain, "missing"), PkIndexList.positionOf(plain, "missing"));
+        assertEquals(-1, PkIndexList.positionOf(new ArrayList<>(), "anything"));
+    }
 }

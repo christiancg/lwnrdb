@@ -1,7 +1,6 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import org.techhouse.cache.PkIndexList;
@@ -16,7 +15,7 @@ final class PkIndexEdits {
 
     static void replaceAll(List<PkIndexEntry> rows, List<PkIndexEntry> replacements) {
         for (final var row : replacements) {
-            final var at = Collections.binarySearch(rows, row.getValue());
+            final var at = PkIndexList.positionOf(rows, row.getValue());
             if (at >= 0) {
                 rows.set(at, row);
             } else {
@@ -28,7 +27,7 @@ final class PkIndexEdits {
     static void insertAll(List<PkIndexEntry> rows, List<PkIndexEntry> inserted) {
         if (inserted.size() <= POINT_EDIT_LIMIT) {
             for (final var row : inserted) {
-                final var at = Collections.binarySearch(rows, row.getValue());
+                final var at = PkIndexList.positionOf(rows, row.getValue());
                 rows.add(at < 0 ? -at - 1 : at, row);
             }
             return;

@@ -2,7 +2,6 @@ package org.techhouse.cache;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -333,7 +332,7 @@ public class UserCache {
         final var pkIndex = getPkIndexAndLoadIfNecessary(dbName, collName);
         final var toRead = new ArrayList<PkIndexEntry>();
         for (var id : missingIds) {
-            final var pos = Collections.binarySearch(pkIndex, id);
+            final var pos = PkIndexList.positionOf(pkIndex, id);
             if (pos >= 0) {
                 toRead.add(pkIndex.get(pos).detachedCopy());
             }

@@ -37,12 +37,12 @@ public class AllocationBudgetTest {
     private static final int BULK = 1_000;
     private static final int WARM_UPS = 5;
     private static final long KB = 1024L;
-    private static final long SAVE_UPDATE_BUDGET = 30 * KB;
+    private static final long SAVE_UPDATE_BUDGET = 28_350;
     private static final long INSERT_BUDGET_PER_DOC = 3 * KB;
     private static final long COLD_SCAN_BUDGET_PER_DOC = 3_680;
-    private static final long BATCH_OF_ONE_BUDGET = 10_980;
-    private static final long BULK_UPDATE_BUDGET_PER_DOC = 3_880;
-    private static final long INDEXED_ID_LOOKUP_BUDGET = 21_580;
+    private static final long BATCH_OF_ONE_BUDGET = 8_430;
+    private static final long BULK_UPDATE_BUDGET_PER_DOC = 3_630;
+    private static final long INDEXED_ID_LOOKUP_BUDGET = 21_510;
     private static final long SAVE_REQUEST_PARSE_BUDGET = 3_120;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """

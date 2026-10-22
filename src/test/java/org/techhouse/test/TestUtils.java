@@ -267,7 +267,14 @@ public class TestUtils {
     }
 
     public static void setDbPath(Object fileSystem, String path) throws NoSuchFieldException, IllegalAccessException {
-        setPrivateField(getPrivateField(fileSystem, "paths", Object.class), "dbPath", path);
+        final var paths = getPrivateField(fileSystem, "paths", Object.class);
+        try {
+            final var useDbPath = paths.getClass().getDeclaredMethod("useDbPath", String.class);
+            useDbPath.setAccessible(true);
+            useDbPath.invoke(paths, path);
+        } catch (NoSuchMethodException | java.lang.reflect.InvocationTargetException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     public static String getDbPath(Object fileSystem) throws NoSuchFieldException, IllegalAccessException {
@@ -280,6 +287,12 @@ public class TestUtils {
 
     public static Object usageTrackerOf(Object memoryManagement) throws NoSuchFieldException, IllegalAccessException {
         return getPrivateField(memoryManagement, "usageTracker", Object.class);
+    }
+
+    public static void resetUsageCounters(Object usageTracker) throws NoSuchFieldException, IllegalAccessException {
+        setPrivateField(usageTracker, "counters", new java.util.concurrent.ConcurrentHashMap<>());
+        setPrivateField(usageTracker, "byAccess", new java.util.concurrent.ConcurrentHashMap<>());
+        setPrivateField(usageTracker, "unflushed", java.util.concurrent.ConcurrentHashMap.newKeySet());
     }
 
     public static void deleteFolder(File folder) {

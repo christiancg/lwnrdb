@@ -2,7 +2,6 @@ package org.techhouse.cache;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -199,14 +198,11 @@ final class AdminPageCache {
     }
 
     long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
-        final var pageEntries = pageList(dbName, collName);
-        final var fileLengthOf = fileLengthsOf(dbName, collName);
-        final var pendingPageBytes = new HashMap<Long, Long>();
+        final var placement = new BatchPagePlacement(pageList(dbName, collName), fileLengthsOf(dbName, collName),
+                configuration.getMaxPageSize(), entryByteSizes);
         final var targets = new long[entryByteSizes.length];
         for (var index = 0; index < entryByteSizes.length; index++) {
-            final var size = entryByteSizes[index];
-            targets[index] = selectPageForInsert(pageEntries, size, pendingPageBytes, fileLengthOf);
-            pendingPageBytes.merge(targets[index], (long) size, Long::sum);
+            targets[index] = placement.place(entryByteSizes[index]);
         }
         return targets;
     }

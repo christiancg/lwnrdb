@@ -42,7 +42,7 @@ public class MemoryManagementTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", savedMaxMemoryBytes);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.stopSweepThread();
-        TestUtils.setPrivateField(TestUtils.usageTrackerOf(mm), "counters", new ConcurrentHashMap<>());
+        TestUtils.resetUsageCounters(TestUtils.usageTrackerOf(mm));
         TestUtils.standardTearDown();
     }
 
@@ -266,7 +266,7 @@ public class MemoryManagementTest {
         org.techhouse.ops.AdminOperationHelper
                 .upsertCollectionUsage(new org.techhouse.bckg_ops.events.CollectionUsageEvent(AccessKind.COLLECTION,
                         "userDb", "userColl", null, System.currentTimeMillis()));
-        TestUtils.setPrivateField(TestUtils.usageTrackerOf(mm), "counters", new ConcurrentHashMap<>());
+        TestUtils.resetUsageCounters(TestUtils.usageTrackerOf(mm));
         mm.loadProfileFromAdmin();
         assertNotNull(mm.getCounter(AccessKind.COLLECTION, "userDb", "userColl", null));
     }

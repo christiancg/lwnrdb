@@ -52,8 +52,9 @@ public final class FieldIndexBatch {
     public void apply(String id, JsonBaseElement currentValue) throws IOException {
         loadEveryType();
         final var target = targetOf(currentValue);
+        final var found = target == null ? null : target.slot().find(target.key(), target.value());
         final var current = lookup.locate(id);
-        if (current != null && target != null && alreadyHolds(current, target)) {
+        if (current != null && found != null && alreadyHolds(current, target, found)) {
             return;
         }
         if (current != null) {
@@ -62,16 +63,17 @@ public final class FieldIndexBatch {
             }
         }
         if (target != null) {
-            final var entry = target.slot().addId(id, target.key(), target.value());
+            final var entry = target.slot().addId(id, target.key(), target.value(), found);
             lookup.moved(id, new FieldIndexLookup.Located(target.slot().identifier(), entry, null));
         } else {
             lookup.moved(id, null);
         }
     }
 
-    private static boolean alreadyHolds(FieldIndexLookup.Located current, Target target) {
+    private static boolean alreadyHolds(FieldIndexLookup.Located current, Target target,
+            FieldIndexEntry<Object> found) {
         return current.next() == null && current.typeIdentifier().equals(target.slot().identifier())
-                && target.slot().find(target.key(), target.value()) == current.entry();
+                && found == current.entry();
     }
 
     public void flush() throws IOException {
