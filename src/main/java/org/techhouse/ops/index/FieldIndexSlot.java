@@ -46,6 +46,7 @@ final class FieldIndexSlot {
     private List<FieldIndexEntry<Object>> entries;
     private int previousCount;
     private long idBytesDelta;
+    private int changedIds;
     private boolean dirty;
 
     @FunctionalInterface
@@ -167,6 +168,7 @@ final class FieldIndexSlot {
         }
         if (entry.getIds().add(id) && resident != null) {
             idBytesDelta += CacheSizeEstimator.fieldIndexIdSize(id);
+            changedIds++;
         }
         log(key, id, true);
         dirty = true;
@@ -178,6 +180,7 @@ final class FieldIndexSlot {
         if (entry.getIds().remove(id)) {
             if (resident != null) {
                 idBytesDelta -= CacheSizeEstimator.fieldIndexIdSize(id);
+                changedIds++;
             }
             log(FieldIndexEntry.fileKeyOf(entry.getValue()), id, false);
             dirty = true;
@@ -346,7 +349,7 @@ final class FieldIndexSlot {
             cache.evictFieldIndex(dbName, collName, identifier);
             return;
         }
-        cache.rememberFieldIndexBatch(dbName, collName, identifier, previousCount, bytesDelta());
+        cache.rememberFieldIndexBatch(dbName, collName, identifier, previousCount, bytesDelta(), changedIds);
     }
 
     boolean coveredByCache() {

@@ -103,10 +103,12 @@ public final class CacheSizeEstimator {
     }
 
     public static long estimateCollectionSize(Map<String, DbEntry> entries) {
-        if (entries == null)
-            return 0L;
+        return entries == null ? 0L : estimateCollectionEntries(entries.values());
+    }
+
+    public static long estimateCollectionEntries(Collection<DbEntry> entries) {
         long total = 0L;
-        for (var e : entries.values()) {
+        for (var e : entries) {
             total += estimateCollectionEntry(e);
         }
         return total;

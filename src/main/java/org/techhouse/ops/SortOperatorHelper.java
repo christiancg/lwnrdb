@@ -22,6 +22,8 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.RangeIdWalk;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.utils.JsonUtils;
 
@@ -108,10 +110,32 @@ public final class SortOperatorHelper {
         return decorated.toArray(Keyed[]::new);
     }
 
+    static IndexedSource.Fast tryIndexedRangeTopK(List<BaseAggregationStep> steps, String dbName, String collName,
+            long bound, PipelineContext context) throws IOException {
+        if (bound <= 0 || steps.size() < 2 || !(steps.get(1) instanceof SortAggregationStep sortStep)) {
+            return null;
+        }
+        final var range = SingleRange.of(steps.getFirst());
+        if (range == null || !range.bounds().fieldName().equals(sortStep.getFieldName())) {
+            return null;
+        }
+        final var ids = RangeIdWalk.open(dbName, collName, range.bounds(), sortStep.getAscending(), bound, context);
+        if (ids == null) {
+            return null;
+        }
+        return new IndexedSource.Fast(
+                context.watch(fetchInOrder(ids, dbName, collName, bound, context).filter(range.matches())), 2);
+    }
+
     private static Stream<JsonObject> fetchInOrder(List<String> orderedIds, String dbName, String collName, long bound,
             PipelineContext context) {
-        final var chunks = Spliterators.spliteratorUnknownSize(
-                chunkIterator(orderedIds.iterator(), firstChunkSize(bound)), Spliterator.ORDERED);
+        return fetchInOrder(orderedIds.iterator(), dbName, collName, bound, context);
+    }
+
+    private static Stream<JsonObject> fetchInOrder(Iterator<String> orderedIds, String dbName, String collName,
+            long bound, PipelineContext context) {
+        final var chunks = Spliterators.spliteratorUnknownSize(chunkIterator(orderedIds, firstChunkSize(bound)),
+                Spliterator.ORDERED);
         return StreamSupport.stream(chunks, false).flatMap(chunk -> fetchChunk(chunk, dbName, collName, context));
     }
 

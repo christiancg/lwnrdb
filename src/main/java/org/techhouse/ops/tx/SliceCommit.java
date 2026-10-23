@@ -64,6 +64,9 @@ public final class SliceCommit {
         if (recordsOutcome) {
             Tx2pcLog.recordOutcome(txId, true, null);
         }
+        if (Tx2pcLog.isPrepared(txId)) {
+            Tx2pcLog.deleteParticipantMarker(txId);
+        }
         TxCommitLog.clearLocalCommit(txId);
         TransactionRecovery.discardAppliedOps(txId, ops.stream().map(AdminTransactionEntry::get_id).toList());
         stagedTriggers.submitAll();

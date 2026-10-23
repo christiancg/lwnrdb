@@ -587,7 +587,11 @@ participant's `TX_STATUS`, so all of them abort. On restart a prepared
 participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
 commit re-drives `COMMIT_TX`. A participant that received `COMMIT_TX` writes `|localcommit` before applying, so a
 crash mid-apply is finished from that marker at startup, or by the recovery sweep, without asking anyone; `TX_STATUS`
-reports COMMITTING as committed.
+reports COMMITTING as committed. A crash between writing `|localcommit` and deleting `|part` leaves both, so
+finishing the slice deletes `|part` too: one left behind was listed in doubt forever, and once the outcome marker was
+garbage-collected recovery could read it as PREPARED and record a committed transaction as aborted. The coordinator step of the
+recovery sweep skips a decision a live commit is still driving, so it never sends a second `COMMIT_TX` whose
+acknowledgement could be taken for the commit's own.
 
 The participant does **not** hold its write locks while in doubt — clients may write those collections meanwhile —
 so every apply is version-checked. Each buffered op is given its write version when it is buffered, after its

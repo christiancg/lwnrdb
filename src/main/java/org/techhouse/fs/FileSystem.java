@@ -404,8 +404,8 @@ public class FileSystem {
         return OrphanedPageRecords.retireDangling(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
     }
 
-    public void checkpointWriteAheadLogs() {
-        writeAheadLog.checkpointAll();
+    public void checkpointWriteAheadLogs(long deadline) {
+        writeAheadLog.checkpointAll(deadline);
     }
 
     public void openWriteGroup(String dbName, String collName) throws IOException {

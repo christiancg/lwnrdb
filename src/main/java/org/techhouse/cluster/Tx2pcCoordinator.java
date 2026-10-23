@@ -53,6 +53,16 @@ public class Tx2pcCoordinator {
             finishEdge(clientId, local);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_ABORTED);
         }
+        tx2pcRecovery.commitDriving(dtxId);
+        try {
+            return decideAndDrive(clientId, sessionId, dtxId, local, remotes, participants);
+        } finally {
+            tx2pcRecovery.commitDriven(dtxId);
+        }
+    }
+
+    private OperationResponse decideAndDrive(UUID clientId, String sessionId, String dtxId, boolean local,
+            List<String> remotes, List<String> participants) {
         try {
             Tx2pcLog.recordCoordinatorCommit(dtxId, sessionId, participants);
         } catch (Exception e) {

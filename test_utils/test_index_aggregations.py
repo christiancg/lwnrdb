@@ -146,6 +146,11 @@ def bulk_load(c, coll, docs):
         c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": batch})
 
 
+def big_ref_for(v: int) -> str:
+    target = (v * 7) % NUM_DOCS
+    return [f"big_{target:06d}", f"BIG_{target:06d}", f"nope_{v}"][v % 3]
+
+
 def setup_fixtures(c):
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     for coll in (COLL, JOIN_LEFT, JOIN_BIG):
@@ -161,11 +166,13 @@ def setup_fixtures(c):
         "payload": rand_payload(PAYLOAD_BYTES),
     } for v in range(NUM_DOCS)))
 
-    bulk_load(c, JOIN_LEFT, ({"_id": f"left_{v:06d}", "joinKey": "shared"} for v in range(LEFT_DOCS)))
+    bulk_load(c, JOIN_LEFT, ({"_id": f"left_{v:06d}", "joinKey": "shared", "bigRef": big_ref_for(v)}
+                             for v in range(LEFT_DOCS)))
     bulk_load(c, JOIN_BIG, ({
         "_id": f"big_{v:06d}",
         "joinKey": "shared" if v == 0 else f"key_{v}",
         "joinKeyPlain": "shared" if v == 0 else f"key_{v}",
+        "idPlain": f"big_{v:06d}",
         "label": "the-one" if v == 0 else f"label_{v}",
         "payload": rand_payload(PAYLOAD_BYTES),
     } for v in range(NUM_DOCS)))
@@ -220,6 +227,8 @@ SORT_STEPS = [{"type": "SORT", "fieldName": "score", "ascending": True}, {"type"
 JOIN_STEPS = [{"type": "JOIN", "joinCollection": JOIN_BIG, "localField": "joinKey",
                "remoteField": "joinKey", "asField": "joined"}]
 JOIN_SCAN_STEPS = [dict(JOIN_STEPS[0], remoteField="joinKeyPlain")]
+JOIN_ID_STEPS = [dict(JOIN_STEPS[0], localField="bigRef", remoteField="_id")]
+JOIN_ID_SCAN_STEPS = [dict(JOIN_ID_STEPS[0], remoteField="idPlain")]
 
 TARGET_OBJECT = {"n": 0, "category": category_for(0)}
 TARGET_ARRAY = ["t", "0"]
@@ -241,6 +250,26 @@ RANGE_AND_STEPS = [RANGE_AND_FILTER, {"type": "SORT", "fieldName": "score", "asc
                    {"type": "LIMIT", "limit": 10}]
 
 
+def range_top_k_steps(low, span, ascending, limit, skip=None, field="score"):
+    steps = [{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+        {"fieldOperatorType": "GREATER_THAN_EQUALS", "field": field, "value": low},
+        {"fieldOperatorType": "SMALLER_THAN", "field": field, "value": low + span}]}},
+             {"type": "SORT", "fieldName": field, "ascending": ascending}]
+    if skip is not None:
+        steps.append({"type": "SKIP", "skip": skip})
+    return steps + [{"type": "LIMIT", "limit": limit}]
+
+
+def one_bound_top_k_steps(operator, value, ascending, limit, field="score"):
+    return [{"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": field, "value": value}},
+            {"type": "SORT", "fieldName": field, "ascending": ascending}, {"type": "LIMIT", "limit": limit}]
+
+
+RANGE_TOP_K_DESC_STEPS = range_top_k_steps(NUM_DOCS // 8, min(500, NUM_DOCS // 2), False, 50)
+RANGE_TOP_K_SKIP_STEPS = range_top_k_steps(NUM_DOCS // 2, min(200, NUM_DOCS // 4), True, 20, skip=5)
+RANGE_TOP_K_PAST_END_STEPS = one_bound_top_k_steps("GREATER_THAN", NUM_DOCS - 20, True, 1000)
+
+
 def distinct_signature(r):
     return sorted({d.get("category") for d in (r.get("results") or [])})
 
@@ -256,6 +285,23 @@ def join_signature(r):
         joined = row.get("joined") or []
         labels.append(tuple(sorted(j.get("label") for j in joined)))
     return len(rows), sorted(labels)
+
+
+def join_by_row_signature(r):
+    return sorted((row.get("_id"), tuple(sorted(j.get("label") for j in (row.get("joined") or []))))
+                  for row in (r.get("results") or []))
+
+
+def probe_join_on_id_matches_the_scan(c):
+    section("JOIN on _id answers exactly as the scan does")
+    by_pk = join_by_row_signature(agg(c, JOIN_LEFT, JOIN_ID_STEPS))
+    by_scan = join_by_row_signature(agg(c, JOIN_LEFT, JOIN_ID_SCAN_STEPS))
+    check("the pk lookup and the unindexed copy of _id attach the same rows", by_pk == by_scan,
+          detail=f"pk={by_pk[:3]!r} scan={by_scan[:3]!r}")
+    matched = {left for left, labels in by_pk if labels}
+    expected = {f"left_{v:06d}" for v in range(LEFT_DOCS) if v % 3 == 0}
+    check("exactly the rows naming an existing id are joined; a case-differing id matches nothing",
+          matched == expected, detail=f"matched={len(matched)} expected={len(expected)}")
 
 
 def compare(label, scan_time, unindexed_resp, indexed_time, indexed_resp, signature, strict_speed):
@@ -1238,6 +1284,7 @@ REG_CONJ_ORDER = "idxagg_reg_conjorder"
 REG_NOID_DUP = "idxagg_reg_noiddup"
 REG_NEAREST_TIES = "idxagg_reg_nearestties"
 REG_NEAREST_SCALE = "idxagg_reg_nearestscale"
+REG_RANGE_TOP_K = "idxagg_reg_rangetopk"
 
 
 def probe_non_ascii_indexed_values(c):
@@ -1994,16 +2041,71 @@ def test_a_bounded_range_and_reads_only_its_documents(c):
                 "aggregationSteps": RANGE_AND_STEPS, "analyze": True})
     check_status("the bounded range query answers", r, "OK")
     analysis = r.get("analyzeResult") or {}
-    check("it reads exactly the documents inside the range, not each bound's half of the collection",
-          analysis.get("documentsScanned") == RANGE_WIDTH, f"scanned {analysis.get('documentsScanned')}")
-    check("the rows match the same query on the scan path",
-          bu.ids_of(r) == bu.ids_of(agg(c, COLL, forced_scan(RANGE_AND_STEPS))))
+    check("followed by SORT on its field and LIMIT 10, it reads only the ten documents it returns",
+          analysis.get("documentsScanned") == 10, f"scanned {analysis.get('documentsScanned')}")
+    check("the rows match the same query on the scan path, in order",
+          agree_ordered_ids(r) == agree_ordered_ids(agg(c, COLL, forced_scan(RANGE_AND_STEPS))))
+    filtered = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+                       "aggregationSteps": [RANGE_AND_FILTER], "analyze": True})
+    check("on its own it reads exactly the documents inside the range, not each bound's half of the collection",
+          (filtered.get("analyzeResult") or {}).get("documentsScanned") == RANGE_WIDTH,
+          str(filtered.get("analyzeResult")))
     counted = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
                       "aggregationSteps": [RANGE_AND_FILTER, {"type": "COUNT"}], "analyze": True})
     check("COUNT of the range is answered from the index alone",
           (counted.get("analyzeResult") or {}).get("documentsScanned") == 0, str(counted.get("analyzeResult")))
     check("COUNT of the range equals its width", agg_count(c, COLL, [RANGE_AND_FILTER]) == RANGE_WIDTH,
           f"count {agg_count(c, COLL, [RANGE_AND_FILTER])}")
+
+
+def range_top_k_disagreements(c, coll, queries):
+    wrong = []
+    for steps in queries:
+        indexed = agree_ordered_ids(agg(c, coll, steps))
+        scanned = agree_ordered_ids(agg(c, coll, forced_scan(steps)))
+        if indexed != scanned:
+            wrong.append((steps, indexed, scanned))
+    return wrong
+
+
+def test_range_top_k_agrees_with_the_scan(c):
+    section("A numeric range followed by SORT on its field and LIMIT answers exactly what the scan answers")
+    queries = []
+    for span in (1, 2, 20, 200, 500):
+        for ascending in (True, False):
+            for limit in (1, 10, 50, span + 100):
+                queries.append(range_top_k_steps(NUM_DOCS // 3, span, ascending, limit))
+            queries.append(range_top_k_steps(NUM_DOCS // 3, span, ascending, 7, skip=3))
+    for operator, value in (("GREATER_THAN", NUM_DOCS - 40), ("GREATER_THAN_EQUALS", NUM_DOCS - 40),
+                            ("SMALLER_THAN", 40), ("SMALLER_THAN_EQUALS", 40), ("GREATER_THAN", NUM_DOCS + 5)):
+        for ascending in (True, False):
+            for limit in (5, 100):
+                queries.append(one_bound_top_k_steps(operator, value, ascending, limit))
+    wrong = range_top_k_disagreements(c, COLL, queries)
+    check(f"{len(queries)} spans, directions, limits and bounds agree with the scan, rows in order", not wrong,
+          f"first disagreement: {wrong[0]!r}" if wrong else "")
+    r = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL, "analyze": True,
+                "aggregationSteps": range_top_k_steps(NUM_DOCS // 8, 500, True, 10)})
+    check("a span-500 range with LIMIT 10 reads only ten documents",
+          (r.get("analyzeResult") or {}).get("documentsScanned") == 10, str(r.get("analyzeResult")))
+
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_RANGE_TOP_K})
+    for i in range(60):
+        save_doc(c, REG_RANGE_TOP_K, {"_id": f"t{(i * 17) % 60:02d}", "n": i % 7})
+    for doc_id, value in (("str", "3"), ("bool", True), ("arr", [3]), ("obj", {"n": 3}), ("nul", None)):
+        save_doc(c, REG_RANGE_TOP_K, {"_id": doc_id, "n": value})
+    save_doc(c, REG_RANGE_TOP_K, {"_id": "bare"})
+    build_index(c, REG_RANGE_TOP_K, "n")
+    tied = []
+    for ascending in (True, False):
+        for limit in (1, 4, 9, 13, 40, 100):
+            tied.append(range_top_k_steps(1, 4, ascending, limit, field="n"))
+            tied.append(one_bound_top_k_steps("GREATER_THAN_EQUALS", 2, ascending, limit, field="n"))
+        tied.append(range_top_k_steps(0, 7, ascending, 5, skip=10, field="n"))
+    wrong = range_top_k_disagreements(c, REG_RANGE_TOP_K, tied)
+    check("tied values, mixed kinds, a null and a missing value order the same either way", not wrong,
+          f"first disagreement: {wrong[0]!r}" if wrong else "")
+    check("the tied range is answered by the index", index_used(c, REG_RANGE_TOP_K, tied[0]))
 
 
 def test_wide_and_conjunction_stays_within_memory(c):
@@ -2089,6 +2191,8 @@ def main():
         ("DISTINCT on category", COLL, DISTINCT_STEPS, forced_scan(DISTINCT_STEPS), distinct_signature, True),
         ("SORT on score (+LIMIT 10)", COLL, SORT_STEPS, forced_scan(SORT_STEPS), sort_signature, False),
         ("JOIN against a large remote collection", JOIN_LEFT, JOIN_STEPS, JOIN_SCAN_STEPS, join_signature, True),
+        ("JOIN on _id against a large remote collection", JOIN_LEFT, JOIN_ID_STEPS, JOIN_ID_SCAN_STEPS,
+         join_by_row_signature, True),
         ("FILTER element-match on object field", COLL, FILTER_OBJECT_STEPS, forced_scan(FILTER_OBJECT_STEPS),
          bu.ids_of, True),
         ("FILTER element-match on array field", COLL, FILTER_ARRAY_STEPS, forced_scan(FILTER_ARRAY_STEPS),
@@ -2101,6 +2205,12 @@ def main():
          bu.ids_of, False),
         ("FILTER AND range on score (+SORT +LIMIT 10)", COLL, RANGE_AND_STEPS, forced_scan(RANGE_AND_STEPS),
          bu.ids_of, True),
+        ("FILTER range span 500 on score (+SORT desc +LIMIT 50)", COLL, RANGE_TOP_K_DESC_STEPS,
+         forced_scan(RANGE_TOP_K_DESC_STEPS), agree_ordered_ids, True),
+        ("FILTER range span 200 on score (+SORT +SKIP 5 +LIMIT 20)", COLL, RANGE_TOP_K_SKIP_STEPS,
+         forced_scan(RANGE_TOP_K_SKIP_STEPS), agree_ordered_ids, True),
+        ("FILTER GT on score (+SORT +LIMIT larger than the range)", COLL, RANGE_TOP_K_PAST_END_STEPS,
+         forced_scan(RANGE_TOP_K_PAST_END_STEPS), agree_ordered_ids, True),
     ]
 
     unindexed = {}
@@ -2132,6 +2242,10 @@ def main():
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        probe_join_on_id_matches_the_scan(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         consistency_suite(c)
 
     with Conn() as c:
@@ -2149,6 +2263,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_a_bounded_range_and_reads_only_its_documents(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_range_top_k_agrees_with_the_scan(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

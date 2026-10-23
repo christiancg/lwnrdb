@@ -86,7 +86,7 @@ public class CheckpointGuardTest {
         pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
         recorder.clear();
 
-        fs.checkpointWriteAheadLogs();
+        fs.checkpointWriteAheadLogs(Long.MAX_VALUE);
 
         assertTrue(recorder.forcedNames().contains(LOG_REWRITE), recorder.forcedNames().toString());
         assertFalse(recorder.forcedNames().contains(DIRTY_MARKER), recorder.forcedNames().toString());
@@ -119,7 +119,7 @@ public class CheckpointGuardTest {
         save("pending");
         recorder.clear();
 
-        fs.checkpointWriteAheadLogs();
+        fs.checkpointWriteAheadLogs(Long.MAX_VALUE);
 
         assertFalse(recorder.forcedNames().contains(LOG_REWRITE), recorder.forcedNames().toString());
         assertFalse(recorder.forcedNames().contains(DIRTY_MARKER), recorder.forcedNames().toString());

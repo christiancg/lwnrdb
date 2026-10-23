@@ -50,6 +50,11 @@ public class IndexHelper {
         return IndexEntryReader.getIndexEntriesForField(dbName, collName, fieldName, observer);
     }
 
+    public static List<Object> getDistinctIndexValues(String dbName, String collName, String fieldName,
+            ReadObserver observer) throws IOException {
+        return IndexEntryReader.distinctValuesForField(dbName, collName, fieldName, observer);
+    }
+
     public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
             Set<JsonBaseElement> localValues, ReadObserver observer) throws IOException {
         return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues, observer);

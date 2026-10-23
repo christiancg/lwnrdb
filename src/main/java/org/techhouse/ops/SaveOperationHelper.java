@@ -128,6 +128,7 @@ public final class SaveOperationHelper {
         submit(new EntityEvent(eventType, dbName, collName, entry, CollectionIncarnation.current(dbName, collName),
                 pendingGeneration), saveRequest.isBackgroundFollowOn());
         sink.markDirty(dbName, collName);
+        cache.signalIfOverBudget();
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue(), eventType == EventType.CREATED);
     }
@@ -250,6 +251,7 @@ public final class SaveOperationHelper {
         final var updatedDbEntries = toDbEntries(updatedIndexEntries);
         final var insertedDbEntries = toDbEntries(insertedIndexEntries);
         publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration, sink);
+        cache.signalIfOverBudget();
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
     }

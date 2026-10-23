@@ -332,25 +332,32 @@ final class WriteAheadLog {
         return joined;
     }
 
-    void checkpointAll() {
+    void checkpointAll(long deadline) {
         final var root = new File(paths.dbPath()).getAbsolutePath() + File.separator;
-        for (final var entry : List.copyOf(states.entrySet())) {
-            if (!entry.getKey().startsWith(root)) {
-                continue;
+        final var logs = states.entrySet().stream().filter(entry -> entry.getKey().startsWith(root))
+                .map(Map.Entry::getValue).toList();
+        for (var i = 0; i < logs.size(); i++) {
+            if (System.currentTimeMillis() >= deadline) {
+                logger.warning("The shutdown budget ran out with " + (logs.size() - i) + " write-ahead log(s) not"
+                        + " checkpointed; the next startup replays them");
+                return;
             }
-            final var state = entry.getValue();
-            if (guard.holdsIndexWork(state.dbName, state.collName)) {
-                logger.info("Leaving the write-ahead log of " + subject(state.dbName, state.collName) + " as it is:"
-                        + " its field-index work is still pending, so the next startup replays it and finishes that"
-                        + " work");
-                continue;
-            }
-            try {
-                checkpoint(state.dbName, state.collName);
-            } catch (IOException e) {
-                logger.error("Could not checkpoint the write-ahead log of " + subject(state.dbName, state.collName)
-                        + "; the next startup replays it", e);
-            }
+            checkpointAtShutdown(logs.get(i));
+        }
+    }
+
+    private void checkpointAtShutdown(LogState state) {
+        if (guard.holdsIndexWork(state.dbName, state.collName)) {
+            logger.info("Leaving the write-ahead log of " + subject(state.dbName, state.collName) + " as it is:"
+                    + " its field-index work is still pending, so the next startup replays it and finishes that"
+                    + " work");
+            return;
+        }
+        try {
+            checkpoint(state.dbName, state.collName);
+        } catch (IOException e) {
+            logger.error("Could not checkpoint the write-ahead log of " + subject(state.dbName, state.collName)
+                    + "; the next startup replays it", e);
         }
     }
 

@@ -83,14 +83,11 @@ public final class CountOperatorHelper {
             String collName, PipelineContext context) throws IOException {
         final var filters = steps.subList(0, countIndex).stream()
                 .filter(step -> step.getType() != AggregationStepType.SORT).toList();
-        if (filters.size() != 1 || filters.getFirst().getType() != AggregationStepType.FILTER) {
+        final var range = filters.size() == 1 ? SingleRange.of(filters.getFirst()) : null;
+        if (range == null || cache.hasNoIndex(dbName, collName, range.bounds().fieldName())) {
             return null;
         }
-        final var bounds = ConjunctionCandidates
-                .singleRange(((FilterAggregationStep) filters.getFirst()).getOperator());
-        if (bounds == null || cache.hasNoIndex(dbName, collName, bounds.fieldName())) {
-            return null;
-        }
+        final var bounds = range.bounds();
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         if (!pendingBefore.isEmpty()) {
             return null;

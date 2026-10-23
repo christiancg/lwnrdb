@@ -3579,6 +3579,55 @@ def test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared():
         restore_after_fault_test()
 
 
+def test_a_participant_halted_between_its_commit_markers_is_not_left_in_doubt():
+    section("Fault seam: a participant halted between its decided marker and dropping its prepared one")
+
+    owners = owned_by_every_node("faultmark")
+    if owners is None:
+        return
+    edge, victim = nodes[2], nodes[1]
+    local, remote = owners[edge.index][0], owners[victim.index][0]
+    point, subject = "WAL_APPENDED", "admin|transactions"
+    try:
+        if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
+            return
+        conn = authed(edge.client_port)
+        try:
+            tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
+            check_status("a write to the coordinator's own collection", conn.send({
+                "type": "SAVE", "databaseName": DB, "collectionName": local,
+                "object": {"_id": "mark_edge", "v": 1}}), "OK")
+            check_status("a write to the participant's collection", conn.send({
+                "type": "SAVE", "databaseName": DB, "collectionName": remote,
+                "object": {"_id": "mark_part", "v": 1}}), "OK")
+            check_status("ARM_FAULT pauses the participant at its prepared marker",
+                         arm_fault(victim, point, "PAUSE", match=subject), "OK")
+            pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
+            check_status("the participant paused while preparing", await_fault(victim, point, 20000), "OK")
+            check_status("ARM_FAULT halts it at the next marker, the decided one",
+                         arm_fault(victim, point, "HALT", match=subject), "OK")
+            check("the participant halted", victim.wait_for_exit(30.0))
+            check("with the fault's exit status, not a crash", victim.proc.returncode == FAULT_HALT_STATUS,
+                  f"returncode={victim.proc.returncode}")
+            pending.join(60.0)
+        finally:
+            conn.close()
+        print(f"  Restarting node-{victim.index} ...")
+        victim.start()
+        check("the restarted participant finished the slice",
+              wait_until(lambda: stored_documents(victim, DB, remote).get("mark_part", {}).get("v") == 1
+                         and not holds_tx_record(victim, tx_id, "localcommit"), timeout_s=60.0),
+              f"transaction={tx_id}")
+        check("and dropped its prepared marker", not holds_tx_record(victim, tx_id, "part"), f"transaction={tx_id}")
+        check("so nothing is listed in doubt", in_doubt_row(victim.client_port, tx_id) is None, f"transaction={tx_id}")
+        check("every node sees the participant's write",
+              all_nodes_see(DB, remote, "mark_part", 1, ports=all_ports(), timeout_s=30.0))
+        check("and the coordinator's own write",
+              all_nodes_see(DB, local, "mark_edge", 1, ports=all_ports(), timeout_s=30.0))
+    finally:
+        restore_after_fault_test()
+
+
 def test_a_write_inside_an_anti_entropy_round_trip_is_not_undone():
     section("Fault seam: writes landing between an anti-entropy snapshot and its repair")
 
@@ -3698,6 +3747,7 @@ GROUPS = {
         test_a_write_paused_while_its_ownership_moves_is_not_reported_unapplied,
         test_a_node_halted_between_a_tombstone_and_its_delete_converges,
         test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared,
+        test_a_participant_halted_between_its_commit_markers_is_not_left_in_doubt,
         test_a_write_inside_an_anti_entropy_round_trip_is_not_undone,
         test_a_prepared_participant_resolves_without_its_coordinator,
         test_a_post_prepare_write_survives_2pc_recovery,

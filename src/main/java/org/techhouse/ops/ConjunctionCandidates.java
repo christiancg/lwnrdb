@@ -59,7 +59,7 @@ final class ConjunctionCandidates {
         return sets.contains(null) ? null : intersection(sets);
     }
 
-    static RangeBounds singleRange(BaseOperator operator) {
+    static List<FieldOperator> singleRangeLeaves(BaseOperator operator) {
         final var leaves = new ArrayList<FieldOperator>();
         if (operator.getType() == OperatorType.FIELD) {
             leaves.add((FieldOperator) operator);
@@ -76,7 +76,7 @@ final class ConjunctionCandidates {
                 || leaves.stream().map(FieldOperator::getField).distinct().count() != 1) {
             return null;
         }
-        return RangeBounds.fromLeaves(leaves.getFirst().getField(), leaves);
+        return leaves;
     }
 
     static Set<String> rangeMatchingIds(RangeBounds bounds, List<FieldOperator> leaves, String dbName, String collName,
@@ -149,7 +149,7 @@ final class ConjunctionCandidates {
         return union;
     }
 
-    private static BiPredicate<JsonObject, String> everyLeaf(List<FieldOperator> leaves) {
+    static BiPredicate<JsonObject, String> everyLeaf(List<FieldOperator> leaves) {
         final var testers = leaves.stream()
                 .map(leaf -> FieldPredicateFactory.getTester(leaf, leaf.getFieldOperatorType())).toList();
         return (document, fieldName) -> testers.stream().allMatch(tester -> tester.test(document, fieldName));

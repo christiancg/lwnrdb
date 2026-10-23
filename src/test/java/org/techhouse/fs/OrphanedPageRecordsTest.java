@@ -76,6 +76,26 @@ public class OrphanedPageRecordsTest {
         return retired.stream().map(PkIndexEntry::getValue).sorted().toList();
     }
 
+    private static PkIndexEntry row(String id, long position, long length, long page) {
+        return new PkIndexEntry(DB, COLL, id, position, length, page, 0L);
+    }
+
+    @Test
+    public void test_indexed_ends_by_page_takes_the_max_end_per_page() {
+        final var ends = OrphanedPageRecords.indexedEndsByPage(
+                List.of(row("a", 40, 10, 0), row("b", 0, 20, 0), row("c", 5, 5, 2), row("d", 90, 30, 2)));
+
+        assertEquals(Map.of(0L, 50L, 2L, 120L), ends);
+    }
+
+    @Test
+    public void test_a_page_with_no_rows_ends_at_zero() {
+        final var ends = OrphanedPageRecords.indexedEndsByPage(List.of(row("a", 0, 10, 1)));
+
+        assertEquals(0L, ends.getOrDefault(0L, 0L));
+        assertTrue(OrphanedPageRecords.indexedEndsByPage(List.of()).isEmpty());
+    }
+
     @Test
     public void test_scan_reports_an_unterminated_tail_without_refusing_adoption() throws IOException {
         f.seed(0, "a");

@@ -10,9 +10,18 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 
 final class UserCacheSizes {
+    static final long DRIFT_FRACTION = 10L;
+
     private final Map<String, AtomicLong> collectionBytes = new ConcurrentHashMap<>();
     private final Map<String, Long> pkBytesPerEntry = new ConcurrentHashMap<>();
     private final Map<String, Long> fieldIndexBytesPerEntry = new ConcurrentHashMap<>();
+    private final Map<String, Drift> fieldIndexDrift = new ConcurrentHashMap<>();
+
+    private record Drift(long measuredIds, long changedIds) {
+        boolean isDue() {
+            return changedIds >= Math.max(1L, measuredIds / DRIFT_FRACTION);
+        }
+    }
 
     void trackPut(String collId, DbEntry previous, DbEntry added) {
         final var delta = CacheSizeEstimator.estimateCollectionEntry(added)
@@ -63,19 +72,38 @@ final class UserCacheSizes {
 
     long measureFieldIndex(String collId, String indexKey, List<FieldIndexEntry<?>> entries) {
         final var measured = CacheSizeEstimator.estimateFieldIndexSize(entries);
-        rememberFieldIndex(collId, indexKey, measured, entries.size());
+        rememberMeasuredFieldIndex(collId, indexKey, measured, entries);
         return measured;
     }
 
-    void rememberFieldIndex(String collId, String indexKey, long bytes, int entryCount) {
+    void rememberMeasuredFieldIndex(String collId, String indexKey, long bytes, List<FieldIndexEntry<?>> entries) {
+        rememberFieldIndex(collId, indexKey, bytes, entries.size());
+        var ids = 0L;
+        for (final var entry : entries) {
+            final var entryIds = entry.getIds();
+            ids += entryIds == null ? 0 : entryIds.size();
+        }
+        fieldIndexDrift.put(fieldIndexKey(collId, indexKey), new Drift(ids, 0L));
+    }
+
+    boolean needsMeasure(String collId, String indexKey) {
+        final var drift = fieldIndexDrift.get(fieldIndexKey(collId, indexKey));
+        return drift == null || drift.isDue();
+    }
+
+    private void rememberFieldIndex(String collId, String indexKey, long bytes, int entryCount) {
         if (entryCount > 0) {
             fieldIndexBytesPerEntry.put(fieldIndexKey(collId, indexKey), bytes / entryCount);
         }
     }
 
-    void adjustFieldIndex(String collId, String indexKey, int previousCount, int entryCount, long deltaBytes) {
+    void adjustFieldIndex(String collId, String indexKey, int previousCount, int entryCount, long deltaBytes,
+            int changedIds) {
         final var total = rememberedFieldIndexBytes(collId, indexKey, previousCount) + deltaBytes;
         rememberFieldIndex(collId, indexKey, Math.max(0L, total), entryCount);
+        final var changed = Math.abs((long) entryCount - previousCount) + changedIds;
+        fieldIndexDrift.computeIfPresent(fieldIndexKey(collId, indexKey),
+                (_, drift) -> new Drift(drift.measuredIds(), drift.changedIds() + changed));
     }
 
     long rememberedFieldIndexBytes(String collId, String indexKey, int entryCount) {
@@ -87,12 +115,14 @@ final class UserCacheSizes {
 
     void forgetFieldIndex(String collId, String indexKey) {
         fieldIndexBytesPerEntry.remove(fieldIndexKey(collId, indexKey));
+        fieldIndexDrift.remove(fieldIndexKey(collId, indexKey));
     }
 
     void forgetFieldIndexAllTypes(String collId, String fieldName) {
         final var fieldKey = fieldIndexKey(collId, fieldName);
-        fieldIndexBytesPerEntry.keySet()
-                .removeIf(key -> key.equals(fieldKey) || key.startsWith(fieldKey + Globals.COLL_IDENTIFIER_SEPARATOR));
+        final var typePrefix = fieldKey + Globals.COLL_IDENTIFIER_SEPARATOR;
+        fieldIndexBytesPerEntry.keySet().removeIf(key -> key.equals(fieldKey) || key.startsWith(typePrefix));
+        fieldIndexDrift.keySet().removeIf(key -> key.equals(fieldKey) || key.startsWith(typePrefix));
     }
 
     void forgetCollection(String collId) {
@@ -105,6 +135,7 @@ final class UserCacheSizes {
         collectionBytes.keySet().removeIf(key -> key.startsWith(prefix));
         pkBytesPerEntry.keySet().removeIf(key -> key.startsWith(prefix));
         fieldIndexBytesPerEntry.keySet().removeIf(key -> key.startsWith(prefix));
+        fieldIndexDrift.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     long rememberedFootprint(Map<String, List<PkIndexEntry>> pkIndexes, Map<String, Map<String, DbEntry>> collections,

@@ -39,10 +39,11 @@ final class OrphanedPageRecords {
         }
         final var entries = recognised.get();
         final var indexedIds = entries.stream().map(PkIndexEntry::getValue).collect(Collectors.toSet());
+        final var indexedEnds = indexedEndsByPage(entries);
         final var orphansByPage = new HashMap<Long, List<Orphan>>();
         for (final var page : pages) {
             final var orphans = orphansOf(paths.collectionPage(dbName, collName, page), dbName, collName, page,
-                    indexedEndOf(entries, page), indexedIds);
+                    indexedEnds.getOrDefault(page, 0L), indexedIds);
             if (!orphans.isEmpty()) {
                 orphansByPage.put(page, orphans);
             }
@@ -74,9 +75,10 @@ final class OrphanedPageRecords {
         }
         final var entries = recognised.get();
         final var indexedIds = entries.stream().map(PkIndexEntry::getValue).collect(Collectors.toSet());
+        final var indexedEnds = indexedEndsByPage(entries);
         for (final var page : pages) {
             final var file = paths.collectionPage(dbName, collName, page);
-            final var scan = scanRecords(file, dbName, collName, page, indexedEndOf(entries, page));
+            final var scan = scanRecords(file, dbName, collName, page, indexedEnds.getOrDefault(page, 0L));
             final var copies = scan.records();
             if (scan.readable() && !copies.isEmpty()
                     && copies.stream().allMatch(copy -> indexedIds.contains(copy.entry().get_id()))) {
@@ -114,9 +116,12 @@ final class OrphanedPageRecords {
         return entry.getPosition() + entry.getLength() > pageLengths.getOrDefault(entry.getPage(), 0L);
     }
 
-    static long indexedEndOf(List<PkIndexEntry> entries, long page) {
-        return entries.stream().filter(entry -> entry.getPage() == page)
-                .mapToLong(entry -> entry.getPosition() + entry.getLength()).max().orElse(0L);
+    static Map<Long, Long> indexedEndsByPage(List<PkIndexEntry> entries) {
+        final var ends = new HashMap<Long, Long>();
+        for (final var entry : entries) {
+            ends.merge(entry.getPage(), entry.getPosition() + entry.getLength(), Math::max);
+        }
+        return ends;
     }
 
     record PageRecordScan(List<Orphan> records, String unreadable, boolean unterminatedTail) {

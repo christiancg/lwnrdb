@@ -36,7 +36,7 @@ Every other flag is passed to `bench_client.py`: `--docs` (100000), `--batch` (5
 ## Memory
 
 lwnrdb's peak container memory follows the heap ceiling, not the data. ZGC grows the heap toward whatever ceiling it is
-given, so the same 100k-document run (about 0.7 GiB of live heap after GC) peaked at very different sizes. Mean of three
+given, so the same 100k-document run (about 190 MB of live heap after a full GC) peaked at very different sizes. Mean of three
 runs per setting, balanced order, synced, `--ops-scale 2`, 4 GiB container, `maxMemory` fixed at 2 GiB for all of them:
 
 | heap ceiling | peak container memory | CPU per operation vs the old 70% | ZGC allocation stalls |

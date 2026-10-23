@@ -180,7 +180,7 @@ final class FieldIndexBatchSupport {
         return byType;
     }
 
-    private static Map<String, List<? extends FieldIndexEntry<?>>> loadedTypes(String fieldName) throws IOException {
+    static Map<String, List<? extends FieldIndexEntry<?>>> loadedTypes(String fieldName) throws IOException {
         final var fs = IocContainer.get(FileSystem.class);
         final var loaded = new TreeMap<String, List<? extends FieldIndexEntry<?>>>();
         for (final var type : IndexKind.scalarIndexClasses()) {

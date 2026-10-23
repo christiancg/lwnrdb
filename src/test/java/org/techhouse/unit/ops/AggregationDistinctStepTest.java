@@ -331,4 +331,69 @@ public class AggregationDistinctStepTest {
         assertEquals(1, result.size(), result.toString());
         assertEquals(first.copyWithout(Globals.PK_FIELD), result.getFirst());
     }
+
+    private static List<String> distinctRows(String field) throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new DistinctAggregationStep(field)));
+        return AggregationOperationHelper.processAggregation(request).stream()
+                .map(org.techhouse.utils.JsonUtils::canonicalize).sorted().toList();
+    }
+
+    private static List<Object> distinctIndexValues(String field) throws IOException {
+        return IndexHelper.getDistinctIndexValues(TestGlobals.DB, TestGlobals.COLL, field,
+                org.techhouse.analyze.ReadObserver.NONE);
+    }
+
+    @Test
+    public void test_size_sum_coverage_answers_on_full_coverage_and_declines_on_a_missing_value() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "v1", "color", new JsonString("red"));
+        addDoc(cache, "v2", "color", new JsonString("red"));
+        addDoc(cache, "v3", "color", new org.techhouse.ejson.elements.JsonNumber(3));
+        enableIndex(cache, "color");
+        assertEquals(2, distinctIndexValues("color").size(), "two values cover all three documents");
+
+        final var missing = new JsonObject();
+        missing.add(Globals.PK_FIELD, new JsonString("v4"));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
+                DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, missing));
+
+        assertNull(distinctIndexValues("color"), "three ids under four pk rows can never cover the collection");
+    }
+
+    @Test
+    public void test_indexed_distinct_matches_the_scan_over_every_type() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        final var object = new JsonObject();
+        object.addProperty("k", 1);
+        final var array = new org.techhouse.ejson.elements.JsonArray();
+        array.add(new JsonString("a"));
+        final JsonBaseElement[] values = {new JsonString("Red"), new JsonString("red"),
+                new org.techhouse.ejson.elements.JsonNumber(2), org.techhouse.ejson.elements.JsonBoolean.of(true),
+                new JsonString("#geo(1,2)"), object, array, new org.techhouse.ejson.elements.JsonNumber(2)};
+        for (var i = 0; i < values.length; i++) {
+            addDoc(cache, "t" + i, "mixed", values[i]);
+        }
+        final var scanned = distinctRows("mixed");
+        enableIndex(cache, "mixed");
+
+        assertNotNull(distinctIndexValues("mixed"), "every document holds a value, so the index answers");
+        assertEquals(scanned, distinctRows("mixed"));
+    }
+
+    @Test
+    public void test_a_pending_document_is_distinct_by_its_current_value() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "p1", "color", new JsonString("red"));
+        addDoc(cache, "p2", "color", new JsonString("blue"));
+        enableIndex(cache, "color");
+        addDoc(cache, "p2", "color", new JsonString("green"));
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        final var generation = pending.mark(TestGlobals.DB, TestGlobals.COLL, "p2");
+        try {
+            assertEquals(List.of("{\"color\":\"green\"}", "{\"color\":\"red\"}"), distinctRows("color"));
+        } finally {
+            pending.clear(TestGlobals.DB, TestGlobals.COLL, "p2", generation);
+        }
+    }
 }
