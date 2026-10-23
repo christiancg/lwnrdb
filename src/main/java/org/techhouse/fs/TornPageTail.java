@@ -66,7 +66,7 @@ final class TornPageTail {
 
     private static boolean restoreMissingLineEnd(File page, long pageNumber, List<PkIndexEntry> entries)
             throws IOException {
-        final var indexedEnd = OrphanedPageRecords.indexedEndOf(entries, pageNumber);
+        final var indexedEnd = OrphanedPageRecords.indexedEndsByPage(entries).getOrDefault(pageNumber, 0L);
         final var lineEnd = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
         final var missing = indexedEnd - page.length();
         if (missing <= 0 || missing > lineEnd.length) {

@@ -2,8 +2,10 @@ package org.techhouse.cache;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -17,8 +19,11 @@ import org.techhouse.log.Logger;
 
 public class MemoryManagement {
     static final long SWEEP_INTERVAL_SECONDS = 5L;
+    static final long FULL_MEASURE_FROM_PERCENT = 50L;
     static final long USAGE_RETENTION_MILLIS = 24L * 60L * 60L * 1000L;
     static final long USAGE_CLEANUP_INTERVAL_SECONDS = 60L * 60L;
+    static final long OVER_CAP_LOCK_WAIT_MILLIS = 100L;
+    static final long NO_LOCK_WAIT = 0L;
 
     private final Logger logger = Logger.logFor(MemoryManagement.class);
     private final Configuration config = Configuration.getInstance();
@@ -27,7 +32,9 @@ public class MemoryManagement {
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final UsageTracker usageTracker = IocContainer.get(UsageTracker.class);
     private final AtomicBoolean sweepRunning = new AtomicBoolean(false);
+    private final AtomicBoolean sweepQueued = new AtomicBoolean(false);
     private final AtomicBoolean sweepOutOfMemory = new AtomicBoolean(false);
+    private final AtomicBoolean requestedSweepOutOfMemory = new AtomicBoolean(false);
     private final AtomicBoolean flushOutOfMemory = new AtomicBoolean(false);
     private volatile ScheduledExecutorService scheduler;
 
@@ -75,28 +82,50 @@ public class MemoryManagement {
         if (isCachingDisabled()) {
             return;
         }
-        scheduler = Executors.newScheduledThreadPool(1, r -> {
+        final var started = Executors.newScheduledThreadPool(1, r -> {
             final var t = new Thread(r, "memory-management-sweep");
             t.setDaemon(true);
             return t;
         });
-        scheduler.scheduleAtFixedRate(this::runEvictionSweepSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
+        scheduler = started;
+        started.scheduleAtFixedRate(this::runEvictionSweepSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
                 TimeUnit.SECONDS);
-        scheduler.scheduleAtFixedRate(this::flushUsageProfileSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
+        started.scheduleAtFixedRate(this::flushUsageProfileSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
                 TimeUnit.SECONDS);
-        scheduler.scheduleAtFixedRate(this::submitCleanupTask, USAGE_CLEANUP_INTERVAL_SECONDS,
+        started.scheduleAtFixedRate(this::submitCleanupTask, USAGE_CLEANUP_INTERVAL_SECONDS,
                 USAGE_CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        userCache.onOverBudget(() -> requestSweep(started));
     }
 
     public void stopSweepThread() {
+        userCache.onOverBudget(null);
         if (scheduler != null) {
             scheduler.shutdownNow();
             scheduler = null;
+        }
+        sweepQueued.set(false);
+    }
+
+    private void requestSweep(ScheduledExecutorService on) {
+        if (!sweepQueued.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            on.execute(() -> {
+                sweepQueued.set(false);
+                runRequestedSweepSafely();
+            });
+        } catch (RejectedExecutionException e) {
+            sweepQueued.set(false);
         }
     }
 
     private void runEvictionSweepSafely() {
         runSurvivingErrors("Eviction sweep failed", this::runEvictionSweep, sweepOutOfMemory);
+    }
+
+    private void runRequestedSweepSafely() {
+        runSurvivingErrors("Requested eviction sweep failed", () -> sweep(Measure.FULL), requestedSweepOutOfMemory);
     }
 
     private void flushUsageProfileSafely() {
@@ -149,6 +178,10 @@ public class MemoryManagement {
     }
 
     public void runEvictionSweep() {
+        sweep(Measure.FULL_FORCED);
+    }
+
+    private void sweep(Measure overBudgetMeasure) {
         if (isCachingDisabled() || config.isCacheUnlimited()) {
             return;
         }
@@ -156,7 +189,13 @@ public class MemoryManagement {
             return;
         }
         try {
-            evictDownTo(config.getMaxMemoryBytes(), Measure.FULL);
+            final var maxBytes = config.getMaxMemoryBytes();
+            final var remembered = userCacheBytes(Measure.REMEMBERED);
+            if (remembered > maxBytes) {
+                evictDownTo(maxBytes, overBudgetMeasure, OVER_CAP_LOCK_WAIT_MILLIS);
+            } else if (remembered * 100L >= maxBytes * FULL_MEASURE_FROM_PERCENT) {
+                evictDownTo(maxBytes, Measure.FULL, NO_LOCK_WAIT);
+            }
         } finally {
             sweepRunning.set(false);
         }
@@ -170,13 +209,13 @@ public class MemoryManagement {
         if (userCacheBytes(Measure.REMEMBERED) + nextPageEstimateBytes <= maxBytes) {
             return;
         }
-        evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes), Measure.REMEMBERED);
+        evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes), Measure.REMEMBERED, NO_LOCK_WAIT);
     }
 
     private record RankedResource(CacheableResource resource, int tier, long accessCount, long lastAccess) {
     }
 
-    private void evictDownTo(long targetBytes, Measure measure) {
+    private void evictDownTo(long targetBytes, Measure measure, long lockWaitMillis) {
         final var resources = userCache.listCacheableResources(measure);
         var remaining = sumBytes(resources);
         if (remaining <= targetBytes) {
@@ -189,12 +228,18 @@ public class MemoryManagement {
         }
         ranked.sort(Comparator.comparingInt(RankedResource::tier).thenComparingLong(RankedResource::accessCount)
                 .thenComparingLong(RankedResource::lastAccess));
+        final var busyCollections = new HashSet<String>();
         for (var candidate : ranked) {
             if (remaining <= targetBytes) {
                 break;
             }
             final var resource = candidate.resource();
-            if (!locks.tryLockWrite(resource.dbName(), resource.collName())) {
+            final var collection = Cache.getCollectionIdentifier(resource.dbName(), resource.collName());
+            if (busyCollections.contains(collection)) {
+                continue;
+            }
+            if (!lockForEviction(resource, lockWaitMillis)) {
+                busyCollections.add(collection);
                 continue;
             }
             final var indexedField = lockedFieldOf(resource);
@@ -218,6 +263,18 @@ public class MemoryManagement {
                 }
                 locks.releaseWrite(resource.dbName(), resource.collName());
             }
+        }
+    }
+
+    private boolean lockForEviction(CacheableResource resource, long lockWaitMillis) {
+        if (lockWaitMillis == NO_LOCK_WAIT) {
+            return locks.tryLockWrite(resource.dbName(), resource.collName());
+        }
+        try {
+            return locks.tryLockWrite(resource.dbName(), resource.collName(), lockWaitMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

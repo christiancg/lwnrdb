@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -2329,6 +2330,78 @@ def run_backlog_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+SHUTDOWN_DB = "shutdown_budget_db"
+SHUTDOWN_COLLECTIONS = 300
+SHUTDOWN_BUDGET_MS = 3000
+SHUTDOWN_MARGIN_S = 3.0
+SHUTDOWN_LEFT_FOR_REPLAY = "write-ahead log(s) not checkpointed; the next startup replays them"
+
+
+def shutdown_coll(index: int) -> str:
+    return f"dirty_{index:03d}"
+
+
+def dirty_every_collection(conn: Conn):
+    check_status("the database for the shutdown budget is created",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": SHUTDOWN_DB}), "OK")
+    failed = []
+    for index in range(SHUTDOWN_COLLECTIONS):
+        coll = shutdown_coll(index)
+        responses = (conn.create_coll(coll, db=SHUTDOWN_DB), conn.create_index("k", coll=coll, db=SHUTDOWN_DB),
+                     conn.save({"_id": "only", "k": f"v{index}"}, db=SHUTDOWN_DB, coll=coll))
+        if any(response.get("status") != "OK" for response in responses):
+            failed.append(coll)
+    check(f"one SAVE lands in each of {SHUTDOWN_COLLECTIONS} indexed collections", not failed, f"failed: {failed[:5]}")
+
+
+def test_a_sigterm_with_many_dirty_logs_exits_within_its_budget(proc, log_path: str, offset: int):
+    section(f"a SIGTERM with {SHUTDOWN_COLLECTIONS} dirty write-ahead logs stops within shutdownTimeoutMs")
+    started = time.monotonic()
+    proc.terminate()
+    try:
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    elapsed = time.monotonic() - started
+    limit = SHUTDOWN_BUDGET_MS / 1000 + SHUTDOWN_MARGIN_S
+    check(f"the process exits within {limit:.1f}s of the SIGTERM", elapsed < limit, f"took {elapsed:.2f}s")
+    left = SHUTDOWN_LEFT_FOR_REPLAY in bu.read_log(log_path)[offset:]
+    print(f"    (checkpoints left for replay at the deadline: {'yes' if left else 'none'}; {elapsed:.2f}s)")
+
+
+def test_every_document_and_index_answers_after_the_bounded_stop(conn: Conn):
+    section("every document and index answers after a stop that left logs for replay")
+    missing, unindexed = [], []
+    for index in range(SHUTDOWN_COLLECTIONS):
+        coll = shutdown_coll(index)
+        found = conn.find("only", db=SHUTDOWN_DB, coll=coll)
+        if found.get("status") != "OK" or (found.get("object") or {}).get("k") != f"v{index}":
+            missing.append(coll)
+        if conn.ids(coll, [bu.filter_step("k", "EQUALS", f"v{index}")], db=SHUTDOWN_DB) != ["only"]:
+            unindexed.append(coll)
+    check("every document is found by id", not missing, f"missing: {missing[:5]}")
+    check("every index answers its document", not unindexed, f"wrong: {unindexed[:5]}")
+
+
+def run_bounded_shutdown_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-shutdown-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, shutdownTimeoutMs=SHUTDOWN_BUDGET_MS)
+    print(f"\n  Starting server on {HOST}:{PORT} with shutdownTimeoutMs={SHUTDOWN_BUDGET_MS} ...")
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            dirty_every_collection(conn)
+        test_a_sigterm_with_many_dirty_logs_exits_within_its_budget(proc, log_path, len(bu.read_log(log_path)))
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_every_document_and_index_answers_after_the_bounded_stop(conn)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -2509,6 +2582,7 @@ def main():
         proc = None
 
         run_backlog_phase()
+        run_bounded_shutdown_phase()
     finally:
         bu.stop_server(proc)
 

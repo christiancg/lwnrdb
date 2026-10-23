@@ -1,6 +1,7 @@
 package org.techhouse.ops.index;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -40,11 +41,17 @@ public final class PrimaryKeyIndexResolver {
         return resolved;
     }
 
+    public static Set<String> existingIds(Collection<JsonBaseElement> candidates, String dbName, String collName,
+            ReadObserver observer) throws IOException {
+        observer.indexUsed(Globals.PK_FIELD, Cache.getCollectionIdentifier(dbName, collName));
+        return idsAmong(candidates, dbName, collName);
+    }
+
     private static Set<String> idsIn(JsonBaseElement operand, String dbName, String collName) throws IOException {
         return operand instanceof JsonArray operands ? idsAmong(operands.asList(), dbName, collName) : Set.of();
     }
 
-    private static Set<String> idsAmong(List<JsonBaseElement> candidates, String dbName, String collName)
+    private static Set<String> idsAmong(Collection<JsonBaseElement> candidates, String dbName, String collName)
             throws IOException {
         final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         final var matched = new HashSet<String>();

@@ -57,7 +57,7 @@ jobs:
 
           - name: memory-extensive
             start_server: true
-            max_memory: 512mb
+            max_memory: 4mb
             xmx: 1g
             run: |
               MEM_TEST_COLLECTIONS=4 \
@@ -180,6 +180,11 @@ jobs:
             run: |
               python3 test_utils/test_fuzz.py --self-test
               python3 test_utils/test_fuzz.py --seeds regression --budget 240 --shrink 120
+
+          - name: bench-tooling
+            start_server: false
+            run: |
+              python3 -m unittest discover -s test_utils/bench -p "test_*.py"
 
           - name: cache-warmup-bench
             start_server: true

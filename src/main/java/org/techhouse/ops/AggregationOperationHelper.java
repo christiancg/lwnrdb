@@ -14,7 +14,6 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonArray;
@@ -112,10 +111,10 @@ public final class AggregationOperationHelper {
         Stream<JsonObject> resultStream = initialStream;
         var startIndex = 0;
         if (resultStream == null) {
-            final var fastCount = CountOperatorHelper.tryIndexOnlyCount(steps, dbName, collName, context);
-            if (fastCount != null) {
-                resultStream = Stream.of(fastCount.result());
-                startIndex = fastCount.nextStepIndex();
+            final var fast = IndexedSource.of(steps, dbName, collName, sortBound(steps, 1), context);
+            if (fast != null) {
+                resultStream = fast.stream();
+                startIndex = fast.nextStepIndex();
             }
         }
         for (var i = startIndex; i < steps.size(); i++) {
@@ -269,7 +268,7 @@ public final class AggregationOperationHelper {
         return id instanceof JsonString jsonString ? jsonString.getValue() : "";
     }
 
-    private static JsonArray inIdOrder(List<JsonObject> documents) {
+    static JsonArray inIdOrder(List<JsonObject> documents) {
         final var ordered = new ArrayList<>(documents);
         ordered.sort(Comparator.comparing(AggregationOperationHelper::documentId));
         final var array = new JsonArray();
@@ -320,8 +319,8 @@ public final class AggregationOperationHelper {
         try (var documents = context.source(resultStream, dbName, collName)) {
             leftEntries = context.watch(documents).toList();
         }
-        final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
-                joinCollectionLocalField, transaction, context);
+        final var joinedCollection = JoinLookup.build(dbName, joinCollectionName, joinCollectionRemoteField,
+                leftEntries, joinCollectionLocalField, transaction, context);
         final var joinedBytes = new HashMap<SaltedKey, Long>();
         final var asRoot = writtenRoot(as);
         return leftEntries.stream().map(jsonObject -> {
@@ -351,65 +350,17 @@ public final class AggregationOperationHelper {
         context.chargeResult(joinedBytes);
     }
 
-    private static Map<SaltedKey, JsonArray> buildJoinLookup(String dbName, String joinCollectionName,
-            String remoteField, List<JsonObject> leftEntries, String localField, Transaction transaction,
-            PipelineContext context) throws IOException {
-        final var localValues = new SaltedElementSet();
-        for (var left : leftEntries) {
-            final var localValue = JsonUtils.resolvePath(left, localField);
-            if (localValue != null) {
-                localValues.add(localValue);
-            }
-        }
-        final var joinCollId = Cache.getCollectionIdentifier(dbName, joinCollectionName);
-        final var overlay = transaction != null ? transaction.overlayFor(joinCollId) : null;
-        if (overlay != null && !overlay.isEmpty()) {
-            return groupByRemoteField(TransactionOperationHelper.applyOverlayToStream(transaction, joinCollId,
-                    context.source(null, dbName, joinCollectionName)), remoteField, context);
-        }
-        final var matchingIds = IndexHelper.getMatchingIdsForJoin(dbName, joinCollectionName, remoteField, localValues,
-                context);
-        if (matchingIds == null) {
-            final var joinCollectionMap = cache.getWholeCollection(dbName, joinCollectionName);
-            context.scanned(joinCollectionMap.size());
-            return groupByRemoteField(joinCollectionMap.values().stream().map(DbEntry::getData), remoteField, context);
-        }
-        final var matchedDocs = cache.getEntriesByIds(dbName, joinCollectionName, matchingIds);
-        context.scanned(matchedDocs.size());
-        final var matchedByKey = new HashMap<SaltedKey, List<JsonObject>>();
-        for (var dbEntry : matchedDocs) {
-            final var data = dbEntry.getData();
-            final var key = JsonUtils.resolvePath(data, remoteField);
-            if (key != null) {
-                matchedByKey.computeIfAbsent(new SaltedKey(key), _ -> new ArrayList<>()).add(data);
-            }
-        }
-        final var lookup = new HashMap<SaltedKey, JsonArray>();
-        matchedByKey.forEach((key, documents) -> lookup.put(key, inIdOrder(documents)));
-        return lookup;
-    }
-
-    private static Map<SaltedKey, JsonArray> groupByRemoteField(Stream<JsonObject> documents, String remoteField,
-            PipelineContext context) {
-        try (var remoteDocuments = context.watch(documents)) {
-            return remoteDocuments.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
-                    .collect(Collectors.groupingBy(
-                            jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, remoteField)), HashMap::new,
-                            Collectors.collectingAndThen(Collectors.toList(), AggregationOperationHelper::inIdOrder)));
-        }
-    }
-
     private static Stream<JsonObject> processDistinctStep(BaseAggregationStep baseDistinctStep,
             Stream<JsonObject> resultStream, String dbName, String collName, PipelineContext context)
             throws IOException {
         final var distinctStep = (DistinctAggregationStep) baseDistinctStep;
         final var fieldName = distinctStep.getFieldName();
         if (resultStream == null && fieldName != null && !fieldName.isBlank()) {
-            final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName, context);
-            if (indexEntries != null) {
-                return distinctRows(indexEntries.stream().map(indexEntry -> {
+            final var indexValues = IndexHelper.getDistinctIndexValues(dbName, collName, fieldName, context);
+            if (indexValues != null) {
+                return distinctRows(indexValues.stream().map(indexValue -> {
                     final var json = new JsonObject();
-                    JsonUtils.setPath(json, fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
+                    JsonUtils.setPath(json, fieldName, IndexHelper.indexValueToElement(indexValue));
                     return json;
                 }));
             }

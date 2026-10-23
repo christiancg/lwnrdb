@@ -4,13 +4,16 @@ import datetime
 import json
 import os
 import sys
+import time
 
+import phase_cpu
 import runner
 import workload
 from engines import ENGINES, create
 from engines.base import DURABILITIES
 
 READY_TIMEOUT_S = 300
+START_SETTLE_S = 1.0
 
 
 def _initialize(engine_name: str, durability: str) -> None:
@@ -69,10 +72,14 @@ def main(argv: list) -> int:
         for phase in workload.phases(settings):
             if selected and phase.name not in selected and phase.name != "bulk_insert":
                 continue
+            print(f"{phase_cpu.START} {phase.name}", flush=True)
+            time.sleep(START_SETTLE_S)
             print(f"[{args.engine}] {phase.name:<22}", end="", flush=True)
             result = runner.run_phase(args.engine, phase, settings)
+            result["ops_with_warmup"] = phase.ops + phase.warmup
             report["phases"].append(result)
             print(_line(result), flush=True)
+            print(f"{phase_cpu.END} {phase.name} {result['ops_with_warmup']}", flush=True)
             status |= 1 if result["errors"] or result["invalid"] else 0
         report["final_count"] = runner.in_child(lambda: _count_all(args.engine, args.durability))
         report["expected_count"] = settings.docs

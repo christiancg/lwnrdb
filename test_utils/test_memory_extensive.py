@@ -5,6 +5,7 @@ import shutil
 import string
 import subprocess
 import sys
+import threading
 import time
 
 import base_utils as bu
@@ -28,6 +29,9 @@ ACCOUNTING_DOCS = int(os.environ.get("MEM_TEST_ACCOUNTING_DOCS", "20000"))
 ACCOUNTING_COLL = "accounting"
 ACCOUNTING_RATIO_BOUNDS = (0.75, 1.25)
 LATENCY_BUDGET_MS = 3_000
+SAMPLED_LOAD_DOCS = int(os.environ.get("MEM_TEST_SAMPLED_LOAD_DOCS", "60000"))
+SAMPLED_LOAD_COLL = "sampled_load"
+SAMPLE_INTERVAL_S = 1.0
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -149,6 +153,57 @@ def accounting_accuracy(c: Conn, pid):
           detail="the cache's modelled heap matches what the documents and indexes really hold"
           if low <= ratio <= high else "THE CACHE ACCOUNTING DOES NOT TRACK REAL HEAP")
     c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": ACCOUNTING_COLL})
+
+
+def sample_cache_every_second(stop, samples):
+    sampler = Conn()
+    sampler.authenticate()
+    try:
+        while not stop.is_set():
+            samples.append(snapshot(sampler).get("memory", {}).get("userCacheBytes", 0))
+            stop.wait(SAMPLE_INTERVAL_S)
+    finally:
+        sampler.close()
+
+
+def cache_stays_bounded_during_bulk_load(c: Conn, cap_bytes):
+    section(f"Bulk load of {SAMPLED_LOAD_DOCS} indexed docs, userCacheBytes sampled every second")
+    if cap_bytes <= 0:
+        warn("cap is 0 or unlimited — sampled bulk load skipped")
+        return
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SAMPLED_LOAD_COLL})
+    for fld in INDEXED_FIELDS:
+        c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": SAMPLED_LOAD_COLL,
+                "fieldName": fld}, timeout=60)
+    samples = []
+    stop = threading.Event()
+    sampler = threading.Thread(target=sample_cache_every_second, args=(stop, samples), daemon=True)
+    sampler.start()
+    loaded = True
+    try:
+        for start in range(0, SAMPLED_LOAD_DOCS, BULK_BATCH_SIZE):
+            batch = [dict(small_doc(i), _id=f"load_{i:07d}")
+                     for i in range(start, min(start + BULK_BATCH_SIZE, SAMPLED_LOAD_DOCS))]
+            r = c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": SAMPLED_LOAD_COLL,
+                        "objects": batch}, timeout=120)
+            loaded = loaded and r.get("status") == "OK"
+    finally:
+        stop.set()
+        sampler.join(timeout=30)
+    check(f"{SAMPLED_LOAD_DOCS} docs loaded into {SAMPLED_LOAD_COLL}", loaded)
+    budget = cap_bytes * CACHE_CAP_TOLERANCE
+    after_first = samples[1:]
+    peak = max(after_first, default=0)
+    print(f"  {len(samples)} samples, peak after the first {peak/1024/1024:.2f}MB, "
+          f"cap {cap_bytes/1024/1024:.2f}MB")
+    if not after_first:
+        warn("the bulk load finished before a second sample — raise MEM_TEST_SAMPLED_LOAD_DOCS")
+    over = [round(s / 1024 / 1024, 2) for s in after_first if s > budget]
+    check(f"userCacheBytes stays <= cap*{CACHE_CAP_TOLERANCE}={budget/1024/1024:.2f}MB during the load",
+          not over,
+          detail="writes wake the sweep as soon as the cache is over its cap" if not over
+          else f"samples over the bound (MB): {over}")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": SAMPLED_LOAD_COLL})
 
 
 def setup(c):
@@ -363,6 +418,7 @@ def main():
     print(f"  configured cap = {cap_bytes/1024/1024:.0f}MB")
 
     accounting_accuracy(c, pid)
+    cache_stays_bounded_during_bulk_load(c, cap_bytes)
 
     rss_samples, cache_samples, heap_samples = [], [], []
 

@@ -4,8 +4,9 @@ import json
 import os
 import subprocess
 import sys
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
+import phase_cpu
 import report
 from engines.base import DURABILITIES
 from engines.lwnrdb_engine import PASSWORD, USERNAME
@@ -15,6 +16,10 @@ COMPOSE = ["docker", "compose", "-f", os.path.join(HERE, "docker-compose.yml")]
 RESULTS = os.path.join(HERE, "results")
 GENERATED = os.path.join(HERE, "generated")
 MIB = 1024 * 1024
+DEFAULT_HEAP_PERCENT = 35
+CACHE_SHARE_OF_HEAP_DIVISOR = 2
+GC_LOG = "/tmp/gc.log"
+GC_STALL_ROW = "Allocation Stalls:"
 UNITS = {"k": 1024, "m": MIB, "g": 1024 * MIB}
 DATA_DIRS = {
     "lwnrdb": "/app/db",
@@ -44,7 +49,8 @@ def resource_env(cpus: int, memory: int, host_cpus: int, synced: bool) -> Dict[s
         "BENCH_CPUSET": f"0-{cpus - 1}",
         "BENCH_CLIENT_CPUSET": f"{cpus}-{host_cpus - 1}",
         "BENCH_MEMORY": f"{mb}m",
-        "LWNRDB_HEAP_PERCENT": "70",
+        "LWNRDB_HEAP_PERCENT": str(DEFAULT_HEAP_PERCENT),
+        "LWNRDB_JAVA_OPTS": "",
         "MYSQL_BUFFER_POOL": f"{mb // 2}M",
         "POSTGRES_SHARED_BUFFERS": f"{mb // 4}MB",
         "POSTGRES_EFFECTIVE_CACHE": f"{mb * 3 // 4}MB",
@@ -56,10 +62,11 @@ def resource_env(cpus: int, memory: int, host_cpus: int, synced: bool) -> Dict[s
     }
 
 
-def write_lwnrdb_config(memory: int, synced: bool) -> None:
+def write_lwnrdb_config(memory: int, synced: bool, heap_percent: int = DEFAULT_HEAP_PERCENT) -> None:
     os.makedirs(GENERATED, exist_ok=True)
+    cache_budget_mb = memory * heap_percent // 100 // MIB // CACHE_SHARE_OF_HEAP_DIVISOR
     lines = ["port=8989", "filePath=db", "logPath=logs", f"defaultAdminUsername={USERNAME}",
-             f"defaultAdminPassword={PASSWORD}", f"maxMemory={memory // MIB // 2}mb", "maxConnections=500",
+             f"defaultAdminPassword={PASSWORD}", f"maxMemory={cache_budget_mb}mb", "maxConnections=500",
              f"syncWrites={str(synced).lower()}"]
     path = os.path.join(GENERATED, "lwnrdb.cfg")
     with open(path, "w") as handle:
@@ -84,13 +91,36 @@ def _exec_int(env: Dict[str, str], engine: str, *command: str) -> Optional[int]:
         return None
 
 
+def _gc_allocation_stalls(env: Dict[str, str]) -> Optional[int]:
+    command = f"test -f {GC_LOG} && grep '{GC_STALL_ROW}' {GC_LOG} | awk '{{ if ($NF + 0 > m) m = $NF + 0 }} END {{ print m + 0 }}' || true"
+    return _exec_int(env, "lwnrdb", "sh", "-c", command)
+
+
 def measure(env: Dict[str, str], engine: str) -> dict:
     kilobytes = _exec_int(env, engine, "du", "-sk", DATA_DIRS[engine])
     return {
         "memory_peak": _exec_int(env, engine, "cat", "/sys/fs/cgroup/memory.peak"),
         "memory_current": _exec_int(env, engine, "cat", "/sys/fs/cgroup/memory.current"),
         "data_bytes": None if kilobytes is None else kilobytes * 1024,
+        "gc_allocation_stalls": _gc_allocation_stalls(env) if engine == "lwnrdb" else None,
     }
+
+
+def cpu_stat_reader(env: Dict[str, str], engine: str) -> phase_cpu.StatReader:
+    def read() -> str:
+        result = compose(env, "--profile", engine, "exec", "-T", engine, "cat", "/sys/fs/cgroup/cpu.stat",
+                         capture=True, check=False)
+        return result.stdout or ""
+
+    return read
+
+
+def relay(meter: phase_cpu.PhaseCpu) -> Callable[[str], None]:
+    def forward(line: str) -> None:
+        print(line, end="", flush=True)
+        meter.on_line(line)
+
+    return forward
 
 
 def run_engine(env: Dict[str, str], engine: str, run_id: str, workload_args: List[str], keep: bool,
@@ -99,14 +129,16 @@ def run_engine(env: Dict[str, str], engine: str, run_id: str, workload_args: Lis
     compose(env, "--profile", engine, "down", "-v", "--remove-orphans")
     compose(env, "--profile", engine, "up", "-d", engine)
     try:
-        status = compose(env, "--profile", "client", "run", "--rm", "bench", "python", "bench_client.py",
-                         "--engine", engine, "--out", f"/results/{run_id}/{engine}.json",
-                         "--durability", durability, *workload_args,
-                         check=False).returncode
+        meter = phase_cpu.PhaseCpu(cpu_stat_reader(env, engine))
+        status = phase_cpu.follow(COMPOSE + ["--profile", "client", "run", "--rm", "-T", "bench", "python", "-u",
+                                             "bench_client.py", "--engine", engine, "--out",
+                                             f"/results/{run_id}/{engine}.json", "--durability", durability,
+                                             *workload_args], env, relay(meter))
         path = os.path.join(RESULTS, run_id, f"{engine}.json")
         if os.path.exists(path):
             with open(path) as handle:
                 result = json.load(handle)
+            meter.attach(result)
             result["container"] = measure(env, engine)
             result["resources"] = {"cpus": env["BENCH_CPUS"], "cpuset": env["BENCH_CPUSET"],
                                    "memory": env["BENCH_MEMORY"]}
@@ -129,6 +161,11 @@ def _parse(argv: List[str]):
                         help="relaxed: no engine syncs per commit; synced: every engine syncs every write")
     parser.add_argument("--keep", action="store_true", help="leave the last engine's container running")
     parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--heap-percent", type=int, default=DEFAULT_HEAP_PERCENT,
+                        help="-XX:MaxRAMPercentage of the lwnrdb container; maxMemory is set to half the resulting heap")
+    parser.add_argument("--java-opts", default="",
+                        help="extra JVM flags for lwnrdb, passed as JDK_JAVA_OPTIONS; write --java-opts=-XX:SoftMaxHeapSize=1g "
+                             "with an equals sign, because a value that starts with a dash is read as a flag")
     return parser.parse_known_args(argv)
 
 
@@ -146,7 +183,9 @@ def main(argv: List[str]) -> int:
     memory = parse_size(args.memory)
     synced = args.durability == "synced"
     env = resource_env(args.cpus, memory, host_cpus, synced)
-    write_lwnrdb_config(memory, synced)
+    env["LWNRDB_HEAP_PERCENT"] = str(args.heap_percent)
+    env["LWNRDB_JAVA_OPTS"] = args.java_opts
+    write_lwnrdb_config(memory, synced, args.heap_percent)
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     os.makedirs(os.path.join(RESULTS, run_id), exist_ok=True)
     compose(env, *profiles(list(DATA_DIRS)), "down", "-v", "--remove-orphans")

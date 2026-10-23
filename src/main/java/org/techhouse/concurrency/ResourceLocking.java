@@ -227,7 +227,7 @@ public class ResourceLocking {
         if (dirtyRead) {
             return List.of();
         }
-        final var sorted = identifiers.stream().distinct().sorted().toList();
+        final var sorted = identifiers.size() == 1 ? identifiers : identifiers.stream().distinct().sorted().toList();
         final var acquired = new ArrayList<String>();
         final var deadline = deadlineFor(timeoutMillis);
         try {

@@ -28,12 +28,12 @@ public final class SearchUtils {
     }
 
     public static <T> Set<String> findingBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
-        final var slice = sliceOf(entries, bounds);
+        final var slice = sliceBetween(entries, bounds);
         return slice == null ? Set.of() : toIdSet(entries, slice[0], slice[1]);
     }
 
     public static <T> long countBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
-        final var slice = sliceOf(entries, bounds);
+        final var slice = sliceBetween(entries, bounds);
         var count = 0L;
         if (slice != null) {
             for (var i = slice[0]; i < slice[1]; i++) {
@@ -43,7 +43,7 @@ public final class SearchUtils {
         return count;
     }
 
-    private static <T> int[] sliceOf(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
+    public static <T> int[] sliceBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
         var from = 0;
         var to = entries.size();
         for (final var bound : bounds.bounds()) {
@@ -182,7 +182,11 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> toIdSet(List<FieldIndexEntry<T>> entries, int start, int foundIndex) {
-        final var ids = new HashSet<String>();
+        var total = 0;
+        for (var i = start; i < foundIndex; i++) {
+            total += entries.get(i).getIds().size();
+        }
+        final var ids = HashSet.<String>newHashSet(total);
         for (var i = start; i < foundIndex; i++) {
             ids.addAll(entries.get(i).getIds());
         }

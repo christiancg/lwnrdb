@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.net.Socket;
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.techhouse.ShutdownCoordinator;
 import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.ScheduleExecutor;
@@ -375,6 +377,23 @@ public class ShutdownCoordinatorTest {
             TransactionOperationHelper.cleanupOnDisconnect(clientId);
             clientTracker.removeById(clientId);
         }
+    }
+
+    @Test
+    public void test_checkpoint_stops_at_the_deadline_and_leaves_the_rest_for_replay() throws Exception {
+        final var fileSystem = mock(FileSystem.class);
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "fileSystem", fileSystem);
+        final var budget = Configuration.getInstance().getShutdownTimeoutMs();
+        final var start = System.currentTimeMillis();
+
+        coordinator.shutdown(null, null);
+
+        final var end = System.currentTimeMillis();
+        final var deadline = ArgumentCaptor.forClass(Long.class);
+        verify(fileSystem).checkpointWriteAheadLogs(deadline.capture());
+        assertTrue(deadline.getValue() >= start + budget && deadline.getValue() <= end + budget,
+                "the checkpoint step gets the shutdown's own deadline, so it stops starting checkpoints at it");
     }
 
     @Test

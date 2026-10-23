@@ -13,15 +13,18 @@ import static org.mockito.Mockito.when;
 import static org.techhouse.test.Tx2pcFixtures.findStatus;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.Tx2pcCoordinator;
+import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
@@ -232,6 +235,35 @@ public class Tx2pcCoordinatorTest {
         final var response = coordinator.commit(clientId);
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(OperationStatus.OK, findStatus("tpc-commit"));
+    }
+
+    @Test
+    public void test_recovery_leaves_a_commit_alone_while_its_coordinator_drives_it() throws Exception {
+        final var driven = TestUtils.getPrivateField(IocContainer.get(Tx2pcRecovery.class), "drivenByCommit",
+                Set.class);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-driven");
+        final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        final var drivenWhileCommitting = new AtomicBoolean();
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {
+            final ClusterMessage message = invocation.getArgument(1);
+            final var reply = new ClusterMessage();
+            reply.setType(message.getType() == ClusterMessageType.PREPARE_TX
+                    ? ClusterMessageType.PREPARE_TX_ACK
+                    : ClusterMessageType.COMMIT_TX_ACK);
+            if (message.getType() == ClusterMessageType.COMMIT_TX) {
+                drivenWhileCommitting.set(Tx2pcLog.isCommitted(dtxId) && driven.contains(dtxId));
+            }
+            return reply;
+        });
+        TestUtils.setPrivateField(coordinator, "pool", pool);
+
+        assertEquals(OperationStatus.OK, coordinator.commit(clientId).getStatus());
+
+        assertTrue(drivenWhileCommitting.get(),
+                "a recovery sweep that re-drives a commit its coordinator is still driving takes a participant's"
+                        + " answer meant for the commit, so a lost acknowledgement goes unnoticed");
+        assertFalse(driven.contains(dtxId));
     }
 
     @Test

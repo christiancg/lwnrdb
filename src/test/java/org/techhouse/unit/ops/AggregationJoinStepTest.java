@@ -4,19 +4,29 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.PipelineContext;
+import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -266,6 +276,112 @@ public class AggregationJoinStepTest {
         indexJoinKey();
 
         assertEquals(scanned.toString(), join().toString());
+    }
+
+    private static void putWith(String coll, String id, String field, JsonBaseElement value) throws IOException {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(field, value);
+        obj.add("mirror", new JsonString(id));
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, coll, obj);
+        entry.set_id(id);
+        TestUtils.cacheEntry(IocContainer.get(Cache.class), TestGlobals.DB, coll, entry);
+    }
+
+    private static List<JsonObject> joinOn(String remoteField) throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", remoteField, "j")));
+        return AggregationOperationHelper.processAggregation(request);
+    }
+
+    private static Map<String, String> joinedById(List<JsonObject> rows) {
+        final var joined = new TreeMap<String, String>();
+        for (final var row : rows) {
+            final var attached = row.get("j");
+            final var labels = new java.util.ArrayList<String>();
+            if (attached.isJsonArray()) {
+                attached.asJsonArray().forEach(
+                        document -> labels.add(document.asJsonObject().get(Globals.PK_FIELD).asJsonString().getValue()
+                                + "/" + document.asJsonObject().get("label")));
+            }
+            joined.put(row.get(Globals.PK_FIELD).asJsonString().getValue(),
+                    attached.isJsonNull() ? "null" : labels.toString());
+        }
+        return joined;
+    }
+
+    @Test
+    public void test_join_on_id_matches_exactly_and_answers_as_the_scan_does() throws IOException {
+        putWith(TestGlobals.JOIN_COLL, "j1", "label", new JsonString("one"));
+        putWith(TestGlobals.JOIN_COLL, "j2", "label", new JsonString("two"));
+        putWith(TestGlobals.COLL, "exact", "ref", new JsonString("j1"));
+        putWith(TestGlobals.COLL, "upper", "ref", new JsonString("J1"));
+        putWith(TestGlobals.COLL, "dup", "ref", new JsonString("j1"));
+        putWith(TestGlobals.COLL, "missing", "ref", new JsonString("nope"));
+        putWith(TestGlobals.COLL, "number", "ref", new JsonNumber(2));
+        putWith(TestGlobals.COLL, "nul", "ref", JsonNull.INSTANCE);
+
+        final var byPk = joinedById(joinOn(Globals.PK_FIELD));
+
+        assertEquals(joinedById(joinOn("mirror")), byPk,
+                "the pk lookup answers exactly as grouping the whole remote collection does");
+        assertTrue(byPk.get("exact").startsWith("[j1/"), byPk.get("exact"));
+        assertEquals(byPk.get("exact"), byPk.get("dup"));
+        assertEquals("null", byPk.get("upper"), "the primary key is compared exactly, never case-folded");
+        assertEquals("null", byPk.get("missing"));
+        assertEquals("null", byPk.get("number"), "a non-string local value never names an id");
+        assertEquals("null", byPk.get("nul"));
+        assertEquals(byPk, joinedById(joinOn("_id.")));
+    }
+
+    private static AnalyzeContext analyzedJoinOn(String remoteField) throws IOException {
+        final var analyze = new AnalyzeContext();
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", remoteField, "j")));
+        AggregationOperationHelper.processAggregation(request, null, null, PipelineContext.fromConfiguration(analyze));
+        return analyze;
+    }
+
+    @Test
+    public void test_join_on_id_reads_only_the_matched_documents_through_the_pk_index() throws IOException {
+        for (var i = 0; i < 20; i++) {
+            putWith(TestGlobals.JOIN_COLL, "r" + i, "label", new JsonString("l" + i));
+        }
+        putWith(TestGlobals.COLL, "left", "ref", new JsonString("r7"));
+
+        final var byPk = analyzedJoinOn(Globals.PK_FIELD);
+        final var byScan = analyzedJoinOn("mirror");
+
+        assertEquals(Set.of(Globals.PK_FIELD), byPk.getIndexesUsed());
+        assertEquals(2, byPk.getDocumentsScanned(), "the left row plus its one match");
+        assertEquals(21, byScan.getDocumentsScanned(), "the left row plus the whole remote collection");
+    }
+
+    @Test
+    public void test_join_on_id_inside_a_transaction_sees_its_buffered_write() throws IOException {
+        putWith(TestGlobals.COLL, "left", "ref", new JsonString("buffered"));
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var clientId = clientTracker.registerForwardedClient("alice");
+        TransactionOperationHelper.start(clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        try {
+            final var save = new SaveRequest(TestGlobals.DB, TestGlobals.JOIN_COLL);
+            final var object = new JsonObject();
+            object.add(Globals.PK_FIELD, new JsonString("buffered"));
+            save.setObject(object);
+            save.set_id("buffered");
+            TransactionOperationHelper.bufferSave(save, transaction);
+            final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.setAggregationSteps(
+                    List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", Globals.PK_FIELD, "j")));
+
+            final var rows = AggregationOperationHelper.processAggregation(request, null, transaction);
+
+            assertEquals(1, rows.getFirst().get("j").asJsonArray().size(),
+                    "an uncommitted write is only in the overlay, so the overlay path must still answer");
+        } finally {
+            TransactionOperationHelper.rollback(clientId);
+        }
     }
 
     @Test

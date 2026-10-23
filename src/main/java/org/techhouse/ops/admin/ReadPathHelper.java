@@ -1,10 +1,10 @@
 package org.techhouse.ops.admin;
 
 import java.io.IOException;
-import java.util.Collections;
 import java.util.List;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.PkIndexList;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
@@ -70,7 +70,7 @@ public final class ReadPathHelper {
                         return unregistered;
                     }
                     final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-                    final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
+                    final var foundIndexEntry = PkIndexList.positionOf(primaryKeyIndex, id);
                     if (foundIndexEntry < 0) {
                         return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
                     }
