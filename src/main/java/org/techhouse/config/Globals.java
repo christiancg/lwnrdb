@@ -107,5 +107,6 @@ public final class Globals {
     public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
     public static final long HANDSHAKE_DEADLINE_GRACE_MS = 1000L;
     public static final long PAGE_ROWS_WRITE_BACK_MS = 1000L;
+    public static final long TRANSACTION_OP_RECORD_BYTES = 4L * 1024 * 1024;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
 }

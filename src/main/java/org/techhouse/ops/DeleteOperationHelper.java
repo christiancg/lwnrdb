@@ -47,9 +47,10 @@ public final class DeleteOperationHelper {
         final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
         pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entryToBeDeleted.get_id()), pendingGeneration,
                 () -> {
-                    fs.deleteFromCollection(idxEntry);
+                    fs.deleteFromCollection(idxEntry, primaryKeyIndex, cache.pageOccupancy(dbName, collName));
                     return null;
                 });
+        cache.updatePageSizeInMemory(dbName, collName, idxEntry.getPage(), -idxEntry.getLength(), -1);
         primaryKeyIndex.remove(PkIndexList.positionOf(primaryKeyIndex, id));
         cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,

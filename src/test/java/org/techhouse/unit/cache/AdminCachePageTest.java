@@ -11,10 +11,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.VacuumedPage;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -251,5 +259,74 @@ public class AdminCachePageTest {
         assertEquals(30, adminRow.getPosition(),
                 "names allow underscores, so db 'trigger' + collection 'runs' collides with admin/trigger_runs;"
                         + " a vacuum of the page metadata must not move the real admin index");
+    }
+
+    private static OperationStatus save(OperationProcessor processor, String id, int payload) {
+        final var object = new JsonObject();
+        object.addProperty("_id", id);
+        object.addProperty("payload", "x".repeat(payload));
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(object);
+        request.set_id(id);
+        return processor.processMessage(request).getStatus();
+    }
+
+    @Test
+    public void test_a_delete_applies_its_page_delta_on_the_write_path() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        final var processor = IocContainer.get(OperationProcessor.class);
+        final var cache = IocContainer.get(Cache.class);
+        for (final var id : List.of("a", "b", "c")) {
+            assertEquals(OperationStatus.OK, save(processor, id, 40));
+        }
+        final var row = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).get(1);
+        final var page = cache.getAdminPageEntry(TestGlobals.DB, TestGlobals.COLL, row.getPage());
+        final var sizeBefore = page.getPageSize();
+        final var countBefore = page.getEntryCount();
+        final var request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("b");
+
+        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+
+        assertEquals(sizeBefore - row.getLength(), page.getPageSize(),
+                "the live bytes drop before the background worker runs, so the next placement sees them");
+        assertEquals(countBefore - 1, page.getEntryCount());
+    }
+
+    @Test
+    public void test_a_relocation_applies_the_source_page_delta_on_the_write_path() throws Exception {
+        final var configuration = Configuration.getInstance();
+        final var shipped = configuration.getMaxPageSize();
+        TestUtils.setPrivateField(configuration, "maxPageSize", 1024L);
+        try {
+            TestUtils.createTestDatabaseAndCollection();
+            final var processor = IocContainer.get(OperationProcessor.class);
+            final var cache = IocContainer.get(Cache.class);
+            for (final var id : List.of("a", "b", "c")) {
+                assertEquals(OperationStatus.OK, save(processor, id, 250));
+            }
+            final var row = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).getFirst();
+            final var source = cache.getAdminPageEntry(TestGlobals.DB, TestGlobals.COLL, row.getPage());
+            final var sizeBefore = source.getPageSize();
+            final var countBefore = source.getEntryCount();
+
+            assertEquals(OperationStatus.OK, save(processor, "a", 700));
+
+            final var moved = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).getFirst();
+            assertNotEquals(row.getPage(), moved.getPage(), "the grown document must have been relocated");
+            assertEquals(sizeBefore - row.getLength(), source.getPageSize());
+            assertEquals(countBefore - 1, source.getEntryCount());
+        } finally {
+            TestUtils.setPrivateField(configuration, "maxPageSize", shipped);
+        }
+    }
+
+    @Test
+    public void test_a_negative_delta_for_an_untracked_page_creates_no_row() {
+        AdminCache cache = new AdminCache();
+
+        cache.updatePageSizeInMemory("db", "coll", 3L, -100L, -1);
+
+        assertNull(cache.getAdminPageEntry("db", "coll", 3L));
     }
 }

@@ -184,4 +184,29 @@ public class UsageTrackerTest {
         assertEquals(TOTAL_ACCESSES, lastDrained.get());
         assertTrue(tracker.drainDirtyCounters().isEmpty());
     }
+
+    @Test
+    public void test_forget_collection_drops_its_counters() {
+        tracker.recordAccess(AccessKind.COLLECTION, DB, COLL, null);
+        tracker.recordAccess(AccessKind.FIELD_INDEX, DB, COLL, "price");
+        tracker.recordAccess(AccessKind.COLLECTION, DB, "kept", null);
+        tracker.recordAccess(AccessKind.COLLECTION, "otherDb", COLL, null);
+
+        tracker.forgetCollection(DB, COLL);
+
+        assertNull(tracker.getCounter(AccessKind.COLLECTION, DB, COLL, null));
+        assertNull(tracker.getCounter(AccessKind.FIELD_INDEX, DB, COLL, "price"));
+        assertNotNull(tracker.getCounter(AccessKind.COLLECTION, DB, "kept", null));
+        final var drained = tracker.drainDirtyCounters();
+        assertEquals(2, drained.size(), "a forgotten counter leaves the unflushed set too");
+        tracker.recordAccess(AccessKind.COLLECTION, DB, COLL, null);
+        assertEquals(1L, tracker.getCounter(AccessKind.COLLECTION, DB, COLL, null).getAccessCount(),
+                "a recreated collection starts from a fresh counter");
+
+        tracker.forgetDatabase(DB);
+
+        assertNull(tracker.getCounter(AccessKind.COLLECTION, DB, COLL, null));
+        assertNull(tracker.getCounter(AccessKind.COLLECTION, DB, "kept", null));
+        assertNotNull(tracker.getCounter(AccessKind.COLLECTION, "otherDb", COLL, null));
+    }
 }

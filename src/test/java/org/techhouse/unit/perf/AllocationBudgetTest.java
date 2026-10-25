@@ -9,6 +9,7 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.conn.OutboundQueue;
@@ -20,7 +21,9 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.CountOperatorHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -28,6 +31,8 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.step.CountAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -37,18 +42,26 @@ public class AllocationBudgetTest {
     private static final int BULK = 1_000;
     private static final int WARM_UPS = 5;
     private static final long KB = 1024L;
-    private static final long SAVE_UPDATE_BUDGET = 28_350;
+    private static final long SAVE_UPDATE_BUDGET = 25_430;
     private static final long INSERT_BUDGET_PER_DOC = 3 * KB;
     private static final long COLD_SCAN_BUDGET_PER_DOC = 3_680;
     private static final long BATCH_OF_ONE_BUDGET = 8_430;
     private static final long BULK_UPDATE_BUDGET_PER_DOC = 3_630;
     private static final long INDEXED_ID_LOOKUP_BUDGET = 21_510;
+    private static final long EQUALS_INDEX_COUNT_BUDGET = 2_735;
     private static final long SAVE_REQUEST_PARSE_BUDGET = 3_120;
+    private static final long LOCKED_COLD_SCAN_BUDGET_PER_DOC = 4_440;
+    private static final long INDEXED_FILTER_LIMIT_BUDGET = 24_630;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
             {"type":"FILTER","operator":{"fieldOperatorType":"SMALLER_THAN","field":"qty","value":1}},
             {"type":"COUNT"}]}""";
+
+    private static final String INDEXED_FILTER_LIMIT = """
+            {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
+            {"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"cat","value":"c3"}},
+            {"type":"LIMIT","limit":5}]}""";
 
     private static final String INDEXED_LOOKUP = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
@@ -202,6 +215,42 @@ public class AllocationBudgetTest {
     }
 
     @Test
+    void lockedColdScanAllocatesUnderBudgetPerDoc() throws Exception {
+        final var request = (AggregateRequest) RequestParser
+                .parseRequest(COLD_SCAN.formatted(TestGlobals.DB, TestGlobals.COLL));
+        final var documents = cache.pkIndexSize(TestGlobals.DB, TestGlobals.COLL);
+        final var perDoc = cheapestOf(() -> {
+            cache.evictCollection(TestGlobals.DB, TestGlobals.COLL);
+            holdingTheCollectionRead(() -> AggregationOperationHelper.processAggregation(request));
+        }) / documents;
+        assertEquals(documents, cache.userCache().getCachedCollection(TestGlobals.DB, TestGlobals.COLL).size(),
+                "a complete locked scan within the budget admits the collection it read");
+        assertTrue(perDoc <= LOCKED_COLD_SCAN_BUDGET_PER_DOC,
+                report("one document of a locked cold scan", perDoc, LOCKED_COLD_SCAN_BUDGET_PER_DOC));
+    }
+
+    @Test
+    void indexedFilterLimitAllocatesUnderBudget() throws Exception {
+        final var request = (AggregateRequest) RequestParser
+                .parseRequest(INDEXED_FILTER_LIMIT.formatted(TestGlobals.DB, TestGlobals.COLL));
+        IocContainer.get(PendingIndexWrites.class).clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        holdingTheCollectionRead(() -> AggregationOperationHelper.processAggregation(request));
+        final var measured = cheapestOf(
+                () -> holdingTheCollectionRead(() -> AggregationOperationHelper.processAggregation(request)));
+        assertTrue(measured <= INDEXED_FILTER_LIMIT_BUDGET,
+                report("an indexed FILTER + LIMIT 5", measured, INDEXED_FILTER_LIMIT_BUDGET));
+    }
+
+    private static void holdingTheCollectionRead(ThrowingAction action) throws Exception {
+        assertTrue(locks.tryLockRead(TestGlobals.DB, TestGlobals.COLL, 5_000));
+        try {
+            action.run();
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    @Test
     void backgroundBatchOfOneAllocatesUnderBudget() throws Exception {
         assertTrue(locks.tryLockRead(TestGlobals.DB, TestGlobals.COLL, 5_000));
         try {
@@ -230,6 +279,30 @@ public class AllocationBudgetTest {
                     report("an indexed lookup of 500 ids", measured, INDEXED_ID_LOOKUP_BUDGET));
         } finally {
             locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    @Test
+    void equalsIndexOnlyCountAllocatesUnderBudget() throws Exception {
+        final var steps = List.of(
+                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "cat", new JsonString("c3"))),
+                new CountAggregationStep());
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        final var stillPending = pending.idsFor(TestGlobals.DB, TestGlobals.COLL);
+        pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(locks.tryLockRead(TestGlobals.DB, TestGlobals.COLL, 5_000));
+        try {
+            final var counted = CountOperatorHelper.tryIndexOnlyCount(steps, TestGlobals.DB, TestGlobals.COLL,
+                    PipelineContext.withoutScripts());
+            assertNotNull(counted, "an EQUALS on an indexed field is counted from the index");
+            assertEquals(DOCS / 20, counted.result().get("count").asJsonNumber().asInteger());
+            final var measured = cheapestOf(() -> CountOperatorHelper.tryIndexOnlyCount(steps, TestGlobals.DB,
+                    TestGlobals.COLL, PipelineContext.withoutScripts()));
+            assertTrue(measured <= EQUALS_INDEX_COUNT_BUDGET,
+                    report("an index-only COUNT of a 500-id EQUALS", measured, EQUALS_INDEX_COUNT_BUDGET));
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+            pending.mark(TestGlobals.DB, TestGlobals.COLL, stillPending);
         }
     }
 

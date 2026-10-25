@@ -1,6 +1,5 @@
 package org.techhouse.ops.admin;
 
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -8,6 +7,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.DroppedCollections;
 
 public final class LeftoverFolders {
     private static final Logger logger = Logger.logFor(LeftoverFolders.class);
@@ -15,7 +15,6 @@ public final class LeftoverFolders {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
-    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     private LeftoverFolders() {
     }
@@ -26,8 +25,7 @@ public final class LeftoverFolders {
             return true;
         }
         final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, 0);
-        cache.evictCollection(dbName, collName);
-        pendingIndexWrites.clearCollection(dbName, collName);
+        DroppedCollections.forgetCollection(dbName, collName);
         logOutcome("collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName, moved);
         return moved;
     }
@@ -37,8 +35,7 @@ public final class LeftoverFolders {
             return true;
         }
         final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
-        cache.evictDatabase(dbName);
-        pendingIndexWrites.clearDatabase(dbName);
+        DroppedCollections.forgetDatabase(dbName);
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);
         logOutcome("database " + dbName, moved);

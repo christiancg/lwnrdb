@@ -66,9 +66,13 @@ def _footer(reports: list) -> list:
         invalid = sum(phase["invalid"] for phase in report["phases"])
         return f"{errors} / {invalid}"
 
-    def stalls(report: dict) -> str:
-        value = report.get("container", {}).get("gc_allocation_stalls")
-        return "—" if value is None else str(value)
+    def pauses(report: dict) -> str:
+        value = report.get("container", {}).get("gc_pauses")
+        return "—" if value is None else f"{value['count']} / {value['p99_ms']:,.2f} / {value['max_ms']:,.2f}"
+
+    def full_gcs(report: dict) -> str:
+        value = report.get("container", {}).get("gc_pauses")
+        return "—" if value is None else str(value["full_gcs"])
 
     rows = [
         ["peak container memory"] + [cell(report, "memory_peak") for report in reports],
@@ -76,8 +80,9 @@ def _footer(reports: list) -> list:
         ["final document count"] + [str(report.get("final_count", "—")) for report in reports],
         ["errors / invalid results"] + [problems(report) for report in reports],
     ]
-    if any(report.get("container", {}).get("gc_allocation_stalls") is not None for report in reports):
-        rows.insert(2, ["ZGC allocation stalls"] + [stalls(report) for report in reports])
+    if any(report.get("container", {}).get("gc_pauses") is not None for report in reports):
+        rows.insert(2, ["G1 full GCs"] + [full_gcs(report) for report in reports])
+        rows.insert(2, ["G1 pauses: count / p99 ms / max ms"] + [pauses(report) for report in reports])
     return ["### Container", ""] + _table([""] + [r["engine"] for r in reports], rows) + [""]
 
 

@@ -158,7 +158,7 @@ final class AdminPageCache {
         if (existing != null) {
             existing.setPageSize(existing.getPageSize() + bytesDelta);
             existing.setEntryCount(existing.getEntryCount() + addedEntries);
-        } else {
+        } else if (addedEntries >= 0) {
             final var newEntry = new AdminPageEntry(dbName, collName, page);
             newEntry.setPageSize(bytesDelta);
             newEntry.setEntryCount(addedEntries);
@@ -232,6 +232,9 @@ final class AdminPageCache {
             }
             final var pending = pendingPageBytes.getOrDefault(page, 0L);
             final var liveBytes = entry.getPageSize() + pending;
+            if (!PagePlacement.liveBytesAdmit(liveBytes, entryByteSize, maxPageBytes)) {
+                continue;
+            }
             if (PagePlacement.acceptsInsert(liveBytes, fileLengthOf.applyAsLong(page) + pending, entryByteSize,
                     maxPageBytes)) {
                 bestFit = page;

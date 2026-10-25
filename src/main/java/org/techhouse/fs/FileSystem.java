@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongFunction;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -273,6 +274,12 @@ public class FileSystem {
         return pageAppender.bulkInsert(dbName, collName, entries, storagePageResolver, encodedLines);
     }
 
+    public <T extends DbEntry> List<IndexedDbEntry> writeBatch(String dbName, String collName, List<T> inserts,
+            Function<? super T, Long> pageOf, Function<? super T, byte[]> lines, List<PkIndexEntry> deletes)
+            throws IOException {
+        return pageAppender.bulkInsertAndDelete(dbName, collName, inserts, pageOf, lines, deletes);
+    }
+
     public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
         return pageAppender.insert(entry, entry.encodeLine());
     }
@@ -285,10 +292,15 @@ public class FileSystem {
         recordReplacer.delete(pkIndexEntry);
     }
 
+    public void deleteFromCollection(PkIndexEntry pkIndexEntry, List<PkIndexEntry> residentRows,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
+        recordReplacer.delete(pkIndexEntry, residentRows, occupancy);
+    }
+
     public PkIndexEntry relocate(DbEntry entry, PkIndexEntry oldRow, long targetPage, byte[] encodedLine,
-            List<PkIndexEntry> residentRows) throws IOException {
+            List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy) throws IOException {
         entry.setPage(targetPage);
-        return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows);
+        return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows, occupancy);
     }
 
     public List<PkIndexEntry> redoWriteAheadLogs() throws IOException {
@@ -331,13 +343,14 @@ public class FileSystem {
 
     public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
             List<PkIndexEntry> residentRows) throws IOException {
-        return updateFromCollection(entry, pkIndexEntry, encodedLine, null, residentRows);
+        return updateFromCollection(entry, pkIndexEntry, encodedLine, null, residentRows, null);
     }
 
     public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
-            PagePlacement placement, List<PkIndexEntry> residentRows) throws IOException {
-        return recordReplacer.replace(entry, encodedLine, pkIndexEntry, pkIndexEntry.getPage(), placement,
-                residentRows);
+            PagePlacement placement, List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy)
+            throws IOException {
+        return recordReplacer.replace(entry, encodedLine, pkIndexEntry, pkIndexEntry.getPage(), placement, residentRows,
+                occupancy);
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
@@ -396,12 +409,24 @@ public class FileSystem {
     }
 
     public void healTornPageTails(String dbName, String collName) throws IOException {
-        TornPageTail.healAll(paths, dbName, collName, pageFileLengths(dbName, collName).keySet(),
-                () -> readWholePkIndexFile(dbName, collName));
+        healTornPageTails(pkRowsSession(dbName, collName));
     }
 
-    public List<PkIndexEntry> retireDanglingPkEntries(String dbName, String collName) throws IOException {
-        return OrphanedPageRecords.retireDangling(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
+    public PkRowsSession pkRowsSession(String dbName, String collName) {
+        return new PkRowsSession(pkIndexStore, dbName, collName);
+    }
+
+    public long highestPkVersion(String dbName, String collName) throws IOException {
+        return pkIndexStore.highestVersion(dbName, collName);
+    }
+
+    public void healTornPageTails(PkRowsSession session) throws IOException {
+        TornPageTail.healAll(paths, session.dbName(), session.collName(),
+                pageFileLengths(session.dbName(), session.collName()).keySet(), session::rows);
+    }
+
+    public List<PkIndexEntry> retireDanglingPkEntries(PkRowsSession session) throws IOException {
+        return OrphanedPageRecords.retireDangling(session, pageFileLengths(session.dbName(), session.collName()));
     }
 
     public void checkpointWriteAheadLogs(long deadline) {
@@ -439,9 +464,9 @@ public class FileSystem {
         }
     }
 
-    public List<DbEntry> adoptOrphanedRecords(String dbName, String collName) throws IOException {
-        return OrphanedPageRecords.adoptAll(paths, pkIndexStore, dbName, collName,
-                pageFileLengths(dbName, collName).keySet());
+    public List<DbEntry> adoptOrphanedRecords(PkRowsSession session) throws IOException {
+        return OrphanedPageRecords.adoptAll(paths, session,
+                pageFileLengths(session.dbName(), session.collName()).keySet());
     }
 
     public long pageFileCount(String dbName, String collName) throws IOException {

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollectionUsageEntry;
@@ -88,6 +89,20 @@ public class UsageTracker {
     public void clearCounter(AccessKind kind, String dbName, String collName, String indexKey) {
         counters.remove(buildKey(kind, dbName, collName, indexKey));
         byAccess.remove(accessKeyOf(kind, dbName, collName, indexKey));
+    }
+
+    public void forgetCollection(String dbName, String collName) {
+        forgetWhere(counter -> dbName.equals(counter.dbName()) && collName.equals(counter.collName()));
+    }
+
+    public void forgetDatabase(String dbName) {
+        forgetWhere(counter -> dbName.equals(counter.dbName()));
+    }
+
+    private void forgetWhere(Predicate<UsageCounter> dropped) {
+        counters.values().removeIf(dropped);
+        byAccess.values().removeIf(dropped);
+        unflushed.removeIf(dropped);
     }
 
     public void putCounter(UsageCounter counter) {

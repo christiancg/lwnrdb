@@ -10,6 +10,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,9 +25,11 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
 import org.techhouse.ops.req.SaveRequest;
@@ -171,6 +176,68 @@ public class PageOccupancyReconcilerTest {
 
         assertNotNull(row(0));
         assertEquals(firstPageFileLength(), existingRow(0).getPageSize());
+    }
+
+    private static Map<Long, Long> liveBytesByPage(List<PkIndexEntry> rows) {
+        final var byPage = new TreeMap<Long, Long>();
+        rows.forEach(pk -> byPage.merge(pk.getPage(), pk.getLength(), Long::sum));
+        return byPage;
+    }
+
+    private Map<Long, Long> adminTransactionRowSizes() {
+        final var byPage = new TreeMap<Long, Long>();
+        cache.getAdminPageEntries(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME)
+                .forEach(row -> byPage.put(row.getPage(), row.getPageSize()));
+        return byPage;
+    }
+
+    private static void saveOutcomeMarker(String outcome) throws Exception {
+        final var payload = new JsonObject();
+        payload.addProperty("outcome", outcome);
+        AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(UUID.randomUUID().toString(),
+                AdminTransactionEntry.MARKER_OUTCOME, AdminTransactionEntry.OP_TYPE_TRANSACTION_OUTCOME, payload));
+    }
+
+    @Test
+    public void test_admin_rows_are_rebuilt_at_startup() throws Exception {
+        final var collName = Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME;
+        saveOutcomeMarker("committed");
+        cache.getAdminPageEntries(Globals.ADMIN_DB_NAME, collName).forEach(stale -> {
+            stale.setPageSize(0L);
+            stale.setEntryCount(0);
+        });
+
+        PageOccupancyReconciler.reconcileAll();
+
+        final var live = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, collName);
+        assertEquals(liveBytesByPage(live), adminTransactionRowSizes());
+        assertEquals(live.size(), cache.getAdminPageEntries(Globals.ADMIN_DB_NAME, collName).stream()
+                .mapToInt(AdminPageEntry::getEntryCount).sum());
+        assertFalse(PageOccupancyReconciler.reconcileAdminRows(collName), "the rebuilt rows agree");
+    }
+
+    @Test
+    public void test_admin_rows_whose_sizes_agree_but_counts_do_not_are_rebuilt() throws Exception {
+        final var collName = Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME;
+        saveOutcomeMarker("aborted");
+        final var row = cache.getAdminPageEntries(Globals.ADMIN_DB_NAME, collName).getFirst();
+        row.setEntryCount(row.getEntryCount() + 1);
+
+        assertTrue(PageOccupancyReconciler.reconcileAdminRows(collName));
+
+        assertEquals(fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, collName).size(), row.getEntryCount());
+    }
+
+    @Test
+    public void test_user_rows_whose_sizes_agree_but_counts_do_not_are_rebuilt() throws Exception {
+        save("counted");
+        final var row = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        row.setEntryCount(row.getEntryCount() + 1);
+
+        assertTrue(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+
+        assertEquals(fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).size(),
+                cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).getFirst().getEntryCount());
     }
 
     private File firstUserPage() {

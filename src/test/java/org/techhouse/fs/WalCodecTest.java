@@ -2,7 +2,9 @@ package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -164,5 +166,34 @@ public class WalCodecTest {
         assertEquals(List.of("a", "ü-id"), kept.pendingIds());
         assertEquals(1, kept.framesSinceCheckpoint(), "pending ids are not a record");
         assertEquals(List.of(), cleared.pendingIds());
+    }
+
+    @Test
+    public void test_rewrite_frames_round_trip() {
+        final var bytes = log(WalCodec.encode(checkpoint()), WalCodec.encode(record(2L)),
+                WalCodec.encodeRewriteBegin(3L, 3L, 120L), WalCodec.encodeRewriteEnd(4L, 3L, 3L, 40L),
+                WalCodec.encodeRewriteBegin(5L, 0L, 90L), WalCodec.encodeRewriteEnd(6L, 99L, 0L, 10L),
+                WalCodec.encode(record(7L)));
+
+        final var decoded = WalCodec.decodeAll(bytes);
+
+        assertEquals(
+                Map.of(3L, new WalCodec.Rewrite(3L, 120L, 40L), 0L,
+                        new WalCodec.Rewrite(5L, 90L, WalCodec.NO_REWRITE_END)),
+                decoded.rewrites(), "an END that names another BEGIN leaves its page's barrier open");
+        assertEquals(6, decoded.framesSinceCheckpoint());
+        assertEquals(7L, decoded.lastSeq());
+        assertEquals(40L, decoded.rewrites().get(3L).floor());
+        assertEquals(90L, decoded.rewrites().get(0L).floor());
+        final var first = decoded.records().getFirst();
+        final var blank = first.changes().get(2);
+        assertTrue(decoded.rewrites().get(0L).skips(first, blank));
+        assertFalse(decoded.rewrites().get(0L).skips(first, first.changes().get(1)), "pk.idx always replays");
+        assertFalse(decoded.rewrites().get(0L).skips(decoded.records().get(1), blank));
+        assertEquals(Map.of(),
+                WalCodec.decodeAll(
+                        log(bytes, WalCodec.encode(new WalCheckpoint(8L, "walDb", "walColl", 42L, new TreeMap<>()))))
+                        .rewrites(),
+                "a checkpoint ends every barrier");
     }
 }

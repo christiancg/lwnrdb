@@ -362,4 +362,23 @@ public class SearchUtilsTest {
         assertEquals(big, result);
         assertEquals(100, result.size());
     }
+
+    @Test
+    public void test_count_equals_sums_the_ids_of_the_equal_run() {
+        final List<FieldIndexEntry<String>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", "Alpha", Set.of("a")),
+                new FieldIndexEntry<>("db1", "col1", "alpha", Set.of("b", "c")),
+                new FieldIndexEntry<>("db1", "col1", "beta", Set.of("d")),
+                new FieldIndexEntry<>("db1", "col1", "gamma", Set.of("e", "f", "g")));
+
+        assertEquals(3L, SearchUtils.countEquals(entries, "ALPHA"));
+        assertEquals(1L, SearchUtils.countEquals(entries, "beta"));
+        assertEquals(3L, SearchUtils.countEquals(entries, "gamma"));
+        assertEquals(0L, SearchUtils.countEquals(entries, "delta"));
+        assertEquals(0L, SearchUtils.countEquals(List.of(), "alpha"));
+        for (final var value : List.of("alpha", "BETA", "gamma", "zeta")) {
+            assertEquals(SearchUtils.findingByOperator(entries, FieldOperatorType.EQUALS, value).size(),
+                    SearchUtils.countEquals(entries, value), value);
+        }
+    }
 }

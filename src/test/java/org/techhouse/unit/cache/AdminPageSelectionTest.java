@@ -9,10 +9,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -172,5 +174,25 @@ public class AdminPageSelectionTest {
         assertEquals(0L, cache.selectPageForInsert(TestGlobals.DB, COLL, 100),
                 "the appender vacuums a page that is a quarter dead before appending to it");
         assertEquals(0L, cache.selectPagesForInsert(TestGlobals.DB, COLL, new int[]{100})[0]);
+    }
+
+    @Test
+    public void test_a_page_without_live_room_is_never_statted() throws NoSuchFieldException, IllegalAccessException {
+        page(0, maxPageSize());
+        page(1, maxPageSize() - 50);
+        page(2, 0);
+        final var pageCache = TestUtils.getPrivateField(cache.adminCache(), "pageCache", Object.class);
+        final var realFs = TestUtils.getPrivateField(pageCache, "fs", FileSystem.class);
+        final var spyFs = Mockito.spy(realFs);
+        TestUtils.setPrivateField(pageCache, "fs", spyFs);
+        try {
+            assertEquals(2L, cache.selectPageForInsert(TestGlobals.DB, COLL, 100));
+
+            Mockito.verify(spyFs, Mockito.never()).pageFileLength(TestGlobals.DB, COLL, 0L);
+            Mockito.verify(spyFs, Mockito.never()).pageFileLength(TestGlobals.DB, COLL, 1L);
+            Mockito.verify(spyFs).pageFileLength(TestGlobals.DB, COLL, 2L);
+        } finally {
+            TestUtils.setPrivateField(pageCache, "fs", realFs);
+        }
     }
 }

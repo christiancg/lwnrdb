@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
+import java.util.function.LongFunction;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.fault.FaultInjector;
@@ -236,7 +237,7 @@ final class WriteAheadLog {
                             + " durable before applying its logged writes");
                 }
                 forceLog(log);
-                WalRedo.replay(paths, dbName, collName, WalCodec.decodeAll(Files.readAllBytes(log.toPath())).records());
+                WalRedo.replay(paths, dbName, collName, WalCodec.decodeAll(Files.readAllBytes(log.toPath())));
                 state.unapplied = false;
                 logger.warning("Applied the logged writes of " + subject(dbName, collName) + " that an earlier write"
                         + " could not");
@@ -244,6 +245,56 @@ final class WriteAheadLog {
         } finally {
             walLock.unlock();
             pkLock.unlock();
+        }
+    }
+
+    void settleBeforeRewrite(String dbName, String collName) throws IOException {
+        final var log = paths.writeAheadLog(dbName, collName);
+        final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
+        final var walLock = FileLocks.lockWrite(log);
+        try {
+            requireApplied(dbName, collName);
+            final var state = stateOf(log, dbName, collName);
+            if (state.knownLength == 0L) {
+                checkpoint(dbName, collName);
+            }
+            if (state.group != null) {
+                if (!settle(dbName, collName, log, state)) {
+                    throw new IOException("Could not force the open write group of " + subject(dbName, collName)
+                            + " before rewriting one of its pages; its writes were taken back");
+                }
+                state.group = null;
+            }
+            requireApplied(dbName, collName);
+        } finally {
+            walLock.unlock();
+            pkLock.unlock();
+        }
+    }
+
+    long beginRewrite(String dbName, String collName, long page, long lengthBefore) throws IOException {
+        SyncedWrites.content(paths.collectionPage(dbName, collName, page).toPath());
+        return appendFrame(dbName, collName, seq -> WalCodec.encodeRewriteBegin(seq, page, lengthBefore), true);
+    }
+
+    void endRewrite(String dbName, String collName, long beginSeq, long page, long lengthAfter, boolean force)
+            throws IOException {
+        appendFrame(dbName, collName, seq -> WalCodec.encodeRewriteEnd(seq, beginSeq, page, lengthAfter), force);
+    }
+
+    private long appendFrame(String dbName, String collName, LongFunction<byte[]> frame, boolean force)
+            throws IOException {
+        final var log = paths.writeAheadLog(dbName, collName);
+        final var walLock = FileLocks.lockWrite(log);
+        try {
+            final var state = stateOf(log, dbName, collName);
+            final var seq = state.nextSeq;
+            write(log, state, frame.apply(seq), new byte[0], 0, force);
+            state.nextSeq++;
+            state.recordsSinceCheckpoint++;
+            return seq;
+        } finally {
+            walLock.unlock();
         }
     }
 

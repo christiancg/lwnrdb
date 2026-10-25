@@ -71,7 +71,7 @@ public class WalPlanTest {
         assertTrue(readOnly.setWritable(true, true));
 
         rf.replace("b", "newer-b", 0, PagePlacement.APPEND);
-        WalRedo.replay(rf.fx.paths, DB, COLL, decodedLog().records());
+        WalRedo.replay(rf.fx.paths, DB, COLL, decodedLog());
 
         assertEquals(StorageFixture.record("b", "newer-b"), rf.fx.readAt(rf.fx.indexed("b")));
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());

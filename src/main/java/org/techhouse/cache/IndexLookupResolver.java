@@ -76,6 +76,20 @@ final class IndexLookupResolver {
         });
     }
 
+    @SuppressWarnings("unchecked")
+    static <T> OptionalLong countEquals(UserCache userCache, String dbName, String collName, String fieldName, T value)
+            throws IOException {
+        return readingIndex(dbName, collName, fieldName, () -> {
+            final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                    (Class<T>) scalarIndexClass(value));
+            if (index == null) {
+                return OptionalLong.empty();
+            }
+            userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+            return OptionalLong.of(SearchUtils.countEquals(index, value));
+        });
+    }
+
     @FunctionalInterface
     private interface IndexRead<R> {
         R read() throws IOException;

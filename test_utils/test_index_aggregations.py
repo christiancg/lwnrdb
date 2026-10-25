@@ -268,10 +268,42 @@ def one_bound_top_k_steps(operator, value, ascending, limit, field="score"):
 RANGE_TOP_K_DESC_STEPS = range_top_k_steps(NUM_DOCS // 8, min(500, NUM_DOCS // 2), False, 50)
 RANGE_TOP_K_SKIP_STEPS = range_top_k_steps(NUM_DOCS // 2, min(200, NUM_DOCS // 4), True, 20, skip=5)
 RANGE_TOP_K_PAST_END_STEPS = one_bound_top_k_steps("GREATER_THAN", NUM_DOCS - 20, True, 1000)
+COUNT_EQUALS_STEPS = [bu.filter_step("category", "EQUALS", "CAT_3"), {"type": "COUNT"}]
+
+
+FILTER_LIMIT_CATEGORY = category_for(3)
+FILTER_LIMIT_STEPS = [bu.filter_step("category", "EQUALS", FILTER_LIMIT_CATEGORY), {"type": "LIMIT", "limit": 20}]
+
+
+def limited_match_signature(r):
+    rows = r.get("results") or []
+    return len(rows), all(row.get("category") == FILTER_LIMIT_CATEGORY for row in rows)
+
+
+def probe_filter_limit_is_a_matching_subset(c):
+    section("An indexed FILTER + LIMIT answers a subset of the scan whose rows all match")
+    category_filter = bu.filter_step("category", "EQUALS", FILTER_LIMIT_CATEGORY)
+    everything = set(agg_ids(c, COLL, forced_scan([category_filter])))
+    check("the category has more rows than any limit below", len(everything) > 60, detail=f"rows={len(everything)}")
+    check("the limited FILTER is answered through the index", index_used(c, COLL, FILTER_LIMIT_STEPS))
+    for window in ([{"type": "LIMIT", "limit": 1}], [{"type": "LIMIT", "limit": 50}],
+                   [{"type": "SKIP", "skip": 3}, {"type": "LIMIT", "limit": 7}]):
+        rows = agg(c, COLL, [category_filter] + window).get("results") or []
+        ids = [row.get("_id") for row in rows]
+        expected = window[-1]["limit"]
+        check(f"{window} answers {expected} distinct rows", len(ids) == expected == len(set(ids)),
+              detail=f"got {len(ids)} rows, {len(set(ids))} distinct")
+        check(f"{window} answers only rows the scan matches", set(ids) <= everything)
+        check(f"{window} rows all carry the filtered value",
+              all(row.get("category") == FILTER_LIMIT_CATEGORY for row in rows))
 
 
 def distinct_signature(r):
     return sorted({d.get("category") for d in (r.get("results") or [])})
+
+
+def count_signature(r):
+    return bu.count_of(r)
 
 
 def sort_signature(r):
@@ -377,6 +409,14 @@ def probe_count_with_filter(c):
             bad += 1
     check("index-only COUNT (with filter) counts committed docs immediately", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} counts were stale")
+    wait_for_background()
+    for value in ("countme", "COUNTME", "absent"):
+        steps = [bu.filter_step("status", "EQUALS", value)]
+        indexed = agg_count(c, CONS, steps)
+        scanned = agg_count(c, CONS, forced_scan(steps))
+        check(f"index-only EQUALS COUNT of {value!r} equals the scan COUNT once nothing is pending",
+              indexed == scanned and index_used(c, CONS, steps + [{"type": "COUNT"}]),
+              detail=f"index={indexed} scan={scanned}")
 
 
 THROWING_MAP = {"type": "MAP", "operators": [{"fieldName": "x", "operator": {
@@ -652,6 +692,48 @@ def probe_index_log_after_many_updates(c):
           not bad, detail=f"disagreeing: {bad}")
 
 
+CONS_EDITS = "idxagg_cons_edits"
+EDITS_SHARED = 12
+EDITS_UNIQUE = 1500
+
+
+def bucket_docs(offset: int):
+    return [{"_id": f"u_{i:05d}", "bucket": offset + i} for i in range(EDITS_UNIQUE)]
+
+
+def probe_large_resident_index_edits_match_the_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CONS_EDITS})
+    build_index(c, CONS_EDITS, "bucket")
+    for i in range(EDITS_SHARED):
+        save_doc(c, CONS_EDITS, {"_id": f"s_{i:02d}", "bucket": 1})
+    c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": CONS_EDITS, "objects": bucket_docs(1000)},
+           timeout=120)
+    wait_for_background()
+    agg(c, CONS_EDITS, [bu.filter_step("bucket", "EQUALS", 1)])
+    for i in range(5):
+        save_doc(c, CONS_EDITS, {"_id": f"s_{i:02d}", "bucket": 2})
+    c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": CONS_EDITS, "objects": bucket_docs(5000)},
+           timeout=120)
+    wait_for_background()
+    bad = []
+    for label, steps in (
+            ("EQUALS 1", [bu.filter_step("bucket", "EQUALS", 1)]),
+            ("EQUALS 2", [bu.filter_step("bucket", "EQUALS", 2)]),
+            ("EQUALS 1500", [bu.filter_step("bucket", "EQUALS", 1500)]),
+            ("GREATER_THAN 5999", [bu.filter_step("bucket", "GREATER_THAN", 5999)]),
+            ("SORT LIMIT", [{"type": "SORT", "fieldName": "bucket", "ascending": False}, {"type": "LIMIT", "limit": 20}]),
+    ):
+        if agg_ids(c, CONS_EDITS, steps) != agg_ids(c, CONS_EDITS, forced_scan(steps)):
+            bad.append(label)
+    counts = (agg_count(c, CONS_EDITS, [bu.filter_step("bucket", "EQUALS", 1)]),
+              agg_count(c, CONS_EDITS, [bu.filter_step("bucket", "EQUALS", 2)]),
+              agg_count(c, CONS_EDITS, [bu.filter_step("bucket", "GREATER_THAN_EQUALS", 5000)]))
+    if counts != (EDITS_SHARED - 5, 5, EDITS_UNIQUE):
+        bad.append(f"COUNT {counts}")
+    check(f"a value crossing 8 ids and a {EDITS_UNIQUE}-document re-bucketing on a resident index equal the scan",
+          not bad, detail=f"disagreeing: {bad}")
+
+
 def last_round(i: int) -> int:
     rounds = [r for r in range(1, LOGGED_UPDATES + 1) if r % LOGGED_DOCS == i]
     return rounds[-1] if rounds else 0
@@ -676,6 +758,7 @@ def consistency_suite(c):
     probe_drop_burst_no_background_errors(c)
     probe_bulk_update_same_page_no_corruption(c)
     probe_index_log_after_many_updates(c)
+    probe_large_resident_index_edits_match_the_scan(c)
     probe_convergence(c)
 
 
@@ -2199,6 +2282,8 @@ def main():
          bu.ids_of, True),
         ("FILTER IN over a list of objects", COLL, FILTER_OBJECT_IN_STEPS, forced_scan(FILTER_OBJECT_IN_STEPS),
          bu.ids_of, True),
+        ("FILTER EQUALS on category (+LIMIT 20)", COLL, FILTER_LIMIT_STEPS, forced_scan(FILTER_LIMIT_STEPS),
+         limited_match_signature, False),
         ("FILTER geo distance (within radius)", COLL, FILTER_GEO_DISTANCE_STEPS,
          forced_scan(FILTER_GEO_DISTANCE_STEPS), bu.ids_of, False),
         ("FILTER geo within polygon", COLL, FILTER_GEO_WITHIN_STEPS, forced_scan(FILTER_GEO_WITHIN_STEPS),
@@ -2211,6 +2296,8 @@ def main():
          forced_scan(RANGE_TOP_K_SKIP_STEPS), agree_ordered_ids, True),
         ("FILTER GT on score (+SORT +LIMIT larger than the range)", COLL, RANGE_TOP_K_PAST_END_STEPS,
          forced_scan(RANGE_TOP_K_PAST_END_STEPS), agree_ordered_ids, True),
+        ("COUNT of a case-folded EQUALS on category (index-only)", COLL, COUNT_EQUALS_STEPS,
+         forced_scan(COUNT_EQUALS_STEPS), count_signature, False),
     ]
 
     unindexed = {}
@@ -2243,6 +2330,7 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         probe_join_on_id_matches_the_scan(c)
+        probe_filter_limit_is_a_matching_subset(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

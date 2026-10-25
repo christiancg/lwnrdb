@@ -28,7 +28,7 @@ OVERRIDE = """services:
     image: lwnrdb-profile
     command:
       - java
-      - -XX:+UseZGC
+      - -XX:+UseG1GC
       - -XX:MaxRAMPercentage={heap}
       - -XX:+UnlockDiagnosticVMOptions
       - -XX:+DebugNonSafepoints

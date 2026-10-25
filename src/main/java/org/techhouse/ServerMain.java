@@ -258,9 +258,7 @@ public class ServerMain {
             if (collEntry != null) {
                 highest = Math.max(highest, collEntry.getIncarnation());
             }
-            for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
-                highest = Math.max(highest, pkEntry.getVersion());
-            }
+            highest = Math.max(highest, fs.highestPkVersion(dbName, collName));
             for (final var tombstoneVersion : fs.tombstones().read(dbName, collName).values()) {
                 highest = Math.max(highest, tombstoneVersion);
             }

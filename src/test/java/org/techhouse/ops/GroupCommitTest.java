@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.IntFunction;
@@ -22,6 +23,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -268,5 +270,50 @@ public class GroupCommitTest {
             throw new IllegalStateException("triggers file unreadable");
         }));
         assertTrue(GroupCommit.groupable(() -> true));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, ?> queues() throws Exception {
+        final var field = GroupCommit.class.getDeclaredField("queues");
+        field.setAccessible(true);
+        return (Map<String, ?>) field.get(null);
+    }
+
+    @Test
+    public void test_a_dropped_collection_leaves_no_queue() throws Exception {
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(queues().containsKey(collId), "the seed save queued itself");
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL)).getStatus());
+        assertFalse(queues().containsKey(collId));
+
+        GroupCommit.queuedFor(TestGlobals.DB, "other_coll");
+        GroupCommit.queuedFor("other_db", TestGlobals.COLL);
+        DroppedCollections.forgetDatabase(TestGlobals.DB);
+        assertFalse(queues().containsKey(Cache.getCollectionIdentifier(TestGlobals.DB, "other_coll")));
+        assertTrue(queues().containsKey(Cache.getCollectionIdentifier("other_db", TestGlobals.COLL)));
+        GroupCommit.forgetDatabase("other_db");
+        assertFalse(queues().containsKey(Cache.getCollectionIdentifier("other_db", TestGlobals.COLL)));
+    }
+
+    @Test
+    public void test_a_writer_queued_when_its_queue_is_forgotten_is_served() throws Exception {
+        final OperationResponse[] response = new OperationResponse[1];
+        final Thread writer;
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            writer = Thread.ofVirtual().start(() -> response[0] = save("late", "v"));
+            awaitQueued(1);
+            GroupCommit.forget(TestGlobals.DB, TestGlobals.COLL);
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+        writer.join(WAIT_MS);
+
+        assertFalse(writer.isAlive(), "the writer served itself from the queue it held");
+        assertEquals(OperationStatus.OK, response[0].getStatus());
+        assertEquals("v", valueOf("late"));
+        assertEquals(0, GroupCommit.queuedFor(TestGlobals.DB, TestGlobals.COLL));
     }
 }

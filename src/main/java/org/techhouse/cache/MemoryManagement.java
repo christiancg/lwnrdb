@@ -62,6 +62,14 @@ public class MemoryManagement {
         usageTracker.putCounter(counter);
     }
 
+    public void forgetUsage(String dbName, String collName) {
+        usageTracker.forgetCollection(dbName, collName);
+    }
+
+    public void forgetDatabaseUsage(String dbName) {
+        usageTracker.forgetDatabase(dbName);
+    }
+
     public void loadProfileFromAdmin() {
         usageTracker.loadProfileFromAdmin();
     }

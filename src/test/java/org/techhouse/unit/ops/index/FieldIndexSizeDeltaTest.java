@@ -103,7 +103,7 @@ public class FieldIndexSizeDeltaTest {
                 }
                 final var delta = CacheSizeEstimator.estimateFieldIndexSize(list) - measuredBefore.get(identifier);
                 final var count = list.size();
-                final var expected = count * ((rememberedBefore.get(identifier) + delta) / count);
+                final var expected = count * (Math.max(0L, rememberedBefore.get(identifier) + delta) / count);
                 assertEquals(expected, rememberedAfter.get(identifier), identifier + " after batch " + batch);
                 checked++;
             }

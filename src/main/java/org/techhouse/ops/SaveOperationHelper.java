@@ -107,8 +107,8 @@ public final class SaveOperationHelper {
             final var previousLength = idxEntry.getLength();
             pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
             savedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
-                    pendingGeneration,
-                    () -> fs.updateFromCollection(entry, idxEntry, encodedLine, placement, primaryKeyIndex));
+                    pendingGeneration, () -> fs.updateFromCollection(entry, idxEntry, encodedLine, placement,
+                            primaryKeyIndex, cache.pageOccupancy(dbName, collName)));
             cache.updatePageSizeForUpdateInMemory(dbName, collName, savedPkIndexEntry.getPage(),
                     savedPkIndexEntry.getLength() - previousLength);
             eventType = EventType.UPDATED;
@@ -362,11 +362,13 @@ public final class SaveOperationHelper {
         final PkIndexEntry relocatedPkIndexEntry;
         try {
             relocatedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
-                    deleteGeneration, () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex));
+                    deleteGeneration, () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex,
+                            cache.pageOccupancy(dbName, collName)));
         } catch (Exception e) {
             pendingIndexWrites.clear(dbName, collName, entry.get_id(), createGeneration);
             throw e;
         }
+        cache.updatePageSizeInMemory(dbName, collName, idxEntry.getPage(), -idxEntry.getLength(), -1);
         cache.evictEntry(dbName, collName, entry.get_id());
         submit(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
                 CollectionIncarnation.current(dbName, collName), deleteGeneration), followOn);

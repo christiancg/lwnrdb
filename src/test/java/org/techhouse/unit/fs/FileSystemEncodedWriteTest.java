@@ -102,7 +102,7 @@ public class FileSystemEncodedWriteTest extends FileSystemTestBase {
 
         final var source = indexed("bulk-2");
         final var relocated = document("bulk-2", "moved", 1L);
-        fs.relocate(relocated, source, 1L, relocated.encodeLine(), resident());
+        fs.relocate(relocated, source, 1L, relocated.encodeLine(), resident(), null);
         expectRemovedFromFirstPage("bulk-2");
         expectAppended(1L, "bulk-2", "moved");
         assertPagesAsLegacy();

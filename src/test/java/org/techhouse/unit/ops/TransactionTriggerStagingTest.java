@@ -25,18 +25,20 @@ import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.TriggerRunLog;
-import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 
 public class TransactionTriggerStagingTest {
+    private static final String CLEAR_LOCAL_COMMIT = "clearLocalCommit";
     private static final String TRIGGER = "t";
     private static final String DOC_ID = "tx-doc";
     private static final String OTHER_COLL = "other-staging";
@@ -101,16 +103,21 @@ public class TransactionTriggerStagingTest {
     @Test
     public void test_trigger_runs_are_recorded_before_the_commit_marker_is_cleared() {
         final var clientId = transactionSavingOneDocument();
+        final var txId = transactionIdOf(clientId);
         final var calls = new CopyOnWriteArrayList<String>();
 
-        try (var ignoredCommitLog = mockStatic(TxCommitLog.class, recordingInto(calls));
-                var ignoredRunLog = mockStatic(TriggerRunLog.class, recordingInto(calls))) {
+        try (var ignoredAdmin = mockStatic(AdminOperationHelper.class, invocation -> {
+            calls.add(TransactionRecordCalls.clearsLocalCommit(invocation, txId)
+                    ? CLEAR_LOCAL_COMMIT
+                    : invocation.getMethod().getName());
+            return invocation.callRealMethod();
+        }); var ignoredRunLog = mockStatic(TriggerRunLog.class, recordingInto(calls))) {
             assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
         }
 
         final var recorded = calls.indexOf("recordDeterministic");
         assertTrue(recorded >= 0, "the commit recorded no trigger run: " + calls);
-        assertTrue(recorded < calls.indexOf("clearLocalCommit"),
+        assertTrue(recorded < calls.indexOf(CLEAR_LOCAL_COMMIT),
                 "the run must be durable before the evidence that would replay the commit is gone: " + calls);
     }
 
@@ -130,8 +137,8 @@ public class TransactionTriggerStagingTest {
         final var txId = transactionIdOf(clientId);
         final var failuresLeft = new AtomicInteger(1);
 
-        try (var ignored = mockStatic(TxCommitLog.class, invocation -> {
-            if ("clearLocalCommit".equals(invocation.getMethod().getName()) && failuresLeft.getAndDecrement() > 0) {
+        try (var ignored = mockStatic(AdminOperationHelper.class, invocation -> {
+            if (TransactionRecordCalls.clearsLocalCommit(invocation, txId) && failuresLeft.getAndDecrement() > 0) {
                 throw new IOException("killed after staging");
             }
             return invocation.callRealMethod();

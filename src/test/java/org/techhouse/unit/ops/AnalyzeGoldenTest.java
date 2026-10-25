@@ -160,6 +160,12 @@ public class AnalyzeGoldenTest {
     }
 
     @Test
+    public void anIndexFilterWithALimit() {
+        assertEquals("scanned=8 indexes=[n] locks=[myDb|analyzeGolden, myDb|analyzeGolden|n]",
+                analyzed(field(FieldOperatorType.EQUALS, "n", new JsonNumber(1)), new LimitAggregationStep(1)));
+    }
+
+    @Test
     public void aFullScanFilter() {
         assertEquals("scanned=7 indexes=[] locks=[myDb|analyzeGolden]",
                 analyzed(field(FieldOperatorType.EQUALS, "missing", new JsonNumber(1))));

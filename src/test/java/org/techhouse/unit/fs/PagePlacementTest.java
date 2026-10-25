@@ -44,4 +44,30 @@ public class PagePlacementTest {
         assertFalse(PagePlacement.acceptsInsert(901, 901, 100, MAX), "no live room");
         assertFalse(PagePlacement.acceptsInsert(751, 1000, 100, MAX));
     }
+
+    @Test
+    public void test_accepts_insert_implies_live_bytes_admit() {
+        for (var live = 0L; live <= MAX + 100; live += 37) {
+            for (var file = 0L; file <= MAX + 100; file += 41) {
+                for (var inserted = 1L; inserted <= 400; inserted += 53) {
+                    if (PagePlacement.acceptsInsert(live, file, inserted, MAX)) {
+                        assertTrue(PagePlacement.liveBytesAdmit(live, inserted, MAX),
+                                live + "/" + file + "/" + inserted);
+                    }
+                }
+            }
+        }
+        assertTrue(PagePlacement.liveBytesAdmit(900, 100, MAX));
+        assertFalse(PagePlacement.liveBytesAdmit(901, 100, MAX));
+    }
+
+    @Test
+    public void test_vacuums_after_delete() {
+        assertTrue(PagePlacement.vacuumsAfterDelete(750, 1000, MAX), "a quarter page dead");
+        assertFalse(PagePlacement.vacuumsAfterDelete(751, 1000, MAX), "less than a quarter page dead");
+        assertTrue(PagePlacement.vacuumsAfterDelete(0, 30, MAX), "an emptied page always goes");
+        assertTrue(PagePlacement.vacuumsAfterDelete(-5, 30, MAX), "a stale count still empties the page");
+        assertFalse(PagePlacement.vacuumsAfterDelete(0, 0, MAX), "an empty file has nothing to give back");
+        assertTrue(PagePlacement.vacuumsAfterDelete(900, 1400, MAX), "a page grown past the cap");
+    }
 }

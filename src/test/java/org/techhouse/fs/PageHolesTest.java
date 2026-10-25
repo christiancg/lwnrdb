@@ -86,7 +86,7 @@ public class PageHolesTest {
     public void adoptionSkipsHoles() throws IOException {
         blank("c");
 
-        final var adopted = OrphanedPageRecords.adoptAll(fx.paths, fx.store, DB, COLL, List.of(0L));
+        final var adopted = OrphanedPageRecords.adoptAll(fx.paths, new PkRowsSession(fx.store, DB, COLL), List.of(0L));
 
         assertTrue(adopted.isEmpty(), "a hole past the last indexed record is not an orphan");
         assertEquals(List.of("a", "b"), fx.indexedRows().stream().map(PkIndexEntry::getValue).toList());

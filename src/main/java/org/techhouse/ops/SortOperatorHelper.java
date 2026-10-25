@@ -132,8 +132,8 @@ public final class SortOperatorHelper {
         return fetchInOrder(orderedIds.iterator(), dbName, collName, bound, context);
     }
 
-    private static Stream<JsonObject> fetchInOrder(Iterator<String> orderedIds, String dbName, String collName,
-            long bound, PipelineContext context) {
+    static Stream<JsonObject> fetchInOrder(Iterator<String> orderedIds, String dbName, String collName, long bound,
+            PipelineContext context) {
         final var chunks = Spliterators.spliteratorUnknownSize(chunkIterator(orderedIds, firstChunkSize(bound)),
                 Spliterator.ORDERED);
         return StreamSupport.stream(chunks, false).flatMap(chunk -> fetchChunk(chunk, dbName, collName, context));

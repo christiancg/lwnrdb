@@ -561,14 +561,26 @@ ACTIVE, and nothing at all is NONE. One table (`ops/tx/SliceStateMachine`) maps 
 | ABORTED | `409-13` | `409-13` | `409-13` | recorded reply | vote no | `ERROR` | ack |
 
 Every commit path — the local commit, the single-owner fast path, a 2PC participant on `COMMIT_TX`, the
-coordinator's own slice, a startup or recovery replay — runs the same procedure (`ops/tx/SliceCommit`): write
-`|localcommit` (deleting `|part`), apply the ops, stage the triggers, record the outcome where a peer may ask for it,
-clear `|localcommit`, discard the ops, replicate. A failed apply leaves the slice COMMITTING with its locks held.
+coordinator's own slice, a startup or recovery replay — runs the same procedure (`ops/tx/SliceCommit`): one begin
+record writes `|localcommit`, deletes `|part` and, for a slice whose ops are still only in memory, carries those ops
+too; then apply the ops, stage the triggers, and one finish record writes the outcome where a peer may ask for it and
+deletes `|part`, `|localcommit` and the ops together; then replicate. A failed apply leaves the slice COMMITTING with
+its locks held, and so does a finish record that did not land. Each record is one write-ahead-log append of
+`admin/transactions` (`AdminOperationHelper.writeTransactionRecords`), so no crash leaves half of it.
+
+Buffered ops stay in the edge's or participant's memory until the first durable marker: the begin record of a local
+commit, or the PREPARED record (`[+ops, +|part]`) of a 2PC participant. A transaction rolled back, refused or
+abandoned before then never touched the disk, and a crash before then leaves nothing to sweep. Ops above 4 MB go out
+as their own records first, the marker riding the last one; a crash between them leaves ops with no marker, which the
+startup orphan sweep removes.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
 2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
-it still owns every collection it buffered, and durably recording a PREPARED marker), then — on a unanimous yes — the coordinator
-**durably records the commit decision** and drives `COMMIT_TX` to all. Any no vote or
+it still owns every collection it buffered, and durably recording its ops and a PREPARED marker in one record), then — on a unanimous yes — the coordinator
+**durably records the commit decision** and drives `COMMIT_TX` to all. A coordinator with a slice of its own records
+the decision in that slice's begin record (`[+|coord, +|localcommit, −|part]`), forced before any `COMMIT_TX` is
+sent; it drives the participants only once the decision is published, so a record that did not land answers
+`500-24` with nothing decided. Any no vote or
 unreachable participant drives `ABORT_TX` to all and returns `409-7 TRANSACTION_ABORTED`.
 Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own replicas.
 If the coordinator's own slice fails to apply, the edge keeps the transaction open and answers `409-10`. The slice is
@@ -587,9 +599,10 @@ participant's `TX_STATUS`, so all of them abort. On restart a prepared
 participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
 commit re-drives `COMMIT_TX`. A participant that received `COMMIT_TX` writes `|localcommit` before applying, so a
 crash mid-apply is finished from that marker at startup, or by the recovery sweep, without asking anyone; `TX_STATUS`
-reports COMMITTING as committed. A crash between writing `|localcommit` and deleting `|part` leaves both, so
-finishing the slice deletes `|part` too: one left behind was listed in doubt forever, and once the outcome marker was
-garbage-collected recovery could read it as PREPARED and record a committed transaction as aborted. The coordinator step of the
+reports COMMITTING as committed. Writing `|localcommit` and deleting `|part` are one record, and finishing the slice
+deletes any `|part` still there too: before they were one record a crash between them left both, one left behind was
+listed in doubt forever, and once the outcome marker was garbage-collected recovery could read it as PREPARED and
+record a committed transaction as aborted. The coordinator step of the
 recovery sweep skips a decision a live commit is still driving, so it never sends a second `COMMIT_TX` whose
 acknowledgement could be taken for the commit's own.
 

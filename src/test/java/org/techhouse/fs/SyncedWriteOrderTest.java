@@ -148,14 +148,19 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
-    public void test_a_vacuum_checkpoints_before_and_after() throws Exception {
+    public void test_a_vacuum_forces_only_its_page_before_the_barrier() throws Exception {
+        rf.fx.seed(1, "x");
+        rf.replace("x", "new-x", 1, PagePlacement.APPEND);
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
         recorder.clear();
 
         rf.vacuum.vacuumIfNeeded(DB, COLL, 0, 10, PagePlacement.VACUUM_THEN_APPEND, null);
 
-        assertInOrder(recorder.forcedNames(), PAGE, WAL + ".repair", INTENTS,
-                COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, WAL, WAL + ".repair");
+        assertEquals(List.of(PAGE, WAL, INTENTS, COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, WAL),
+                filesOnly(recorder.forcedNames()),
+                "the page is forced before REWRITE_BEGIN, the temp file before the rename, and the log once more"
+                        + " for REWRITE_END and the moved rows; page 1, pk.idx and a log rewrite are never forced");
+        assertInOrder(recorder.forcedNames(), COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, COLL, WAL);
     }
 
     @Test

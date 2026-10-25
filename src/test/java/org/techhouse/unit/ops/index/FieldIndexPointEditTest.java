@@ -2,12 +2,11 @@ package org.techhouse.unit.ops.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
@@ -21,7 +20,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.ChunkedList;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IdSet;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
@@ -30,7 +31,7 @@ import org.techhouse.utils.ReflectionUtils;
 public class FieldIndexPointEditTest {
     private static final String FIELD = "price";
     private static final int DOCUMENTS = 10_000;
-    private static final int POINT_EDIT_LIMIT = 64;
+    private static final int CHUNKED_POINT_EDIT_LIMIT = 1024;
     private static final Map<String, Integer> SCANS = new ConcurrentHashMap<>();
     private final Cache cache = IocContainer.get(Cache.class);
     private FieldIndexBatchSupport support;
@@ -139,9 +140,30 @@ public class FieldIndexPointEditTest {
     }
 
     @Test
+    public void test_an_admitted_index_is_chunked_and_holds_compact_id_sets() throws Exception {
+        assertInstanceOf(ChunkedList.class, residentIndex());
+        support.put(idOf(15), new JsonNumber(DOCUMENTS + 3));
+        support.applyBatchHoldingTheCollection(FIELD, List.of(idOf(15)));
+        assertTrue(residentIndex().stream().allMatch(entry -> entry.getIds() instanceof IdSet));
+    }
+
+    @Test
+    public void test_a_batch_past_the_array_limit_still_edits_a_chunked_list_in_place() throws Exception {
+        final var counting = countingResidentIndex();
+        final var ids = IntStream.range(100, 300).mapToObj(FieldIndexPointEditTest::idOf).toList();
+        ids.forEach(id -> support.put(id, new JsonNumber(valueOf(id) + 0.75)));
+
+        support.applyBatchHoldingTheCollection(FIELD, ids);
+
+        assertSame(counting, residentIndex());
+        assertEquals(Map.of(), SCANS);
+        assertNull(support.residentMismatch(FIELD));
+    }
+
+    @Test
     public void test_large_batch_merges_by_binary_search_and_keeps_the_list_object() throws Exception {
         final var counting = countingResidentIndex();
-        final var ids = IntStream.range(100, 100 + POINT_EDIT_LIMIT * 2).mapToObj(FieldIndexPointEditTest::idOf)
+        final var ids = IntStream.range(100, 100 + CHUNKED_POINT_EDIT_LIMIT).mapToObj(FieldIndexPointEditTest::idOf)
                 .toList();
         ids.forEach(id -> support.put(id, new JsonNumber(valueOf(id) + 0.25)));
 
@@ -152,9 +174,9 @@ public class FieldIndexPointEditTest {
         assertNull(support.residentMismatch(FIELD));
     }
 
-    private static final class ScanCountingIndex extends ArrayList<FieldIndexEntry<?>> {
-        ScanCountingIndex(Collection<FieldIndexEntry<?>> entries) {
-            super(entries);
+    private static final class ScanCountingIndex extends ChunkedList<FieldIndexEntry<?>> {
+        ScanCountingIndex(List<FieldIndexEntry<?>> entries) {
+            fill(entries);
         }
 
         @Override
@@ -190,6 +212,7 @@ public class FieldIndexPointEditTest {
         }
 
         @Override
+        @SuppressWarnings("NullableProblems")
         public boolean removeIf(Predicate<? super FieldIndexEntry<?>> filter) {
             SCANS.merge("removeIf", 1, Integer::sum);
             return super.removeIf(filter);

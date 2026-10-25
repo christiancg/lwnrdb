@@ -89,7 +89,7 @@ public class UserCache {
         final var primaryKeyIndex = pkIndexMap
                 .get(Cache.getCollectionIdentifier(vacuumed.dbName(), vacuumed.collName()));
         if (primaryKeyIndex != null) {
-            vacuumed.reposition(primaryKeyIndex);
+            vacuumed.reposition(id -> PkIndexList.rowOf(primaryKeyIndex, id));
         }
     }
 
@@ -142,7 +142,7 @@ public class UserCache {
     public void admitMaintainedFieldIndex(String dbName, String collName, String indexIdentifier,
             List<FieldIndexEntry<?>> written) {
         if (rl.holdsCollectionLock(dbName, collName) && residentFieldIndex(dbName, collName, indexIdentifier) == null) {
-            admitFieldIndex(dbName, collName, indexIdentifier, written);
+            admitFieldIndex(dbName, collName, indexIdentifier, ChunkedList.copyOf(written));
         }
     }
 
@@ -197,7 +197,7 @@ public class UserCache {
         }
         final var indexEntries = loader.load();
         if (indexEntries != null && rl.holdsCollectionLock(dbName, collName)) {
-            admitFieldIndex(dbName, collName, indexIdentifier, new ArrayList<>(indexEntries));
+            admitFieldIndex(dbName, collName, indexIdentifier, ChunkedList.copyOf(indexEntries));
         }
         return indexEntries;
     }
@@ -316,7 +316,9 @@ public class UserCache {
 
     public Map<String, DbEntry> admitWholeCollection(String dbName, String collName, Map<String, DbEntry> loaded) {
         if (!isCachingDisabled(dbName)) {
-            final var asMap = new ConcurrentHashMap<>(loaded);
+            final var asMap = loaded instanceof ConcurrentHashMap<String, DbEntry> concurrent
+                    ? concurrent
+                    : new ConcurrentHashMap<>(loaded);
             final var size = CacheSizeEstimator.estimateCollectionSize(asMap);
             if (shouldCache(dbName, () -> size)) {
                 final var collId = Cache.getCollectionIdentifier(dbName, collName);

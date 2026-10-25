@@ -102,7 +102,9 @@ public final class ClusterWriteHelper {
         if (!coordinator.stillOwns(dbName, collName)) {
             return new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
         }
-        faultInjector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, Cache.getCollectionIdentifier(dbName, collName));
+        final var subject = Cache.getCollectionIdentifier(dbName, collName);
+        faultInjector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, subject);
+        faultInjector.at(FaultPoint.WRITE_OWNER_PROBED, subject);
         return CollectionReadinessGuard.check(type, dbName, collName);
     }
 }

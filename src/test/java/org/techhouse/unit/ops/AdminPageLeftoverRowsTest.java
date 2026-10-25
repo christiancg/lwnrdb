@@ -30,6 +30,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
+import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
@@ -295,6 +296,7 @@ public class AdminPageLeftoverRowsTest {
         for (var i = 0; i < DELTA_COLLECTIONS; i++) {
             AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, DELTA_PREFIX + i));
         }
+        PageRowWriteBack.flushAll();
         cache.loadAdminData();
     }
 

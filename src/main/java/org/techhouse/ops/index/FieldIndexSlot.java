@@ -6,7 +6,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,8 +13,10 @@ import java.util.Map;
 import java.util.Set;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheSizeEstimator;
+import org.techhouse.cache.ChunkedList;
 import org.techhouse.cache.FieldIndexLookup;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IdSet;
 import org.techhouse.data.IndexKind;
 import org.techhouse.fs.FieldIndexLoader;
 import org.techhouse.fs.FileSystem;
@@ -24,6 +25,7 @@ import org.techhouse.ioc.IocContainer;
 
 final class FieldIndexSlot {
     static final int POINT_EDIT_LIMIT = 64;
+    static final int CHUNKED_POINT_EDIT_LIMIT = 1024;
     private static final int CREATED_IN_BATCH = -1;
     private static final Cache cache = IocContainer.get(Cache.class);
     @SuppressWarnings("FieldMayBeFinal")
@@ -158,7 +160,7 @@ final class FieldIndexSlot {
     FieldIndexEntry<Object> addId(String id, String key, Object value, FieldIndexEntry<Object> found) {
         var entry = found;
         if (entry == null) {
-            entry = new FieldIndexEntry<>(dbName, collName, value, new HashSet<>());
+            entry = new FieldIndexEntry<>(dbName, collName, value, new IdSet());
             created.put(key, entry);
             if (resident != null) {
                 touched.put(entry, CREATED_IN_BATCH);
@@ -242,7 +244,7 @@ final class FieldIndexSlot {
                 added.add(entry);
             }
         }
-        if (removed.size() + added.size() > POINT_EDIT_LIMIT) {
+        if (removed.size() + added.size() > pointEditLimit()) {
             mergeInOnePass(removed, added);
             return;
         }
@@ -253,6 +255,10 @@ final class FieldIndexSlot {
             final var at = Collections.binarySearch(entries, entry, order);
             entries.add(at < 0 ? -at - 1 : at, entry);
         }
+    }
+
+    private int pointEditLimit() {
+        return entries instanceof ChunkedList ? CHUNKED_POINT_EDIT_LIMIT : POINT_EDIT_LIMIT;
     }
 
     private void removeExact(FieldIndexEntry<Object> entry) {

@@ -39,6 +39,7 @@ public final class PageOccupancyReconciler {
 
     public static void reconcileAll() {
         healAdminPageTails();
+        reconcileAdminRows();
         for (final var dbEntry : List.copyOf(cache.getAllAdminDbEntries())) {
             for (final var collName : cache.getCollectionNamesForDatabase(dbEntry.get_id())) {
                 reconcileQuietly(dbEntry.get_id(), collName);
@@ -119,6 +120,50 @@ public final class PageOccupancyReconciler {
         }
     }
 
+    private static void reconcileAdminRows() {
+        for (final var collName : Globals.ADMIN_COLLECTION_NAMES) {
+            try {
+                if (reconcileAdminRows(collName)) {
+                    logger.warning("Rebuilt the page-occupancy metadata of " + Globals.ADMIN_DB_NAME + "|" + collName
+                            + " from its page files: they are written back, so an unclean stop leaves them behind");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception e) {
+                logger.warning("Could not reconcile the page-occupancy metadata of " + Globals.ADMIN_DB_NAME + "|"
+                        + collName + ": " + e.getMessage());
+            }
+        }
+    }
+
+    public static boolean reconcileAdminRows(String collName) throws Exception {
+        final var dbName = Globals.ADMIN_DB_NAME;
+        final var pages = fs.pageFileLengths(dbName, collName).keySet();
+        final var occupancy = occupancyByPage(fs.readWholePkIndexFile(dbName, collName));
+        final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
+        if (agreesWithLiveBytes(rows, pages, occupancy) && countsAgree(rows, occupancy)) {
+            return false;
+        }
+        replaceRows(dbName, collName, pages, occupancy, rows);
+        return true;
+    }
+
+    private static boolean countsAgree(Map<Long, AdminPageEntry> rows, Map<Long, long[]> occupancy) {
+        for (final var live : occupancy.entrySet()) {
+            final var row = rows.get(live.getKey());
+            if ((row == null ? 0L : row.getEntryCount()) != live.getValue()[ENTRY_COUNT]) {
+                return false;
+            }
+        }
+        for (final var row : rows.values()) {
+            if (row.getEntryCount() != occupancy.getOrDefault(row.getPage(), NOTHING_LIVE)[ENTRY_COUNT]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static String pageRowCollectionOf(String dbName, String collName) {
         return AdminPageEntry.pagesCollectionName(dbName, collName);
     }
@@ -147,20 +192,22 @@ public final class PageOccupancyReconciler {
 
     public static boolean reconcile(String dbName, String collName) throws Exception {
         fs.healTornPageTails(Globals.ADMIN_PAGES_DB_NAME, pageRowCollectionOf(dbName, collName));
-        fs.healTornPageTails(dbName, collName);
-        final var retired = fs.retireDanglingPkEntries(dbName, collName);
+        final var session = fs.pkRowsSession(dbName, collName);
+        fs.healTornPageTails(session);
+        final var retired = fs.retireDanglingPkEntries(session);
         if (!retired.isEmpty()) {
-            fs.healTornPageTails(dbName, collName);
+            fs.healTornPageTails(session);
             scheduleIndexCleanupFor(retired);
         }
-        final var adopted = fs.adoptOrphanedRecords(dbName, collName);
+        final var adopted = fs.adoptOrphanedRecords(session);
         if (!adopted.isEmpty()) {
             scheduleIndexMaintenanceFor(dbName, collName, adopted);
         }
         final var pages = fs.pageFileLengths(dbName, collName).keySet();
-        final var occupancy = occupancyByPage(dbName, collName);
+        final var occupancy = occupancyByPage(session.rows());
         final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
-        if (adopted.isEmpty() && retired.isEmpty() && agreesWithLiveBytes(rows, pages, occupancy)) {
+        if (adopted.isEmpty() && retired.isEmpty() && agreesWithLiveBytes(rows, pages, occupancy)
+                && countsAgree(rows, occupancy)) {
             return false;
         }
         replaceRows(dbName, collName, pages, occupancy, rows);
@@ -168,7 +215,8 @@ public final class PageOccupancyReconciler {
     }
 
     public static void rebuildRows(String dbName, String collName) throws Exception {
-        replaceRows(dbName, collName, fs.pageFileLengths(dbName, collName).keySet(), occupancyByPage(dbName, collName),
+        replaceRows(dbName, collName, fs.pageFileLengths(dbName, collName).keySet(),
+                occupancyByPage(fs.readWholePkIndexFile(dbName, collName)),
                 rowsByPage(cache.getAdminPageEntries(dbName, collName)));
     }
 
@@ -228,9 +276,9 @@ public final class PageOccupancyReconciler {
         return true;
     }
 
-    private static Map<Long, long[]> occupancyByPage(String dbName, String collName) throws Exception {
+    private static Map<Long, long[]> occupancyByPage(List<PkIndexEntry> pkRows) {
         final var occupancy = new HashMap<Long, long[]>();
-        for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
+        for (final var pkEntry : pkRows) {
             final var live = occupancy.computeIfAbsent(pkEntry.getPage(), _ -> new long[2]);
             live[ENTRY_COUNT]++;
             live[LIVE_BYTES] += pkEntry.getLength();

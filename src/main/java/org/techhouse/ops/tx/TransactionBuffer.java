@@ -17,7 +17,6 @@ import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.BulkBeforeHooks;
 import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
@@ -42,7 +41,7 @@ public final class TransactionBuffer {
     private TransactionBuffer() {
     }
 
-    public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {
+    public static void bufferTriggerRunConsume(Transaction transaction, String runId) {
         final var payload = new JsonObject();
         payload.addProperty(AdminTransactionEntry.TRIGGER_RUN_ID_FIELD, runId);
         bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN, "", "", payload, List.of(),
@@ -198,15 +197,14 @@ public final class TransactionBuffer {
     }
 
     private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
-            JsonObject payload, List<String> insertedIds, List<Long> versions, long bytes) throws Exception {
+            JsonObject payload, List<String> insertedIds, List<Long> versions, long bytes) {
         final var seq = transaction.nextSeq();
         final var opEntry = new AdminTransactionEntry(transaction.getTransactionId().toString(),
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
         opEntry.setTriggerContext(insertedIds, clientTracker.getAuthenticatedUsername(transaction.getClientId()),
                 transaction.getTriggerDepth());
         opEntry.setVersions(versions);
-        AdminOperationHelper.saveTransactionOp(opEntry);
-        transaction.addBufferedOpId(opEntry.get_id());
+        transaction.addPendingOp(opEntry);
         transaction.accountBuffered(versions.size(), bytes);
         return seq;
     }

@@ -64,12 +64,16 @@ public class PageRowWriteBackTest {
     }
 
     private static void created(String collName, String id, long page) throws Exception {
-        event(EventType.CREATED, collName, id, page);
+        EventProcessorHelper.processEvent(new EntityEvent(EventType.CREATED, TestGlobals.DB, collName,
+                entryOnPage(collName, id, page), CollectionIncarnation.current(TestGlobals.DB, collName)));
     }
 
-    private static void event(EventType type, String collName, String id, long page) throws Exception {
-        EventProcessorHelper.processEvent(new EntityEvent(type, TestGlobals.DB, collName,
-                entryOnPage(collName, id, page), CollectionIncarnation.current(TestGlobals.DB, collName)));
+    private static void deleteFirstOnPageZero() throws Exception {
+        final var entry = entryOnPage(TestGlobals.COLL, "a", 0);
+        IocContainer.get(Cache.class).updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, -entry.byteSize(),
+                -1);
+        EventProcessorHelper.processEvent(new EntityEvent(EventType.DELETED, TestGlobals.DB, TestGlobals.COLL, entry,
+                CollectionIncarnation.current(TestGlobals.DB, TestGlobals.COLL)));
     }
 
     private Map<Long, Integer> rowsOnDisk(String collName) throws IOException {
@@ -109,7 +113,7 @@ public class PageRowWriteBackTest {
     public void test_rows_dirty_past_the_interval_are_written_once() throws Exception {
         created(TestGlobals.COLL, "a", 0);
         created(TestGlobals.COLL, "c", 2);
-        event(EventType.DELETED, TestGlobals.COLL, "a", 0);
+        deleteFirstOnPageZero();
         final var now = System.currentTimeMillis();
 
         PageRowWriteBack.flushDue(now - Globals.PAGE_ROWS_WRITE_BACK_MS);
@@ -128,7 +132,7 @@ public class PageRowWriteBackTest {
     public void test_a_later_change_updates_the_row_written_before() throws Exception {
         created(TestGlobals.COLL, "a", 0);
         PageRowWriteBack.flushAll();
-        event(EventType.DELETED, TestGlobals.COLL, "a", 0);
+        deleteFirstOnPageZero();
 
         PageRowWriteBack.flushAll();
 
@@ -183,12 +187,16 @@ public class PageRowWriteBackTest {
     }
 
     @Test
-    public void test_admin_collections_still_write_through() {
+    public void test_admin_collection_rows_are_written_back() {
+        PageRowWriteBack.flushAll();
         recorder.clear();
 
         AdminPageHelper.recordLandedDelta(Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.CREATED,
                 List.of(entryOnPage(Globals.ADMIN_DATABASES_COLLECTION_NAME, "landed", 0)));
 
+        assertFalse(pageRowsForced(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME),
+                recorder.forcedNames().toString());
+        PageRowWriteBack.flushAll();
         assertTrue(pageRowsForced(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME),
                 recorder.forcedNames().toString());
     }

@@ -166,7 +166,7 @@ public final class AggregationOperationHelper {
         return reduceIndex > 0 && !ResultHasher.ordersResults(steps.subList(0, reduceIndex));
     }
 
-    private static long sortBound(List<BaseAggregationStep> steps, int sortIndex) {
+    static long sortBound(List<BaseAggregationStep> steps, int sortIndex) {
         final var next = stepAt(steps, sortIndex + 1);
         if (next instanceof LimitAggregationStep limitStep) {
             return limitStep.getLimit();

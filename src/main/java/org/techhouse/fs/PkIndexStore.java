@@ -7,6 +7,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +21,7 @@ import org.techhouse.log.Logger;
 final class PkIndexStore {
     private static final Logger logger = Logger.logFor(PkIndexStore.class);
     private static final long DELETED = -1L;
+    private static final int VERSION_SCAN_CHUNK = 1 << 20;
     private static final Map<String, PkFileState> fileStates = new ConcurrentHashMap<>();
 
     private final FilePaths paths;
@@ -184,6 +186,71 @@ final class PkIndexStore {
         return folded.unrecognised() ? Optional.empty() : Optional.of(folded.live());
     }
 
+    long highestVersion(String dbName, String collectionName) throws IOException {
+        final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        if (!indexFile.exists()) {
+            return 0L;
+        }
+        final var readLock = FileLocks.lockRead(indexFile);
+        try (var in = Files.newInputStream(indexFile.toPath())) {
+            final var scan = new VersionScan();
+            var buffer = new byte[VERSION_SCAN_CHUNK];
+            var filled = 0;
+            while (true) {
+                final var read = in.read(buffer, filled, buffer.length - filled);
+                if (read < 0) {
+                    break;
+                }
+                filled += read;
+                final var consumed = scan.lines(buffer, filled);
+                System.arraycopy(buffer, consumed, buffer, 0, filled - consumed);
+                filled -= consumed;
+                if (filled == buffer.length) {
+                    buffer = Arrays.copyOf(buffer, buffer.length * 2);
+                }
+            }
+            if (scan.malformed && scan.recognised == 0) {
+                throw new IOException("No line in " + indexFile.getName() + " could be read as a PK index entry");
+            }
+            return scan.highest;
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    private static final class VersionScan {
+        private long highest;
+        private long recognised;
+        private boolean malformed;
+
+        int lines(byte[] bytes, int filled) {
+            var start = 0;
+            for (var index = 0; index < filled; index++) {
+                if (bytes[index] == '\n' || bytes[index] == '\r') {
+                    line(bytes, start, index);
+                    start = index + 1;
+                }
+            }
+            return start;
+        }
+
+        private void line(byte[] bytes, int start, int end) {
+            if (end == start) {
+                return;
+            }
+            if (PkIndexEntry.isDeleteRow(bytes, start, end)) {
+                recognised++;
+                return;
+            }
+            try {
+                highest = Math.max(highest, PkIndexEntry.versionOf(bytes, start, end));
+                recognised++;
+            } catch (IllegalArgumentException e) {
+                malformed = true;
+            }
+        }
+    }
+
     private Folded readHealed(String dbName, String collectionName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
         if (!indexFile.exists()) {
@@ -321,5 +388,10 @@ final class PkIndexStore {
 
     static void forgetState(File indexFile) {
         forget(indexFile);
+    }
+
+    static void forgetUnder(File folder) {
+        final var prefix = folder.getAbsolutePath() + File.separator;
+        fileStates.keySet().removeIf(path -> path.startsWith(prefix));
     }
 }

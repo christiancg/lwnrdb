@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.fs.CheckpointGuard;
@@ -21,9 +23,11 @@ import org.techhouse.log.Logger;
  */
 public class PendingIndexWrites {
     private static final Logger logger = Logger.logFor(PendingIndexWrites.class);
+    private static final int MARKER_LOCK_STRIPES = 64;
     private final Map<String, Map<String, Integer>> pending = new ConcurrentHashMap<>();
-    private final Map<String, java.util.concurrent.locks.ReentrantLock> markerLocks = new ConcurrentHashMap<>();
-    private final Map<String, Long> generations = new ConcurrentHashMap<>();
+    private final ReentrantLock[] markerLocks = markerLockStripes();
+    private final AtomicLong epoch = new AtomicLong();
+    private final Map<String, Long> pins = new ConcurrentHashMap<>();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     private static final class PublishedSingletonGuard implements CheckpointGuard {
@@ -76,17 +80,17 @@ public class PendingIndexWrites {
 
     private long mark(String dbName, String collName, Iterable<String> ids, boolean unlogged) {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        final var byId = pending.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         final var markerLock = markerLockFor(collId);
         markerLock.lock();
         try {
+            final var byId = pending.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
             for (var id : ids) {
                 byId.merge(id, 1, Integer::sum);
             }
             if (unlogged) {
                 markDirty(dbName, collName);
             }
-            return generations.getOrDefault(collId, 0L);
+            return pins.computeIfAbsent(collId, _ -> epoch.get());
         } finally {
             markerLock.unlock();
         }
@@ -106,14 +110,12 @@ public class PendingIndexWrites {
     }
 
     private void clearIn(String dbName, String collName, String collId, String id, long generation) {
-        final var byId = pending.get(collId);
-        if (byId == null) {
-            return;
-        }
-        final var markerLock = markerLocks.computeIfAbsent(collId, _ -> new java.util.concurrent.locks.ReentrantLock());
+        final var markerLock = markerLockFor(collId);
         markerLock.lock();
         try {
-            if (generation < generations.getOrDefault(collId, 0L)) {
+            final var pin = pins.get(collId);
+            final var byId = pending.get(collId);
+            if (pin == null || generation < pin || byId == null) {
                 return;
             }
             byId.computeIfPresent(id, (_, current) -> current - 1 <= 0 ? null : current - 1);
@@ -137,11 +139,9 @@ public class PendingIndexWrites {
         final var markerLock = markerLockFor(collId);
         markerLock.lock();
         try {
-            generations.merge(collId, 1L, Long::sum);
-            final var byId = pending.get(collId);
-            if (byId != null) {
-                byId.clear();
-            }
+            epoch.incrementAndGet();
+            pins.remove(collId);
+            pending.remove(collId);
         } finally {
             markerLock.unlock();
         }
@@ -150,7 +150,7 @@ public class PendingIndexWrites {
     public void clearDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
         final var collIds = new HashSet<>(pending.keySet());
-        collIds.addAll(generations.keySet());
+        collIds.addAll(pins.keySet());
         for (final var collId : collIds) {
             if (collId.startsWith(prefix)) {
                 clearCollection(dbName, collId.substring(prefix.length()));
@@ -158,8 +158,16 @@ public class PendingIndexWrites {
         }
     }
 
-    private java.util.concurrent.locks.ReentrantLock markerLockFor(String collId) {
-        return markerLocks.computeIfAbsent(collId, _ -> new java.util.concurrent.locks.ReentrantLock());
+    private ReentrantLock markerLockFor(String collId) {
+        return markerLocks[Math.floorMod(collId.hashCode(), markerLocks.length)];
+    }
+
+    private static ReentrantLock[] markerLockStripes() {
+        final var stripes = new ReentrantLock[MARKER_LOCK_STRIPES];
+        for (var index = 0; index < MARKER_LOCK_STRIPES; index++) {
+            stripes[index] = new ReentrantLock();
+        }
+        return stripes;
     }
 
     public Set<String> idsFor(String dbName, String collName) {

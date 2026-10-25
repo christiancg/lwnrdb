@@ -2,13 +2,13 @@ package org.techhouse.cache;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.cache.heap.DocumentHeapSizer;
 import org.techhouse.cache.heap.HeapLayout;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IdSet;
 import org.techhouse.data.PkIndexEntry;
 
 public final class CacheSizeEstimator {
@@ -119,8 +119,8 @@ public final class CacheSizeEstimator {
     }
 
     public static long estimateFieldIndexSizeByCount(int entryCount, HeapLayout layout) {
-        final var singleIdEntry = fieldEntryOverhead(layout) + layout.presizedHashTableSize(1)
-                + idSize(TYPICAL_ID, layout) + layout.shallowSize(Double.class);
+        final var singleIdEntry = fieldEntryOverhead(layout) + idSlotsSize(1, layout) + idSize(TYPICAL_ID, layout)
+                + layout.shallowSize(Double.class);
         return entryCount * singleIdEntry;
     }
 
@@ -152,7 +152,11 @@ public final class CacheSizeEstimator {
 
     private static long fieldEntryShellSize(Object value, int idCount, HeapLayout layout) {
         return fieldEntryOverhead(layout) + DocumentHeapSizer.indexedValueSize(value, layout)
-                + layout.presizedHashTableSize(idCount);
+                + idSlotsSize(idCount, layout);
+    }
+
+    private static long idSlotsSize(int idCount, HeapLayout layout) {
+        return idCount == 0 ? 0L : layout.referenceArraySize(IdSet.slotsFor(idCount));
     }
 
     public static long fieldIndexIdSize(String id) {
@@ -170,11 +174,10 @@ public final class CacheSizeEstimator {
     }
 
     private static long fieldEntryOverhead(HeapLayout layout) {
-        return layout.referenceBytes() + layout.shallowSize(FieldIndexEntry.class) + layout.shallowSize(HashSet.class)
-                + layout.shallowSize(HashMap.class);
+        return layout.referenceBytes() + layout.shallowSize(FieldIndexEntry.class) + layout.shallowSize(IdSet.class);
     }
 
     private static long idSize(String id, HeapLayout layout) {
-        return layout.shallowSize(HASH_MAP_NODE) + layout.stringSize(id);
+        return layout.stringSize(id);
     }
 }

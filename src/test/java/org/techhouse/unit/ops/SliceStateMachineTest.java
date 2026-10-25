@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.Mockito;
+import org.mockito.stubbing.Answer;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ops.AdminOperationHelper;
@@ -24,6 +26,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
+import org.techhouse.ops.admin.TransactionRecords;
 import org.techhouse.ops.tx.SliceCommit;
 import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.ops.tx.SliceStateMachine.Action;
@@ -31,6 +34,7 @@ import org.techhouse.ops.tx.SliceStateMachine.Message;
 import org.techhouse.ops.tx.SliceStateMachine.State;
 import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TestUtils;
 
 public class SliceStateMachineTest extends VersionedReplaySupport {
     private static final String LOST = "409-13";
@@ -209,6 +213,45 @@ public class SliceStateMachineTest extends VersionedReplaySupport {
         assertNull(Tx2pcLog.readOutcome(silent.getTransactionId().toString()));
         assertFalse(TxCommitLog.isLocallyCommitted(recorded.getTransactionId().toString()));
         assertEquals("v", valueOf("recorded"));
+    }
+
+    @Test
+    public void test_status_answers_committed_while_finish_unpublishes() throws Exception {
+        final var transaction = newTransaction();
+        bufferSave(transaction, "unpublished", "v");
+        final var txId = transaction.getTransactionId().toString();
+        SliceCommit.begin(transaction);
+        markPrepared(txId);
+        final var ops = opsOf(transaction);
+        final var statuses = new ArrayList<String>();
+        final var spy = Mockito.spy(cache);
+        final Answer<Object> observing = invocation -> {
+            invocation.callRealMethod();
+            statuses.add(invocation.getMethod().getName() + "=" + Tx2pcLog.status(txId, null));
+            return null;
+        };
+        Mockito.doAnswer(observing).when(spy).putPkIndexTransaction(Mockito.any());
+        Mockito.doAnswer(observing).when(spy).removePkIndexTransaction(Mockito.anyString());
+        TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", spy);
+        try {
+            assertEquals(SliceCommit.Result.COMMITTED, SliceCommit.finish(transaction, ops, "admin", true));
+        } finally {
+            TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", cache);
+        }
+
+        assertEquals(2 + ops.size() + 1, statuses.size(), "outcome, part, localcommit and every op: " + statuses);
+        assertTrue(statuses.stream().allMatch(status -> status.endsWith("=COMMITTED")), statuses.toString());
+        assertTrue(statuses.getFirst().startsWith("putPkIndexTransaction"), "the outcome is published first");
+    }
+
+    @Test
+    public void test_unpublish_order_drops_part_then_localcommit_then_the_rest() {
+        final var txId = UUID.randomUUID().toString();
+        final var op = txId + "|0";
+        final var part = Tx2pcLog.participantMarkerId(txId);
+        final var localCommit = TxCommitLog.markerId(txId);
+
+        assertEquals(List.of(part, localCommit, op), TransactionRecords.unpublishOrder(List.of(op, localCommit, part)));
     }
 
     @Test

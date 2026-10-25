@@ -1,7 +1,6 @@
 package org.techhouse.ops.admin;
 
 import java.util.List;
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -14,6 +13,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.DroppedCollections;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
@@ -32,7 +32,6 @@ public final class CollectionOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
-    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
@@ -141,8 +140,7 @@ public final class CollectionOperationHelper {
             }
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
-                cache.evictCollection(dbName, collName);
-                pendingIndexWrites.clearCollection(dbName, collName);
+                DroppedCollections.forgetCollection(dbName, collName);
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);

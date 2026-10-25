@@ -3,8 +3,6 @@ package org.techhouse.unit.cache;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
@@ -14,6 +12,7 @@ import org.techhouse.cache.heap.DocumentHeapSizer;
 import org.techhouse.cache.heap.HeapLayout;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IdSet;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -24,7 +23,6 @@ public class CacheSizeEstimatorTest {
     private static final String COLL = "estimatorColl";
     private static final String TYPICAL_ID = "x".repeat(36);
     private static final long OLD_FLAT_FIELD_ENTRY_BYTES = 64L;
-    private static final Class<?> HASH_MAP_NODE = HeapLayout.jdkClass("java.util.HashMap$Node");
     private static final Class<?> CONCURRENT_HASH_MAP_NODE = HeapLayout
             .jdkClass("java.util.concurrent.ConcurrentHashMap$Node");
 
@@ -139,20 +137,19 @@ public class CacheSizeEstimatorTest {
     }
 
     private static long fieldEntryOverhead() {
-        return LAYOUT.referenceBytes() + LAYOUT.shallowSize(FieldIndexEntry.class) + LAYOUT.shallowSize(HashSet.class)
-                + LAYOUT.shallowSize(HashMap.class);
+        return LAYOUT.referenceBytes() + LAYOUT.shallowSize(FieldIndexEntry.class) + LAYOUT.shallowSize(IdSet.class);
     }
 
     @Test
     public void test_field_index_size_counts_ids_and_values() {
-        final var ids = HashSet.<String>newHashSet(2);
+        final var ids = new IdSet();
         ids.add("a1");
         ids.add("b2");
         final List<FieldIndexEntry<?>> entries = List.of(new FieldIndexEntry<>(DB, COLL, "red", ids),
                 new FieldIndexEntry<>(DB, COLL, 42.0, Set.of("c3")), new FieldIndexEntry<>(DB, COLL, true, null));
-        final var idCost = LAYOUT.shallowSize(HASH_MAP_NODE) + LAYOUT.stringSize("a1");
-        final var red = fieldEntryOverhead() + LAYOUT.stringSize("red") + LAYOUT.presizedHashTableSize(2) + 2 * idCost;
-        final var number = fieldEntryOverhead() + LAYOUT.shallowSize(Double.class) + LAYOUT.presizedHashTableSize(1)
+        final var idCost = LAYOUT.stringSize("a1");
+        final var red = fieldEntryOverhead() + LAYOUT.stringSize("red") + LAYOUT.referenceArraySize(2) + 2 * idCost;
+        final var number = fieldEntryOverhead() + LAYOUT.shallowSize(Double.class) + LAYOUT.referenceArraySize(1)
                 + idCost;
         final var bool = fieldEntryOverhead();
 
@@ -163,8 +160,8 @@ public class CacheSizeEstimatorTest {
 
     @Test
     public void test_field_index_count_fallback_uses_the_model_not_a_flat_constant() {
-        final var singleIdEntry = fieldEntryOverhead() + LAYOUT.presizedHashTableSize(1)
-                + LAYOUT.shallowSize(HASH_MAP_NODE) + LAYOUT.stringSize(TYPICAL_ID) + LAYOUT.shallowSize(Double.class);
+        final var singleIdEntry = fieldEntryOverhead() + LAYOUT.referenceArraySize(1) + LAYOUT.stringSize(TYPICAL_ID)
+                + LAYOUT.shallowSize(Double.class);
         assertEquals(3 * singleIdEntry, CacheSizeEstimator.estimateFieldIndexSizeByCount(3, LAYOUT));
         assertNotEquals(3 * OLD_FLAT_FIELD_ENTRY_BYTES, CacheSizeEstimator.estimateFieldIndexSizeByCount(3));
         assertEquals(0L, CacheSizeEstimator.estimateFieldIndexSizeByCount(0));
@@ -198,8 +195,8 @@ public class CacheSizeEstimatorTest {
 
     @Test
     public void test_shell_and_id_sizes_add_up_to_the_full_estimate() {
-        for (final var count : List.of(0, 1, 5_000)) {
-            final var ids = new HashSet<String>();
+        for (final var count : List.of(0, 1, 8, 9, 5_000)) {
+            final var ids = new IdSet();
             for (var i = 0; i < count; i++) {
                 ids.add("id-" + i);
             }
@@ -211,5 +208,19 @@ public class CacheSizeEstimatorTest {
 
             assertEquals(CacheSizeEstimator.estimateFieldIndexSize(List.of(entry)), pieces, count + " ids");
         }
+    }
+
+    @Test
+    public void test_an_id_set_is_charged_its_packed_array_or_its_open_table() {
+        final var current = HeapLayout.current();
+        final var shell = current.referenceBytes() + current.shallowSize(FieldIndexEntry.class)
+                + current.shallowSize(IdSet.class) + current.stringSize("v");
+        assertEquals(shell, CacheSizeEstimator.fieldEntryShellSize("v", 0));
+        assertEquals(shell + current.referenceArraySize(1), CacheSizeEstimator.fieldEntryShellSize("v", 1));
+        assertEquals(shell + current.referenceArraySize(IdSet.PACKED_LIMIT),
+                CacheSizeEstimator.fieldEntryShellSize("v", IdSet.PACKED_LIMIT));
+        assertEquals(shell + current.referenceArraySize(16), CacheSizeEstimator.fieldEntryShellSize("v", 9));
+        assertEquals(shell + current.referenceArraySize(32), CacheSizeEstimator.fieldEntryShellSize("v", 13));
+        assertEquals(current.stringSize("an-id"), CacheSizeEstimator.fieldIndexIdSize("an-id"));
     }
 }

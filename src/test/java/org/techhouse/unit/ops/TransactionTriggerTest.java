@@ -289,6 +289,7 @@ public class TransactionTriggerTest {
         final var txId = transaction.getTransactionId().toString();
         final var opIds = List.copyOf(transaction.getBufferedOpIds());
         final var collections = List.copyOf(transaction.getHeldLocks());
+        org.techhouse.test.TransactionRecordCalls.persistBufferedOps(transaction);
         org.techhouse.ops.TxCommitLog.recordLocalCommit(txId, opIds, collections);
         clientTracker.clearActiveTransaction(clientId);
         clientTracker.clearTransactionState(clientId);

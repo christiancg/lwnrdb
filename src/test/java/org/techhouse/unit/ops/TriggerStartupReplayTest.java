@@ -49,6 +49,7 @@ import org.techhouse.ops.tx.CommittedOpTriggers;
 import org.techhouse.ops.tx.TransactionRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerStartupReplayTest {
@@ -113,6 +114,7 @@ public class TriggerStartupReplayTest {
         request.setObject(document(id));
         request.set_id(id);
         TransactionOperationHelper.bufferSave(request, transaction);
+        TransactionRecordCalls.persistBufferedOps(transaction);
         final var txId = transaction.getTransactionId().toString();
         if (prepared) {
             Tx2pcLog.recordParticipantPrepared(txId, COORDINATOR, List.of(COORDINATOR), collections());
@@ -123,7 +125,7 @@ public class TriggerStartupReplayTest {
         assertTrue(TransactionRecovery.applyAllWithRetry(ops, txId, applier), "the slice's ops must apply");
         CommittedOpTriggers.stage(ops, "admin", 0, transaction, applier.outcomes(), txId);
         if (!prepared) {
-            TransactionRecovery.discardAppliedOps(txId, transaction.getBufferedOpIds());
+            AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
         }
         clientTracker.removeById(clientId);
         TestUtils.releaseAllLocks();

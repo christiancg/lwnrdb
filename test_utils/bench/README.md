@@ -35,9 +35,12 @@ Every other flag is passed to `bench_client.py`: `--docs` (100000), `--batch` (5
 
 ## Memory
 
-lwnrdb's peak container memory follows the heap ceiling, not the data. ZGC grows the heap toward whatever ceiling it is
-given, so the same 100k-document run (about 190 MB of live heap after a full GC) peaked at very different sizes. Mean of three
-runs per setting, balanced order, synced, `--ops-scale 2`, 4 GiB container, `maxMemory` fixed at 2 GiB for all of them:
+The server runs G1 (`-XX:+UseG1GC`), like the Docker image. The table below was measured under ZGC, the earlier
+default, which ran without compressed references and peaked at about 2.5x G1's container memory on the same run.
+Under ZGC lwnrdb's peak container memory followed the heap ceiling, not the data: ZGC grows the heap toward whatever
+ceiling it is given, so the same 100k-document run (about 190 MB of live heap after a full GC) peaked at very different
+sizes. Mean of three runs per setting, balanced order, synced, `--ops-scale 2`, 4 GiB container, `maxMemory` fixed at
+2 GiB for all of them:
 
 | heap ceiling | peak container memory | CPU per operation vs the old 70% | ZGC allocation stalls |
 |---|---:|---|---:|
@@ -52,8 +55,8 @@ smaller ceiling, and the single-document writes the same or less), and none of t
 sets no heap flag, so it runs at the JVM default of a quarter of the container; the bench used to run at 70%, which
 reported a memory figure the image never produces. The bench now defaults to 35% with `maxMemory` at half the heap.
 Results from before that change used a 70% heap and a 2 GiB `maxMemory`, so their memory column is not comparable.
-The `ZGC allocation stalls` row of `summary.md` is read from `-Xlog:gc*:file=/tmp/gc.log`, so it appears only when
-that flag is passed through `--java-opts`.
+The server always logs its collections with `-Xlog:gc:file=/tmp/gc.log`; the `G1 pauses: count / p99 ms / max ms` and
+`G1 full GCs` rows of `summary.md` are read from it (`Pause Young`, `Remark`, `Cleanup` and `Full` lines).
 
 ## What makes it fair
 

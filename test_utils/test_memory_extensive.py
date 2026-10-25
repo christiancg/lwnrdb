@@ -12,7 +12,7 @@ import base_utils as bu
 from base_utils import Conn, check, section, warn
 
 HOST = "127.0.0.1"
-PORT = 8989
+PORT = int(os.environ.get("MEM_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
@@ -32,6 +32,12 @@ LATENCY_BUDGET_MS = 3_000
 SAMPLED_LOAD_DOCS = int(os.environ.get("MEM_TEST_SAMPLED_LOAD_DOCS", "60000"))
 SAMPLED_LOAD_COLL = "sampled_load"
 SAMPLE_INTERVAL_S = 1.0
+DROP_DB = "mem_drops"
+DROP_ROUNDS = 3
+DROP_COLLECTIONS = int(os.environ.get("MEM_TEST_DROP_COLLECTIONS", "500"))
+DROP_GROWTH_LIMIT = 0.02
+DROP_TRACKED_CLASSES = ("java.util.concurrent.locks.ReentrantReadWriteLock",
+                        "java.util.concurrent.ConcurrentLinkedQueue", "org.techhouse.cache.UsageCounter")
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -50,6 +56,8 @@ def get_pid_rss_mb(pid):
 
 
 def find_server_pid():
+    if os.environ.get("MEM_TEST_SERVER_PID"):
+        return int(os.environ["MEM_TEST_SERVER_PID"])
     try:
         out = subprocess.check_output(
             ["pgrep", "-f", "lwnrdb.jar"], text=True).strip()
@@ -86,6 +94,61 @@ def live_heap_bytes(pid):
         return None
     total = re.search(r"(?m)^Total\s+\d+\s+(\d+)", out)
     return int(total.group(1)) if total else None
+
+
+def class_instance_counts(pid, class_names):
+    try:
+        out = subprocess.check_output(["jcmd", str(pid), "GC.class_histogram"], text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    counts = dict.fromkeys(class_names, 0)
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[3] in counts:
+            counts[parts[3]] = int(parts[1])
+    return counts
+
+
+def short_name(class_name):
+    return class_name.rsplit(".", 1)[1]
+
+
+def create_write_and_drop(c: Conn, coll):
+    replies = [
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DROP_DB, "collectionName": coll}),
+        c.send({"type": "SAVE", "databaseName": DROP_DB, "collectionName": coll,
+                "object": {"_id": "only", "v": 1}}),
+        c.send({"type": "FIND_BY_ID", "databaseName": DROP_DB, "collectionName": coll, "_id": "only"}),
+        c.send({"type": "DROP_COLLECTION", "databaseName": DROP_DB, "collectionName": coll}),
+    ]
+    return all(reply.get("status") == "OK" for reply in replies)
+
+
+def dropped_collections_release_memory(c: Conn, pid):
+    section(f"Dropped collections release memory: {DROP_ROUNDS} rounds of create/write/drop x {DROP_COLLECTIONS}")
+    if shutil.which("jcmd") is None:
+        warn("jcmd is not on PATH — dropped-collection memory skipped")
+        return
+    c.send({"type": "DROP_DATABASE", "databaseName": DROP_DB})
+    c.send({"type": "CREATE_DATABASE", "databaseName": DROP_DB})
+    rounds = []
+    for round_number in range(DROP_ROUNDS):
+        failed = [i for i in range(DROP_COLLECTIONS) if not create_write_and_drop(c, f"r{round_number}_c{i}")]
+        check(f"round {round_number + 1}: {DROP_COLLECTIONS} collections created, written and dropped", not failed,
+              detail=f"failed: {failed[:5]}" if failed else "")
+        counts = class_instance_counts(pid, DROP_TRACKED_CLASSES)
+        if counts is None:
+            warn("jcmd could not read the server's class histogram — dropped-collection memory skipped")
+            c.send({"type": "DROP_DATABASE", "databaseName": DROP_DB})
+            return
+        print(f"  after round {round_number + 1}: "
+              + ", ".join(f"{short_name(name)}={count}" for name, count in counts.items()))
+        rounds.append(counts)
+    for name in DROP_TRACKED_CLASSES:
+        second, third = rounds[1][name], rounds[2][name]
+        check(f"{short_name(name)} instances grow < {DROP_GROWTH_LIMIT:.0%} between rounds 2 and 3",
+              third <= second * (1 + DROP_GROWTH_LIMIT), detail=f"{second} -> {third}")
+    c.send({"type": "DROP_DATABASE", "databaseName": DROP_DB})
 
 
 def small_doc(i: int):
@@ -419,6 +482,7 @@ def main():
 
     accounting_accuracy(c, pid)
     cache_stays_bounded_during_bulk_load(c, cap_bytes)
+    dropped_collections_release_memory(c, pid)
 
     rss_samples, cache_samples, heap_samples = [], [], []
 

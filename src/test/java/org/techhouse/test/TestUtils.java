@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.mockito.Mockito;
 import org.techhouse.bckg_ops.PendingIndexWrites;
@@ -91,7 +92,8 @@ public class TestUtils {
         TestUtils.getPrivateField(adminCache, "metadataMisses", PartitionedMissCache.class).clear();
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(pendingIndexWrites, "generations", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pendingIndexWrites, "pins", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pendingIndexWrites, "epoch", new AtomicLong());
         // Drop any tracked clients so leaked test connections can't fill the connection limit and make
         // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
         ClientTracker clientTracker = IocContainer.get(ClientTracker.class);

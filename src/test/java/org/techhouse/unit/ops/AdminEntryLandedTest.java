@@ -78,6 +78,8 @@ public class AdminEntryLandedTest {
         final var mocked = mockStatic(AdminPageHelper.class, CALLS_REAL_METHODS);
         mocked.when(() -> AdminPageHelper.baseUpdateEntryCount(eq(Globals.ADMIN_DB_NAME), eq(collName), any(),
                 anyList(), anyBoolean())).thenThrow(failure);
+        mocked.when(() -> AdminPageHelper.baseUpdateEntryCountOfRefs(eq(Globals.ADMIN_DB_NAME), eq(collName), any(),
+                anyList())).thenThrow(failure);
         return mocked;
     }
 
@@ -272,9 +274,14 @@ public class AdminEntryLandedTest {
         final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
 
         final String errorCode;
-        try (var mocked = mockStatic(TxCommitLog.class, CALLS_REAL_METHODS)) {
-            mocked.when(() -> TxCommitLog.recordLocalCommit(any(), any(), any()))
-                    .thenThrow(new IOException("disk full"));
+        try (var ignored = mockStatic(AdminOperationHelper.class, invocation -> {
+            if ("writeTransactionRecords".equals(invocation.getMethod().getName())
+                    && invocation.<List<AdminTransactionEntry>>getArgument(0).stream()
+                            .anyMatch(entry -> entry.get_id().equals(TxCommitLog.markerId(txId)))) {
+                throw new IOException("disk full");
+            }
+            return invocation.callRealMethod();
+        })) {
             errorCode = TransactionOperationHelper.commit(clientId).getErrorCode();
         }
 

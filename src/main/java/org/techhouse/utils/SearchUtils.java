@@ -33,11 +33,18 @@ public final class SearchUtils {
     }
 
     public static <T> long countBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
-        final var slice = sliceBetween(entries, bounds);
+        return idCountOf(entries, sliceBetween(entries, bounds));
+    }
+
+    public static <T> long countEquals(List<FieldIndexEntry<T>> entries, T value) {
+        return idCountOf(entries, equalRun(entries, value));
+    }
+
+    private static <T> long idCountOf(List<FieldIndexEntry<T>> entries, int[] slice) {
         var count = 0L;
         if (slice != null) {
-            for (var i = slice[0]; i < slice[1]; i++) {
-                count += entries.get(i).getIds().size();
+            for (final var entry : entries.subList(slice[0], slice[1])) {
+                count += entry.getIds().size();
             }
         }
         return count;
@@ -182,13 +189,14 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> toIdSet(List<FieldIndexEntry<T>> entries, int start, int foundIndex) {
+        final var slice = entries.subList(start, foundIndex);
         var total = 0;
-        for (var i = start; i < foundIndex; i++) {
-            total += entries.get(i).getIds().size();
+        for (final var entry : slice) {
+            total += entry.getIds().size();
         }
         final var ids = HashSet.<String>newHashSet(total);
-        for (var i = start; i < foundIndex; i++) {
-            ids.addAll(entries.get(i).getIds());
+        for (final var entry : slice) {
+            ids.addAll(entry.getIds());
         }
         return ids;
     }

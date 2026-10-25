@@ -321,6 +321,61 @@ public class AggregationSortIndexLazinessTest {
     }
 
     @Test
+    public void test_an_indexed_filter_limit_fetches_only_the_first_chunk() {
+        userCache.evictCollectionDocuments(TestGlobals.DB, COLL);
+
+        final var limited = ids(bound(FieldOperatorType.GREATER_THAN_EQUALS, 0), new LimitAggregationStep(3));
+
+        assertEquals(3, limited.size());
+        assertTrue(cachedDocuments() <= 3,
+                "a LIMIT after an indexed FILTER must fetch the bound, but " + cachedDocuments() + " were read");
+        assertTrue(scanned(bound(FieldOperatorType.GREATER_THAN_EQUALS, 0)).containsAll(limited));
+    }
+
+    @Test
+    public void test_an_indexed_filter_limit_pulls_more_chunks_past_stale_entries() {
+        final var matching = ids(bound(FieldOperatorType.SMALLER_THAN, 100)).stream().sorted().toList();
+        assertEquals(100, matching.size());
+        final var survivors = matching.subList(0, 3);
+        for (final var stale : matching.subList(3, matching.size())) {
+            save(stale, new JsonNumber(5000));
+        }
+        forgetPendingWrites();
+        userCache.evictCollectionDocuments(TestGlobals.DB, COLL);
+
+        final var limited = ids(bound(FieldOperatorType.SMALLER_THAN, 100), new LimitAggregationStep(3));
+
+        assertEquals(survivors, limited.stream().sorted().toList());
+        assertEquals(survivors, scanned(bound(FieldOperatorType.SMALLER_THAN, 100)).stream().sorted().toList());
+        assertTrue(cachedDocuments() > 3, "every stale candidate fails the re-test, so later chunks are fetched");
+    }
+
+    @Test
+    public void test_a_skip_and_limit_after_an_indexed_filter_answer_distinct_matching_rows() {
+        final var all = scanned(bound(FieldOperatorType.SMALLER_THAN, 50));
+
+        final var window = ids(bound(FieldOperatorType.SMALLER_THAN, 50), new SkipAggregationStep(2),
+                new LimitAggregationStep(4));
+
+        assertEquals(4, window.size());
+        assertEquals(4, Set.copyOf(window).size());
+        assertTrue(all.containsAll(window));
+    }
+
+    @Test
+    public void test_analyze_counts_the_documents_an_indexed_filter_limit_fetched() {
+        final var request = new AggregateRequest(TestGlobals.DB, COLL);
+        request.setAnalyze(true);
+        request.setAggregationSteps(
+                List.of(bound(FieldOperatorType.GREATER_THAN_EQUALS, 0), new LimitAggregationStep(5)));
+
+        final var result = ((AggregateAnalyzeResponse) processor.processMessage(request)).getAnalyzeResult();
+
+        assertEquals(List.of(FIELD), result.getIndexesUsed());
+        assertEquals(5, result.getDocumentsScanned());
+    }
+
+    @Test
     public void test_analyze_reports_the_index_and_the_documents_fetched() {
         final var request = new AggregateRequest(TestGlobals.DB, COLL);
         request.setAnalyze(true);

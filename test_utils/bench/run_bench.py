@@ -1,7 +1,9 @@
 import argparse
 import datetime
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 from typing import Callable, Dict, List, Optional
@@ -19,7 +21,8 @@ MIB = 1024 * 1024
 DEFAULT_HEAP_PERCENT = 35
 CACHE_SHARE_OF_HEAP_DIVISOR = 2
 GC_LOG = "/tmp/gc.log"
-GC_STALL_ROW = "Allocation Stalls:"
+G1_PAUSE = re.compile(r"\bPause (Young|Remark|Cleanup|Full)\b.*?(\d+(?:\.\d+)?)ms\s*$")
+P99 = 0.99
 UNITS = {"k": 1024, "m": MIB, "g": 1024 * MIB}
 DATA_DIRS = {
     "lwnrdb": "/app/db",
@@ -91,9 +94,29 @@ def _exec_int(env: Dict[str, str], engine: str, *command: str) -> Optional[int]:
         return None
 
 
-def _gc_allocation_stalls(env: Dict[str, str]) -> Optional[int]:
-    command = f"test -f {GC_LOG} && grep '{GC_STALL_ROW}' {GC_LOG} | awk '{{ if ($NF + 0 > m) m = $NF + 0 }} END {{ print m + 0 }}' || true"
-    return _exec_int(env, "lwnrdb", "sh", "-c", command)
+def parse_g1_pauses(log: Optional[str]) -> Optional[dict]:
+    if log is None:
+        return None
+    pauses = []
+    full = 0
+    for line in log.splitlines():
+        match = G1_PAUSE.search(line)
+        if match:
+            pauses.append(float(match.group(2)))
+            full += match.group(1) == "Full"
+    pauses.sort()
+    return {
+        "count": len(pauses),
+        "p99_ms": pauses[max(math.ceil(P99 * len(pauses)) - 1, 0)] if pauses else 0.0,
+        "max_ms": pauses[-1] if pauses else 0.0,
+        "full_gcs": full,
+    }
+
+
+def _gc_pauses(env: Dict[str, str]) -> Optional[dict]:
+    result = compose(env, "--profile", "lwnrdb", "exec", "-T", "lwnrdb", "sh", "-c",
+                     f"test -f {GC_LOG} && cat {GC_LOG}", capture=True, check=False)
+    return parse_g1_pauses(result.stdout if result.returncode == 0 else None)
 
 
 def measure(env: Dict[str, str], engine: str) -> dict:
@@ -102,7 +125,7 @@ def measure(env: Dict[str, str], engine: str) -> dict:
         "memory_peak": _exec_int(env, engine, "cat", "/sys/fs/cgroup/memory.peak"),
         "memory_current": _exec_int(env, engine, "cat", "/sys/fs/cgroup/memory.current"),
         "data_bytes": None if kilobytes is None else kilobytes * 1024,
-        "gc_allocation_stalls": _gc_allocation_stalls(env) if engine == "lwnrdb" else None,
+        "gc_pauses": _gc_pauses(env) if engine == "lwnrdb" else None,
     }
 
 

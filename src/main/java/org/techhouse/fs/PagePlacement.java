@@ -20,8 +20,16 @@ public enum PagePlacement {
     }
 
     public static boolean acceptsInsert(long liveBytes, long fileLength, long insertedBytes, long maxPageSize) {
-        return liveBytes + insertedBytes <= maxPageSize
+        return liveBytesAdmit(liveBytes, insertedBytes, maxPageSize)
                 && (fileLength + insertedBytes <= maxPageSize || isVacuumable(liveBytes, fileLength, maxPageSize));
+    }
+
+    public static boolean liveBytesAdmit(long liveBytes, long insertedBytes, long maxPageSize) {
+        return liveBytes + insertedBytes <= maxPageSize;
+    }
+
+    public static boolean vacuumsAfterDelete(long liveAfter, long fileLength, long maxPageSize) {
+        return fileLength > 0 && (liveAfter <= 0 || isVacuumable(liveAfter, fileLength, maxPageSize));
     }
 
     private static boolean isVacuumable(long liveBytes, long fileLength, long maxPageSize) {

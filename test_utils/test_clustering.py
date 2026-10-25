@@ -302,20 +302,30 @@ def fresh_database(port, db, seed_value=1, label_prefix=""):
             lambda: save(port, db, "docs", {"_id": "d1", "v": seed_value})), "OK")
 
 
+OWNER_PROBE_POINT = "WRITE_OWNER_PROBED"
+
+
 def owner_of(port, db, coll, attempts=20):
+    subject = f"{db}|{coll}"
     for _ in range(attempts):
-        conn = authed(port)
+        live = [n for n in nodes if n.alive]
+        owner = None
         try:
-            tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
-            if tx_id is None:
-                return None
-            probe = conn.send({"type": "SAVE", "databaseName": db, "collectionName": coll,
-                               "object": {"_id": "owner_probe", "v": 0}})
-            if probe.get("status") == "OK":
-                return next((n for n in nodes if n.alive and holds_tx_record(n, tx_id)), None)
+            if all(arm_fault(n, OWNER_PROBE_POINT, "PAUSE", match=subject).get("status") == "OK" for n in live):
+                probe = BackgroundOp(port, {"type": "DELETE", "databaseName": db, "collectionName": coll,
+                                            "_id": "owner_probe"})
+                deadline = time.time() + 10.0
+                while owner is None and time.time() < deadline:
+                    owner = next((n for n in live
+                                  if await_fault(n, OWNER_PROBE_POINT, 100).get("status") == "OK"), None)
+                for n in live:
+                    release_fault(n, OWNER_PROBE_POINT)
+                probe.join(30.0)
         finally:
-            conn.send({"type": "ROLLBACK_TRANSACTION"})
-            conn.close()
+            for n in live:
+                release_fault(n, OWNER_PROBE_POINT)
+        if owner is not None:
+            return owner
         time.sleep(0.5)
     return None
 
@@ -3628,6 +3638,58 @@ def test_a_participant_halted_between_its_commit_markers_is_not_left_in_doubt():
         restore_after_fault_test()
 
 
+def test_a_coordinator_halted_after_its_decision_record_recovers():
+    section("Fault seam: a coordinator halted right after the record holding its decision and its own begin")
+
+    owners = owned_by_every_node("faultcoord")
+    if owners is None:
+        return
+    edge, participant = nodes[2], nodes[1]
+    local, remote = owners[edge.index][0], owners[participant.index][0]
+    point, subject = "WAL_APPENDED", "admin|transactions"
+    try:
+        if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
+            return
+        conn = authed(edge.client_port)
+        try:
+            tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
+            check_status("a write to the coordinator's own collection", conn.send({
+                "type": "SAVE", "databaseName": DB, "collectionName": local,
+                "object": {"_id": "decided_edge", "v": 1}}), "OK")
+            check_status("a write to the participant's collection", conn.send({
+                "type": "SAVE", "databaseName": DB, "collectionName": remote,
+                "object": {"_id": "decided_part", "v": 1}}), "OK")
+            check_status("ARM_FAULT pauses the coordinator at its own prepared record",
+                         arm_fault(edge, point, "PAUSE", match=subject), "OK")
+            pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
+            check_status("the coordinator paused while preparing its own slice", await_fault(edge, point, 20000),
+                         "OK")
+            check_status("ARM_FAULT halts it at the next record, the one holding the decision",
+                         arm_fault(edge, point, "HALT", match=subject), "OK")
+            check("the coordinator halted", edge.wait_for_exit(30.0))
+            check("with the fault's exit status, not a crash", edge.proc.returncode == FAULT_HALT_STATUS,
+                  f"returncode={edge.proc.returncode}")
+            pending.join(60.0)
+        finally:
+            conn.close()
+        check("the participant still holds its prepared slice while the coordinator is down",
+              holds_tx_record(participant, tx_id, "part"), f"transaction={tx_id}")
+        print(f"  Restarting node-{edge.index} ...")
+        edge.start()
+        check("the restarted coordinator finished its own slice and re-drove the participant",
+              wait_until(lambda: not holds_tx_record(edge, tx_id, "coord")
+                         and not holds_tx_record(edge, tx_id, "localcommit")
+                         and not holds_tx_record(participant, tx_id, "part"), timeout_s=90.0, interval_s=1.0),
+              f"transaction={tx_id}")
+        check("nothing is listed in doubt", in_doubt_row(edge.client_port, tx_id) is None, f"transaction={tx_id}")
+        check("every node sees the coordinator's own write",
+              all_nodes_see(DB, local, "decided_edge", 1, ports=all_ports(), timeout_s=30.0))
+        check("and the participant's write",
+              all_nodes_see(DB, remote, "decided_part", 1, ports=all_ports(), timeout_s=30.0))
+    finally:
+        restore_after_fault_test()
+
+
 def test_a_write_inside_an_anti_entropy_round_trip_is_not_undone():
     section("Fault seam: writes landing between an anti-entropy snapshot and its repair")
 
@@ -3748,6 +3810,7 @@ GROUPS = {
         test_a_node_halted_between_a_tombstone_and_its_delete_converges,
         test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared,
         test_a_participant_halted_between_its_commit_markers_is_not_left_in_doubt,
+        test_a_coordinator_halted_after_its_decision_record_recovers,
         test_a_write_inside_an_anti_entropy_round_trip_is_not_undone,
         test_a_prepared_participant_resolves_without_its_coordinator,
         test_a_post_prepare_write_survives_2pc_recovery,

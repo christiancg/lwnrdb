@@ -13,6 +13,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -122,6 +123,15 @@ final class GroupCommit {
 
     static int queuedFor(String dbName, String collName) {
         return queueOf(dbName, collName).size();
+    }
+
+    static void forget(String dbName, String collName) {
+        queues.remove(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    static void forgetDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        queues.keySet().removeIf(collId -> collId.startsWith(prefix));
     }
 
     private static Queue<GroupedWrite> queueOf(String dbName, String collName) {

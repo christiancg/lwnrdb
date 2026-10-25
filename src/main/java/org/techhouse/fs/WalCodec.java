@@ -7,7 +7,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeMap;
 import java.util.zip.CRC32;
 
@@ -18,13 +20,26 @@ final class WalCodec {
     private static final byte ABORT = 'A';
     private static final byte GROUP_BASE = 'G';
     private static final byte PENDING = 'I';
+    private static final byte REWRITE_BEGIN = 'B';
+    private static final byte REWRITE_END = 'E';
     static final long NO_GROUP_BASE = -1L;
+    static final long NO_REWRITE_END = -1L;
     static final int HEADER_BYTES = 1 + 1 + Long.BYTES + Integer.BYTES + Integer.BYTES;
     private static final int CHANGE_HEADER_BYTES = 1 + Long.BYTES + Long.BYTES + Long.BYTES;
     private static final int RECORD_BYTES_HINT = 256;
 
     record Decoded(WalCheckpoint checkpoint, List<WalRecord> records, int framesSinceCheckpoint, long lastSeq,
-            long cleanLength, long groupBase, List<String> pendingIds) {
+            long cleanLength, long groupBase, List<String> pendingIds, Map<Long, Rewrite> rewrites) {
+    }
+
+    record Rewrite(long beginSeq, long lengthBefore, long lengthAfter) {
+        boolean skips(WalRecord record, WalChange change) {
+            return change.target() != WalTarget.PK_WRITE && record.seq() < beginSeq;
+        }
+
+        long floor() {
+            return lengthAfter == NO_REWRITE_END ? lengthBefore : lengthAfter;
+        }
     }
 
     static final class RecordBuffer extends OutputStream {
@@ -140,6 +155,16 @@ final class WalCodec {
         return frame(PENDING, seq, payload.array());
     }
 
+    static byte[] encodeRewriteBegin(long seq, long page, long lengthBefore) {
+        return frame(REWRITE_BEGIN, seq,
+                ByteBuffer.allocate(Long.BYTES * 2).putLong(page).putLong(lengthBefore).array());
+    }
+
+    static byte[] encodeRewriteEnd(long seq, long beginSeq, long page, long lengthAfter) {
+        return frame(REWRITE_END, seq,
+                ByteBuffer.allocate(Long.BYTES * 3).putLong(beginSeq).putLong(page).putLong(lengthAfter).array());
+    }
+
     static byte[] encodeGroupBase(long seq, long pkIndexLength) {
         return frame(GROUP_BASE, seq, ByteBuffer.allocate(Long.BYTES).putLong(pkIndexLength).array());
     }
@@ -171,6 +196,7 @@ final class WalCodec {
         var cleanLength = 0L;
         var groupBase = NO_GROUP_BASE;
         List<String> pendingIds = List.of();
+        final var rewrites = new HashMap<Long, Rewrite>();
         while (buffer.remaining() >= HEADER_BYTES) {
             final var start = buffer.position();
             final var magic = buffer.get();
@@ -195,6 +221,7 @@ final class WalCodec {
                         framesSinceCheckpoint = -1;
                         groupBase = NO_GROUP_BASE;
                         pendingIds = List.of();
+                        rewrites.clear();
                         yield true;
                     }
                     case WRITE -> records.add(decodeRecord(seq, payload));
@@ -209,6 +236,15 @@ final class WalCodec {
                     }
                     case GROUP_BASE -> {
                         groupBase = ByteBuffer.wrap(payload).getLong();
+                        yield true;
+                    }
+                    case REWRITE_BEGIN -> {
+                        final var frame = ByteBuffer.wrap(payload);
+                        rewrites.put(frame.getLong(), new Rewrite(seq, frame.getLong(), NO_REWRITE_END));
+                        yield true;
+                    }
+                    case REWRITE_END -> {
+                        endRewrite(rewrites, ByteBuffer.wrap(payload));
                         yield true;
                     }
                     default -> false;
@@ -227,7 +263,17 @@ final class WalCodec {
             cleanLength = buffer.position();
         }
         return new Decoded(checkpoint, List.copyOf(records), framesSinceCheckpoint, lastSeq, cleanLength, groupBase,
-                pendingIds);
+                pendingIds, Map.copyOf(rewrites));
+    }
+
+    private static void endRewrite(Map<Long, Rewrite> rewrites, ByteBuffer frame) {
+        final var beginSeq = frame.getLong();
+        final var page = frame.getLong();
+        final var lengthAfter = frame.getLong();
+        final var begun = rewrites.get(page);
+        if (begun != null && begun.beginSeq() == beginSeq) {
+            rewrites.put(page, new Rewrite(beginSeq, begun.lengthBefore(), lengthAfter));
+        }
     }
 
     private static WalCheckpoint decodeCheckpoint(long seq, byte[] payload) {

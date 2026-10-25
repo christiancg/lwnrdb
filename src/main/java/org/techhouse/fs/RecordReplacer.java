@@ -7,12 +7,17 @@ import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Function;
+import java.util.function.LongFunction;
+import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fault.FaultPoint;
+import org.techhouse.log.Logger;
 
 final class RecordReplacer {
+    private static final Logger logger = Logger.logFor(RecordReplacer.class);
+    private final Configuration configuration = Configuration.getInstance();
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
     private final PageVacuum vacuum;
@@ -23,8 +28,13 @@ final class RecordReplacer {
         this.vacuum = vacuum;
     }
 
+    PkIndexEntry replace(DbEntry entry, byte[] line, PkIndexEntry oldRow, long targetPage, PagePlacement placement)
+            throws IOException {
+        return replace(entry, line, oldRow, targetPage, placement, null, null);
+    }
+
     PkIndexEntry replace(DbEntry entry, byte[] line, PkIndexEntry oldRow, long targetPage, PagePlacement placement,
-            List<PkIndexEntry> residentRows) throws IOException {
+            List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy) throws IOException {
         final var dbName = oldRow.getDatabaseName();
         final var collName = oldRow.getCollectionName();
         final var source = paths.collectionPage(dbName, collName, oldRow.getPage());
@@ -33,7 +43,7 @@ final class RecordReplacer {
         try {
             var oldPosition = oldRow.getPosition();
             final var vacuumed = vacuum.vacuumIfNeeded(dbName, collName, targetPage, line.length, placement,
-                    residentRows);
+                    residentRows, occupancy);
             if (vacuumed != null && targetPage == oldRow.getPage()) {
                 oldPosition = positionAfter(vacuumed, oldRow.getValue(), oldPosition);
             }
@@ -52,18 +62,44 @@ final class RecordReplacer {
     }
 
     void delete(PkIndexEntry oldRow) throws IOException {
+        delete(oldRow, null, null);
+    }
+
+    void delete(PkIndexEntry oldRow, List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy)
+            throws IOException {
         final var dbName = oldRow.getDatabaseName();
         final var collName = oldRow.getCollectionName();
         final var page = paths.collectionPage(dbName, collName, oldRow.getPage());
         final var lock = FileLocks.lockWrite(page);
         try {
-            requireWithinPage(oldRow, oldRow.getPosition(), page.length());
+            final var fileLength = page.length();
+            requireWithinPage(oldRow, oldRow.getPosition(), fileLength);
+            final var before = residentRows == null || occupancy == null ? null : occupancy.apply(oldRow.getPage());
             final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
             plan.deleteRow(oldRow.getValue());
             plan.blank(oldRow.getPage(), oldRow.getPosition(), oldRow.getLength());
             plan.commit(null, FaultPoint.PK_ROW_COMMITTED);
+            if (before != null) {
+                vacuumAfterDelete(oldRow, residentRows,
+                        new PageOccupancy(before.liveBytes() - oldRow.getLength(), before.rows() - 1), page,
+                        fileLength);
+            }
         } finally {
             lock.unlock();
+        }
+    }
+
+    private void vacuumAfterDelete(PkIndexEntry deleted, List<PkIndexEntry> residentRows, PageOccupancy after,
+            File page, long fileLength) {
+        if (!PagePlacement.vacuumsAfterDelete(after.liveBytes(), fileLength, configuration.getMaxPageSize())) {
+            return;
+        }
+        try {
+            vacuum.vacuumAfterDelete(deleted.getDatabaseName(), deleted.getCollectionName(), deleted.getPage(),
+                    residentRows, after, deleted.getValue());
+        } catch (IOException e) {
+            logger.warning("Deleted '" + deleted.getValue() + "' from " + page.getName() + " but could not vacuum the"
+                    + " page after it; the delete stands and a later write vacuums the page: " + e.getMessage());
         }
     }
 

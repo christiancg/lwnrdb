@@ -60,15 +60,31 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
                 parseLong(line, lengthEnd + 1, pageEnd), parseLong(line, pageEnd + 1, end));
     }
 
+    public static long versionOf(byte[] line, int start, int end) {
+        final var valueEnd = nextSeparator(line, start, end);
+        final var positionEnd = nextSeparator(line, valueEnd + 1, end);
+        final var lengthEnd = nextSeparator(line, positionEnd + 1, end);
+        final var pageEnd = nextSeparator(line, lengthEnd + 1, end);
+        if (pageEnd >= end || nextSeparator(line, pageEnd + 1, end) != end) {
+            throw new IllegalArgumentException("A PK index line must hold " + FIELD_COUNT + " separated fields");
+        }
+        return parseLong(line, pageEnd + 1, end);
+    }
+
+    public static boolean isDeleteRow(byte[] line, int start, int end) {
+        final var valueEnd = nextSeparator(line, start, end);
+        return valueEnd + 2 == end && line[valueEnd + 1] == DELETE_MARK_BYTE;
+    }
+
     public static String toDeleteRow(String id) {
         return FieldIndexEntry.escapeIndexToken(id) + Globals.ID_SEPARATOR + DELETE_MARK;
     }
 
     public static String deletedIdOf(byte[] line, int start, int end) {
-        final var valueEnd = nextSeparator(line, start, end);
-        if (valueEnd + 2 != end || line[valueEnd + 1] != DELETE_MARK_BYTE) {
+        if (!isDeleteRow(line, start, end)) {
             return null;
         }
+        final var valueEnd = nextSeparator(line, start, end);
         return FieldIndexEntry.unescapeIndexToken(new String(line, start, valueEnd - start, StandardCharsets.UTF_8));
     }
 

@@ -125,10 +125,13 @@ public class EventProcessorIncarnationTest {
     public void test_event_with_matching_incarnation_is_processed() throws Exception {
         seedLivePage();
         final var countBefore = firstPage().getEntryCount();
+        final var live = entryOnPage("live", 0);
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0L, -live.byteSize(), -1);
 
-        EventProcessorHelper.processEvent(event(EventType.DELETED, entryOnPage("live", 0), CURRENT));
+        EventProcessorHelper.processEvent(event(EventType.DELETED, live, CURRENT));
 
-        Assertions.assertEquals(countBefore - 1, firstPage().getEntryCount());
+        Assertions.assertEquals(countBefore - 1, firstPage().getEntryCount(),
+                "the delete's delta was applied on the write path, so the event does not apply it again");
     }
 
     @Test

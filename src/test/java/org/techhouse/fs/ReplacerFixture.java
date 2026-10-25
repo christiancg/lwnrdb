@@ -41,7 +41,7 @@ final class ReplacerFixture {
 
     PkIndexEntry replace(String id, String value, long targetPage, PagePlacement placement) throws IOException {
         final var entry = entry(id, value, targetPage);
-        return replacer.replace(entry, line(id, value), fx.indexed(id), targetPage, placement, null);
+        return replacer.replace(entry, line(id, value), fx.indexed(id), targetPage, placement);
     }
 
     IndexedDbEntry indexed(String id, String value) throws IOException {

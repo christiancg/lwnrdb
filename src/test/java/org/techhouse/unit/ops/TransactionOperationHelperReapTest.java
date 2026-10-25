@@ -28,6 +28,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 
 public class TransactionOperationHelperReapTest {
     private static final String STRANDED = TestGlobals.DB + Globals.COLL_IDENTIFIER_SEPARATOR + "stranded";
@@ -93,6 +94,7 @@ public class TransactionOperationHelperReapTest {
         openTransactionWithOneWrite("fenced");
         final var transaction = clientTracker.getActiveTransaction(clientId);
         final var txId = transaction.getTransactionId().toString();
+        TransactionRecordCalls.persistBufferedOps(transaction);
         TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         try {

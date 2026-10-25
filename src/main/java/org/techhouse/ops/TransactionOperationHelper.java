@@ -19,6 +19,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
 import org.techhouse.data.Transaction;
+import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -108,8 +109,8 @@ public final class TransactionOperationHelper {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
         }
         try {
-            AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-            TransactionRecovery.recordAborted(transaction.getTransactionId().toString());
+            TransactionRecovery.recordAborted(transaction.getTransactionId().toString(),
+                    transaction.getBufferedOpIds());
             return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction aborted");
         } catch (Exception e) {
             logger.error(OperationType.ROLLBACK_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(),
@@ -125,22 +126,23 @@ public final class TransactionOperationHelper {
     }
 
     public static OperationResponse commit(UUID clientId) {
-        return commit(clientId, false, false);
+        return commit(clientId, false, false, List.of());
     }
 
     public static OperationResponse commitForwarded(UUID clientId) {
-        return commit(clientId, false, true);
+        return commit(clientId, false, true, List.of());
     }
 
-    static OperationResponse commitDecided(UUID clientId) {
-        return commit(clientId, true, true);
+    static OperationResponse commitDecided(UUID clientId, List<AdminTransactionEntry> decision) {
+        return commit(clientId, true, true, decision);
     }
 
     private static boolean isDecided(String txId) {
         return TxCommitLog.isLocallyCommitted(txId) || Tx2pcLog.isPrepared(txId) && Tx2pcLog.isCommitted(txId);
     }
 
-    private static OperationResponse commit(UUID clientId, boolean decidedElsewhere, boolean recordsOutcome) {
+    private static OperationResponse commit(UUID clientId, boolean decidedElsewhere, boolean recordsOutcome,
+            List<AdminTransactionEntry> decision) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
@@ -158,14 +160,16 @@ public final class TransactionOperationHelper {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, refusal);
             }
-            final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
+            final var ops = transaction.areOpsDurable()
+                    ? AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds())
+                    : new ArrayList<>(transaction.getPendingOps());
             if (ops.size() != transaction.getBufferedOpIds().size()) {
                 logger.error("Transaction " + transaction.getTransactionId() + " lost "
                         + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION,
                         fenced ? ErrorCode.TRANSACTION_HALF_APPLIED : ErrorCode.ERROR_TRANSACTION);
             }
-            SliceCommit.begin(transaction);
+            SliceCommit.begin(transaction, decision);
             fenced = true;
             final var result = SliceCommit.finish(transaction, ops, clientTracker.getAuthenticatedUsername(clientId),
                     recordsOutcome);
@@ -382,7 +386,7 @@ public final class TransactionOperationHelper {
                 + " write lock(s) " + held + " that only recovery or its own thread can release");
     }
 
-    public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {
+    public static void bufferTriggerRunConsume(Transaction transaction, String runId) {
         TransactionBuffer.bufferTriggerRunConsume(transaction, runId);
     }
 
