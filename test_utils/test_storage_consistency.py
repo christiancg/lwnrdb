@@ -344,6 +344,7 @@ def seed(conn: Conn, work_dir: str):
 
     files = page_files(work_dir)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
+    bu.wait_until(lambda: page_metadata_bytes(work_dir) > 0, timeout_s=5.0, interval_s=0.1)
     check("page metadata is persisted for a user collection", page_metadata_bytes(work_dir) > 0,
           "admin/pages/<db>_<coll> is empty, so a restart would lose the page list")
     check("the full scan sees every seeded document", conn.count_via_scan() == SEEDED_DOCS,

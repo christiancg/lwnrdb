@@ -69,6 +69,9 @@ public final class PageRowWriteBack {
     }
 
     public static void flushDue(long nowMillis) {
+        if (dirty.isEmpty()) {
+            return;
+        }
         for (final var entry : List.copyOf(dirty.entrySet())) {
             if (nowMillis - entry.getValue().since() >= Globals.PAGE_ROWS_WRITE_BACK_MS) {
                 flush(entry.getKey());

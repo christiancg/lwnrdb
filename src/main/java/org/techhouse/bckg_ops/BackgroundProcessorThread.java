@@ -3,7 +3,6 @@ package org.techhouse.bckg_ops;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.bckg_ops.events.Event;
-import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.PageRowWriteBack;
 
@@ -17,7 +16,6 @@ public class BackgroundProcessorThread implements Runnable {
     private final AtomicInteger parked;
     private final AtomicInteger workerCount;
     private final IdleSignal idleSignal;
-    private long lastIdleFlush;
 
     public BackgroundProcessorThread(BackgroundLanes lanes, int ownLane, AtomicInteger inFlight, AtomicInteger parked,
             AtomicInteger workerCount, IdleSignal idleSignal) {
@@ -55,7 +53,7 @@ public class BackgroundProcessorThread implements Runnable {
                     parked.decrementAndGet();
                 }
                 if (first == null) {
-                    flushPageRowsWhenIdle();
+                    flushPageRows();
                     continue;
                 }
                 batch.add(first);
@@ -74,14 +72,6 @@ public class BackgroundProcessorThread implements Runnable {
                 inFlight.addAndGet(requeued - batch.size());
                 idleSignal.signal();
             }
-            flushPageRows();
-        }
-    }
-
-    private void flushPageRowsWhenIdle() {
-        final var now = System.currentTimeMillis();
-        if (now - lastIdleFlush >= Globals.PAGE_ROWS_WRITE_BACK_MS) {
-            lastIdleFlush = now;
             flushPageRows();
         }
     }

@@ -12,11 +12,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundLanes;
+import org.techhouse.bckg_ops.BackgroundProcessorThread;
 import org.techhouse.bckg_ops.EventProcessorHelper;
+import org.techhouse.bckg_ops.IdleSignal;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
@@ -197,6 +201,33 @@ public class PageRowWriteBackTest {
         assertTrue(worst <= Math.max(floor, live) + live,
                 "dead bytes stay within one flush of max(floor, live): worst " + worst + ", live " + live);
         assertEquals(Map.of(0L, 1, 1L, 1, 2L, 1, 3L, 1, 4L, 1), rowsOnDisk(TestGlobals.COLL));
+    }
+
+    @Test
+    public void test_an_idle_worker_writes_a_due_row_back_promptly() throws Exception {
+        final var idleSignal = new IdleSignal();
+        final var worker = new Thread(new BackgroundProcessorThread(new BackgroundLanes(1), 0, new AtomicInteger(),
+                new AtomicInteger(), new AtomicInteger(1), idleSignal));
+        worker.start();
+        try {
+            Thread.sleep(Globals.PAGE_ROWS_WRITE_BACK_MS / 2);
+            created(TestGlobals.COLL, "prompt", 0);
+            final var touched = System.nanoTime();
+
+            assertTrue(idleSignal.awaitIdle(() -> {
+                try {
+                    return !rowsOnDisk(TestGlobals.COLL).isEmpty();
+                } catch (IOException e) {
+                    return false;
+                }
+            }, Globals.PAGE_ROWS_WRITE_BACK_MS + 2_000L));
+            final var waitedMillis = (System.nanoTime() - touched) / 1_000_000L;
+            assertTrue(waitedMillis <= Globals.PAGE_ROWS_WRITE_BACK_MS + 300L,
+                    "a due row waits for an idle worker's next wake, not for its next second: " + waitedMillis + "ms");
+        } finally {
+            worker.interrupt();
+            worker.join(5_000);
+        }
     }
 
     @Test
