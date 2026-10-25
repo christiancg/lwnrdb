@@ -129,8 +129,8 @@ public class BackgroundLanesTest {
         assertNotEquals(null, poll(lanes, 0));
     }
 
-    private static final class Recorded extends CollectionScopedEvent {
-        private final List<String> seen;
+    private static class Recorded extends CollectionScopedEvent {
+        protected final List<String> seen;
         private final String label;
 
         private Recorded(String collName, List<String> seen, String label) {
@@ -143,6 +143,27 @@ public class BackgroundLanesTest {
         public String toString() {
             seen.add(label);
             return label;
+        }
+    }
+
+    private static final class Stuck extends Recorded {
+        private final java.util.concurrent.CountDownLatch release;
+
+        private Stuck(String collName, List<String> seen, java.util.concurrent.CountDownLatch release) {
+            super(collName, seen, "stuck");
+            this.release = release;
+        }
+
+        @Override
+        public String toString() {
+            try {
+                if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    seen.add("never released");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return super.toString();
         }
     }
 
@@ -166,6 +187,41 @@ public class BackgroundLanesTest {
         } finally {
             worker.interrupt();
             worker.join(5_000);
+        }
+    }
+
+    @Test
+    public void test_a_lane_whose_owner_is_stuck_is_served_by_another_worker() throws Exception {
+        final var lanes = new BackgroundLanes(2);
+        final var seen = java.util.Collections.synchronizedList(new ArrayList<String>());
+        final var release = new java.util.concurrent.CountDownLatch(1);
+        final var stuckCollection = collectionOnLane(lanes, 0);
+        final var inFlight = new java.util.concurrent.atomic.AtomicInteger(2);
+        final var idleSignal = new org.techhouse.bckg_ops.IdleSignal();
+        final var workerCount = new java.util.concurrent.atomic.AtomicInteger(2);
+        final var parked = new java.util.concurrent.atomic.AtomicInteger();
+        lanes.add(new Stuck(stuckCollection, seen, release));
+        final var owner = new Thread(new org.techhouse.bckg_ops.BackgroundProcessorThread(lanes, 0, inFlight, parked,
+                workerCount, idleSignal));
+        owner.start();
+        Thread.sleep(20);
+        lanes.add(new Recorded(collectionOnLane(lanes, 0), seen, "waiting"));
+        final var helper = new Thread(new org.techhouse.bckg_ops.BackgroundProcessorThread(lanes, 1, inFlight, parked,
+                workerCount, idleSignal));
+        helper.start();
+        try {
+            assertTrue(idleSignal.awaitIdle(() -> seen.contains("waiting"), 3_000L),
+                    "another worker serves the stuck owner's lane: " + seen);
+            assertFalse(seen.contains("stuck"), "the owner is still stuck when its lane is served");
+            release.countDown();
+            assertTrue(idleSignal.awaitIdle(() -> inFlight.get() <= 0, 5_000L));
+            assertFalse(seen.contains("never released"), seen.toString());
+        } finally {
+            release.countDown();
+            owner.interrupt();
+            helper.interrupt();
+            owner.join(5_000);
+            helper.join(5_000);
         }
     }
 }

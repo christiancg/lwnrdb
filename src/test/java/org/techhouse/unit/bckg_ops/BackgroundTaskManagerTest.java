@@ -176,4 +176,22 @@ public class BackgroundTaskManagerTest {
                     ConfigKey.BACKGROUND_QUEUE_MAX_EVENTS.defaultValue());
         }
     }
+
+    @Test
+    void test_an_event_in_a_non_zero_lane_keeps_the_queue_from_draining() throws Exception {
+        TestUtils.setPrivateField(Configuration.getInstance(), "backgroundProcessingThreads", 4);
+        final var manager = new BackgroundTaskManager();
+        final var lanes = TestUtils.getPrivateField(manager, "lanes", BackgroundLanes.class);
+        var collection = "lane";
+        for (var i = 0; lanes.laneOf(new EntityEvent(EventType.CREATED, "test", collection, new DbEntry())) != 3; i++) {
+            collection = "lane" + i;
+        }
+
+        manager.submitBackgroundTask(new EntityEvent(EventType.CREATED, "test", collection, new DbEntry()));
+
+        assertFalse(lanes.isEmpty());
+        assertFalse(manager.drain(0L), "an event waiting in the last lane is not idle");
+        assertEquals(0, manager.pending(), "stopping discards it from every lane");
+        assertTrue(lanes.isEmpty());
+    }
 }

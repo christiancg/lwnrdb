@@ -160,6 +160,22 @@ public class EventBatchCoalescingTest {
     }
 
     @Test
+    public void test_a_create_and_delete_of_one_id_in_a_group_count_every_created_id() throws Exception {
+        seedCollections();
+        final var batched = new ArrayList<Event>();
+        batched.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry("flip")));
+        batched.add(new EntityEvent(EventType.DELETED, TestGlobals.DB, TestGlobals.COLL, entry("flip")));
+        batched.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry("flip")));
+        batched.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry("kept")));
+
+        EventProcessorHelper.processBatch(batched);
+
+        Assertions.assertEquals(2, totalEntryCount(TestGlobals.COLL),
+                "a missing row counts each distinct created id once and a delete books no delta: the write path owns "
+                        + "deltas, and the startup reconciler corrects a row created this way");
+    }
+
+    @Test
     public void test_dropped_collection_in_a_batch_clears_pending_and_creates_no_page_metadata() throws Exception {
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
         final var pending = IocContainer.get(PendingIndexWrites.class);

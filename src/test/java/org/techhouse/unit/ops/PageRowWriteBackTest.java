@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -17,6 +21,7 @@ import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
@@ -145,6 +150,53 @@ public class PageRowWriteBackTest {
         assertEquals(Map.of(0L, 2, 1L, 1), rowsInMemory(),
                 "a missing page counts its distinct created ids, an existing one keeps the write path's count");
         assertEquals(Map.of(0L, 2, 1L, 1), rowsOnDisk(TestGlobals.COLL));
+    }
+
+    private static long[] rowFileDeadAndLive() throws IOException {
+        final var folder = Path.of(TestGlobals.PATH, Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_FOLDER,
+                AdminPageEntry.pagesCollectionName(TestGlobals.DB, TestGlobals.COLL));
+        var total = 0L;
+        var live = 0L;
+        try (var files = Files.list(folder)) {
+            for (final var file : files.filter(path -> path.toString().endsWith(Globals.DB_FILE_EXTENSION)).toList()) {
+                final var text = Files.readString(file);
+                total += Files.size(file);
+                for (final var line : text.split("\n")) {
+                    if (!line.isBlank()) {
+                        live += line.getBytes(StandardCharsets.UTF_8).length + 1;
+                    }
+                }
+            }
+        }
+        return new long[]{total - live, live};
+    }
+
+    @Test
+    public void test_two_hundred_write_backs_keep_the_row_file_compact() throws Exception {
+        final var pages = 5;
+        final var refs = new ArrayList<EntityRef>();
+        for (var page = 0; page < pages; page++) {
+            created(TestGlobals.COLL, "seed" + page, page);
+            refs.add(EntityRef.of(entryOnPage(TestGlobals.COLL, "seed" + page, page)));
+        }
+        PageRowWriteBack.flushAll();
+        final var floor = Math.min(Configuration.getInstance().getMaxPageSize() / 4, Globals.COMPACT_STAY_DEAD_FLOOR);
+        var worst = 0L;
+        var live = 0L;
+        for (var round = 0; round < 200; round++) {
+            for (var page = 0; page < pages; page++) {
+                cache.updatePageSizeForUpdateInMemory(TestGlobals.DB, TestGlobals.COLL, page, round % 2 == 0 ? 1 : -1);
+            }
+            AdminPageHelper.bookWritePathPages(TestGlobals.DB, TestGlobals.COLL, List.of(), refs, INCARNATION);
+            PageRowWriteBack.flushAll();
+            final var deadAndLive = rowFileDeadAndLive();
+            worst = Math.max(worst, deadAndLive[0]);
+            live = deadAndLive[1];
+        }
+
+        assertTrue(worst <= Math.max(floor, live) + live,
+                "dead bytes stay within one flush of max(floor, live): worst " + worst + ", live " + live);
+        assertEquals(Map.of(0L, 1, 1L, 1, 2L, 1, 3L, 1, 4L, 1), rowsOnDisk(TestGlobals.COLL));
     }
 
     @Test

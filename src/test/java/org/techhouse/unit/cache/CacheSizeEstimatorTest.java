@@ -16,6 +16,7 @@ import org.techhouse.data.IdSet;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonParser;
 
 public class CacheSizeEstimatorTest {
     private static final HeapLayout LAYOUT = new HeapLayout(8, 12, 4);
@@ -222,5 +223,43 @@ public class CacheSizeEstimatorTest {
         assertEquals(shell + current.referenceArraySize(16), CacheSizeEstimator.fieldEntryShellSize("v", 9));
         assertEquals(shell + current.referenceArraySize(32), CacheSizeEstimator.fieldEntryShellSize("v", 13));
         assertEquals(current.stringSize("an-id"), CacheSizeEstimator.fieldIndexIdSize("an-id"));
+    }
+
+    private static JsonObject parsed(String json) {
+        return JsonParser.parse(json, 64, Integer.MAX_VALUE).asJsonObject();
+    }
+
+    private static JsonObject ownedCopyOf(JsonObject shaped) {
+        final var owned = new JsonObject(shaped.size());
+        for (var i = 0; i < shaped.size(); i++) {
+            owned.add(shaped.keyAt(i), shaped.valueAt(i));
+        }
+        return owned;
+    }
+
+    @Test
+    public void test_a_mixed_collection_of_shared_and_owned_documents_is_estimated_like_the_sizer() {
+        final var shapedData = parsed("{\"_id\":\"mix1\",\"estimatorMixName\":\"a\",\"estimatorMixCount\":1}");
+        final var siblingData = parsed("{\"_id\":\"mix2\",\"estimatorMixName\":\"b\",\"estimatorMixCount\":2}");
+        assertNotNull(shapedData.shape());
+        assertSame(shapedData.shape(), siblingData.shape());
+        final var shaped = DbEntry.fromJsonObject(DB, COLL, shapedData);
+        final var owned = DbEntry.fromJsonObject(DB, COLL, ownedCopyOf(shapedData));
+        final var entryBytes = LAYOUT.shallowSize(DbEntry.class);
+
+        for (final var dbEntry : List.of(shaped, owned)) {
+            assertEquals(entryBytes + DocumentHeapSizer.sizeOf(dbEntry.getData(), LAYOUT),
+                    CacheSizeEstimator.estimateEntry(dbEntry, LAYOUT));
+        }
+        if (!shapedData.shape().isPinned()) {
+            assertEquals(CacheSizeEstimator.estimateEntry(owned, LAYOUT),
+                    CacheSizeEstimator.estimateEntry(shaped, LAYOUT),
+                    "an unpinned shared shape is charged like an object that owns its keys");
+        }
+
+        shapedData.shape().pin();
+        final var pinned = DbEntry.fromJsonObject(DB, COLL, siblingData);
+        assertTrue(CacheSizeEstimator.estimateEntry(pinned, LAYOUT) < CacheSizeEstimator.estimateEntry(owned, LAYOUT),
+                "a pinned shape is not charged to the document");
     }
 }

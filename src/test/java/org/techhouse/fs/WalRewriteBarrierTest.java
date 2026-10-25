@@ -19,6 +19,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.test.TestUtils;
 
@@ -220,5 +222,36 @@ public class WalRewriteBarrierTest {
 
         assertArrayEquals(compacted, Files.readAllBytes(rf.fx.page(0).toPath()));
         assertHolds(Map.of("b", "new-b", "c", "old-c"));
+    }
+
+    @Test
+    public void test_an_admin_compaction_below_the_cap_survives_a_power_loss() throws Exception {
+        final var configuration = Configuration.getInstance();
+        final var maxPageSize = configuration.getMaxPageSize();
+        TestUtils.setPrivateField(configuration, "maxPageSize", 4096L);
+        try {
+            final var admin = new ReplacerFixture(new File(tmp, "adminRoot"), Globals.ADMIN_DB_NAME, COLL);
+            for (final var id : List.of("x", "y")) {
+                admin.appender.insert(admin.entry(id, "v0", 0), ReplacerFixture.line(id, "v0"));
+            }
+            new WriteAheadLog(admin.fx.paths).checkpoint(Globals.ADMIN_DB_NAME, COLL);
+            for (var round = 1; admin.fx.page(0).length() < 2048; round++) {
+                admin.replace("x", "v" + round + "-" + "p".repeat(80), 0, PagePlacement.APPEND);
+            }
+            assertTrue(admin.fx.page(0).length() < 4096, "the compaction must happen below the cap");
+
+            assertNotNull(
+                    admin.vacuum.vacuumIfNeeded(Globals.ADMIN_DB_NAME, COLL, 0, 10, null, admin.fx.indexedRows()));
+            final var compacted = Files.readAllBytes(admin.fx.page(0).toPath());
+            power.powerLoss();
+            PowerLossFixture.restart(admin.fx.paths, Globals.ADMIN_DB_NAME, COLL);
+            WalRedo.redoAll(admin.fx.paths);
+
+            assertArrayEquals(compacted, Files.readAllBytes(admin.fx.page(0).toPath()));
+            assertTrue(admin.fx.everyRowReadsItsOwnRecord());
+            assertEquals(2, admin.fx.indexedRows().size());
+        } finally {
+            TestUtils.setPrivateField(configuration, "maxPageSize", maxPageSize);
+        }
     }
 }
