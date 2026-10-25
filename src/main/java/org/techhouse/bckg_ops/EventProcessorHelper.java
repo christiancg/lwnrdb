@@ -204,16 +204,21 @@ public class EventProcessorHelper {
         }
         final var indexFailure = indexFailureOf(
                 () -> IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids), lockBudgetMs));
-        for (final var event : group) {
-            AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getEntity(),
-                    event.getIncarnation());
-            if (indexFailure == null) {
-                clearPendingEvent(event);
-            }
-        }
+        bookGroupPages(dbName, collName, group, first.getIncarnation());
         if (indexFailure != null) {
             throw indexFailure;
         }
+        clearPendingEvents(group);
+    }
+
+    private static void bookGroupPages(String dbName, String collName, List<EntityEvent> group, long incarnation)
+            throws InterruptedException {
+        final var created = new ArrayList<EntityRef>(group.size());
+        final var others = new ArrayList<EntityRef>(group.size());
+        for (final var event : group) {
+            (event.getType() == EventType.CREATED ? created : others).add(event.getEntity());
+        }
+        AdminOperationHelper.bookWritePathPages(dbName, collName, created, others, incarnation);
     }
 
     private static void clearPendingEvents(List<EntityEvent> group) {
@@ -254,9 +259,7 @@ public class EventProcessorHelper {
         }
         final var indexFailure = indexFailureOf(() -> IndexHelper.bulkUpdateIndexes(dbName, collName,
                 idsOf(event.getInserted(), event.getUpdated()), lockBudgetMs));
-        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInserted(),
-                event.getIncarnation());
-        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdated(),
+        AdminOperationHelper.bookWritePathPages(dbName, collName, event.getInserted(), event.getUpdated(),
                 event.getIncarnation());
         if (indexFailure != null) {
             throw indexFailure;

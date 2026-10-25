@@ -63,6 +63,10 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return CollectionIdentifiers.of(dbName, collName);
     }
 
+    public static CollectionNames canonicalNames(String dbName, String collName) {
+        return CollectionIdentifiers.namesOf(dbName, collName);
+    }
+
     public static String getIndexIdentifier(String fieldName, Class<?> fieldType) {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + INDEX_TYPE_NAMES.get(fieldType);
     }

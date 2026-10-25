@@ -90,7 +90,6 @@ src/main/java/org/techhouse/simplejs/values/JsObject.java 1
 src/main/java/org/techhouse/simplejs/values/PropertyTable.java 1
 src/main/java/org/techhouse/utils/GeoUtils.java 5
 src/main/java/org/techhouse/utils/JsonUtils.java 3
-src/main/java/org/techhouse/utils/SearchUtils.java 1
 src/main/java/org/techhouse/utils/VectorUtils.java 1
 src/test/java/org/techhouse/cluster/ClusterMessagesTest.java 1
 src/test/java/org/techhouse/cluster/CoalescingSweepTest.java 1

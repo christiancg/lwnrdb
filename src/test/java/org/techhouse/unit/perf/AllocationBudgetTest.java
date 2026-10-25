@@ -10,6 +10,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.conn.OutboundQueue;
@@ -25,6 +26,8 @@ import org.techhouse.ops.CountOperatorHelper;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.SaveOperationHelper;
+import org.techhouse.ops.admin.AdminPageHelper;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.RequestParser;
@@ -44,14 +47,15 @@ public class AllocationBudgetTest {
     private static final long KB = 1024L;
     private static final long SAVE_UPDATE_BUDGET = 25_430;
     private static final long INSERT_BUDGET_PER_DOC = 3 * KB;
-    private static final long COLD_SCAN_BUDGET_PER_DOC = 3_680;
+    private static final long COLD_SCAN_BUDGET_PER_DOC = 3_570;
     private static final long BATCH_OF_ONE_BUDGET = 8_430;
     private static final long BULK_UPDATE_BUDGET_PER_DOC = 3_630;
     private static final long INDEXED_ID_LOOKUP_BUDGET = 21_510;
     private static final long EQUALS_INDEX_COUNT_BUDGET = 2_735;
     private static final long SAVE_REQUEST_PARSE_BUDGET = 3_120;
-    private static final long LOCKED_COLD_SCAN_BUDGET_PER_DOC = 4_440;
+    private static final long LOCKED_COLD_SCAN_BUDGET_PER_DOC = 4_035;
     private static final long INDEXED_FILTER_LIMIT_BUDGET = 24_630;
+    private static final long WRITE_PATH_PAGE_BOOKING_BUDGET = 915;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final String COLD_SCAN = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
@@ -266,6 +270,16 @@ public class AllocationBudgetTest {
                 () -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("d" + next[0]++ * 53)));
         assertTrue(measured <= BATCH_OF_ONE_BUDGET,
                 report("a background batch of one id", measured, BATCH_OF_ONE_BUDGET));
+    }
+
+    @Test
+    void writePathPageBookingOfOneEventAllocatesUnderBudget() throws Exception {
+        final var incarnation = CollectionIncarnation.current(TestGlobals.DB, TestGlobals.COLL);
+        final var updated = List.of(new EntityRef("d1", 0L, 600L, 590L));
+        final var measured = cheapestOf(() -> AdminPageHelper.bookWritePathPages(TestGlobals.DB, TestGlobals.COLL,
+                List.of(), updated, incarnation));
+        assertTrue(measured <= WRITE_PATH_PAGE_BOOKING_BUDGET,
+                report("the page booking of one event", measured, WRITE_PATH_PAGE_BOOKING_BUDGET));
     }
 
     @Test

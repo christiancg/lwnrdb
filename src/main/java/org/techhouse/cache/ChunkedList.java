@@ -9,8 +9,11 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.RandomAccess;
+import java.util.function.Predicate;
+import java.util.function.ToLongFunction;
+import org.techhouse.data.SortedChunks;
 
-public class ChunkedList<E> extends AbstractList<E> implements RandomAccess {
+public class ChunkedList<E> extends AbstractList<E> implements RandomAccess, SortedChunks<E> {
     static final int CHUNK_ROWS = 512;
     private static final int SPLIT_ROWS = 2 * CHUNK_ROWS;
 
@@ -193,12 +196,59 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess {
         restart();
     }
 
-    private int chunkOf(int index) {
-        final var hinted = lastChunk;
-        if (hinted < starts.length && starts[hinted] <= index
-                && (hinted + 1 == starts.length || index < starts[hinted + 1])) {
-            return hinted;
+    @Override
+    public int partitionPoint(Predicate<? super E> before) {
+        var low = 0;
+        var high = chunks.size();
+        while (low < high) {
+            final var middle = (low + high) >>> 1;
+            if (before.test(chunks.get(middle).getLast())) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
         }
+        if (low == chunks.size()) {
+            return size;
+        }
+        final var rows = chunks.get(low);
+        var first = 0;
+        var last = rows.size();
+        while (first < last) {
+            final var middle = (first + last) >>> 1;
+            if (before.test(rows.get(middle))) {
+                first = middle + 1;
+            } else {
+                last = middle;
+            }
+        }
+        return starts[low] + first;
+    }
+
+    @Override
+    public long sumOf(int fromIndex, int toIndex, ToLongFunction<? super E> weight) {
+        Objects.checkFromToIndex(fromIndex, toIndex, size);
+        var total = 0L;
+        if (fromIndex == toIndex) {
+            return total;
+        }
+        var chunk = chunkContaining(fromIndex);
+        var offset = fromIndex - starts[chunk];
+        var remaining = toIndex - fromIndex;
+        while (remaining > 0) {
+            final var rows = chunks.get(chunk);
+            final var end = Math.min(rows.size(), offset + remaining);
+            for (var row = offset; row < end; row++) {
+                total += weight.applyAsLong(rows.get(row));
+            }
+            remaining -= end - offset;
+            offset = 0;
+            chunk++;
+        }
+        return total;
+    }
+
+    private int chunkContaining(int index) {
         var low = 0;
         var high = chunks.size() - 1;
         while (low < high) {
@@ -209,8 +259,18 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess {
                 high = middle - 1;
             }
         }
-        lastChunk = low;
         return low;
+    }
+
+    private int chunkOf(int index) {
+        final var hinted = lastChunk;
+        if (hinted < starts.length && starts[hinted] <= index
+                && (hinted + 1 == starts.length || index < starts[hinted + 1])) {
+            return hinted;
+        }
+        final var found = chunkContaining(index);
+        lastChunk = found;
+        return found;
     }
 
     private void shiftStartsAfter(int chunk, int delta) {

@@ -9,6 +9,7 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -20,7 +21,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.mockito.Mockito;
+import org.techhouse.bckg_ops.BackgroundLanes;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
@@ -402,5 +406,26 @@ public class TestUtils {
         Mockito.when(socket.getInputStream()).thenReturn(in);
         Mockito.when(socket.getOutputStream()).thenReturn(out);
         return socket;
+    }
+
+    public static List<Event> queuedBackgroundEvents(BackgroundTaskManager manager)
+            throws NoSuchFieldException, IllegalAccessException {
+        return queuedEvents(getPrivateField(manager, "lanes", BackgroundLanes.class));
+    }
+
+    public static List<Event> queuedEvents(BackgroundLanes lanes) throws NoSuchFieldException, IllegalAccessException {
+        final var queues = getPrivateField(lanes, "queues", List.class);
+        final var events = new ArrayList<Event>();
+        for (final var queue : queues) {
+            for (final var event : (Collection<?>) queue) {
+                events.add((Event) event);
+            }
+        }
+        return events;
+    }
+
+    public static void discardQueuedBackgroundEvents(BackgroundTaskManager manager)
+            throws NoSuchFieldException, IllegalAccessException {
+        getPrivateField(manager, "lanes", BackgroundLanes.class).discardAll();
     }
 }

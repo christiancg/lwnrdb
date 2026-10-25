@@ -383,6 +383,47 @@ def test_rows_of_different_shapes_round_trip(c):
     drop_coll(c, COLL_SHAPES)
 
 
+ESCAPE_CLASSES_REQUEST_VALUE = r'q\"b\\c\u0001n\nd\u007fl\u2028p\u2029e\ud83d\ude00s\ud800'
+ESCAPE_CLASSES_WIRE_VALUE = (b'"v":"q\\"b\\\\c\\u0001n\\nd\x7fl\xe2\x80\xa8p\xe2\x80\xa9e\xf0\x9f\x98\x80s'
+                             b'\\ud800"')
+
+
+def test_strings_with_every_escape_class_round_trip(c):
+    section("A string with every escape class comes back byte for byte")
+    create_coll(c, COLL_SHAPES)
+    check_status("the escaped document is saved", c.send_raw(
+        '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_SHAPES
+        + '","object":{"_id":"escapes","v":"' + ESCAPE_CLASSES_REQUEST_VALUE + '"}}'), "OK")
+    c.s.sendall((json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_SHAPES,
+                             "_id": "escapes"}) + "\n").encode())
+    raw = c.f.readline()
+    check("quotes, backslashes and control characters are escaped, DEL, U+2028/2029 and pairs stay raw, and a lone"
+          " surrogate is spelled \\uXXXX", ESCAPE_CLASSES_WIRE_VALUE in raw, detail=repr(raw[:300]))
+    drop_coll(c, COLL_SHAPES)
+
+
+def test_documents_of_one_shape_do_not_share_writes(c):
+    section("Documents saved with the same keys never see each other's added or removed keys")
+    create_coll(c, COLL_SHAPES)
+    for doc_id in ("shape_one", "shape_two"):
+        check_status(f"{doc_id} saved", save(c, COLL_SHAPES, {"_id": doc_id, "shared": doc_id, "dropped": 1}), "OK")
+    check_status("shape_one is rewritten with one key added and one removed",
+                 save(c, COLL_SHAPES, {"_id": "shape_one", "shared": "shape_one", "added": True}), "OK")
+    check_field("shape_two still has the removed key", find_by_id(c, COLL_SHAPES, "shape_two"), "object.dropped", 1)
+    check("shape_two did not gain the added key",
+          "added" not in (find_by_id(c, COLL_SHAPES, "shape_two").get("object") or {}))
+    check("a FILTER on the added key finds only shape_one",
+          ids_of(aggregate(c, COLL_SHAPES, [filter_step("added", "EQUALS", True)])) == ["shape_one"])
+    mapped = aggregate(c, COLL_SHAPES, [filter_step("_id", "EQUALS", "shape_two"), {"type": "MAP", "operators": [
+        {"fieldName": "mapped", "operator": {"type": "CAST", "fieldName": "dropped", "toType": "STRING"}}]}])
+    check("a MAP adding a key to one row answers it", (mapped.get("results") or [{}])[0].get("mapped") == "1",
+          detail=str(mapped)[:300])
+    check("the stored documents never see the MAP's key",
+          all("mapped" not in (find_by_id(c, COLL_SHAPES, doc_id).get("object") or {})
+              for doc_id in ("shape_one", "shape_two")))
+    drop_coll(c, COLL_SHAPES)
+
+
 def check_client_refusal(label: str, response: dict, connection_kept: bool = False) -> bool:
     refused = (response.get("status") == "ERROR" and not str(response.get("errorCode") or "").startswith("500")
                and not (connection_kept and "closed connection" in str(response.get("message"))))
@@ -1238,6 +1279,8 @@ def main():
         test_top_level_id,
         test_value_types,
         test_rows_of_different_shapes_round_trip,
+        test_strings_with_every_escape_class_round_trip,
+        test_documents_of_one_shape_do_not_share_writes,
         test_a_malformed_document_is_refused_as_a_client_error,
         test_a_line_with_a_second_value_or_a_nan_point_is_refused,
         test_deep_nesting_is_refused_not_dropped,

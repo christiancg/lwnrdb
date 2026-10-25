@@ -57,23 +57,51 @@ final class PageVacuum {
         final var page = paths.collectionPage(dbName, collName, pageNumber);
         final var fileLength = page.length();
         final var maxPageSize = configuration.getMaxPageSize();
-        if (placement == null && fileLength + appendedBytes <= maxPageSize) {
+        final var compact = compactsBelowTheCap(dbName, residentRows);
+        final var skippedUpTo = compact ? PagePlacement.compactFloor(maxPageSize) : maxPageSize;
+        if (placement == null && fileLength + appendedBytes <= skippedUpTo) {
             return null;
         }
         final var known = residentRows == null || occupancy == null ? null : occupancy.apply(pageNumber);
         if (known != null) {
-            if (placement == null && PagePlacement.forStay(known.liveBytes(), fileLength, appendedBytes,
+            if (placement == null && stayPlacement(compact, known.liveBytes(), fileLength, appendedBytes,
                     maxPageSize) != PagePlacement.VACUUM_THEN_APPEND) {
                 return null;
             }
             return vacuum(dbName, collName, pageNumber, residentRows, known, null);
         }
         final var pageRows = PageRows.of(pkIndexStore, residentRows, dbName, collName, pageNumber);
-        if (placement == null && PagePlacement.forStay(PageRows.liveBytes(pageRows), fileLength, appendedBytes,
+        if (placement == null && stayPlacement(compact, PageRows.liveBytes(pageRows), fileLength, appendedBytes,
                 maxPageSize) != PagePlacement.VACUUM_THEN_APPEND) {
             return null;
         }
+        if (placement == null && compact && fileLength + appendedBytes <= maxPageSize) {
+            return compactUnlessRefused(dbName, collName, pageNumber, pageRows);
+        }
         return vacuum(dbName, collName, pageNumber, pageRows);
+    }
+
+    private static boolean compactsBelowTheCap(String dbName, List<PkIndexEntry> residentRows) {
+        return residentRows != null
+                && (Globals.ADMIN_DB_NAME.equals(dbName) || Globals.ADMIN_PAGES_DB_NAME.equals(dbName));
+    }
+
+    private static PagePlacement stayPlacement(boolean compact, long liveBytes, long fileLength, long appendedBytes,
+            long maxPageSize) {
+        return compact
+                ? PagePlacement.forCompactStay(liveBytes, fileLength, appendedBytes, maxPageSize)
+                : PagePlacement.forStay(liveBytes, fileLength, appendedBytes, maxPageSize);
+    }
+
+    private VacuumedPage compactUnlessRefused(String dbName, String collName, long pageNumber,
+            List<PkIndexEntry> pageRows) throws IOException {
+        try {
+            return vacuum(dbName, collName, pageNumber, pageRows);
+        } catch (VacuumRefusedException refused) {
+            logger.warning("Left " + dbName + "|" + collName + " page " + pageNumber + " uncompacted: "
+                    + refused.getMessage());
+            return null;
+        }
     }
 
     VacuumedPage vacuum(String dbName, String collName, long pageNumber, List<PkIndexEntry> pageRows)
@@ -189,14 +217,14 @@ final class PageVacuum {
         for (final var line : lines) {
             final var row = byPosition.get(line.position());
             if (row == null || row.getLength() != line.length() || !row.getValue().equals(line.id())) {
-                throw new IOException("Refusing to vacuum " + page.getName() + ": the record at offset "
+                throw new VacuumRefusedException("Refusing to vacuum " + page.getName() + ": the record at offset "
                         + line.position() + " is not the one its PK index names there; run REINDEX with"
                         + " \"primaryKey\": true on this collection");
             }
         }
         if (lines.size() != pageRows.size()) {
-            throw new IOException("Refusing to vacuum " + page.getName() + ": its PK index names " + pageRows.size()
-                    + " record(s) on it but the page holds " + lines.size()
+            throw new VacuumRefusedException("Refusing to vacuum " + page.getName() + ": its PK index names "
+                    + pageRows.size() + " record(s) on it but the page holds " + lines.size()
                     + "; run REINDEX with \"primaryKey\": true on this collection");
         }
     }

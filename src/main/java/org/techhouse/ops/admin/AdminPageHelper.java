@@ -26,6 +26,7 @@ public final class AdminPageHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final Logger logger = Logger.logFor(AdminPageHelper.class);
     private static final Configuration configuration = Configuration.getInstance();
+    private static final long UNSTAMPED_INCARNATION = 0L;
 
     private AdminPageHelper() {
     }
@@ -53,15 +54,41 @@ public final class AdminPageHelper {
         locks.release(Globals.ADMIN_PAGES_DB_NAME, AdminPageEntry.pagesCollectionName(dbName, collName));
     }
 
+    @SuppressWarnings("RedundantThrows")
     public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<EntityRef> inserted,
             long incarnation) throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, type, inserted, true, incarnation);
+        bookWritePathPages(dbName, collName, type, inserted, incarnation);
     }
 
     @SuppressWarnings("RedundantThrows")
     public static void updateEntryCount(String dbName, String collName, EventType type, EntityRef entity,
             long incarnation) throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, type, List.of(entity), true, incarnation);
+        bookWritePathPages(dbName, collName, type, List.of(entity), incarnation);
+    }
+
+    private static void bookWritePathPages(String dbName, String collName, EventType type, List<EntityRef> refs,
+            long incarnation) throws InterruptedException {
+        if (type == EventType.CREATED) {
+            bookWritePathPages(dbName, collName, refs, List.of(), incarnation);
+        } else {
+            bookWritePathPages(dbName, collName, List.of(), refs, incarnation);
+        }
+    }
+
+    public static void bookWritePathPages(String dbName, String collName, List<EntityRef> created,
+            List<EntityRef> others, long incarnation) throws InterruptedException {
+        if (created.isEmpty() && others.isEmpty()) {
+            return;
+        }
+        lockAdminPageCollection(dbName, collName);
+        try {
+            if (Globals.ADMIN_DB_NAME.equals(dbName)
+                    || CollectionIncarnation.isCurrent(dbName, collName, incarnation)) {
+                WritePathPageBooking.book(dbName, collName, created, others, incarnation);
+            }
+        } finally {
+            releaseAdminPageCollection(dbName, collName);
+        }
     }
 
     public static void recordLandedDelta(String collName, EventType type, List<DbEntry> entries) {
@@ -91,19 +118,19 @@ public final class AdminPageHelper {
     public static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
             final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated)
             throws InterruptedException, IOException {
-        baseUpdateEntryCount(dbName, collName, type, EntityRef.allOf(insertedOrDeleted),
-                type == EventType.CREATED && skipMemoryDeltaForCreated, 0L);
+        bookRefs(dbName, collName, type, EntityRef.allOf(insertedOrDeleted),
+                type == EventType.CREATED && skipMemoryDeltaForCreated);
     }
 
     @SuppressWarnings("RedundantThrows")
     public static void baseUpdateEntryCountOfRefs(final String dbName, final String collName, final EventType type,
             final List<EntityRef> insertedOrDeleted) throws InterruptedException, IOException {
-        baseUpdateEntryCount(dbName, collName, type, insertedOrDeleted, false, 0L);
+        bookRefs(dbName, collName, type, insertedOrDeleted, false);
     }
 
-    private static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
-            final List<EntityRef> insertedOrDeleted, final boolean deltaAlreadyAppliedOnWritePath,
-            final long incarnation) throws InterruptedException {
+    private static void bookRefs(final String dbName, final String collName, final EventType type,
+            final List<EntityRef> insertedOrDeleted, final boolean deltaAlreadyAppliedOnWritePath)
+            throws InterruptedException {
         if (insertedOrDeleted.isEmpty()) {
             return;
         }
@@ -111,14 +138,10 @@ public final class AdminPageHelper {
         try {
             // Re-check under the lock: a concurrent drop must not lead to orphan page metadata.
             if (!Globals.ADMIN_DB_NAME.equals(dbName)
-                    && !CollectionIncarnation.isCurrent(dbName, collName, incarnation)) {
+                    && !CollectionIncarnation.isCurrent(dbName, collName, UNSTAMPED_INCARNATION)) {
                 return;
             }
             final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(EntityRef::page));
-            final var existingPageEntries = cache.getAdminPageEntries(dbName, collName);
-            final var workingPageEntries = existingPageEntries != null
-                    ? new ArrayList<>(existingPageEntries)
-                    : new ArrayList<AdminPageEntry>();
             final var deltas = new ArrayList<PageDelta>();
             final var newPages = new ArrayList<AdminPageEntry>();
             for (var groupedEntry : grouped.entrySet()) {
@@ -135,9 +158,8 @@ public final class AdminPageHelper {
                     case CREATED -> groupEntries.size();
                     case DELETED -> -groupEntries.size();
                 };
-                final var existing = workingPageEntries.stream().filter(p -> p.getPage() == page).findFirst();
-                if (existing.isPresent()) {
-                    final var live = existing.get();
+                final var live = cache.getAdminPageEntry(dbName, collName, page);
+                if (live != null) {
                     final var pending = deltaAlreadyAppliedOnWritePath
                             ? pendingCopy(dbName, collName, live, 0, 0L)
                             : pendingCopy(dbName, collName, live, deltaCount, deltaBytes);
@@ -146,13 +168,12 @@ public final class AdminPageHelper {
                     final var newEntry = new AdminPageEntry(dbName, collName, page);
                     newEntry.setEntryCount(groupEntries.size());
                     newEntry.setPageSize(sumBytes);
-                    workingPageEntries.add(newEntry);
                     newPages.add(newEntry);
                 }
             }
             cache.addAdminPageEntries(dbName, collName, newPages);
             deltas.forEach(PageDelta::publish);
-            PageRowWriteBack.touched(dbName, collName, incarnation, touchedPages(newPages, deltas),
+            PageRowWriteBack.touched(dbName, collName, UNSTAMPED_INCARNATION, touchedPages(newPages, deltas),
                     System.currentTimeMillis());
         } finally {
             releaseAdminPageCollection(dbName, collName);

@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -126,6 +127,24 @@ public class PageRowWriteBackTest {
         recorder.clear();
         PageRowWriteBack.flushDue(now + 2 * Globals.PAGE_ROWS_WRITE_BACK_MS);
         assertFalse(pageRowsForced(TestGlobals.DB, TestGlobals.COLL), "a flushed collection is clean");
+    }
+
+    @Test
+    public void test_a_group_booking_touches_each_page_once_and_counts_every_created_id() throws Exception {
+        created(TestGlobals.COLL, "seed", 1);
+        final var created = List.of(EntityRef.of(entryOnPage(TestGlobals.COLL, "g1", 0)),
+                EntityRef.of(entryOnPage(TestGlobals.COLL, "g2", 0)),
+                EntityRef.of(entryOnPage(TestGlobals.COLL, "g2", 0)),
+                EntityRef.of(entryOnPage(TestGlobals.COLL, "g3", 1)));
+        final var others = List.of(EntityRef.of(entryOnPage(TestGlobals.COLL, "u1", 1)),
+                EntityRef.of(entryOnPage(TestGlobals.COLL, "u2", 5)));
+
+        AdminPageHelper.bookWritePathPages(TestGlobals.DB, TestGlobals.COLL, created, others, INCARNATION);
+        PageRowWriteBack.flushAll();
+
+        assertEquals(Map.of(0L, 2, 1L, 1), rowsInMemory(),
+                "a missing page counts its distinct created ids, an existing one keeps the write path's count");
+        assertEquals(Map.of(0L, 2, 1L, 1), rowsOnDisk(TestGlobals.COLL));
     }
 
     @Test

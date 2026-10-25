@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntConsumer;
@@ -152,8 +151,7 @@ public class ReindexPrimaryKeyTest {
     }
 
     private List<String> queuedIds() throws Exception {
-        final LinkedBlockingQueue<?> queue = TestUtils.getPrivateField(stubTaskManager, "queue",
-                LinkedBlockingQueue.class);
+        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
         return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast).map(EntityEvent::getId)
                 .toList();
     }

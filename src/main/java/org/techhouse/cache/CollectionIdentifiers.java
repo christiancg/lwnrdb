@@ -6,15 +6,19 @@ import org.techhouse.config.Globals;
 
 final class CollectionIdentifiers {
     static final int MAX_REMEMBERED = 8192;
-    private static final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> BY_DATABASE = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, ConcurrentHashMap<String, CollectionNames>> BY_DATABASE = new ConcurrentHashMap<>();
     private static final AtomicInteger remembered = new AtomicInteger();
 
     private CollectionIdentifiers() {
     }
 
     static String of(String dbName, String collName) {
+        return namesOf(dbName, collName).identifier();
+    }
+
+    static CollectionNames namesOf(String dbName, String collName) {
         if (dbName == null || collName == null) {
-            return concatenated(dbName, collName);
+            return unremembered(dbName, collName);
         }
         final var collections = BY_DATABASE.get(dbName);
         final var hit = collections == null ? null : collections.get(collName);
@@ -35,18 +39,22 @@ final class CollectionIdentifiers {
         }
     }
 
-    private static String remember(String dbName, String collName) {
-        final var identifier = concatenated(dbName, collName);
+    private static CollectionNames remember(String dbName, String collName) {
+        final var names = unremembered(dbName, collName);
         if (remembered.get() >= MAX_REMEMBERED) {
-            return identifier;
+            return names;
         }
         final var collections = BY_DATABASE.computeIfAbsent(dbName, _ -> new ConcurrentHashMap<>());
-        final var previous = collections.putIfAbsent(collName, identifier);
+        final var previous = collections.putIfAbsent(collName, names);
         if (previous != null) {
             return previous;
         }
         remembered.incrementAndGet();
-        return identifier;
+        return names;
+    }
+
+    private static CollectionNames unremembered(String dbName, String collName) {
+        return new CollectionNames(dbName, collName, concatenated(dbName, collName));
     }
 
     private static String concatenated(String dbName, String collName) {

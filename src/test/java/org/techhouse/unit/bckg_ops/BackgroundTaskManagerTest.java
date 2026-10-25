@@ -7,20 +7,18 @@ import static org.mockito.Mockito.*;
 
 import java.lang.reflect.Field;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundLanes;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.ReflectionUtils;
 
 public class BackgroundTaskManagerTest {
     @AfterEach
@@ -36,11 +34,10 @@ public class BackgroundTaskManagerTest {
 
         manager.submitBackgroundTask(event);
 
-        final var type = new ReflectionUtils.TypeToken<LinkedBlockingQueue<Event>>() {
-        };
-        LinkedBlockingQueue<Event> queue = TestUtils.getPrivateField(manager, "queue", type);
+        final var lanes = TestUtils.getPrivateField(manager, "lanes", BackgroundLanes.class);
 
-        assertTrue(queue.contains(event), "Queue should contain the event after submission");
+        assertFalse(lanes.isEmpty(), "a lane should hold the event after submission");
+        assertEquals(1, lanes.discardAll());
     }
 
     @Test
@@ -116,10 +113,8 @@ public class BackgroundTaskManagerTest {
 
         manager.stopBackgroundWorkers();
 
-        final var type = new ReflectionUtils.TypeToken<LinkedBlockingQueue<Event>>() {
-        };
-        LinkedBlockingQueue<Event> queue = TestUtils.getPrivateField(manager, "queue", type);
-        assertTrue(queue.isEmpty(), "pending events should be dropped on stop");
+        final var lanes = TestUtils.getPrivateField(manager, "lanes", BackgroundLanes.class);
+        assertTrue(lanes.isEmpty(), "pending events should be dropped on stop");
         assertTrue(oldPool.isShutdown(), "the previous pool should be shut down");
 
         final var newPool = TestUtils.getPrivateField(manager, "pool", java.util.concurrent.ExecutorService.class);

@@ -52,6 +52,40 @@ public class CollectionIdentifiersTest {
     }
 
     @Test
+    public void canonical_names_are_the_first_seen_instances() {
+        final var db = new String(DB.toCharArray());
+        final var coll = new String("names".toCharArray());
+        final var first = Cache.canonicalNames(db, coll);
+
+        final var again = Cache.canonicalNames(new String(DB.toCharArray()), new String("names".toCharArray()));
+
+        assertSame(db, again.dbName());
+        assertSame(coll, again.collName());
+        assertSame(first.identifier(), Cache.getCollectionIdentifier(DB, "names"));
+    }
+
+    @Test
+    public void evicting_a_collection_forgets_its_canonical_names() {
+        final var coll = new String("forgotten".toCharArray());
+        Cache.canonicalNames(DB, coll);
+
+        cache.evictCollection(DB, "forgotten");
+
+        assertNotSame(coll, Cache.canonicalNames(DB, new String("forgotten".toCharArray())).collName());
+    }
+
+    @Test
+    public void past_the_cap_canonical_names_are_the_request_strings() {
+        for (var i = 0; i < PAST_THE_CAP; i++) {
+            Cache.getCollectionIdentifier(CAP_DB, "c" + i);
+        }
+        final var coll = new String("late".toCharArray());
+
+        assertSame(coll, Cache.canonicalNames(CAP_DB, coll).collName());
+        assertEquals(concatenated(CAP_DB, "late"), Cache.canonicalNames(CAP_DB, "late").identifier());
+    }
+
+    @Test
     public void a_null_name_keeps_the_concatenation_behaviour() {
         assertEquals(concatenated(null, "orders"), Cache.getCollectionIdentifier(null, "orders"));
         assertEquals(concatenated(DB, null), Cache.getCollectionIdentifier(DB, null));

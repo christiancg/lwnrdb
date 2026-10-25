@@ -11,7 +11,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -173,8 +172,7 @@ public class PendingMarkBeforeWriteTest {
 
         SaveOperationHelper.executeBulkSave(bulk);
 
-        final LinkedBlockingQueue<?> queue = TestUtils.getPrivateField(stubTaskManager, "queue",
-                LinkedBlockingQueue.class);
+        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
         final var events = queue.stream().filter(BulkEntityEvent.class::isInstance).map(BulkEntityEvent.class::cast)
                 .toList();
         assertEquals(1, events.size());

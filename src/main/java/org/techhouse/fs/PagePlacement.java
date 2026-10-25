@@ -19,6 +19,17 @@ public enum PagePlacement {
         return isVacuumable(liveBytes, fileLength, maxPageSize) ? VACUUM_THEN_APPEND : APPEND;
     }
 
+    public static PagePlacement forCompactStay(long liveBytes, long fileLength, long appendedBytes, long maxPageSize) {
+        if (fileLength - liveBytes >= Math.max(compactFloor(maxPageSize), liveBytes)) {
+            return VACUUM_THEN_APPEND;
+        }
+        return forStay(liveBytes, fileLength, appendedBytes, maxPageSize);
+    }
+
+    static long compactFloor(long maxPageSize) {
+        return Math.min(quarterOf(maxPageSize), Globals.COMPACT_STAY_DEAD_FLOOR);
+    }
+
     public static boolean acceptsInsert(long liveBytes, long fileLength, long insertedBytes, long maxPageSize) {
         return liveBytesAdmit(liveBytes, insertedBytes, maxPageSize)
                 && (fileLength + insertedBytes <= maxPageSize || isVacuumable(liveBytes, fileLength, maxPageSize));

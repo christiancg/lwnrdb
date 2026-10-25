@@ -40,6 +40,8 @@ GEO_SCAN = "idxagg_geo_scan"
 GEO_TARGET = "#geo(40.0,-74.0)"
 GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
 WIDE_AND = "idxagg_wide_and"
+CHUNKED_COUNT = "idxagg_chunked_count"
+CHUNKED_COUNT_DOCS = 3000
 WIDE_AND_DOCS = int(os.environ.get("INDEX_TEST_WIDE_AND_DOCS", "20000"))
 WIDE_AND_CHILDREN = 2000
 COLLIDING_STRINGS = "idxagg_colliding_strings"
@@ -2191,6 +2193,31 @@ def test_range_top_k_agrees_with_the_scan(c):
     check("the tied range is answered by the index", index_used(c, REG_RANGE_TOP_K, tied[0]))
 
 
+def test_a_range_count_across_index_chunks_matches_the_scan(c):
+    section("A range or equality COUNT over a field index of thousands of entries agrees with the scan")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CHUNKED_COUNT})
+    bulk_load(c, CHUNKED_COUNT, ({"_id": f"k{i:05d}", "n": i if i else -0.0, "s": ("V" if i % 2 else "v") +
+                                 f"{i // 2:05d}"} for i in range(CHUNKED_COUNT_DOCS)))
+    build_index(c, CHUNKED_COUNT, "n", "s")
+    queries = []
+    for operator in ("GREATER_THAN", "GREATER_THAN_EQUALS", "SMALLER_THAN", "SMALLER_THAN_EQUALS"):
+        for value in (-1, 0, 511, 512, 1024.5, 2999, 3000):
+            queries.append([bu.filter_step("n", operator, value)])
+    queries.append([{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+        {"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "n", "value": 300},
+        {"fieldOperatorType": "SMALLER_THAN", "field": "n", "value": 2700}]}}])
+    for key in ("v00255", "V00256", "v00000", "v01499", "missing"):
+        queries.append([bu.filter_step("s", "EQUALS", key)])
+    wrong = [steps for steps in queries
+             if agg_count(c, CHUNKED_COUNT, steps) != agg_count(c, CHUNKED_COUNT, forced_scan(steps))]
+    check(f"{len(queries)} bounds and equal runs count the same through the index and the scan", not wrong,
+          f"first disagreement: {wrong[0]!r}" if wrong else "")
+    check("the range count is answered by the index",
+          index_used(c, CHUNKED_COUNT, [bu.filter_step("n", "GREATER_THAN_EQUALS", 512), {"type": "COUNT"}]))
+    check("a case-folded equal run counts both spellings",
+          agg_count(c, CHUNKED_COUNT, [bu.filter_step("s", "EQUALS", "v00255")]) == 2)
+
+
 def test_wide_and_conjunction_stays_within_memory(c):
     section("A source AND of 2000 children keeps one tally per document, not one row per child")
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
@@ -2355,6 +2382,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_range_top_k_agrees_with_the_scan(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_a_range_count_across_index_chunks_matches_the_scan(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

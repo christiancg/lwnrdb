@@ -18,6 +18,7 @@ public final class Globals {
     public static final int BUFFER_SIZE = 32768;
     public static final int PK_LOG_MIN_DEAD_ROWS = 1024;
     public static final int PAGE_VACUUM_DEAD_DIVISOR = 4;
+    public static final long COMPACT_STAY_DEAD_FLOOR = 16 * 1024;
     public static final long FIELD_INDEX_LOG_MIN_BYTES = 64 * 1024;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String VACUUM_FILE_EXTENSION = ".vacuum";
@@ -83,6 +84,9 @@ public final class Globals {
     public static final int KEY_TABLE_PROBE_WINDOW = 8;
     public static final int KEY_TABLE_MAX_PINNED = 16_384;
     public static final int KEY_TABLE_PIN_HITS = 8;
+    public static final int SHAPE_TABLE_SLOTS = 1024;
+    public static final int SHAPE_TABLE_MAX_PINNED = 256;
+    public static final int SHAPE_TABLE_MAX_KEYS = 32;
     public static final long MAX_REQUEST_SIZE_CEILING = 1_073_741_824L;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
@@ -107,6 +111,7 @@ public final class Globals {
     public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
     public static final long HANDSHAKE_DEADLINE_GRACE_MS = 1000L;
     public static final long PAGE_ROWS_WRITE_BACK_MS = 1000L;
+    public static final long BACKGROUND_STEAL_AFTER_MS = 50L;
     public static final long TRANSACTION_OP_RECORD_BYTES = 4L * 1024 * 1024;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
 }

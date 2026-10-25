@@ -3,9 +3,9 @@ package org.techhouse.unit.bckg_ops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Set;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundLanes;
 import org.techhouse.bckg_ops.BackgroundProcessorThread;
 import org.techhouse.bckg_ops.IdleSignal;
 import org.techhouse.bckg_ops.events.EntityEvent;
@@ -26,12 +26,12 @@ public class BackgroundProcessorThreadTest {
 
     @Test
     public void testRunWhenQueueHasEvent() throws InterruptedException {
-        LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
+        final var queue = new BackgroundLanes(1);
         Event mockEvent = new Event(EventType.CREATED) {
         };
         queue.add(mockEvent);
 
-        Thread thread = new Thread(new BackgroundProcessorThread(queue, new AtomicInteger(), new AtomicInteger(),
+        Thread thread = new Thread(new BackgroundProcessorThread(queue, 0, new AtomicInteger(), new AtomicInteger(),
                 new AtomicInteger(), new IdleSignal()));
         thread.start();
 
@@ -41,14 +41,14 @@ public class BackgroundProcessorThreadTest {
 
     @Test
     public void test_a_failed_batch_still_settles_the_count_the_producer_took() throws InterruptedException {
-        final var queue = new LinkedBlockingQueue<Event>();
+        final var queue = new BackgroundLanes(1);
         final var inFlight = new AtomicInteger(1);
         queue.add(new Event(EventType.CREATED) {
         });
 
         final var idleSignal = new IdleSignal();
-        final var thread = new Thread(
-                new BackgroundProcessorThread(queue, inFlight, new AtomicInteger(), new AtomicInteger(1), idleSignal));
+        final var thread = new Thread(new BackgroundProcessorThread(queue, 0, inFlight, new AtomicInteger(),
+                new AtomicInteger(1), idleSignal));
         thread.start();
         try {
             assertTrue(idleSignal.awaitIdle(() -> inFlight.get() <= 0, 5000L));
@@ -63,9 +63,9 @@ public class BackgroundProcessorThreadTest {
 
     @Test
     public void testRunWhenQueueIsEmpty() {
-        LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
+        final var queue = new BackgroundLanes(1);
 
-        Thread thread = new Thread(new BackgroundProcessorThread(queue, new AtomicInteger(), new AtomicInteger(),
+        Thread thread = new Thread(new BackgroundProcessorThread(queue, 0, new AtomicInteger(), new AtomicInteger(),
                 new AtomicInteger(), new IdleSignal()));
         thread.start();
         assertTrue(thread.isAlive());
@@ -99,12 +99,12 @@ public class BackgroundProcessorThreadTest {
     }
 
     private void assertDeferredEventStaysCounted() throws Exception {
-        final var queue = new LinkedBlockingQueue<Event>();
+        final var queue = new BackgroundLanes(1);
         final var inFlight = new AtomicInteger(1);
         queue.add(new EntityEvent(EventType.UPDATED, TestGlobals.DB, TestGlobals.COLL, deferredEntry()));
         final var idleSignal = new IdleSignal();
-        final var worker = new Thread(
-                new BackgroundProcessorThread(queue, inFlight, new AtomicInteger(), new AtomicInteger(1), idleSignal));
+        final var worker = new Thread(new BackgroundProcessorThread(queue, 0, inFlight, new AtomicInteger(),
+                new AtomicInteger(1), idleSignal));
 
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
         try {

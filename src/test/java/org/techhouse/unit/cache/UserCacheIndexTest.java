@@ -371,8 +371,8 @@ public class UserCacheIndexTest {
         var arr = new JsonArray();
         arr.add(JsonBoolean.of(true));
         var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
-        var idx = List.of(new FieldIndexEntry<>(dbName, collName, true, Set.of("id1")),
-                new FieldIndexEntry<>(dbName, collName, false, Set.of("id2")));
+        var idx = List.of(new FieldIndexEntry<>(dbName, collName, false, Set.of("id2")),
+                new FieldIndexEntry<>(dbName, collName, true, Set.of("id1")));
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class)).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
 

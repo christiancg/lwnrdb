@@ -131,8 +131,8 @@ final class RecordReplacer {
                 final var page = group.getKey();
                 for (final var index : group.getValue()) {
                     final var entry = entries.get(index);
-                    newRows[index] = new PkIndexEntry(dbName, collName, entry.get_id(), plan.append(page, lines[index]),
-                            lines[index].length, page, entry.getVersion());
+                    newRows[index] = new PkIndexEntry(dbName, collName, entry.getIndex().getValue(),
+                            plan.append(page, lines[index]), lines[index].length, page, entry.getVersion());
                     plan.replaceRow(newRows[index]);
                     plan.blank(page, positions[index], entry.getIndex().getLength());
                 }
@@ -176,7 +176,7 @@ final class RecordReplacer {
             final var entry = entries.get(index);
             final var updatedEntry = new IndexedDbEntry();
             updatedEntry.setIndex(newRows[index]);
-            updatedEntry.set_id(entry.get_id());
+            updatedEntry.set_id(newRows[index].getValue());
             updatedEntry.setCollectionName(collName);
             updatedEntry.setDatabaseName(dbName);
             updatedEntry.setData(entry.getData());

@@ -156,6 +156,24 @@ public class EventProcessorIncarnationTest {
     }
 
     @Test
+    public void test_a_stale_group_creates_no_page_row() throws Exception {
+        final var batch = List.<Event>of(event(EventType.CREATED, entryOnPage("stale-a", 11), DROPPED),
+                event(EventType.CREATED, entryOnPage("stale-b", 11), DROPPED));
+
+        EventProcessorHelper.processBatch(batch);
+
+        Assertions.assertNull(page(11));
+    }
+
+    @Test
+    public void test_a_booking_under_a_changed_incarnation_creates_no_row() throws Exception {
+        AdminOperationHelper.bookWritePathPages(TestGlobals.DB, TestGlobals.COLL,
+                List.of(EntityRef.of(entryOnPage("raced-group", 12))), List.of(), DROPPED);
+
+        Assertions.assertNull(page(12));
+    }
+
+    @Test
     public void test_current_incarnation_reads_the_registered_entry() {
         Assertions.assertEquals(CURRENT, CollectionIncarnation.current(TestGlobals.DB, TestGlobals.COLL));
         Assertions.assertEquals(0L, CollectionIncarnation.current(TestGlobals.DB, "neverCreated"));

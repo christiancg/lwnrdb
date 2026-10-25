@@ -67,6 +67,11 @@ public final class AdminOperationHelper {
         AdminPageHelper.updateEntryCount(dbName, collName, type, entity, incarnation);
     }
 
+    public static void bookWritePathPages(String dbName, String collName, List<EntityRef> created,
+            List<EntityRef> others, long incarnation) throws InterruptedException {
+        AdminPageHelper.bookWritePathPages(dbName, collName, created, others, incarnation);
+    }
+
     public static void createPageCollections(String dbName, String collName) throws IOException {
         AdminPageHelper.createPageCollections(dbName, collName);
     }

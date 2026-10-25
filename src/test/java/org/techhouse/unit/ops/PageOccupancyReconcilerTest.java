@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
-import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -279,8 +278,7 @@ public class PageOccupancyReconcilerTest {
     }
 
     private List<EntityEvent> queuedUpdates() throws Exception {
-        final LinkedBlockingQueue<?> queue = TestUtils.getPrivateField(stubTaskManager, "queue",
-                LinkedBlockingQueue.class);
+        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
         return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast)
                 .filter(event -> event.getType() == EventType.UPDATED).toList();
     }

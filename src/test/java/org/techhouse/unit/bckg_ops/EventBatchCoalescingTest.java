@@ -7,8 +7,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
@@ -59,24 +62,40 @@ public class EventBatchCoalescingTest {
     }
 
     @Test
-    public void test_batched_creates_count_the_same_as_individual_ones() throws Exception {
+    public void test_batched_creates_count_every_created_id_like_a_bulk_event() throws Exception {
         seedCollections();
         final var batched = new ArrayList<Event>();
-        final var individual = new ArrayList<Event>();
+        final var inserted = new ArrayList<DbEntry>();
         for (var i = 0; i < 12; i++) {
             batched.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry("id" + i)));
             final var other = entry("id" + i);
             other.setCollectionName(OTHER_COLL);
-            individual.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, OTHER_COLL, other));
+            inserted.add(other);
         }
 
         EventProcessorHelper.processBatch(batched);
-        for (final var event : individual) {
-            EventProcessorHelper.processEvent(event);
-        }
+        EventProcessorHelper.processEvent(new BulkEntityEvent(TestGlobals.DB, OTHER_COLL, inserted, List.of()));
 
+        Assertions.assertEquals(12, totalEntryCount(TestGlobals.COLL));
         Assertions.assertEquals(totalEntryCount(OTHER_COLL), totalEntryCount(TestGlobals.COLL),
-                "a coalesced batch must leave the same entry count as the same events processed one by one");
+                "a coalesced batch books a missing page like a bulk event of the same documents");
+    }
+
+    @Test
+    public void test_a_group_is_booked_once() throws Exception {
+        seedCollections();
+        final var batch = new ArrayList<Event>();
+        for (var i = 0; i < 6; i++) {
+            batch.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry("once" + i)));
+        }
+        try (var admin = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
+            EventProcessorHelper.processBatch(batch);
+
+            admin.verify(() -> AdminOperationHelper.bookWritePathPages(ArgumentMatchers.eq(TestGlobals.DB),
+                    ArgumentMatchers.eq(TestGlobals.COLL), ArgumentMatchers.argThat(created -> created.size() == 6),
+                    ArgumentMatchers.argThat(List::isEmpty), ArgumentMatchers.anyLong()), Mockito.times(1));
+        }
+        Assertions.assertEquals(6, totalEntryCount(TestGlobals.COLL));
     }
 
     @Test
@@ -116,7 +135,7 @@ public class EventBatchCoalescingTest {
     }
 
     @Test
-    public void test_mixed_event_types_batched_match_the_same_events_unbatched() throws Exception {
+    public void test_mixed_event_types_batched_match_the_same_documents_as_a_bulk_event() throws Exception {
         seedCollections();
 
         final var batched = new ArrayList<Event>();
@@ -125,15 +144,19 @@ public class EventBatchCoalescingTest {
         batched.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry("id1")));
         EventProcessorHelper.processBatch(batched);
 
-        for (final var type : List.of(EventType.CREATED, EventType.UPDATED, EventType.CREATED)) {
-            final var id = type == EventType.UPDATED ? "id0" : "id" + (type == EventType.CREATED ? 0 : 1);
+        final var inserted = new ArrayList<DbEntry>();
+        for (final var id : List.of("id0", "id1")) {
             final var other = entry(id);
             other.setCollectionName(OTHER_COLL);
-            EventProcessorHelper.processEvent(new EntityEvent(type, TestGlobals.DB, OTHER_COLL, other));
+            inserted.add(other);
         }
+        final var updated = entry("id0");
+        updated.setCollectionName(OTHER_COLL);
+        EventProcessorHelper.processEvent(new BulkEntityEvent(TestGlobals.DB, OTHER_COLL, inserted, List.of(updated)));
 
+        Assertions.assertEquals(2, totalEntryCount(TestGlobals.COLL));
         Assertions.assertEquals(totalEntryCount(OTHER_COLL), totalEntryCount(TestGlobals.COLL),
-                "batched and unbatched must agree on the entry count");
+                "batched events and a bulk event of the same documents must agree on the entry count");
     }
 
     @Test

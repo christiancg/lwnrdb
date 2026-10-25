@@ -7,6 +7,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundLanes;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
@@ -456,13 +457,12 @@ public class OperationProcessorWriteTest {
         final var idxEntry = pkIndex.stream().filter(entry -> entry.getValue().equals("reloc-event")).findFirst()
                 .orElseThrow();
         final var taskManager = IocContainer.get(BackgroundTaskManager.class);
-        final var sharedQueue = TestUtils.getPrivateField(taskManager, "queue",
-                java.util.concurrent.LinkedBlockingQueue.class);
-        final var isolatedQueue = new java.util.concurrent.LinkedBlockingQueue<org.techhouse.bckg_ops.events.Event>();
+        final var sharedQueue = TestUtils.getPrivateField(taskManager, "lanes", BackgroundLanes.class);
+        final var isolatedQueue = new BackgroundLanes(1);
         final var wasDraining = TestUtils.getPrivateField(taskManager, "draining", Boolean.class);
         final var sharedInFlight = TestUtils.getPrivateField(taskManager, "inFlight",
                 java.util.concurrent.atomic.AtomicInteger.class);
-        TestUtils.setPrivateField(taskManager, "queue", isolatedQueue);
+        TestUtils.setPrivateField(taskManager, "lanes", isolatedQueue);
         TestUtils.setPrivateField(taskManager, "inFlight", new java.util.concurrent.atomic.AtomicInteger());
         TestUtils.setPrivateField(taskManager, "draining", false);
         try {
@@ -470,13 +470,12 @@ public class OperationProcessorWriteTest {
         } finally {
             TestUtils.setPrivateField(taskManager, "draining", wasDraining);
             TestUtils.setPrivateField(taskManager, "inFlight", sharedInFlight);
-            TestUtils.setPrivateField(taskManager, "queue", sharedQueue);
+            TestUtils.setPrivateField(taskManager, "lanes", sharedQueue);
         }
     }
 
     private static void assertNoEventIsQueued(Cache cache, org.techhouse.data.PkIndexEntry idxEntry,
-            java.util.List<org.techhouse.data.PkIndexEntry> pkIndex, java.util.concurrent.LinkedBlockingQueue<?> queue)
-            throws Exception {
+            java.util.List<org.techhouse.data.PkIndexEntry> pkIndex, BackgroundLanes queue) throws Exception {
         final var broken = new DbEntry();
         broken.setDatabaseName(TestGlobals.DB);
         broken.setCollectionName(TestGlobals.COLL);
@@ -486,7 +485,7 @@ public class OperationProcessorWriteTest {
                 broken, idxEntry, pkIndex));
 
         assertTrue(
-                queue.stream().noneMatch(
+                TestUtils.queuedEvents(queue).stream().noneMatch(
                         event -> event instanceof EntityEvent entity && "reloc-event".equals(entity.getId())),
                 "nothing moved, so there is no delete or insert to maintain");
         assertTrue(cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()

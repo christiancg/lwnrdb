@@ -1211,6 +1211,60 @@ def test_page_metadata_follows_an_admin_row_that_grows_on_update(conn: Conn, wor
           "first-fit is packing rows into a page it believes has room — " + "; ".join(drifted) if drifted else "")
 
 
+COMPACT_ROWS_COLL = "compact_rows"
+COMPACT_ROWS_PAGES = 6
+COMPACT_ROWS_ROUNDS = 20
+COMPACT_ROWS_FLOOR = 1024
+BOOKED_COLL = "booked_rows"
+
+
+def page_metadata_dead_bytes(work_dir: str, db: str, coll: str) -> tuple:
+    folder = os.path.join(work_dir, "db", "admin", "pages", f"{db}_{coll}")
+    total = live = 0
+    if not os.path.isdir(folder):
+        return 0, 0
+    for name in (f for f in os.listdir(folder) if f.endswith(".dat")):
+        with open(os.path.join(folder, name), "rb") as fp:
+            data = fp.read()
+        total += len(data)
+        live += sum(len(line) + 1 for line in data.split(b"\n") if line.strip())
+    return total - live, live
+
+
+def test_admin_page_rows_stay_compact_under_write_back(conn: Conn, work_dir: str):
+    section("A collection's page-row file is compacted once its dead bytes pass the larger of 1 KB and its live bytes")
+    conn.create_coll(COMPACT_ROWS_COLL)
+    pad = "p" * 600
+    for i in range(COMPACT_ROWS_PAGES * 6):
+        conn.save({"_id": f"row{i:03d}", "pad": pad}, coll=COMPACT_ROWS_COLL)
+    settled_drift(work_dir, DB, COMPACT_ROWS_COLL)
+    worst = 0
+    live = 0
+    for round_index in range(COMPACT_ROWS_ROUNDS):
+        before = page_metadata_bytes(work_dir, DB, COMPACT_ROWS_COLL)
+        conn.save({"_id": "row000", "pad": pad[:-1 - round_index % 2]}, coll=COMPACT_ROWS_COLL)
+        bu.wait_until(lambda: page_metadata_bytes(work_dir, DB, COMPACT_ROWS_COLL) != before, timeout_s=5.0,
+                      interval_s=0.1)
+        dead, live = page_metadata_dead_bytes(work_dir, DB, COMPACT_ROWS_COLL)
+        worst = max(worst, dead)
+    one_row = live // max(1, len(recorded_pages(work_dir, DB, COMPACT_ROWS_COLL)))
+    check(f"{COMPACT_ROWS_ROUNDS} write-backs keep the dead bytes within the compaction bound",
+          worst <= max(COMPACT_ROWS_FLOOR, live) + 2 * one_row, f"worst {worst}B dead, {live}B live")
+    check("the page rows still describe the pages after the compactions",
+          not settled_drift(work_dir, DB, COMPACT_ROWS_COLL))
+
+
+def test_single_saves_book_every_created_id(conn: Conn, work_dir: str):
+    section("Single saves landing on a fresh page are each counted in its page row")
+    conn.create_coll(BOOKED_COLL)
+    for i in range(5):
+        check_status(f"save booked{i}", conn.save({"_id": f"booked{i}", "n": i}, coll=BOOKED_COLL), "OK")
+    drifted = settled_drift(work_dir, DB, BOOKED_COLL)
+    rows = recorded_pages(work_dir, DB, BOOKED_COLL)
+    check("the page row counts all five documents and their bytes", not drifted and
+          sum(row["entryCount"] for row in rows.values()) == 5, "; ".join(drifted) or str(rows))
+
+
 def test_page_metadata_follows_dropped_databases(conn: Conn, work_dir: str):
     section("Page occupancy for admin/databases after dropping databases that hold collections")
     refused = []
@@ -1771,6 +1825,42 @@ def test_bulk_insert_with_two_indexes_converges_quickly(conn: Conn, work_dir: st
         by_scan = sorted(conn.ids(CONVERGE_COLL, [{"type": "SKIP", "skip": 0}, equals]))
         check(f"the {field} index answers exactly what a scan answers", by_index == by_scan and by_index,
               f"index={len(by_index)} scan={len(by_scan)}")
+
+
+LANE_WRITERS = 8
+LANE_DOCS = 300
+
+
+def test_concurrent_writes_to_many_collections_converge(conn: Conn):
+    section(f"{LANE_WRITERS} clients writing {LANE_WRITERS} indexed collections at once are indexed exactly")
+    collections = [f"lane_coll_{i}" for i in range(LANE_WRITERS)]
+    for coll in collections:
+        check_status(f"create {coll}", conn.create_coll(coll), "OK")
+        for field in ("cat", "num"):
+            check_status(f"index {coll}.{field}", conn.create_index(field, coll=coll), "OK")
+    refused = []
+
+    def write(target):
+        with admin_conn() as writer:
+            for i in range(LANE_DOCS):
+                r = writer.save({"_id": f"d{i:04d}", "cat": f"c{i % 7}", "num": i % 50}, coll=target)
+                if r.get("status") != "OK":
+                    refused.append(r)
+
+    threads = [threading.Thread(target=write, args=(coll,)) for coll in collections]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(120)
+    check("every concurrent write was acknowledged", not refused, str(refused[:1]))
+    wrong = []
+    for coll in collections:
+        for step in (bu.filter_step("cat", "EQUALS", "c3"), bu.filter_step("num", "GREATER_THAN_EQUALS", 45)):
+            settled = bu.wait_until(lambda: sorted(conn.ids(coll, [step])) ==
+                                    sorted(conn.ids(coll, [{"type": "SKIP", "skip": 0}, step])), timeout_s=15.0)
+            if not settled:
+                wrong.append(f"{coll}: {step['operator']}")
+    check("every collection's indexes answer exactly what its scan answers", not wrong, "; ".join(wrong[:3]))
 
 
 def test_an_unclean_stop_is_reported_at_the_next_startup(log_path: str, log_offset: int):
@@ -2511,6 +2601,8 @@ def main():
             test_scan_is_complete_after_the_first_write(conn)
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_page_metadata_follows_an_admin_row_that_grows_on_update(conn, work_dir)
+            test_admin_page_rows_stay_compact_under_write_back(conn, work_dir)
+            test_single_saves_book_every_created_id(conn, work_dir)
             test_page_metadata_follows_dropped_databases(conn, work_dir)
             test_page_metadata_follows_collections_dropped_after_a_restart(conn, work_dir)
             test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn, work_dir)
@@ -2537,6 +2629,7 @@ def main():
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
             test_bulk_insert_with_two_indexes_converges_quickly(conn, work_dir)
+            test_concurrent_writes_to_many_collections_converge(conn)
             test_updates_on_a_large_collection_stay_fast(conn)
             churned_flags = test_a_low_cardinality_index_stays_exact_under_churn(conn)
             memory_pk_written = rewrite_a_pk_index_from_memory(conn)

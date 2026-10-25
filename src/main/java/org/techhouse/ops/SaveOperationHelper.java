@@ -73,8 +73,9 @@ public final class SaveOperationHelper {
 
     public static OperationResponse executeSave(SaveRequest saveRequest, long version, DirtySink sink)
             throws Exception {
-        final var dbName = saveRequest.getDatabaseName();
-        final var collName = saveRequest.getCollectionName();
+        final var names = Cache.canonicalNames(saveRequest.getDatabaseName(), saveRequest.getCollectionName());
+        final var dbName = names.dbName();
+        final var collName = names.collName();
         final var idError = reconcileSaveId(saveRequest);
         if (idError != null) {
             return idError;
@@ -103,6 +104,7 @@ public final class SaveOperationHelper {
                 return relocateWithListensHeld(dbName, collName, entry, idxEntry, primaryKeyIndex, encodedLine,
                         saveRequest.isBackgroundFollowOn(), sink);
             }
+            adoptResidentId(entry, idxEntry);
             entry.setPage(idxEntry.getPage());
             final var previousLength = idxEntry.getLength();
             pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
@@ -133,6 +135,12 @@ public final class SaveOperationHelper {
         return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue(), eventType == EventType.CREATED);
     }
 
+    private static void adoptResidentId(DbEntry entry, PkIndexEntry residentRow) {
+        final var residentId = residentRow.getValue();
+        entry.adoptId(residentId);
+        entry.getData().addProperty(Globals.PK_FIELD, residentId);
+    }
+
     private static Set<String> idSetOf(List<IndexedDbEntry> entries) {
         final var ids = new HashSet<String>(entries.size() * 2);
         for (final var entry : entries) {
@@ -157,8 +165,9 @@ public final class SaveOperationHelper {
     // A non-null versions list supplies the owner's version per object, so replicas do not assign their own.
     public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest, List<Long> versions,
             DirtySink sink) throws Exception {
-        final var dbName = bulkSaveRequest.getDatabaseName();
-        final var collName = bulkSaveRequest.getCollectionName();
+        final var names = Cache.canonicalNames(bulkSaveRequest.getDatabaseName(), bulkSaveRequest.getCollectionName());
+        final var dbName = names.dbName();
+        final var collName = names.collName();
         final var entries = new ArrayList<DbEntry>();
         final var objects = bulkSaveRequest.getObjects();
         for (var i = 0; i < objects.size(); i++) {
@@ -194,11 +203,12 @@ public final class SaveOperationHelper {
                 final var foundIndexEntry = PkIndexList.positionOf(primaryKeyIndex, id);
                 if (foundIndexEntry >= 0) {
                     final var foundIndex = primaryKeyIndex.get(foundIndexEntry);
+                    adoptResidentId(i, foundIndex);
                     final var indexedDbEntry = new IndexedDbEntry();
                     indexedDbEntry.setIndex(foundIndex);
                     indexedDbEntry.setDatabaseName(dbName);
                     indexedDbEntry.setCollectionName(collName);
-                    indexedDbEntry.set_id(id);
+                    indexedDbEntry.set_id(foundIndex.getValue());
                     indexedDbEntry.setData(data);
                     indexedDbEntry.setVersion(i.getVersion());
                     indexedDbEntriesToUpdate.add(indexedDbEntry);
