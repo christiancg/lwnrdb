@@ -8,13 +8,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.function.LongFunction;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PageOccupancy;
 import org.techhouse.fs.VacuumedPage;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -57,7 +60,11 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public static String getCollectionIdentifier(String dbName, String collName) {
-        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
+        return CollectionIdentifiers.of(dbName, collName);
+    }
+
+    public static CollectionNames canonicalNames(String dbName, String collName) {
+        return CollectionIdentifiers.namesOf(dbName, collName);
     }
 
     public static String getIndexIdentifier(String fieldName, Class<?> fieldType) {
@@ -78,6 +85,13 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public static String getHashIndexIdentifier(String fieldName, String typeLabel) {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + Globals.HASH_INDEX_KEY_PREFIX + typeLabel;
+    }
+
+    public LongFunction<PageOccupancy> pageOccupancy(String dbName, String collName) {
+        return page -> {
+            final var entry = adminCache.getAdminPageEntry(dbName, collName, page);
+            return entry == null ? null : new PageOccupancy(entry.getPageSize(), entry.getEntryCount());
+        };
     }
 
     private static void reposition(VacuumedPage vacuumed, AdminCache admins, UserCache users) {
@@ -111,11 +125,16 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return IndexLookupResolver.countInRange(userCache, dbName, collName, bounds);
     }
 
+    public <T> OptionalLong countEquals(String dbName, String collName, String fieldName, T value) throws IOException {
+        return IndexLookupResolver.countEquals(userCache, dbName, collName, fieldName, value);
+    }
+
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
         return userCache.getEntriesByIds(dbName, collName, ids);
     }
 
     public void evictDatabase(String dbName) {
+        CollectionIdentifiers.forgetDatabase(dbName);
         absentIndexTypes.forgetDatabase(dbName);
         userCache.evictDatabase(dbName);
         adminCache.removeCollectionSchemasForDatabase(dbName);
@@ -126,6 +145,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public void evictCollection(String dbName, String collName) {
         absentIndexTypes.forgetCollection(getCollectionIdentifier(dbName, collName));
+        CollectionIdentifiers.forget(dbName, collName);
         userCache.evictCollection(dbName, collName);
         adminCache.removeCollectionSchema(dbName, collName);
         adminCache.removeTriggers(dbName, collName);
@@ -210,24 +230,29 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         final var collPages = adminCache.getAdminPageEntries(dbName, collName);
         if (collPages == null || collPages.isEmpty() || collPages.size() < fs.pageFileCount(dbName, collName)) {
             return inScanOrder
-                    ? fs.streamPages(dbName, collName).flatMap(page -> orderedPage(page.values(), true))
+                    ? fs.streamPages(dbName, collName).flatMap(page -> sortedById(page.values()))
                     : fs.streamEntries(dbName, collName);
         }
         final var sortedPages = collPages.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).toList();
-        // flatMap keeps this lazy, so only one page map is resident at a time.
-        return sortedPages.stream().flatMap(pageEntry -> {
-            try {
-                final var page = fs.readWholeCollectionPage(dbName, collName, pageEntry.getPage()).values();
-                memoryManagement.ensureHeadroomForBytes(CacheSizeEstimator.estimatePageHeap(page));
-                return orderedPage(page, inScanOrder);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        });
+        final var scan = new ScanAdmission(sortedPages, inScanOrder,
+                page -> fs.readWholeCollectionPage(dbName, collName, page).values(), memoryManagement,
+                scanCompletion(dbName, collName));
+        return StreamSupport.stream(scan, false);
     }
 
-    private static Stream<DbEntry> orderedPage(Collection<DbEntry> pageDocuments, boolean inScanOrder) {
-        return inScanOrder ? pageDocuments.stream().sorted(BY_ID) : pageDocuments.stream();
+    private ScanAdmission.Completion scanCompletion(String dbName, String collName) {
+        if (userCache.isCachingDisabled(dbName) || !locks.holdsCollectionLock(dbName, collName)) {
+            return null;
+        }
+        return collected -> {
+            if (locks.holdsCollectionLock(dbName, collName) && collected.size() == pkIndexSize(dbName, collName)) {
+                userCache.admitWholeCollection(dbName, collName, collected);
+            }
+        };
+    }
+
+    private static Stream<DbEntry> sortedById(Collection<DbEntry> pageDocuments) {
+        return pageDocuments.stream().sorted(BY_ID);
     }
 
     private Map<String, DbEntry> readWholeCollection(String dbName, String collName) throws IOException {

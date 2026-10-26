@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
@@ -41,8 +42,10 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.tx.TransactionWrites;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 
 public class TransactionOperationHelperTest {
     final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
@@ -242,6 +245,7 @@ public class TransactionOperationHelperTest {
         // Simulate a crash: the buffered op record is on disk/in the index, but we drop the in-memory
         // transaction without committing or rolling back.
         final var transaction = clientTracker.getActiveTransaction(clientId);
+        TransactionRecordCalls.persistBufferedOps(transaction);
         for (final var collId : transaction.getHeldLocks()) {
             locks.releaseWrite(collId);
         }
@@ -276,7 +280,8 @@ public class TransactionOperationHelperTest {
         processor.processMessage(new StartTransactionRequest(), clientId);
         processor.processMessage(saveRequest("txn-commit-err"), clientId);
         try (var mocked = mockStatic(AdminOperationHelper.class)) {
-            mocked.when(() -> AdminOperationHelper.readTransactionOps(any())).thenThrow(new RuntimeException("boom"));
+            mocked.when(() -> AdminOperationHelper.writeTransactionRecords(any(), any()))
+                    .thenThrow(new RuntimeException("boom"));
             final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
             assertEquals("500-24", response.getErrorCode());
         }
@@ -319,8 +324,9 @@ public class TransactionOperationHelperTest {
     public void test_buffer_save_error_returns_500_24() throws Exception {
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        try (var mocked = mockStatic(AdminOperationHelper.class)) {
-            mocked.when(() -> AdminOperationHelper.saveTransactionOp(any())).thenThrow(new RuntimeException("boom"));
+        try (var mocked = mockStatic(TransactionWrites.class, CALLS_REAL_METHODS)) {
+            mocked.when(() -> TransactionWrites.checkEntrySize(any(), any(), any(), any()))
+                    .thenThrow(new RuntimeException("boom"));
             final var response = processor.processMessage(saveRequest("txn-buf-err"), clientId);
             assertEquals("500-24", response.getErrorCode());
         }
@@ -338,8 +344,9 @@ public class TransactionOperationHelperTest {
         obj.add("_id", new JsonString("txn-bulk-err"));
         objects.add(obj);
         bulk.setObjects(objects);
-        try (var mocked = mockStatic(AdminOperationHelper.class)) {
-            mocked.when(() -> AdminOperationHelper.saveTransactionOp(any())).thenThrow(new RuntimeException("boom"));
+        try (var mocked = mockStatic(TransactionWrites.class, CALLS_REAL_METHODS)) {
+            mocked.when(() -> TransactionWrites.checkEntrySize(any(), any(), any(), any()))
+                    .thenThrow(new RuntimeException("boom"));
             final var response = processor.processMessage(bulk, clientId);
             assertEquals("500-24", response.getErrorCode());
         }
@@ -357,8 +364,9 @@ public class TransactionOperationHelperTest {
         processor.processMessage(new StartTransactionRequest(), clientId);
         final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         delete.set_id("txn-deleteme");
-        try (var mocked = mockStatic(AdminOperationHelper.class)) {
-            mocked.when(() -> AdminOperationHelper.saveTransactionOp(any())).thenThrow(new RuntimeException("boom"));
+        try (var mocked = mockStatic(TransactionWrites.class, CALLS_REAL_METHODS)) {
+            mocked.when(() -> TransactionWrites.documentForDeletedTrigger(any(), any(), any(), any(), any()))
+                    .thenThrow(new RuntimeException("boom"));
             final var response = processor.processMessage(delete, clientId);
             assertEquals("500-24", response.getErrorCode());
         }

@@ -1,11 +1,12 @@
 package org.techhouse.utils;
 
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.function.ToIntBiFunction;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.SortedChunks;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 
@@ -28,22 +29,36 @@ public final class SearchUtils {
     }
 
     public static <T> Set<String> findingBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
-        final var slice = sliceOf(entries, bounds);
+        final var slice = sliceBetween(entries, bounds);
         return slice == null ? Set.of() : toIdSet(entries, slice[0], slice[1]);
     }
 
     public static <T> long countBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
-        final var slice = sliceOf(entries, bounds);
+        return idCountOf(entries, sliceBetween(entries, bounds));
+    }
+
+    public static <T> long countEquals(List<FieldIndexEntry<T>> entries, T value) {
+        return idCountOf(entries, equalRun(entries, value));
+    }
+
+    private static <T> long idCountOf(List<FieldIndexEntry<T>> entries, int[] slice) {
+        return slice == null ? 0L : idCountOf(entries, slice[0], slice[1]);
+    }
+
+    private static <T> long idCountOf(List<FieldIndexEntry<T>> entries, int from, int to) {
+        if (entries instanceof SortedChunks<?> chunked) {
+            @SuppressWarnings("unchecked")
+            final var chunks = (SortedChunks<FieldIndexEntry<T>>) chunked;
+            return chunks.sumOf(from, to, entry -> entry.getIds().size());
+        }
         var count = 0L;
-        if (slice != null) {
-            for (var i = slice[0]; i < slice[1]; i++) {
-                count += entries.get(i).getIds().size();
-            }
+        for (var index = from; index < to; index++) {
+            count += entries.get(index).getIds().size();
         }
         return count;
     }
 
-    private static <T> int[] sliceOf(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
+    public static <T> int[] sliceBetween(List<FieldIndexEntry<T>> entries, RangeBounds bounds) {
         var from = 0;
         var to = entries.size();
         for (final var bound : bounds.bounds()) {
@@ -76,19 +91,9 @@ public final class SearchUtils {
     }
 
     private static <T> int[] equalRun(List<FieldIndexEntry<T>> entries, T value) {
-        final var hit = Collections.binarySearch(entries, value);
-        if (hit < 0) {
-            return null;
-        }
-        var from = hit;
-        while (from > 0 && entries.get(from - 1).compareTo(value) == 0) {
-            from--;
-        }
-        var to = hit + 1;
-        while (to < entries.size() && entries.get(to).compareTo(value) == 0) {
-            to++;
-        }
-        return new int[]{from, to};
+        final var from = partitionPoint(entries, entry -> entry.compareTo(value) < 0);
+        final var to = partitionPoint(entries, entry -> entry.compareTo(value) <= 0);
+        return from < to ? new int[]{from, to} : null;
     }
 
     private static <T> Set<String> findingRange(List<FieldIndexEntry<T>> entries, T value,
@@ -125,66 +130,46 @@ public final class SearchUtils {
         return entryCustom.compare(target.getCustomValue());
     }
 
-    // Relies on the entries being sorted by value, which FieldIndexLoader guarantees.
     private static <T, V> int binarySearchBoundary(List<FieldIndexEntry<T>> entries, V value,
             GreaterSmallerEqualsType type, ToIntBiFunction<T, V> compare) {
-        if (entries.isEmpty()) {
-            return -1;
+        return switch (type) {
+            case GREATER_THAN -> lowerBoundary(entries,
+                    partitionPoint(entries, entry -> compare.applyAsInt(entry.getValue(), value) <= 0));
+            case GREATER_THAN_EQUALS -> lowerBoundary(entries,
+                    partitionPoint(entries, entry -> compare.applyAsInt(entry.getValue(), value) < 0));
+            case SMALLER_THAN -> partitionPoint(entries, entry -> compare.applyAsInt(entry.getValue(), value) < 0) - 1;
+            case SMALLER_THAN_EQUALS ->
+                partitionPoint(entries, entry -> compare.applyAsInt(entry.getValue(), value) <= 0) - 1;
+        };
+    }
+
+    private static int lowerBoundary(List<?> entries, int point) {
+        return point == entries.size() ? -1 : point;
+    }
+
+    private static <E> int partitionPoint(List<E> entries, Predicate<? super E> before) {
+        if (entries instanceof SortedChunks<?> chunked) {
+            @SuppressWarnings("unchecked")
+            final var chunks = (SortedChunks<E>) chunked;
+            return chunks.partitionPoint(before);
         }
-        int start = 0;
-        int end = entries.size() - 1;
-        switch (type) {
-            case SMALLER_THAN -> {
-                if (compare.applyAsInt(entries.get(end).getValue(), value) < 0) {
-                    return end;
-                }
-            }
-            case SMALLER_THAN_EQUALS -> {
-                if (compare.applyAsInt(entries.get(end).getValue(), value) <= 0) {
-                    return end;
-                }
-            }
-            case GREATER_THAN -> {
-                if (compare.applyAsInt(entries.get(start).getValue(), value) > 0) {
-                    return start;
-                }
-            }
-            case GREATER_THAN_EQUALS -> {
-                if (compare.applyAsInt(entries.get(start).getValue(), value) >= 0) {
-                    return start;
-                }
-            }
-            default -> {
-            }
-        }
-        final var searchingSmaller = type == GreaterSmallerEqualsType.SMALLER_THAN
-                || type == GreaterSmallerEqualsType.SMALLER_THAN_EQUALS;
-        int ans = -1;
-        while (start <= end) {
-            final int mid = (start + end) / 2;
-            final int cmp = compare.applyAsInt(entries.get(mid).getValue(), value);
-            final boolean overshot = searchingSmaller
-                    ? (type == GreaterSmallerEqualsType.SMALLER_THAN ? cmp >= 0 : cmp > 0)
-                    : (type == GreaterSmallerEqualsType.GREATER_THAN ? cmp <= 0 : cmp < 0);
-            if (searchingSmaller == overshot) {
-                end = mid - 1;
-                if (!searchingSmaller) {
-                    ans = mid;
-                }
+        var low = 0;
+        var high = entries.size();
+        while (low < high) {
+            final var middle = (low + high) >>> 1;
+            if (before.test(entries.get(middle))) {
+                low = middle + 1;
             } else {
-                start = mid + 1;
-                if (searchingSmaller) {
-                    ans = mid;
-                }
+                high = middle;
             }
         }
-        return ans;
+        return low;
     }
 
     private static <T> Set<String> toIdSet(List<FieldIndexEntry<T>> entries, int start, int foundIndex) {
-        final var ids = new HashSet<String>();
-        for (var i = start; i < foundIndex; i++) {
-            ids.addAll(entries.get(i).getIds());
+        final var ids = HashSet.<String>newHashSet((int) idCountOf(entries, start, foundIndex));
+        for (final var entry : entries.subList(start, foundIndex)) {
+            ids.addAll(entry.getIds());
         }
         return ids;
     }

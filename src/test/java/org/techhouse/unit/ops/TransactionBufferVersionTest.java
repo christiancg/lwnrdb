@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
-import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.test.TestGlobals;
@@ -19,14 +18,14 @@ import org.techhouse.test.TestUtils;
 
 public class TransactionBufferVersionTest extends VersionedReplaySupport {
 
-    private List<AdminTransactionEntry> bufferedOps(Transaction transaction) throws Exception {
-        final var ops = new ArrayList<>(AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds()));
+    private List<AdminTransactionEntry> bufferedOps(Transaction transaction) {
+        final var ops = new ArrayList<>(transaction.getPendingOps());
         ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
         return ops;
     }
 
     @Test
-    public void test_each_buffered_op_gets_a_strictly_increasing_version() throws Exception {
+    public void test_each_buffered_op_gets_a_strictly_increasing_version() {
         final var transaction = newTransaction();
         bufferSave(transaction, "a", "one");
         bufferSave(transaction, "a", "two");
@@ -45,7 +44,7 @@ public class TransactionBufferVersionTest extends VersionedReplaySupport {
     }
 
     @Test
-    public void test_a_bulk_save_gets_one_version_per_element() throws Exception {
+    public void test_a_bulk_save_gets_one_version_per_element() {
         final var transaction = newTransaction();
         bufferBulkSave(transaction, document("b1", "x"), document("b2", "y"), document("b3", "z"));
 

@@ -92,6 +92,23 @@ public class ServerMainClockSeedTest {
     }
 
     @Test
+    public void test_the_seed_skips_torn_and_malformed_lines_and_delete_rows() throws Exception {
+        final var planted = HybridClock.pack(System.currentTimeMillis() + 864_000_000L, 4);
+        final var torn = HybridClock.pack(System.currentTimeMillis() + 900_000_000L, 1);
+        Files.writeString(pkIndexFile(TestGlobals.COLL).toPath(),
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a", 0, 10, 0, planted).toFileEntry() + "\n"
+                        + "not a pk row\n" + PkIndexEntry.toDeleteRow("b") + "\n"
+                        + new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "c", 0, 10, 0, torn).toFileEntry(),
+                StandardCharsets.UTF_8);
+        Files.writeString(pkIndexFile(UNREADABLE_COLL).toPath(), "unrecognised\n", StandardCharsets.UTF_8);
+
+        seed();
+
+        assertEquals(planted, hybridClock.current(),
+                "a torn last line was never acknowledged, so its version must not seed the clock");
+    }
+
+    @Test
     public void test_buffered_op_versions_are_part_of_the_seed() throws Exception {
         Files.writeString(pkIndexFile(UNREADABLE_COLL).toPath(), "", StandardCharsets.UTF_8);
         final var planted = HybridClock.pack(System.currentTimeMillis() + 864_000_000L, 9);

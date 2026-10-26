@@ -1,12 +1,12 @@
 package org.techhouse.ops;
 
-import java.util.Collections;
 import java.util.List;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.PkIndexList;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.DirtySink;
@@ -36,7 +36,7 @@ public final class DeleteOperationHelper {
         final var collName = deleteRequest.getCollectionName();
         final var id = deleteRequest.get_id();
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        final var found = Collections.binarySearch(primaryKeyIndex, id);
+        final var found = PkIndexList.positionOf(primaryKeyIndex, id);
         if (found < 0) {
             return new OperationResponse(OperationType.DELETE, "Entry with id " + id + " not found",
                     ErrorCode.ENTRY_NOT_FOUND);
@@ -47,10 +47,11 @@ public final class DeleteOperationHelper {
         final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
         pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entryToBeDeleted.get_id()), pendingGeneration,
                 () -> {
-                    fs.deleteFromCollection(idxEntry);
+                    fs.deleteFromCollection(idxEntry, primaryKeyIndex, cache.pageOccupancy(dbName, collName));
                     return null;
                 });
-        primaryKeyIndex.remove(Collections.binarySearch(primaryKeyIndex, id));
+        cache.updatePageSizeInMemory(dbName, collName, idxEntry.getPage(), -idxEntry.getLength(), -1);
+        primaryKeyIndex.remove(PkIndexList.positionOf(primaryKeyIndex, id));
         cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,
                 CollectionIncarnation.current(dbName, collName), pendingGeneration));

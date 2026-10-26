@@ -108,12 +108,12 @@ public class MemoryManagementErrorSurvivalTest {
         final Method flush = MemoryManagement.class.getDeclaredMethod("flushUsageProfileSafely");
         flush.setAccessible(true);
         final var tracker = TestUtils.usageTrackerOf(memoryManagement);
-        final var realCounters = TestUtils.getPrivateField(tracker, "dirtyKeys", Object.class);
-        TestUtils.setPrivateField(tracker, "dirtyKeys", null);
+        final var realCounters = TestUtils.getPrivateField(tracker, "unflushed", Object.class);
+        TestUtils.setPrivateField(tracker, "unflushed", null);
         try {
             assertDoesNotThrow(() -> flush.invoke(memoryManagement));
         } finally {
-            TestUtils.setPrivateField(tracker, "dirtyKeys", realCounters);
+            TestUtils.setPrivateField(tracker, "unflushed", realCounters);
         }
     }
 }

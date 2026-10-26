@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
+import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -32,7 +33,9 @@ public final class TwoPhaseParticipant {
         }
         try {
             Tx2pcLog.recordParticipantPrepared(transaction.getTransactionId().toString(), coordinatorAddress,
-                    participants, new ArrayList<>(transaction.getHeldLocks()));
+                    participants, new ArrayList<>(transaction.getHeldLocks()),
+                    transaction.areOpsDurable() ? List.of() : transaction.getPendingOps());
+            transaction.markOpsDurable();
             return true;
         } catch (Exception e) {
             logger.warning("Failed to prepare transaction: " + e.getMessage());
@@ -41,7 +44,11 @@ public final class TwoPhaseParticipant {
     }
 
     public static OperationResponse commitPrepared(UUID clientId) {
-        return TransactionOperationHelper.commitDecided(clientId);
+        return commitPrepared(clientId, List.of());
+    }
+
+    public static OperationResponse commitPrepared(UUID clientId, List<AdminTransactionEntry> decision) {
+        return TransactionOperationHelper.commitDecided(clientId, decision);
     }
 
     // The durable replay takes the slice's collection write locks. A prepared session that never died still

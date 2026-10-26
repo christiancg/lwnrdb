@@ -17,7 +17,9 @@ services:
     build:
       context: ../..
     image: lwnrdb-bench-server
-    command: ["java", "-XX:+UseZGC", "-XX:MaxRAMPercentage=${LWNRDB_HEAP_PERCENT:-70}", "-jar", "app.jar"]
+    command: ["java", "-XX:+UseG1GC", "-Xlog:gc:file=/tmp/gc.log", "-XX:MaxRAMPercentage=${LWNRDB_HEAP_PERCENT:-35}", "-jar", "app.jar"]
+    environment:
+      JDK_JAVA_OPTIONS: ${LWNRDB_JAVA_OPTS:-}
     volumes:
       - lwnrdb-data:/app/db
       - ./generated/lwnrdb.cfg:/app/lwnrdb.cfg:ro

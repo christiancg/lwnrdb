@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundLanes;
 import org.techhouse.bckg_ops.BackgroundProcessorThread;
 import org.techhouse.bckg_ops.IdleSignal;
 import org.techhouse.bckg_ops.ScheduleExecutor;
@@ -67,7 +68,7 @@ public class WorkerErrorSurvivalTest {
 
     @Test
     public void test_a_background_worker_keeps_running_after_an_error() throws Exception {
-        final var queue = new LinkedBlockingQueue<Event>();
+        final var queue = new BackgroundLanes(1);
         final var inFlight = new AtomicInteger(1);
         final var processed = new AtomicInteger();
         queue.add(new Event(EventType.CREATED) {
@@ -77,8 +78,8 @@ public class WorkerErrorSurvivalTest {
             }
         });
         final var idleSignal = new IdleSignal();
-        final var thread = new Thread(
-                new BackgroundProcessorThread(queue, inFlight, new AtomicInteger(), new AtomicInteger(1), idleSignal));
+        final var thread = new Thread(new BackgroundProcessorThread(queue, 0, inFlight, new AtomicInteger(),
+                new AtomicInteger(1), idleSignal));
         thread.start();
         try {
             assertTrue(idleSignal.awaitIdle(() -> inFlight.get() <= 0, 5000L));

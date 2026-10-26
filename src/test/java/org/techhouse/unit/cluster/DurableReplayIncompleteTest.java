@@ -183,10 +183,10 @@ public class DurableReplayIncompleteTest {
             session.submit(() -> TransactionOperationHelper.start(session.clientId())).get(10, TimeUnit.SECONDS);
             final var transaction = clientTracker.getActiveTransaction(session.clientId());
             final var dtxId = transaction.getTransactionId().toString();
-            final var unappliable = unappliableOp(dtxId);
-            AdminOperationHelper.saveTransactionOp(unappliable);
-            transaction.getBufferedOpIds().add(unappliable.get_id());
-            Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS), List.of(collectionId()));
+            transaction.addPendingOp(unappliableOp(dtxId));
+            Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS), List.of(collectionId()),
+                    transaction.getPendingOps());
+            transaction.markOpsDurable();
 
             final var thrown = assertThrows(DurableReplayIncompleteException.class,
                     () -> TwoPhaseParticipant.resolveFromDurable(dtxId, true, 5000L));

@@ -31,7 +31,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - Only alphanumeric characters allowed and the following symbols are allowed: "_" and "-"
 - Indexes are updated in the background and admin collections also. This is to make the DB a little bit more agile.
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
-- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages/<db>_<collection>`, and the pagination of that admin collection is itself tracked in memory only and rebuilt at startup (no `pages_pages_*` files on disk). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
+- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages/<db>_<collection>`, and the pagination of that admin collection is itself tracked in memory only and rebuilt at startup (no `pages_pages_*` files on disk). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated. A delete gives its page's space back too: once a quarter of the page is dead it vacuums the page, and the delete of its last live document truncates the page file to 0 bytes (the file and its page row stay, so the next insert lands there).
 
 ## Status
 
@@ -1276,15 +1276,19 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | Point | Where it fires | Subject (`match`) |
 |---|---|---|
 | `WRITE_OWNERSHIP_RECHECKED` | A clustered write re-checked, under its collection lock, that this node owns the collection, and has not applied yet | `<db>\|<collection>` |
+| `WRITE_OWNER_PROBED` | Right after `WRITE_OWNERSHIP_RECHECKED`, at the same statement; a separate point so a test can find a collection's owner without releasing a write parked on `WRITE_OWNERSHIP_RECHECKED` | `<db>\|<collection>` |
 | `DELETE_TOMBSTONE_RESERVED` | A clustered delete wrote its tombstone and has not deleted the document yet | `<db>\|<collection>` |
 | `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
 | `PK_INDEX_REPLACED` | A `REINDEX` with `"primaryKey": true` wrote the rebuilt `pk.idx` and has not rebuilt the page rows or field indexes yet | `<db>\|<collection>` |
 | `INDEX_BATCH_FLUSHED` | A background field-index batch appended to the first of the type logs it changed and has not appended to the others yet | `<db>\|<collection>` |
 | `PAGE_COPY_APPENDED` | An update, relocation or bulk update logged its record in the write-ahead log and has not written its copies, `pk.idx` rows or blanks yet | `<db>\|<collection>` |
 | `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete wrote everything its logged record describes: the new copies, the `pk.idx` rows and the blanks of the copies they supersede | `<db>\|<collection>` |
+| `WAL_REWRITE_BEGUN` | A page vacuum logged its forced `REWRITE_BEGIN` frame and has not written its intent, rewritten or truncated the page yet | `<db>\|<collection>` |
 | `PAGE_VACUUM_RENAMED` | A page vacuum moved its rewritten page into place and has not appended the moved records' rows to `pk.idx` yet | `<db>\|<collection>` |
 | `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log (and forced it with `syncWrites`) and has not written the pages or `pk.idx` yet | `<db>\|<collection>` |
 | `WAL_CHECKPOINT_FORCED` | A checkpoint forced the pages and `pk.idx` the log touched and has not rewritten the log as a single checkpoint yet | `<db>\|<collection>` |
+| `WAL_GROUP_APPENDED` | A write group appended its records to the log, unforced, and has not forced it yet | `<db>\|<collection>` |
+| `WAL_GROUP_FORCED` | A write group forced its records and has not applied the blanks they wait for yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
 
 | Action | Effect |
@@ -1469,7 +1473,7 @@ If you prefer to skip Docker, download the jar from the latest release and run i
 
 ```bash
 echo "defaultAdminPassword=<choose-a-strong-password>" > lwnrdb.cfg
-java -XX:+UseZGC -jar lwnrdb.jar
+java -XX:+UseG1GC -jar lwnrdb.jar
 ```
 
 The jar is also its own client, so from another terminal you can create a database and a collection, save a document and read it back without installing anything else. The user is `admin` unless you changed `defaultAdminUsername`:
@@ -1494,7 +1498,7 @@ in the `lwnrdb.cfg` of the working directory before the first start:
 ```bash
 mvn clean package -DskipTests
 echo "defaultAdminPassword=<choose-a-strong-password>" >> lwnrdb.cfg
-java -XX:+UseZGC -jar target/lwnrdb.jar
+java -XX:+UseG1GC -jar target/lwnrdb.jar
 ```
 
 The jar's manifest enables final-field mutation (`Enable-Final-Field-Mutation: ALL-UNNAMED`, JEP 500): the EJson layer
@@ -1659,7 +1663,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxLogFiles` | Valid number ≥ 1 |
 | `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
-| `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory refuses to start |
+| `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory (Windows, for one) logs that warning and falls back to `false` instead of refusing to start |
 | `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, the pages and `pk.idx` its records touched are synced together and the log is rewritten as a single checkpoint. Larger means fewer checkpoints and a longer replay after a crash |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
@@ -1980,13 +1984,13 @@ acting user on the node that runs it (see [docs/clustering.md](docs/clustering.m
 
 ### Memory management
 
-`maxMemory` bounds the **user cache**: a background sweep (every 5s) sums the **modelled heap size** of the cached user collections and indexes and, while that total exceeds the budget, evicts the least-frequently-used of them. Each document and index entry is sized from the JVM's object layout — object headers (compact or not), reference width (4 bytes, or 8 under ZGC or a heap of 32 GB and more), alignment, `String` backing arrays, map entries and hash tables — so the total tracks the heap the cache really holds rather than the documents' on-disk size, which is several times smaller (a small document costs about 3 KB of heap against under 200 bytes on disk). It is still the cache's own accounting, not measured JVM heap — nothing reads real heap to decide an eviction (`GET_DATABASE_STATS` reads it only to report). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+`maxMemory` bounds the **user cache**: a background sweep (every 5s) sums the **modelled heap size** of the cached user collections and indexes and, while that total exceeds the budget, evicts the least-frequently-used of them. Each document and index entry is sized from the JVM's object layout — object headers (compact or not), reference width (4 bytes under G1, the collector the image and the run commands use, or 8 under ZGC, without compressed references, or with a heap of 32 GB and more), alignment, `String` backing arrays, map entries and hash tables — so the total tracks the heap the cache really holds rather than the documents' on-disk size, which is several times smaller (a small document costs about 3 KB of heap against under 200 bytes on disk). It is still the cache's own accounting, not measured JVM heap — nothing reads real heap to decide an eviction (`GET_DATABASE_STATS` reads it only to report). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
 - `0` — unlimited; caching is on but eviction never triggers (suitable when `-Xmx` is already the only ceiling you want).
 - `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
 
 Eviction order is LFU. Access counts are recorded asynchronously and persisted in the `admin/collection_usage` collection; records older than 24h are pruned hourly. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
 
-**Sizing `-Xmx` against the cap.** `maxMemory` bounds the cache's real heap, so the rest of `-Xmx` is what the collector, the page a scan is reading, in-flight requests and scripts get. Size `-Xmx` to roughly twice `maxMemory`, plus the metadata cache and script budgets; startup logs a warning when `-Xmx > maxMemory × 2`, suggesting `maxMemory` around half of `-Xmx`. `maxMemory` cannot reclaim metaspace, JIT code or committed-but-unused heap, so the OS-visible process size stays above it.
+**Sizing `-Xmx` against the cap.** `maxMemory` bounds the cache's real heap, so the rest of `-Xmx` is what the collector, the page a scan is reading, in-flight requests and scripts get. Size `-Xmx` to roughly twice `maxMemory`, plus the metadata cache and script budgets; startup logs a warning when `-Xmx > maxMemory × 2`, suggesting `maxMemory` around half of `-Xmx`. `maxMemory` cannot reclaim metaspace, JIT code or committed-but-unused heap, so the OS-visible process size stays above it. The image and the run commands use G1 (`-XX:+UseG1GC`): ZGC runs without compressed references, which cost 21% more live heap for the same load (183.1 MB against 151.8 MB under G1) and about 2.5x the peak process size on the Docker bench (1,161 MB against 468 MB at 0.3 scale). The flag is explicit because the JVM picks SerialGC by itself in a container under 2 CPUs or 1792 MB. Under ZGC the container's peak memory followed the heap ceiling, not the data: on the Docker bench (100k documents of about 512 B, about 190 MB of live heap after a full GC) the same run peaked at 1.2 GiB under a 1 GiB ceiling, 1.6 GiB under 1.4 GiB and 2.7 GiB under 2.8 GiB, with no extra CPU per operation and no allocation stalls under the smaller ceilings, so keep the ceiling near the rule above rather than at most of the container. If you run ZGC anyway, `-XX:SoftMaxHeapSize` keeps it near a smaller heap and lets it exceed it only under pressure (1.3 GiB peak under a 2.8 GiB ceiling). The Docker image sets no heap flag, so its JVM sizes the heap at a quarter of the container's memory; change it with `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=50` (or `-Xmx` through the same variable), and keep the heap at least as large as `maxMemory` plus the metadata and script budgets, or the JVM can run out of memory before the cache budget evicts anything.
 
 Earlier versions charged each document its on-disk size and each index entry a flat 64–96 bytes, which undercounted the real heap 3–8×. The same data now takes a larger share of `maxMemory`, so a deployment tuned to the old numbers evicts sooner and may want a larger cap.
 
@@ -2018,8 +2022,8 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Guaranteed**
 
 - **An acknowledged write survives a process crash.** Writes go to the files before the response is sent, so a `kill -9` or a JVM crash loses nothing that was acknowledged.
-- **An acknowledged write survives a power loss** while `syncWrites` is on (the default). Every write is first appended to its collection's write-ahead log as the exact bytes it puts at each offset of each page and of `pk.idx`, and that record is synced to the device before the pages and `pk.idx` are touched; a created, renamed or deleted file has its folder synced too. Startup replays the log over whatever the files hold, so a power loss leaves every acknowledged write and no unacknowledged one. On a platform that cannot sync a directory the server refuses to start with `syncWrites=true`. See [Durability](#durability) for what it costs.
-- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, appends its `pk.idx` row, then blanks the old copy into a hole, and the whole write is one record in the collection's write-ahead log (`.wal`), logged before any of it. Startup replays every logged record and cuts the bytes past a logged end, so an interrupted write is either whole or absent. An interrupted page vacuum, which rewrites a page outside the log, keeps an intent in the collection's `.intents` log and re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
+- **An acknowledged write survives a power loss** while `syncWrites` is on (the default). Every write is first appended to its collection's write-ahead log as the exact bytes it puts at each offset of each page and of `pk.idx`, and that record is synced to the device before the pages and `pk.idx` are touched; a created, renamed or deleted file has its folder synced too. Startup replays the log over whatever the files hold, so a power loss leaves every acknowledged write and no unacknowledged one. On a platform that cannot sync a directory the server logs a DURABILITY WARNING at startup and runs with `syncWrites=false`. See [Durability](#durability) for what it costs.
+- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, appends its `pk.idx` row, then blanks the old copy into a hole, and the whole write is one record in the collection's write-ahead log (`.wal`), logged before any of it. Startup replays every logged record and cuts the bytes past a logged end, so an interrupted write is either whole or absent. An interrupted page vacuum, which rewrites a page outside the log, brackets the rewrite with two log frames (`REWRITE_BEGIN` before it, `REWRITE_END` once the new page is in place), so replay never writes an older record's bytes into the rewritten page, keeps an intent in the collection's `.intents` log and re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.
@@ -2039,8 +2043,11 @@ With `syncWrites=true` a write is acknowledged once its record in the collection
 update, a delete, a relocation and a whole bulk write each log one record holding the exact bytes they put on each
 page and in `pk.idx`, then write those files without forcing them. A checkpoint forces every page and `pk.idx` the log
 touched since the last one, in parallel, then rewrites the log as a single checkpoint record; it runs once the log
-passes `walCheckpointBytes`, before a page vacuum or a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`,
-and at shutdown. After a power loss startup replays the log over whatever the files hold and cuts each file back to
+passes `walCheckpointBytes`, before a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`, and at
+shutdown. A page vacuum does not checkpoint: it forces only the page it rewrites, logs a forced `REWRITE_BEGIN`, moves
+the rewritten page into place and syncs its folder, then logs `REWRITE_END` with the page's new length together with
+the record of the rows it moved. Replay skips every older change to that page and cuts it back to that new length (or,
+without the `REWRITE_END`, never below its length at `REWRITE_BEGIN`). After a power loss startup replays the log over whatever the files hold and cuts each file back to
 its last logged end, so an acknowledged write is redone and an unacknowledged one leaves nothing. With
 `syncWrites=false` there is no cut, since the bytes past a logged end may then be an acknowledged write whose record
 did not reach the disk. A write whose
@@ -2065,8 +2072,8 @@ reached the disk leaves nothing. When the force fails, every write of the group 
 error. Writes inside a transaction, on a collection with triggers or before-hooks, nested in a trigger, with
 `syncWrites=false` or with clustering on take the one-force-per-write path. A dirty read (`"dirtyRead":true`) can see a
 grouped write before its force. A force costs what the disk makes it cost, and the per-collection write lock is held
-across it, so it bounds the write rate of one collection: with 8 clients the Docker bench measured 3-4k synced inserts
-and updates and 5-7k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
+across it, so it bounds the write rate of one collection: with 8 clients the Docker bench measured 4-5k synced inserts
+and updates and 7-8k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
 Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed
 there; the Docker image on Linux is the production target). Different collections write in parallel. Logs and the generated TLS keystore are not forced.
 

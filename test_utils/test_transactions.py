@@ -588,6 +588,31 @@ def test_custom_typed_writes_are_readable_inside_the_transaction(c):
         delete(oc, "custom-1")
 
 
+def test_a_transaction_over_four_megabytes_commits_whole(c):
+    section("A transaction whose buffered ops pass 4 MB goes out as several op records and commits whole")
+    padding = "y" * 600_000
+    singles = [f"big_single_{i}" for i in range(8)]
+    bulk = [{"_id": f"big_bulk_{i}", "p": padding} for i in range(8)]
+    check_status("start a transaction", start_txn(c), "OK")
+    for doc_id in singles:
+        check_status(f"buffer {doc_id}", save(c, {"_id": doc_id, "p": padding}), "OK")
+    check_status("buffer one BULK_SAVE op that alone passes 4 MB", bulk_save(c, bulk), "OK")
+    check_status("commit it", commit_txn(c), "OK")
+    found = [doc_id for doc_id in singles + [d["_id"] for d in bulk]
+             if find_by_id(c, doc_id).get("status") == "OK"]
+    check("every buffered document committed", len(found) == len(singles) + len(bulk), f"found {len(found)}")
+    check_status("start a second large transaction", start_txn(c), "OK")
+    for i in range(8):
+        check_status(f"buffer rolled_{i}", save(c, {"_id": f"rolled_{i}", "p": padding}), "OK")
+    check_status("roll it back", rollback_txn(c), "OK")
+    check("nothing of the rolled-back transaction landed",
+          all(find_by_id(c, f"rolled_{i}").get("status") == "NOT_FOUND" for i in range(8)))
+    check_status("delete the large documents in one more transaction", start_txn(c), "OK")
+    for doc_id in singles + [d["_id"] for d in bulk]:
+        delete(c, doc_id)
+    check_status("commit the deletes", commit_txn(c), "OK")
+
+
 def test_transactional_deletes_count_deleted_document_bytes():
     section("A transactional DELETE with a delete trigger counts the deleted document's bytes")
     bu.require_jar()
@@ -700,6 +725,8 @@ def main():
         test_crossed_read_and_write_sets_do_not_hang(c)
     with authed_conn() as (c):
         test_entry_size_is_checked_after_the_id_is_assigned(c)
+    with authed_conn() as (c):
+        test_a_transaction_over_four_megabytes_commits_whole(c)
     with authed_conn() as (c):
         test_a_non_admin_user_can_use_transactions(c)
     with authed_conn() as (c):

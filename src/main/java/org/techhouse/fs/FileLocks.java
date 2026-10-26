@@ -254,6 +254,11 @@ final class FileLocks {
     }
 
     static void moveIntoPlace(Path tmp, Path path) throws IOException {
+        moveIntoPlaceUnsynced(tmp, path);
+        SyncedWrites.entriesOfLanded(path.toAbsolutePath().getParent(), "Moving " + path.getFileName() + " into place");
+    }
+
+    static void moveIntoPlaceUnsynced(Path tmp, Path path) throws IOException {
         PageTails.forget(path.toFile());
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
@@ -261,7 +266,6 @@ final class FileLocks {
             // ATOMIC_MOVE is not supported across filesystems or on every platform.
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
-        SyncedWrites.entriesOfLanded(path.toAbsolutePath().getParent(), "Moving " + path.getFileName() + " into place");
     }
 
     static String separatorBeforeAppend(File file) throws IOException {

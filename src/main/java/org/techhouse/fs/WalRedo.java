@@ -54,9 +54,9 @@ final class WalRedo {
         final var dbName = checkpoint.dbName();
         final var collName = checkpoint.collName();
         final var records = decoded.records();
-        replay(paths, dbName, collName, records);
+        replay(paths, dbName, collName, decoded);
         if (SyncedWrites.enabled()) {
-            cutPastLoggedEnds(paths, checkpoint, records, decoded.groupBase());
+            cutPastLoggedEnds(paths, checkpoint, decoded);
         }
         new WriteAheadLog(paths).track(dbName, collName);
         if (!records.isEmpty()) {
@@ -79,9 +79,12 @@ final class WalRedo {
         return List.copyOf(rows.values());
     }
 
-    static void replay(FilePaths paths, String dbName, String collName, List<WalRecord> records) throws IOException {
-        for (final var record : records) {
+    static void replay(FilePaths paths, String dbName, String collName, WalCodec.Decoded decoded) throws IOException {
+        for (final var record : decoded.records()) {
             for (final var change : record.changes()) {
+                if (skipped(decoded, record, change)) {
+                    continue;
+                }
                 if (change.target() == WalTarget.PK_WRITE) {
                     write(paths.pkIndexFile(dbName, collName), change);
                 } else if (change.target() == WalTarget.PAGE_BLANK) {
@@ -93,6 +96,11 @@ final class WalRedo {
         }
         PageTails.forgetUnder(paths.collectionFolder(dbName, collName));
         PkIndexStore.forgetState(paths.pkIndexFile(dbName, collName));
+    }
+
+    private static boolean skipped(WalCodec.Decoded decoded, WalRecord record, WalChange change) {
+        final var rewrite = change.target() == WalTarget.PK_WRITE ? null : decoded.rewrites().get(change.page());
+        return rewrite != null && rewrite.skips(record, change);
     }
 
     private static void write(File file, WalChange change) throws IOException {
@@ -111,20 +119,26 @@ final class WalRedo {
         }
     }
 
-    private static void cutPastLoggedEnds(FilePaths paths, WalCheckpoint checkpoint, List<WalRecord> records,
-            long groupBase) throws IOException {
+    private static void cutPastLoggedEnds(FilePaths paths, WalCheckpoint checkpoint, WalCodec.Decoded decoded)
+            throws IOException {
         final var dbName = checkpoint.dbName();
         final var collName = checkpoint.collName();
+        final var groupBase = decoded.groupBase();
         final var loggedEnds = new HashMap<Long, Long>();
-        for (final var record : records) {
+        for (final var record : decoded.records()) {
             for (final var change : record.changes()) {
-                loggedEnds.merge(change.target() == WalTarget.PK_WRITE ? NO_PAGE : change.page(), change.end(),
-                        Math::max);
+                if (!skipped(decoded, record, change)) {
+                    loggedEnds.merge(change.target() == WalTarget.PK_WRITE ? NO_PAGE : change.page(), change.end(),
+                            Math::max);
+                }
             }
         }
         for (final var page : DocumentPageStore.pageFileLengths(paths, dbName, collName).entrySet()) {
-            final var keep = Math.max(checkpoint.pageLengths().getOrDefault(page.getKey(), 0L),
-                    loggedEnds.getOrDefault(page.getKey(), 0L));
+            final var rewrite = decoded.rewrites().get(page.getKey());
+            final var floor = rewrite != null
+                    ? rewrite.floor()
+                    : checkpoint.pageLengths().getOrDefault(page.getKey(), 0L);
+            final var keep = Math.max(floor, loggedEnds.getOrDefault(page.getKey(), 0L));
             cutTo(paths.collectionPage(dbName, collName, page.getKey()), page.getValue(), keep);
         }
         final var pkIndex = paths.pkIndexFile(dbName, collName);

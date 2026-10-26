@@ -1,7 +1,6 @@
 package org.techhouse.data;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import org.techhouse.config.Globals;
@@ -186,7 +185,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
             }
         }
         if (count == 0) {
-            final var single = HashSet.<String>newHashSet(1);
+            final var single = new IdSet();
             single.add(unescapeIndexToken(line.substring(from)));
             return single;
         }
@@ -201,7 +200,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
         while (!ids.isEmpty() && ids.getLast().isEmpty()) {
             ids.removeLast();
         }
-        final var result = HashSet.<String>newHashSet(ids.size());
+        final var result = new IdSet(ids.size());
         result.addAll(ids);
         return result;
     }

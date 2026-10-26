@@ -125,10 +125,13 @@ public class EventProcessorIncarnationTest {
     public void test_event_with_matching_incarnation_is_processed() throws Exception {
         seedLivePage();
         final var countBefore = firstPage().getEntryCount();
+        final var live = entryOnPage("live", 0);
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0L, -live.byteSize(), -1);
 
-        EventProcessorHelper.processEvent(event(EventType.DELETED, entryOnPage("live", 0), CURRENT));
+        EventProcessorHelper.processEvent(event(EventType.DELETED, live, CURRENT));
 
-        Assertions.assertEquals(countBefore - 1, firstPage().getEntryCount());
+        Assertions.assertEquals(countBefore - 1, firstPage().getEntryCount(),
+                "the delete's delta was applied on the write path, so the event does not apply it again");
     }
 
     @Test
@@ -150,6 +153,24 @@ public class EventProcessorIncarnationTest {
 
         Assertions.assertNull(page(9));
         Assertions.assertNull(page(10));
+    }
+
+    @Test
+    public void test_a_stale_group_creates_no_page_row() throws Exception {
+        final var batch = List.<Event>of(event(EventType.CREATED, entryOnPage("stale-a", 11), DROPPED),
+                event(EventType.CREATED, entryOnPage("stale-b", 11), DROPPED));
+
+        EventProcessorHelper.processBatch(batch);
+
+        Assertions.assertNull(page(11));
+    }
+
+    @Test
+    public void test_a_booking_under_a_changed_incarnation_creates_no_row() throws Exception {
+        AdminOperationHelper.bookWritePathPages(TestGlobals.DB, TestGlobals.COLL,
+                List.of(EntityRef.of(entryOnPage("raced-group", 12))), List.of(), DROPPED);
+
+        Assertions.assertNull(page(12));
     }
 
     @Test

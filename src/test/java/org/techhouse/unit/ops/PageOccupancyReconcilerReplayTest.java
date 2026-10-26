@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,8 +49,7 @@ public class PageOccupancyReconcilerReplayTest {
     }
 
     private List<EntityEvent> queuedUpdates() throws Exception {
-        final LinkedBlockingQueue<?> queue = TestUtils.getPrivateField(stubTaskManager, "queue",
-                LinkedBlockingQueue.class);
+        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
         return queue.stream().filter(EntityEvent.class::isInstance).map(EntityEvent.class::cast)
                 .filter(event -> event.getType() == EventType.UPDATED).toList();
     }

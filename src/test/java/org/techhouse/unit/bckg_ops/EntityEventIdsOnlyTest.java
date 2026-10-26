@@ -102,13 +102,15 @@ public class EntityEventIdsOnlyTest {
         assertNotNull(before);
         final var countBefore = before.getEntryCount();
         final var deleted = new EntityEvent(EventType.DELETED, TestGlobals.DB, TestGlobals.COLL, original);
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0L, -original.byteSize(), -1);
         original.setPage(4);
         final var restored = new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, original);
 
         EventProcessorHelper.processEvent(deleted);
         EventProcessorHelper.processEvent(restored);
 
-        assertEquals(countBefore - 1, page(0).getEntryCount(), "the delete leaves the page it was removed from");
+        assertEquals(countBefore - 1, page(0).getEntryCount(),
+                "the delete's write-path delta left the page it was removed from, and its event did not apply it again");
         assertEquals(1, page(4).getEntryCount(), "the restore lands on the page it was re-inserted into");
     }
 }

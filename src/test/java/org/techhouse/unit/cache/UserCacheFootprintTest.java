@@ -13,6 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,13 +27,16 @@ import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.index.FieldIndexBatch;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
@@ -261,9 +266,13 @@ public class UserCacheFootprintTest {
     private static final long FINITE_BUDGET = 1L << 30;
 
     private static long withFiniteBudget(TestBody body) throws Exception {
+        return withBudget(FINITE_BUDGET, body);
+    }
+
+    private static long withBudget(long budget, TestBody body) throws Exception {
         final var configuration = Configuration.getInstance();
         final var original = configuration.getMaxMemoryBytes();
-        TestUtils.setPrivateField(configuration, "maxMemoryBytes", FINITE_BUDGET);
+        TestUtils.setPrivateField(configuration, "maxMemoryBytes", budget);
         try {
             FIELD_INDEX_ITERATIONS.set(0);
             body.run();
@@ -297,13 +306,127 @@ public class UserCacheFootprintTest {
         try {
             assertEquals(0, withFiniteBudget(() -> memoryManagement.ensureHeadroomForBytes(1L)),
                     "the write path's headroom check uses remembered sizes");
-            assertTrue(withFiniteBudget(memoryManagement::runEvictionSweep) > 0,
-                    "the 5 s sweep re-measures every resident index");
-            assertTrue(withFiniteBudget(() -> userCache.listCacheableResources(Measure.FULL)) > 0);
+            assertTrue(withBudget(rememberedBytesOf(userCache) * 2, memoryManagement::runEvictionSweep) > 0,
+                    "the 5 s sweep measures an index it has no measure of once the cache is half of its budget");
+            assertEquals(0, withFiniteBudget(() -> userCache.listCacheableResources(Measure.FULL)),
+                    "nothing changed since the sweep measured it");
+            assertTrue(withFiniteBudget(() -> userCache.listCacheableResources(Measure.FULL_FORCED)) > 0);
             assertEquals(0, withFiniteBudget(() -> userCache.listCacheableResources(Measure.REMEMBERED)));
         } finally {
             userCache.evictCollection(DB, COLL);
         }
+    }
+
+    private static long rememberedBytesOf(UserCache cache) {
+        return cache.listCacheableResources(Measure.REMEMBERED).stream()
+                .mapToLong(CacheableResource::estimatedSizeBytes).sum();
+    }
+
+    @Test
+    public void sweepSkipsTheFullMeasureWhileTheCacheIsFarBelowItsBudget() throws Exception {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var memoryManagement = IocContainer.get(MemoryManagement.class);
+        publishFieldIndex(userCache);
+        try {
+            assertEquals(0, withFiniteBudget(memoryManagement::runEvictionSweep),
+                    "a cache far below its budget has nothing to evict, so the sweep must not walk its indexes");
+        } finally {
+            userCache.evictCollection(DB, COLL);
+        }
+    }
+
+    @Test
+    public void growthPastTheCapSignalsTheSweep() throws Exception {
+        final var cache = new UserCache();
+        final var signals = new AtomicInteger();
+        cache.onOverBudget(signals::incrementAndGet);
+        final var published = publishFieldIndex(cache);
+        final var indexKey = Cache.getIndexIdentifier(FIELD, String.class);
+        cache.listCacheableResources(Measure.FULL);
+        final var remembered = rememberedBytesOf(cache);
+
+        withBudget(remembered, () -> cache.rememberFieldIndexBatch(DB, COLL, indexKey, published.size(), 0L, 0));
+        assertEquals(0, signals.get(), "a cache at its budget is not over it");
+
+        cache.onOverBudget(signals::incrementAndGet);
+        withBudget(remembered,
+                () -> cache.rememberFieldIndexBatch(DB, COLL, indexKey, published.size(), 64L * published.size(), 1));
+        assertEquals(1, signals.get(), "a batch that grows the cache past its budget wakes the sweep");
+
+        cache.onOverBudget(null);
+        withBudget(remembered,
+                () -> cache.rememberFieldIndexBatch(DB, COLL, indexKey, published.size(), 64L * published.size(), 1));
+        assertEquals(1, signals.get(), "with no sweep running nothing is signalled");
+    }
+
+    @Test
+    public void signalsWithinOneCheckIntervalComputeTheFootprintOnce() throws Exception {
+        final var cache = new UserCache();
+        final var signals = new AtomicInteger();
+        cache.onOverBudget(signals::incrementAndGet);
+        final var frozenClock = new AtomicLong(42L);
+        final var signal = TestUtils.getPrivateField(cache, "overBudget", Object.class);
+        TestUtils.setPrivateField(signal, "clock", (LongSupplier) frozenClock::get);
+        TestUtils.setPrivateField(signal, "nextCheckNanos", new AtomicLong(frozenClock.get()));
+        publishFieldIndex(cache);
+
+        withBudget(1L, () -> {
+            cache.signalIfOverBudget();
+            cache.signalIfOverBudget();
+        });
+        assertEquals(1, signals.get(), "a second check inside the interval is skipped");
+
+        frozenClock.addAndGet(TimeUnit.MILLISECONDS.toNanos(100));
+        withBudget(1L, cache::signalIfOverBudget);
+        assertEquals(2, signals.get(), "the next interval checks again");
+    }
+
+    @Test
+    public void noSignalWhenCachingIsUnlimitedOrDisabled() throws Exception {
+        final var cache = new UserCache();
+        final var signals = new AtomicInteger();
+        cache.onOverBudget(signals::incrementAndGet);
+        final var published = publishFieldIndex(cache);
+        final var indexKey = Cache.getIndexIdentifier(FIELD, String.class);
+
+        for (final var budget : List.of(Globals.CACHE_UNLIMITED, Globals.CACHE_DISABLED)) {
+            withBudget(budget, () -> {
+                cache.rememberFieldIndexBatch(DB, COLL, indexKey, published.size(), 1L << 20, 1);
+                cache.signalIfOverBudget();
+            });
+        }
+
+        assertEquals(0, signals.get());
+    }
+
+    @Test
+    public void anInsertGrowingTheResidentPkIndexPastTheCapSignalsTheSweep() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        final var userCache = IocContainer.get(UserCache.class);
+        final var signals = new AtomicInteger();
+        userCache.onOverBudget(signals::incrementAndGet);
+        try {
+            withFiniteBudget(() -> save("first"));
+            assertEquals(0, signals.get());
+            assertNotNull(userCache.getCachedCollection(TestGlobals.DB, TestGlobals.COLL), "the first save is cached");
+
+            userCache.onOverBudget(signals::incrementAndGet);
+            withBudget(1L, () -> save("second"));
+
+            assertTrue(signals.get() > 0, "the insert grew a resident pk index past the budget");
+        } finally {
+            userCache.onOverBudget(null);
+            userCache.evictCollection(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    private static void save(String id) {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add(Globals.PK_FIELD, new JsonString(id));
+        request.setObject(object);
+        request.set_id(id);
+        IocContainer.get(OperationProcessor.class).processMessage(request);
     }
 
     private static long rememberedStatusBytes(UserCache cache, Measure measure) {

@@ -81,7 +81,7 @@ public class ShutdownCoordinator {
         step("drain background tasks", () -> backgroundTaskManager.drain(remaining(deadline)));
         step("flush page rows", PageRowWriteBack::flushAll);
         step("stop listen workers", listenManager::stopWorkers);
-        step("checkpoint every write-ahead log", fileSystem::checkpointWriteAheadLogs);
+        step("checkpoint every write-ahead log", () -> fileSystem.checkpointWriteAheadLogs(deadline));
         step("leave the cluster", () -> {
             if (clusterConfig.isEnabled()) {
                 membershipService.stop();

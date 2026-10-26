@@ -37,7 +37,7 @@ PATH_CALLS = {"openat", "stat", "newfstatat", "statx", "lstat", "access", "facce
 LINE = re.compile(r'^\d+\s+(\w+)\((.*)$')
 DESCRIPTOR_PATH = re.compile(r'<([^>]*)>')
 QUOTED = re.compile(r'"([^"]*)"')
-BUDGETS = {"insert": 32.0, "update": 38.0, "delete": 28.0, "bulk_insert": 1.5, "bulk_update": 1.5,
+BUDGETS = {"insert": 30.0, "update": 37.0, "delete": 28.0, "bulk_insert": 1.5, "bulk_update": 1.5,
            "find_by_id": 1.0, "find_eq_indexed": 1.5}
 
 
@@ -83,7 +83,7 @@ class Container:
         sh("docker", "rm", "-f", CONTAINER, check=False)
         sh("docker", "run", "-d", "--name", CONTAINER, "--cap-add", "SYS_PTRACE", "--cpus", "2", "-p",
            f"{self.port}:8989", "-v", f"{self.out}:/out", "-v", f"{cfg}:/app/lwnrdb.cfg:ro", IMAGE, "java",
-           "-XX:+UseZGC", "-jar", "app.jar")
+           "-XX:+UseG1GC", "-jar", "app.jar")
         b.configure(port=self.port)
         self.await_ready()
 

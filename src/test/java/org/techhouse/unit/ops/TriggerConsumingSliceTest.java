@@ -37,6 +37,7 @@ import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 import org.techhouse.test.TriggerTestSupport;
 
 public class TriggerConsumingSliceTest {
@@ -109,6 +110,7 @@ public class TriggerConsumingSliceTest {
         TransactionOperationHelper.start(clientId);
         final var transaction = clientTracker.getActiveTransaction(clientId);
         TransactionOperationHelper.bufferTriggerRunConsume(transaction, runId);
+        TransactionRecordCalls.persistBufferedOps(transaction);
         txId = transaction.getTransactionId().toString();
         final var opIds = List.copyOf(transaction.getBufferedOpIds());
         clientTracker.removeById(clientId);

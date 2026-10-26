@@ -98,11 +98,23 @@ public class WriteAheadLogTest {
         final var other = new ReplacerFixture(tmp, DB, "otherColl");
         other.fx.seed(0, "x");
 
-        new WriteAheadLog(rf.fx.paths).checkpointAll();
+        new WriteAheadLog(rf.fx.paths).checkpointAll(Long.MAX_VALUE);
 
         assertEquals(List.of(), decoded().records());
         assertEquals(List.of(), WalCodec
                 .decodeAll(Files.readAllBytes(other.fx.paths.writeAheadLog(DB, "otherColl").toPath())).records());
+    }
+
+    @Test
+    public void test_checkpoint_all_past_its_deadline_leaves_every_log_for_replay() throws Exception {
+        final var other = new ReplacerFixture(tmp, DB, "otherColl");
+        other.fx.seed(0, "x");
+
+        new WriteAheadLog(rf.fx.paths).checkpointAll(System.currentTimeMillis() - 1);
+
+        assertEquals(3, decoded().records().size());
+        assertEquals(1, WalCodec.decodeAll(Files.readAllBytes(other.fx.paths.writeAheadLog(DB, "otherColl").toPath()))
+                .records().size());
     }
 
     @Test

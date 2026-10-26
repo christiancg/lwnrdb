@@ -47,8 +47,12 @@ interface UserCacheDelegate {
     }
 
     default void rememberFieldIndexBatch(String dbName, String collName, String indexIdentifier, int previousCount,
-            long deltaBytes) {
-        userCache().rememberFieldIndexBatch(dbName, collName, indexIdentifier, previousCount, deltaBytes);
+            long deltaBytes, int changedIds) {
+        userCache().rememberFieldIndexBatch(dbName, collName, indexIdentifier, previousCount, deltaBytes, changedIds);
+    }
+
+    default void signalIfOverBudget() {
+        userCache().signalIfOverBudget();
     }
 
     default FieldIndexLookup fieldIndexLookup(String dbName, String collName, String fieldName) {

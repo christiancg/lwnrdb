@@ -168,9 +168,13 @@ public class OperationProcessorClusterWriteTest {
     }
 
     private void armHalt(IntConsumer onHalt) throws Exception {
+        armHaltAt(FaultPoint.WRITE_OWNERSHIP_RECHECKED, onHalt);
+    }
+
+    private void armHaltAt(FaultPoint point, IntConsumer onHalt) throws Exception {
         TestUtils.setPrivateField(faultInjector, "enabled", true);
         TestUtils.setPrivateField(faultInjector, "halt", onHalt);
-        faultInjector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.HALT, null);
+        faultInjector.arm(point, FaultAction.HALT, null);
     }
 
     @Test
@@ -185,6 +189,19 @@ public class OperationProcessorClusterWriteTest {
         assertTrue(halts.isEmpty(), "a refused write must not reach the point");
         configureMembership(1, node("self", 9990));
         assertNull(ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(List.of(137), halts);
+    }
+
+    @Test
+    public void test_the_owner_probe_point_fires_only_after_the_re_check_passes() throws Exception {
+        configureMembership(2, node("self", 9990), node("other", 9991));
+        final var halts = new CopyOnWriteArrayList<Integer>();
+        armHaltAt(FaultPoint.WRITE_OWNER_PROBED, halts::add);
+        assertNotNull(
+                ClusterWriteHelper.refusalUnderLock(OperationType.DELETE, TestGlobals.DB, collectionOwnedByOther()));
+        assertTrue(halts.isEmpty(), "a refused write must not reach the probe point");
+        configureMembership(1, node("self", 9990));
+        assertNull(ClusterWriteHelper.refusalUnderLock(OperationType.DELETE, TestGlobals.DB, TestGlobals.COLL));
         assertEquals(List.of(137), halts);
     }
 

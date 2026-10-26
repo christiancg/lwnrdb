@@ -32,6 +32,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.tx.VersionedApply;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 
 abstract class VersionedReplaySupport {
     protected static final String COORDINATOR = "127.0.0.1:5000";
@@ -105,6 +106,7 @@ abstract class VersionedReplaySupport {
 
     protected String commitMarkerFor(Transaction transaction) throws Exception {
         final var txId = transaction.getTransactionId().toString();
+        TransactionRecordCalls.persistBufferedOps(transaction);
         TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(), List.of(collId));
         return txId;
     }

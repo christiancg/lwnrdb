@@ -103,7 +103,7 @@ public class FileSystemWriteIntentTest extends FileSystemTestBase {
         insert("2", "two");
         final var moved = updated(first);
 
-        final var relocated = fs.relocate(moved, first, 1, moved.encodeLine(), null);
+        final var relocated = fs.relocate(moved, first, 1, moved.encodeLine(), null, null);
 
         assertEquals(0, openIntents());
         assertEquals(1L, relocated.getPage());

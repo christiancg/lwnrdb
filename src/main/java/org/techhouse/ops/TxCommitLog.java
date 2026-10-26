@@ -22,17 +22,21 @@ public final class TxCommitLog {
     private TxCommitLog() {
     }
 
-    private static String markerId(String txId) {
+    public static String markerId(String txId) {
         return txId + Globals.COLL_IDENTIFIER_SEPARATOR + AdminTransactionEntry.MARKER_LOCAL_COMMIT;
     }
 
     public static void recordLocalCommit(String txId, List<String> opIds, List<String> collections) throws Exception {
+        AdminOperationHelper.saveTransactionOp(localCommitMarker(txId, opIds, collections));
+    }
+
+    public static AdminTransactionEntry localCommitMarker(String txId, List<String> opIds, List<String> collections) {
         final var payload = new JsonObject();
         payload.add(OP_IDS_FIELD, stringArray(opIds));
         payload.add(COLLECTIONS_FIELD, stringArray(collections));
         payload.addProperty(COMMITTED_AT_FIELD, Long.toString(System.currentTimeMillis()));
-        AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(txId,
-                AdminTransactionEntry.MARKER_LOCAL_COMMIT, AdminTransactionEntry.OP_TYPE_LOCAL_COMMIT, payload));
+        return AdminTransactionEntry.marker(txId, AdminTransactionEntry.MARKER_LOCAL_COMMIT,
+                AdminTransactionEntry.OP_TYPE_LOCAL_COMMIT, payload);
     }
 
     public static void clearLocalCommit(String txId) throws Exception {

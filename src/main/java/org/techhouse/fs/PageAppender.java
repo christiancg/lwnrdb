@@ -2,14 +2,17 @@ package org.techhouse.fs;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.fault.FaultPoint;
 
 final class PageAppender {
     private final FilePaths paths;
@@ -45,6 +48,60 @@ final class PageAppender {
                 }
             }
             plan.commit();
+            return indexEntries;
+        } finally {
+            for (var index = locks.size() - 1; index >= 0; index--) {
+                locks.get(index).unlock();
+            }
+        }
+    }
+
+    <T extends DbEntry> List<IndexedDbEntry> bulkInsertAndDelete(String dbName, String collName, List<T> inserts,
+            Function<? super T, Long> pageOf, Function<? super T, byte[]> lines, List<PkIndexEntry> deletes)
+            throws IOException {
+        final var groups = inserts.stream().collect(Collectors.groupingBy(pageOf, TreeMap::new, Collectors.toList()));
+        final var pages = new TreeSet<>(groups.keySet());
+        final var positions = new long[deletes.size()];
+        for (var index = 0; index < positions.length; index++) {
+            pages.add(deletes.get(index).getPage());
+            positions[index] = deletes.get(index).getPosition();
+        }
+        final var locks = new ArrayList<Lock>(pages.size());
+        try {
+            for (final var page : pages) {
+                locks.add(FileLocks.lockWrite(paths.collectionPage(dbName, collName, page)));
+            }
+            final var vacuumed = new HashMap<Long, VacuumedPage>();
+            for (final var group : groups.entrySet()) {
+                final var moved = vacuum.vacuumIfNeeded(dbName, collName, group.getKey(),
+                        appendedBytes(group.getValue()), null, null);
+                if (moved != null) {
+                    vacuumed.put(group.getKey(), moved);
+                }
+            }
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            for (var index = 0; index < positions.length; index++) {
+                final var row = deletes.get(index);
+                final var moved = vacuumed.get(row.getPage());
+                final var position = moved == null
+                        ? positions[index]
+                        : RecordReplacer.positionAfter(moved, row.getValue(), positions[index]);
+                RecordReplacer.requireWithinPage(row, position,
+                        paths.collectionPage(dbName, collName, row.getPage()).length());
+                plan.deleteRow(row.getValue());
+                plan.blank(row.getPage(), position, row.getLength());
+            }
+            final var indexEntries = new ArrayList<IndexedDbEntry>(inserts.size());
+            for (final var group : groups.entrySet()) {
+                for (final var entry : group.getValue()) {
+                    final var line = lines.apply(entry);
+                    final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(),
+                            plan.append(group.getKey(), line), line.length, group.getKey(), entry.getVersion());
+                    plan.insertRow(pkEntry);
+                    indexEntries.add(indexed(dbName, collName, entry, pkEntry));
+                }
+            }
+            plan.commit(null, FaultPoint.PK_ROW_COMMITTED);
             return indexEntries;
         } finally {
             for (var index = locks.size() - 1; index >= 0; index--) {

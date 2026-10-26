@@ -58,6 +58,11 @@ public final class Configuration {
         return values.get(key);
     }
 
+    public void override(ConfigKey key, String value) {
+        values.put(key, value);
+        resolved.remove(key);
+    }
+
     public static Configuration getInstance() {
         if (!config.loading && (config.values.isEmpty() || "0".equals(config.values.get(ConfigKey.PORT)))) {
             config.load();

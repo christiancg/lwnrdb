@@ -20,6 +20,8 @@ PK_LOG_MIN_DEAD_ROWS = 1024
 GROUP_WRITERS = 8
 CONCURRENT_COLL = "group_writers"
 CONCURRENT_SAVES = 40
+DELETE_VACUUM_DOCS = 24
+DELETE_CHECKPOINT_DOCS = 300
 
 
 def doc(i: int, value: str, pad: str = PAD) -> dict:
@@ -103,10 +105,15 @@ def bulk_update(conn):
                "objects": [doc(i, "unacknowledged") for i in range(4)]})
 
 
+def last_attempted_k1(case: KillCase) -> dict:
+    return {**all_acknowledged(case), "k1": case.observed["attempted"][-1]}
+
+
 def churn_k1_until_paused(case: KillCase):
     def write(conn):
         for round_number in range(1000):
             value = f"round{round_number}"
+            case.observed["attempted"] = case.observed.get("attempted", []) + [f"{value}-1"]
             response = save(conn, conn.coll, doc(1, value))
             if response.get("status") != "OK":
                 return
@@ -114,13 +121,37 @@ def churn_k1_until_paused(case: KillCase):
     return write
 
 
+def delete_until_paused(case: KillCase):
+    def write(conn):
+        for i in range(case.seed_docs):
+            case.observed["attempted"] = case.observed.get("attempted", []) + [f"k{i}"]
+            response = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": conn.coll, "_id": f"k{i}"})
+            if response.get("status") != "OK":
+                return
+    return write
+
+
+def without_attempted_deletes(case: KillCase) -> dict:
+    gone = set(case.observed.get("attempted", []))
+    return {key: value for key, value in all_acknowledged(case).items() if key not in gone}
+
+
 def cases() -> list:
     vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None, last_acknowledged_k1,
                       intents_while_paused=1, logged_while_paused=False)
     vacuum.write = churn_k1_until_paused(vacuum)
-    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None, last_acknowledged_k1,
+    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None, last_attempted_k1,
                           logged_while_paused=False)
     checkpoint.write = churn_k1_until_paused(checkpoint)
+    delete_vacuum = KillCase("intent_delete_vacuum_renamed", "PAGE_VACUUM_RENAMED", DELETE_VACUUM_DOCS, None,
+                             without_attempted_deletes, intents_while_paused=1, logged_while_paused=False)
+    delete_vacuum.write = delete_until_paused(delete_vacuum)
+    delete_checkpoint = KillCase("wal_delete_checkpoint_forced", "WAL_CHECKPOINT_FORCED", DELETE_CHECKPOINT_DOCS,
+                                 None, without_attempted_deletes, logged_while_paused=False)
+    delete_checkpoint.write = delete_until_paused(delete_checkpoint)
+    rewrite_begun = KillCase("wal_rewrite_begun", "WAL_REWRITE_BEGUN", 4, None, last_acknowledged_k1,
+                             logged_while_paused=False)
+    rewrite_begun.write = churn_k1_until_paused(rewrite_begun)
     return [
         [KillCase("wal_update_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, update_k1("unacknowledged"),
                   with_k1("unacknowledged")),
@@ -137,9 +168,11 @@ def cases() -> list:
          KillCase("wal_insert_appended", "WAL_APPENDED", KILLED_DOCS, insert_new(KILLED_DOCS),
                   with_new("unacknowledged"))],
         [KillCase("wal_bulk_applied", "PK_ROW_COMMITTED", KILLED_DOCS, bulk_update, with_bulk("unacknowledged")),
-         KillCase("wal_delete_appended", "WAL_APPENDED", KILLED_DOCS, delete_k1, without_k1, indexed=True)],
+         KillCase("wal_delete_appended", "WAL_APPENDED", KILLED_DOCS, delete_k1, without_k1, indexed=True),
+         delete_vacuum],
         [KillCase("wal_index_repaired", "INDEX_BATCH_FLUSHED", KILLED_DOCS, retype_k1, with_k1_retyped,
-                  indexed=True, repairs_index=True)],
+                  indexed=True, repairs_index=True),
+         delete_checkpoint, rewrite_begun],
         [KillCase("wal_group_appended", "WAL_GROUP_APPENDED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
                   indexed=True, writers=GROUP_WRITERS),
          KillCase("wal_group_forced", "WAL_GROUP_FORCED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,

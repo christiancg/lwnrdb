@@ -15,11 +15,42 @@ public final class PageRowWriteBack {
     private static final Logger logger = Logger.logFor(PageRowWriteBack.class);
     private static final Map<String, DirtyRows> dirty = new ConcurrentHashMap<>();
 
-    private record DirtyRows(String dbName, String collName, long incarnation, long since, Set<Long> pages) {
-        DirtyRows with(DirtyRows later) {
-            final var union = new HashSet<>(pages);
-            union.addAll(later.pages());
-            return new DirtyRows(dbName, collName, later.incarnation(), since, Set.copyOf(union));
+    private static final class DirtyRows {
+        private final String dbName;
+        private final String collName;
+        private final long since;
+        private final Set<Long> pages = new HashSet<>();
+        private long incarnation;
+
+        DirtyRows(String dbName, String collName, long since) {
+            this.dbName = dbName;
+            this.collName = collName;
+            this.since = since;
+        }
+
+        void absorb(long laterIncarnation, Collection<Long> touchedPages) {
+            incarnation = laterIncarnation;
+            pages.addAll(touchedPages);
+        }
+
+        String dbName() {
+            return dbName;
+        }
+
+        String collName() {
+            return collName;
+        }
+
+        long since() {
+            return since;
+        }
+
+        long incarnation() {
+            return incarnation;
+        }
+
+        Set<Long> pages() {
+            return pages;
         }
     }
 
@@ -30,11 +61,17 @@ public final class PageRowWriteBack {
         if (pages.isEmpty()) {
             return;
         }
-        dirty.merge(Cache.getCollectionIdentifier(dbName, collName),
-                new DirtyRows(dbName, collName, incarnation, nowMillis, Set.copyOf(pages)), DirtyRows::with);
+        dirty.compute(Cache.getCollectionIdentifier(dbName, collName), (_, existing) -> {
+            final var rows = existing != null ? existing : new DirtyRows(dbName, collName, nowMillis);
+            rows.absorb(incarnation, pages);
+            return rows;
+        });
     }
 
     public static void flushDue(long nowMillis) {
+        if (dirty.isEmpty()) {
+            return;
+        }
         for (final var entry : List.copyOf(dirty.entrySet())) {
             if (nowMillis - entry.getValue().since() >= Globals.PAGE_ROWS_WRITE_BACK_MS) {
                 flush(entry.getKey());
@@ -70,8 +107,13 @@ public final class PageRowWriteBack {
     }
 
     private static void retryLater(String key, DirtyRows rows) {
-        final var retry = new DirtyRows(rows.dbName(), rows.collName(), rows.incarnation(), System.currentTimeMillis(),
-                rows.pages());
-        dirty.merge(key, retry, (existing, _) -> retry.with(existing));
+        dirty.compute(key, (_, existing) -> {
+            final var retry = new DirtyRows(rows.dbName(), rows.collName(), System.currentTimeMillis());
+            retry.absorb(rows.incarnation(), rows.pages());
+            if (existing != null) {
+                retry.absorb(existing.incarnation(), existing.pages());
+            }
+            return retry;
+        });
     }
 }

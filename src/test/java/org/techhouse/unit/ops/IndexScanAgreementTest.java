@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -11,19 +12,26 @@ import java.util.Set;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.techhouse.analyze.ReadObserver;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ejson.custom_types.JsonDateTime;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
+import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TestUtils;
 
 /**
  * The single property the whole index layer owes its callers: an index-backed answer equals the
@@ -261,6 +269,7 @@ public class IndexScanAgreementTest extends FilterResolutionSupport {
         assertEveryQueryAgrees("mixed", queries);
     }
 
+    private static final String SCORE = "score";
     private static final String LONG_SPELLING = "#datetime(2024-01-01T10:00:00)";
     private static final String SHORT_SPELLING = "#datetime(2024-01-01T10:00)";
     private static final String OTHER_INSTANT = "#datetime(2024-01-01T11:00)";
@@ -305,6 +314,54 @@ public class IndexScanAgreementTest extends FilterResolutionSupport {
         assertEquals(2, rowsJson(queries.get("EQUALS meta {when: short}").get()).size(),
                 "both spellings of one instant are equal inside an object");
         assertEveryQueryAgrees("meta", queries);
+    }
+
+    private List<String> lockedRowsJson(BaseAggregationStep... steps) throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lockRead(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            return rowsJson(steps);
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    private void assertLimitedScoreRowsAgree(FieldOperatorType type, JsonBaseElement operand) throws Exception {
+        final var all = rowsJson(new SkipAggregationStep(0), filter(type, SCORE, operand));
+        for (final var limit : List.of(1, 2, 50)) {
+            for (final var lockHeld : List.of(true, false)) {
+                final BaseAggregationStep[] steps = {filter(type, SCORE, operand), new SkipAggregationStep(1),
+                        new LimitAggregationStep(limit)};
+                final var limited = lockHeld ? lockedRowsJson(steps) : rowsJson(steps);
+                final var label = type + " " + SCORE + " " + operand + " limit " + limit + " locked " + lockHeld;
+                assertEquals(Math.clamp(all.size() - 1L, 0, limit), limited.size(), label);
+                assertTrue(all.containsAll(limited), label);
+            }
+        }
+    }
+
+    @Test
+    public void test_filter_limit_through_the_lazy_path_agrees_with_the_scan_pending_overlay_included()
+            throws Exception {
+        seedNumbers();
+        indexField("score");
+        final var moved = new JsonObject();
+        moved.add(org.techhouse.config.Globals.PK_FIELD, new JsonString("n_two_a"));
+        moved.add("score", parsed("9"));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
+                org.techhouse.data.DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, moved));
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        pending.mark(TestGlobals.DB, TestGlobals.COLL, List.of("n_two_a"));
+        try {
+            for (final var literal : List.of("2", "9", "0")) {
+                for (final var type : List.of(FieldOperatorType.EQUALS, FieldOperatorType.GREATER_THAN_EQUALS,
+                        FieldOperatorType.NOT_EQUALS)) {
+                    assertLimitedScoreRowsAgree(type, parsed(literal));
+                }
+            }
+        } finally {
+            pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        }
     }
 
     // Guards the matrix itself: if the field were never registered, every comparison above would be

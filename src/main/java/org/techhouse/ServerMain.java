@@ -93,7 +93,7 @@ public class ServerMain {
         FetchPinningGuard.refuseUnpinnedFetch();
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
-        DeviceSyncGuard.refuseUnsyncablePlatform(fs);
+        DeviceSyncGuard.fallBackWhenUnsyncable(fs);
         fs.createAdminDatabase();
         StartupWarnings.retainAndReportUncleanStops();
         final var replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());
@@ -258,9 +258,7 @@ public class ServerMain {
             if (collEntry != null) {
                 highest = Math.max(highest, collEntry.getIncarnation());
             }
-            for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
-                highest = Math.max(highest, pkEntry.getVersion());
-            }
+            highest = Math.max(highest, fs.highestPkVersion(dbName, collName));
             for (final var tombstoneVersion : fs.tombstones().read(dbName, collName).values()) {
                 highest = Math.max(highest, tombstoneVersion);
             }

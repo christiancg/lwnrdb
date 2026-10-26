@@ -9,6 +9,7 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -17,9 +18,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.mockito.Mockito;
+import org.techhouse.bckg_ops.BackgroundLanes;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
@@ -91,7 +96,8 @@ public class TestUtils {
         TestUtils.getPrivateField(adminCache, "metadataMisses", PartitionedMissCache.class).clear();
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(pendingIndexWrites, "generations", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pendingIndexWrites, "pins", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pendingIndexWrites, "epoch", new AtomicLong());
         // Drop any tracked clients so leaked test connections can't fill the connection limit and make
         // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
         ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -267,7 +273,14 @@ public class TestUtils {
     }
 
     public static void setDbPath(Object fileSystem, String path) throws NoSuchFieldException, IllegalAccessException {
-        setPrivateField(getPrivateField(fileSystem, "paths", Object.class), "dbPath", path);
+        final var paths = getPrivateField(fileSystem, "paths", Object.class);
+        try {
+            final var useDbPath = paths.getClass().getDeclaredMethod("useDbPath", String.class);
+            useDbPath.setAccessible(true);
+            useDbPath.invoke(paths, path);
+        } catch (NoSuchMethodException | java.lang.reflect.InvocationTargetException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     public static String getDbPath(Object fileSystem) throws NoSuchFieldException, IllegalAccessException {
@@ -280,6 +293,12 @@ public class TestUtils {
 
     public static Object usageTrackerOf(Object memoryManagement) throws NoSuchFieldException, IllegalAccessException {
         return getPrivateField(memoryManagement, "usageTracker", Object.class);
+    }
+
+    public static void resetUsageCounters(Object usageTracker) throws NoSuchFieldException, IllegalAccessException {
+        setPrivateField(usageTracker, "counters", new java.util.concurrent.ConcurrentHashMap<>());
+        setPrivateField(usageTracker, "byAccess", new java.util.concurrent.ConcurrentHashMap<>());
+        setPrivateField(usageTracker, "unflushed", java.util.concurrent.ConcurrentHashMap.newKeySet());
     }
 
     public static void deleteFolder(File folder) {
@@ -387,5 +406,26 @@ public class TestUtils {
         Mockito.when(socket.getInputStream()).thenReturn(in);
         Mockito.when(socket.getOutputStream()).thenReturn(out);
         return socket;
+    }
+
+    public static List<Event> queuedBackgroundEvents(BackgroundTaskManager manager)
+            throws NoSuchFieldException, IllegalAccessException {
+        return queuedEvents(getPrivateField(manager, "lanes", BackgroundLanes.class));
+    }
+
+    public static List<Event> queuedEvents(BackgroundLanes lanes) throws NoSuchFieldException, IllegalAccessException {
+        final var queues = getPrivateField(lanes, "queues", List.class);
+        final var events = new ArrayList<Event>();
+        for (final var queue : queues) {
+            for (final var event : (Collection<?>) queue) {
+                events.add((Event) event);
+            }
+        }
+        return events;
+    }
+
+    public static void discardQueuedBackgroundEvents(BackgroundTaskManager manager)
+            throws NoSuchFieldException, IllegalAccessException {
+        getPrivateField(manager, "lanes", BackgroundLanes.class).discardAll();
     }
 }

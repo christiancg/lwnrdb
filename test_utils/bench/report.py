@@ -36,7 +36,8 @@ def _phase(report: dict, name: str) -> Optional[dict]:
     return next((phase for phase in report["phases"] if phase["phase"] == name), None)
 
 
-def _metric_table(reports: list, title: str, value: Callable[[dict], float], fmt: str, higher_is_better: bool) -> list:
+def _metric_table(reports: list, title: str, value: Callable[[dict], float], fmt: str, higher_is_better: bool,
+                  bulk_label: Optional[str] = None) -> list:
     rows = []
     for name in _phase_names(reports):
         phases = [_phase(report, name) for report in reports]
@@ -45,7 +46,7 @@ def _metric_table(reports: list, title: str, value: Callable[[dict], float], fmt
         best = (max if higher_is_better else min)(present) if present else None
         cells = ["—" if v is None else (f"**{fmt.format(v)}**" if v == best and len(present) > 1 else fmt.format(v))
                  for v in values]
-        label = f"{name} (docs/s)" if name == "bulk_insert" and higher_is_better else name
+        label = f"{name} ({bulk_label})" if name == "bulk_insert" and bulk_label else name
         rows.append([label] + cells)
     return [f"### {title}", ""] + _table(["phase"] + [r["engine"] for r in reports], rows) + [""]
 
@@ -65,12 +66,23 @@ def _footer(reports: list) -> list:
         invalid = sum(phase["invalid"] for phase in report["phases"])
         return f"{errors} / {invalid}"
 
+    def pauses(report: dict) -> str:
+        value = report.get("container", {}).get("gc_pauses")
+        return "—" if value is None else f"{value['count']} / {value['p99_ms']:,.2f} / {value['max_ms']:,.2f}"
+
+    def full_gcs(report: dict) -> str:
+        value = report.get("container", {}).get("gc_pauses")
+        return "—" if value is None else str(value["full_gcs"])
+
     rows = [
         ["peak container memory"] + [cell(report, "memory_peak") for report in reports],
         ["data on disk at the end"] + [cell(report, "data_bytes") for report in reports],
         ["final document count"] + [str(report.get("final_count", "—")) for report in reports],
         ["errors / invalid results"] + [problems(report) for report in reports],
     ]
+    if any(report.get("container", {}).get("gc_pauses") is not None for report in reports):
+        rows.insert(2, ["G1 full GCs"] + [full_gcs(report) for report in reports])
+        rows.insert(2, ["G1 pauses: count / p99 ms / max ms"] + [pauses(report) for report in reports])
     return ["### Container", ""] + _table([""] + [r["engine"] for r in reports], rows) + [""]
 
 
@@ -104,9 +116,12 @@ def render(run_dir: str) -> str:
     lines = _header(reports)
     lines += _metric_table(reports, "Throughput (higher is better)",
                            lambda p: p["docs_per_s"] if p["phase"] == "bulk_insert" else p["ops_per_s"],
-                           "{:,.0f}", True)
+                           "{:,.0f}", True, "docs/s")
     lines += _metric_table(reports, "p50 latency, ms (lower is better)", lambda p: p["p50_ms"], "{:,.2f}", False)
     lines += _metric_table(reports, "p99 latency, ms (lower is better)", lambda p: p["p99_ms"], "{:,.2f}", False)
+    if any(phase.get("cpu_ms_per_op") is not None for report in reports for phase in report["phases"]):
+        lines += _metric_table(reports, "Engine CPU per operation, ms (lower is better)",
+                               lambda p: p.get("cpu_ms_per_op"), "{:,.3f}", False, "per batch")
     lines += _footer(reports)
     return "\n".join(lines)
 

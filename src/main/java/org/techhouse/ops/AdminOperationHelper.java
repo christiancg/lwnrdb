@@ -28,6 +28,7 @@ import org.techhouse.ops.admin.AdminRecordStore;
 import org.techhouse.ops.admin.AdminResidentRows;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.AdminUsageHelper;
+import org.techhouse.ops.admin.TransactionRecords;
 import org.techhouse.ops.resp.OperationResponse;
 
 public final class AdminOperationHelper {
@@ -60,9 +61,15 @@ public final class AdminOperationHelper {
         AdminPageHelper.bulkUpdateEntryCount(dbName, collName, type, inserted, incarnation);
     }
 
+    @SuppressWarnings("RedundantThrows")
     public static void updateEntryCount(String dbName, String collName, EventType type, EntityRef entity,
             long incarnation) throws InterruptedException, IOException {
         AdminPageHelper.updateEntryCount(dbName, collName, type, entity, incarnation);
+    }
+
+    public static void bookWritePathPages(String dbName, String collName, List<EntityRef> created,
+            List<EntityRef> others, long incarnation) throws InterruptedException {
+        AdminPageHelper.bookWritePathPages(dbName, collName, created, others, incarnation);
     }
 
     public static void createPageCollections(String dbName, String collName) throws IOException {
@@ -387,7 +394,12 @@ public final class AdminOperationHelper {
     }
 
     public static void deleteTransactionOps(List<String> opIds) throws IOException, InterruptedException {
-        TRANSACTION_OPS.delete(opIds);
+        writeTransactionRecords(List.of(), opIds);
+    }
+
+    public static void writeTransactionRecords(List<AdminTransactionEntry> inserts, List<String> deleteIds)
+            throws IOException, InterruptedException {
+        TransactionRecords.write(inserts, deleteIds);
     }
 
     public static void saveTriggerRun(AdminTriggerRunEntry entry) throws IOException, InterruptedException {

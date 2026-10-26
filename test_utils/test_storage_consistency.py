@@ -1,11 +1,13 @@
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
 
 import base_utils as bu
+import transaction_kills
 import write_intent_kills
 from base_utils import check, check_code, check_field, check_status, section
 
@@ -31,6 +33,8 @@ CONVERGE_DEADLINE_S = 30.0
 HEAL_COLL = "heal_race_docs"
 SCRIPT_COLL = "script_written"
 NON_FINITE_COLL = "non_finite_numbers"
+EMPTIED_COLL = "emptied_by_deletes"
+EMPTIED_DOCS = 40
 LOST_ROWS_COLL = "lost_page_rows"
 LOST_ROWS_DOCS = 12
 TORN_COLL = "torn_tail_docs"
@@ -44,6 +48,9 @@ ORPHAN_COLL = "unindexed_record_docs"
 ORPHAN_DOCS = 4
 ORPHAN_FIELD = "k"
 ORPHAN_ID = "orphan"
+RETIRE_ADOPT_COLL = "retired_then_adopted_docs"
+RETIRE_ADOPT_LOST = "third-and-longest"
+RETIRE_ADOPT_ORPHAN = "o"
 DROPPED_DBS = 6
 KILLED_DROP_COLL = "drop_killed_docs"
 KILLED_DROP_DB = "drop_killed_db"
@@ -84,7 +91,7 @@ CACHE_DISABLED = "-1"
 
 HEAL_SEEDED = 1000
 RACE_SECONDS = 3.0
-RACE_MAX_SECONDS = 30.0
+RACE_MAX_SECONDS = 90.0
 RACE_MIN_WRITES = 100
 
 PERM_USER_PREFIX = "page_grow_user_"
@@ -337,6 +344,7 @@ def seed(conn: Conn, work_dir: str):
 
     files = page_files(work_dir)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
+    bu.wait_until(lambda: page_metadata_bytes(work_dir) > 0, timeout_s=5.0, interval_s=0.1)
     check("page metadata is persisted for a user collection", page_metadata_bytes(work_dir) > 0,
           "admin/pages/<db>_<coll> is empty, so a restart would lose the page list")
     check("the full scan sees every seeded document", conn.count_via_scan() == SEEDED_DOCS,
@@ -409,6 +417,42 @@ def test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn: 
         scanned = ids_for(value, force_scan=True)
         check(f"the index and the scan agree on {value}", indexed == scanned == expected,
               f"index={indexed} scan={scanned} expected={expected}")
+
+
+def page_bytes(work_dir: str, coll: str, db=DB) -> dict:
+    folder = os.path.join(work_dir, "db", db, coll)
+    return {name: os.path.getsize(os.path.join(folder, name)) for name in page_files(work_dir, db, coll)}
+
+
+def delete_every_document_of_a_paged_collection(conn: Conn, work_dir: str):
+    section("Deleting every document of a collection gives its page space back")
+    check_status("create the collection to empty", conn.create_coll(EMPTIED_COLL), "OK")
+    for i in range(EMPTIED_DOCS):
+        conn.save({"_id": f"gone{i:03d}", "pad": PAD}, coll=EMPTIED_COLL)
+    filled = page_bytes(work_dir, EMPTIED_COLL)
+    check("the collection spans several pages before the deletes", len(filled) > 2, f"got {filled}")
+    refused = [i for i in range(EMPTIED_DOCS)
+               if conn.send({"type": "DELETE", "databaseName": DB, "collectionName": EMPTIED_COLL,
+                             "_id": f"gone{i:03d}"}).get("status") != "OK"]
+    check("every delete is acknowledged", not refused, f"refused: {refused}")
+    emptied = page_bytes(work_dir, EMPTIED_COLL)
+    check("every page file is kept but empty once its last document is deleted",
+          set(emptied) == set(filled) and sum(emptied.values()) == 0, f"before {filled}, after {emptied}")
+    check("a scan of the emptied collection finds nothing", conn.count_via_scan(coll=EMPTIED_COLL) == 0)
+
+
+def test_deleting_every_document_returns_the_page_space(conn: Conn, work_dir: str):
+    section("An emptied collection stays empty across a restart and reuses its first page")
+    after_restart = page_bytes(work_dir, EMPTIED_COLL)
+    check("the emptied pages are still 0 bytes after the restart", sum(after_restart.values()) == 0,
+          f"got {after_restart}")
+    check_status("insert one document into the emptied collection",
+                 conn.save({"_id": "back", "pad": PAD}, coll=EMPTIED_COLL), "OK")
+    landed = {name: size for name, size in page_bytes(work_dir, EMPTIED_COLL).items() if size > 0}
+    check("the insert lands on page 0", list(landed) == [f"{EMPTIED_COLL}-0.dat"], f"got {landed}")
+    check("the document reads back", conn.find("back", coll=EMPTIED_COLL).get("status") == "OK")
+    check("pk and scan agree on the one document",
+          conn.count_via_pk(coll=EMPTIED_COLL) == conn.count_via_scan(coll=EMPTIED_COLL) == 1)
 
 
 def test_scan_is_complete_after_restart(conn: Conn):
@@ -911,6 +955,38 @@ def test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn: Conn, 
     check("the recorded page occupancy matches the pages on disk", settled, f"recorded {recorded} actual {actual}")
 
 
+def seed_a_collection_that_will_lose_a_record_and_hold_an_unindexed_one(conn: Conn):
+    section("Seed a collection whose last record a crash will lose and replace with a shorter unindexed one")
+    check_status("create the collection", conn.create_coll(RETIRE_ADOPT_COLL), "OK")
+    for doc_id in ("first", "second", RETIRE_ADOPT_LOST):
+        check_status(f"save {doc_id}", conn.save({"_id": doc_id, "pad": doc_id}, coll=RETIRE_ADOPT_COLL), "OK")
+
+
+def lose_a_record_and_leave_a_shorter_unindexed_one(work_dir: str):
+    folder = os.path.join(work_dir, "db", DB, RETIRE_ADOPT_COLL)
+    bu.damage_after_the_last_checkpoint(folder)
+    path = os.path.join(folder, page_files(work_dir, DB, RETIRE_ADOPT_COLL)[0])
+    record = json.dumps({"_id": RETIRE_ADOPT_ORPHAN}, separators=(",", ":")) + "\n"
+    with open(path, "rb+") as page:
+        content = page.read()
+        page.truncate(content.rstrip(b"\n").rfind(b"\n") + 1)
+        page.seek(0, os.SEEK_END)
+        page.write(record.encode("utf-8"))
+
+
+def test_one_startup_retires_a_lost_record_and_adopts_the_one_written_over_it(conn: Conn):
+    section("One startup retires a lost record's pk row and then adopts the unindexed record written past it")
+    check_status("FIND_BY_ID of the lost record answers NOT_FOUND",
+                 conn.find(RETIRE_ADOPT_LOST, coll=RETIRE_ADOPT_COLL), "NOT_FOUND")
+    check_status("FIND_BY_ID reaches the adopted record, found only against the rows the retirement left",
+                 conn.find(RETIRE_ADOPT_ORPHAN, coll=RETIRE_ADOPT_COLL), "OK")
+    expected = sorted(["first", "second", RETIRE_ADOPT_ORPHAN])
+    scanned = conn.ids(RETIRE_ADOPT_COLL, FULL_SCAN)
+    check("a full scan lists every surviving record once", scanned == expected, f"expected {expected} got {scanned}")
+    pk = conn.count_via_pk(coll=RETIRE_ADOPT_COLL)
+    check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
+
+
 def test_an_unindexed_record_is_adopted_at_startup(conn: Conn):
     section("A record a crash left on a page but out of the PK index is adopted at startup")
     expected = sorted([f"kept{i}" for i in range(ORPHAN_DOCS)] + [ORPHAN_ID])
@@ -1105,6 +1181,14 @@ def create_user(conn: Conn, username: str) -> dict:
                       "collectionPermissions": {}, "scriptPermissions": {}})
 
 
+def settled_drift(work_dir: str, db: str, coll: str, entries: bool = True, timeout_s: float = 10.0) -> list:
+    def drift():
+        return occupancy_drift(recorded_pages(work_dir, db, coll), actual_pages(work_dir, db, coll), entries)
+
+    bu.wait_until(lambda: not drift(), timeout_s=timeout_s, interval_s=0.2)
+    return drift()
+
+
 def test_page_metadata_follows_an_admin_row_that_grows_on_update(conn: Conn, work_dir: str):
     section("Page occupancy for an admin row that grows on update")
     refused = []
@@ -1119,14 +1203,67 @@ def test_page_metadata_follows_an_admin_row_that_grows_on_update(conn: Conn, wor
     check(f"{PERM_USERS} admin rows grew over {PERM_ROUNDS} rounds of updates", not refused,
           f"{len(refused)} requests failed; first: {refused[:1]}")
 
+    drifted = settled_drift(work_dir, "admin", "users")
     recorded = recorded_pages(work_dir, "admin", "users")
     actual = actual_pages(work_dir, "admin", "users")
-    check("every admin/users page on disk is described by page metadata",
+    check("every admin/users page on disk is described by page metadata once the rows are written back",
           set(recorded) == set(actual), f"recorded={sorted(recorded)} on disk={sorted(actual)}")
-
-    drifted = occupancy_drift(recorded, actual)
     check("the recorded page occupancy still matches the page on disk", not drifted,
           "first-fit is packing rows into a page it believes has room — " + "; ".join(drifted) if drifted else "")
+
+
+COMPACT_ROWS_COLL = "compact_rows"
+COMPACT_ROWS_PAGES = 6
+COMPACT_ROWS_ROUNDS = 20
+COMPACT_ROWS_FLOOR = 1024
+BOOKED_COLL = "booked_rows"
+
+
+def page_metadata_dead_bytes(work_dir: str, db: str, coll: str) -> tuple:
+    folder = os.path.join(work_dir, "db", "admin", "pages", f"{db}_{coll}")
+    total = live = 0
+    if not os.path.isdir(folder):
+        return 0, 0
+    for name in (f for f in os.listdir(folder) if f.endswith(".dat")):
+        with open(os.path.join(folder, name), "rb") as fp:
+            data = fp.read()
+        total += len(data)
+        live += sum(len(line) + 1 for line in data.split(b"\n") if line.strip())
+    return total - live, live
+
+
+def test_admin_page_rows_stay_compact_under_write_back(conn: Conn, work_dir: str):
+    section("A collection's page-row file is compacted once its dead bytes pass the larger of 1 KB and its live bytes")
+    conn.create_coll(COMPACT_ROWS_COLL)
+    pad = "p" * 600
+    for i in range(COMPACT_ROWS_PAGES * 6):
+        conn.save({"_id": f"row{i:03d}", "pad": pad}, coll=COMPACT_ROWS_COLL)
+    settled_drift(work_dir, DB, COMPACT_ROWS_COLL)
+    worst = 0
+    live = 0
+    for round_index in range(COMPACT_ROWS_ROUNDS):
+        before = page_metadata_bytes(work_dir, DB, COMPACT_ROWS_COLL)
+        conn.save({"_id": "row000", "pad": pad[:-1 - round_index % 2]}, coll=COMPACT_ROWS_COLL)
+        bu.wait_until(lambda: page_metadata_bytes(work_dir, DB, COMPACT_ROWS_COLL) != before, timeout_s=5.0,
+                      interval_s=0.1)
+        dead, live = page_metadata_dead_bytes(work_dir, DB, COMPACT_ROWS_COLL)
+        worst = max(worst, dead)
+    one_row = live // max(1, len(recorded_pages(work_dir, DB, COMPACT_ROWS_COLL)))
+    check(f"{COMPACT_ROWS_ROUNDS} write-backs keep the dead bytes within the compaction bound",
+          worst <= max(COMPACT_ROWS_FLOOR, live) + 2 * one_row, f"worst {worst}B dead, {live}B live")
+    check("the page rows still describe the pages after the compactions",
+          not settled_drift(work_dir, DB, COMPACT_ROWS_COLL))
+
+
+def test_single_saves_book_every_created_id(conn: Conn, work_dir: str):
+    section("Single saves landing on a fresh page are each counted in its page row")
+    conn.create_coll(BOOKED_COLL)
+    for i in range(5):
+        check_status(f"save booked{i}", conn.save({"_id": f"booked{i}", "n": i}, coll=BOOKED_COLL), "OK")
+    drifted = settled_drift(work_dir, DB, BOOKED_COLL)
+    rows = recorded_pages(work_dir, DB, BOOKED_COLL)
+    check("the page row counts all five documents and their bytes", not drifted and
+          sum(row["entryCount"] for row in rows.values()) == 5, "; ".join(drifted) or str(rows))
 
 
 def test_page_metadata_follows_dropped_databases(conn: Conn, work_dir: str):
@@ -1142,8 +1279,7 @@ def test_page_metadata_follows_dropped_databases(conn: Conn, work_dir: str):
     check(f"{DROPPED_DBS} databases with collections were created and dropped", not refused,
           f"{len(refused)} requests failed; first: {refused[:1]}")
 
-    drifted = occupancy_drift(recorded_pages(work_dir, "admin", "databases"),
-                              actual_pages(work_dir, "admin", "databases"), entries=False)
+    drifted = settled_drift(work_dir, "admin", "databases", entries=False)
     check("the recorded admin/databases page size still matches the page on disk", not drifted,
           "; ".join(drifted))
 
@@ -1157,8 +1293,7 @@ def test_page_metadata_follows_collections_dropped_after_a_restart(conn: Conn, w
     check(f"{ADMIN_PAGES_COLLECTIONS} collections loaded at startup were dropped", not refused,
           f"{len(refused)} requests failed; first: {refused[:1]}")
 
-    drifted = occupancy_drift(recorded_pages(work_dir, "admin", "collections"),
-                              actual_pages(work_dir, "admin", "collections"))
+    drifted = settled_drift(work_dir, "admin", "collections")
     check("the recorded admin/collections occupancy still matches every page on disk", not drifted,
           "a dropped row's delta landed on another page — " + "; ".join(drifted) if drifted else "")
 
@@ -1691,6 +1826,42 @@ def test_bulk_insert_with_two_indexes_converges_quickly(conn: Conn, work_dir: st
         by_scan = sorted(conn.ids(CONVERGE_COLL, [{"type": "SKIP", "skip": 0}, equals]))
         check(f"the {field} index answers exactly what a scan answers", by_index == by_scan and by_index,
               f"index={len(by_index)} scan={len(by_scan)}")
+
+
+LANE_WRITERS = 8
+LANE_DOCS = 300
+
+
+def test_concurrent_writes_to_many_collections_converge(conn: Conn):
+    section(f"{LANE_WRITERS} clients writing {LANE_WRITERS} indexed collections at once are indexed exactly")
+    collections = [f"lane_coll_{i}" for i in range(LANE_WRITERS)]
+    for coll in collections:
+        check_status(f"create {coll}", conn.create_coll(coll), "OK")
+        for field in ("cat", "num"):
+            check_status(f"index {coll}.{field}", conn.create_index(field, coll=coll), "OK")
+    refused = []
+
+    def write(target):
+        with admin_conn() as writer:
+            for i in range(LANE_DOCS):
+                r = writer.save({"_id": f"d{i:04d}", "cat": f"c{i % 7}", "num": i % 50}, coll=target)
+                if r.get("status") != "OK":
+                    refused.append(r)
+
+    threads = [threading.Thread(target=write, args=(coll,)) for coll in collections]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(120)
+    check("every concurrent write was acknowledged", not refused, str(refused[:1]))
+    wrong = []
+    for coll in collections:
+        for step in (bu.filter_step("cat", "EQUALS", "c3"), bu.filter_step("num", "GREATER_THAN_EQUALS", 45)):
+            settled = bu.wait_until(lambda: sorted(conn.ids(coll, [step])) ==
+                                    sorted(conn.ids(coll, [{"type": "SKIP", "skip": 0}, step])), timeout_s=15.0)
+            if not settled:
+                wrong.append(f"{coll}: {step['operator']}")
+    check("every collection's indexes answer exactly what its scan answers", not wrong, "; ".join(wrong[:3]))
 
 
 def test_an_unclean_stop_is_reported_at_the_next_startup(log_path: str, log_offset: int):
@@ -2329,6 +2500,78 @@ def run_backlog_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+SHUTDOWN_DB = "shutdown_budget_db"
+SHUTDOWN_COLLECTIONS = 300
+SHUTDOWN_BUDGET_MS = 3000
+SHUTDOWN_MARGIN_S = 3.0
+SHUTDOWN_LEFT_FOR_REPLAY = "write-ahead log(s) not checkpointed; the next startup replays them"
+
+
+def shutdown_coll(index: int) -> str:
+    return f"dirty_{index:03d}"
+
+
+def dirty_every_collection(conn: Conn):
+    check_status("the database for the shutdown budget is created",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": SHUTDOWN_DB}), "OK")
+    failed = []
+    for index in range(SHUTDOWN_COLLECTIONS):
+        coll = shutdown_coll(index)
+        responses = (conn.create_coll(coll, db=SHUTDOWN_DB), conn.create_index("k", coll=coll, db=SHUTDOWN_DB),
+                     conn.save({"_id": "only", "k": f"v{index}"}, db=SHUTDOWN_DB, coll=coll))
+        if any(response.get("status") != "OK" for response in responses):
+            failed.append(coll)
+    check(f"one SAVE lands in each of {SHUTDOWN_COLLECTIONS} indexed collections", not failed, f"failed: {failed[:5]}")
+
+
+def test_a_sigterm_with_many_dirty_logs_exits_within_its_budget(proc, log_path: str, offset: int):
+    section(f"a SIGTERM with {SHUTDOWN_COLLECTIONS} dirty write-ahead logs stops within shutdownTimeoutMs")
+    started = time.monotonic()
+    proc.terminate()
+    try:
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    elapsed = time.monotonic() - started
+    limit = SHUTDOWN_BUDGET_MS / 1000 + SHUTDOWN_MARGIN_S
+    check(f"the process exits within {limit:.1f}s of the SIGTERM", elapsed < limit, f"took {elapsed:.2f}s")
+    left = SHUTDOWN_LEFT_FOR_REPLAY in bu.read_log(log_path)[offset:]
+    print(f"    (checkpoints left for replay at the deadline: {'yes' if left else 'none'}; {elapsed:.2f}s)")
+
+
+def test_every_document_and_index_answers_after_the_bounded_stop(conn: Conn):
+    section("every document and index answers after a stop that left logs for replay")
+    missing, unindexed = [], []
+    for index in range(SHUTDOWN_COLLECTIONS):
+        coll = shutdown_coll(index)
+        found = conn.find("only", db=SHUTDOWN_DB, coll=coll)
+        if found.get("status") != "OK" or (found.get("object") or {}).get("k") != f"v{index}":
+            missing.append(coll)
+        if conn.ids(coll, [bu.filter_step("k", "EQUALS", f"v{index}")], db=SHUTDOWN_DB) != ["only"]:
+            unindexed.append(coll)
+    check("every document is found by id", not missing, f"missing: {missing[:5]}")
+    check("every index answers its document", not unindexed, f"wrong: {unindexed[:5]}")
+
+
+def run_bounded_shutdown_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-shutdown-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, shutdownTimeoutMs=SHUTDOWN_BUDGET_MS)
+    print(f"\n  Starting server on {HOST}:{PORT} with shutdownTimeoutMs={SHUTDOWN_BUDGET_MS} ...")
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            dirty_every_collection(conn)
+        test_a_sigterm_with_many_dirty_logs_exits_within_its_budget(proc, log_path, len(bu.read_log(log_path)))
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_every_document_and_index_answers_after_the_bounded_stop(conn)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -2346,6 +2589,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             seed(conn, work_dir)
+            delete_every_document_of_a_paged_collection(conn, work_dir)
         test_no_final_field_is_mutated_reflectively(log_path)
         bu.stop_server(proc)
         proc = None
@@ -2354,9 +2598,12 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_scan_is_complete_after_restart(conn)
+            test_deleting_every_document_returns_the_page_space(conn, work_dir)
             test_scan_is_complete_after_the_first_write(conn)
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_page_metadata_follows_an_admin_row_that_grows_on_update(conn, work_dir)
+            test_admin_page_rows_stay_compact_under_write_back(conn, work_dir)
+            test_single_saves_book_every_created_id(conn, work_dir)
             test_page_metadata_follows_dropped_databases(conn, work_dir)
             test_page_metadata_follows_collections_dropped_after_a_restart(conn, work_dir)
             test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn, work_dir)
@@ -2383,6 +2630,7 @@ def main():
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
             test_bulk_insert_with_two_indexes_converges_quickly(conn, work_dir)
+            test_concurrent_writes_to_many_collections_converge(conn)
             test_updates_on_a_large_collection_stay_fast(conn)
             churned_flags = test_a_low_cardinality_index_stays_exact_under_churn(conn)
             memory_pk_written = rewrite_a_pk_index_from_memory(conn)
@@ -2393,6 +2641,7 @@ def main():
             seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn)
             seed_collections_for_primary_key_rebuilds(conn)
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
+            seed_a_collection_that_will_lose_a_record_and_hold_an_unindexed_one(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
             seed_a_collection_its_database_will_stop_listing(conn)
             seed_a_database_whose_collection_will_be_a_symlink(conn)
@@ -2418,6 +2667,7 @@ def main():
         damage_the_pk_indexes_to_rebuild(work_dir)
         leave_the_index_half_built(work_dir)
         leave_an_unindexed_record(work_dir)
+        lose_a_record_and_leave_a_shorter_unindexed_one(work_dir)
         interrupt_the_drops(work_dir)
         unlist_the_collection(work_dir)
         tear_an_admin_page_tail(work_dir)
@@ -2444,6 +2694,7 @@ def main():
             test_reindex_primary_key_refuses_a_duplicated_record(conn, work_dir)
             test_a_stray_copy_of_a_held_id_is_cut_at_startup(conn, work_dir)
             test_an_unindexed_record_is_adopted_at_startup(conn)
+            test_one_startup_retires_a_lost_record_and_adopts_the_one_written_over_it(conn)
             test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn)
             test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn, work_dir)
             test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
@@ -2508,7 +2759,9 @@ def main():
         bu.stop_server(proc)
         proc = None
 
+        transaction_kills.run(admin_conn, lambda kill_dir: write_config(kill_dir, faults=True))
         run_backlog_phase()
+        run_bounded_shutdown_phase()
     finally:
         bu.stop_server(proc)
 

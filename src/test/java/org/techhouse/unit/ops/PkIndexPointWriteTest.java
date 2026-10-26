@@ -24,6 +24,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
@@ -253,6 +254,26 @@ public class PkIndexPointWriteTest {
             assertFound(idOf(survivor));
         }
         assertSorted(residentIndex());
+    }
+
+    @Test
+    public void test_a_vacuum_repositions_without_iterating_the_list() throws Exception {
+        TestUtils.setPrivateField(configuration, "maxPageSize", SMALL_PAGE);
+        seed(6, 280);
+        final var counting = countingResidentIndex();
+
+        for (var round = 1; round <= 40; round++) {
+            assertEquals(OperationStatus.OK, save(idOf(round % 6), 280).getStatus());
+        }
+
+        assertEquals(Map.of(), SCANS, "a vacuum finds its rows by id, never by walking the pk list");
+        assertTrue(
+                IocContainer.get(FileSystem.class).pageFileLength(TestGlobals.DB, TestGlobals.COLL, 0L) <= SMALL_PAGE,
+                "the page was vacuumed rather than grown");
+        for (var i = 0; i < 6; i++) {
+            assertEquals(0L, counting.get(i).getPage(), "every update stayed on its page");
+            assertFound(idOf(i));
+        }
     }
 
     @Test

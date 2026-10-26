@@ -14,4 +14,8 @@ public sealed interface JsonOut permits Utf8JsonOut, CharJsonOut, Utf8CountingJs
     default JsonOut append(String text) {
         return append(text, 0, text.length());
     }
+
+    default void appendEscaped(String text) {
+        JsonStrings.appendEscapedRuns(this, text);
+    }
 }

@@ -59,7 +59,7 @@ final class IndexLookupResolver {
             }
             final var ids = SearchUtils.findingBetween(index, bounds);
             userCache.recordFieldIndexAccess(dbName, collName, fieldName);
-            return new HashSet<>(ids);
+            return ids;
         });
     }
 
@@ -73,6 +73,20 @@ final class IndexLookupResolver {
             }
             userCache.recordFieldIndexAccess(dbName, collName, fieldName);
             return OptionalLong.of(SearchUtils.countBetween(index, bounds));
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    static <T> OptionalLong countEquals(UserCache userCache, String dbName, String collName, String fieldName, T value)
+            throws IOException {
+        return readingIndex(dbName, collName, fieldName, () -> {
+            final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                    (Class<T>) scalarIndexClass(value));
+            if (index == null) {
+                return OptionalLong.empty();
+            }
+            userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+            return OptionalLong.of(SearchUtils.countEquals(index, value));
         });
     }
 

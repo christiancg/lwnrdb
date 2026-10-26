@@ -1,5 +1,6 @@
 package org.techhouse.ops.tx;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -77,26 +78,9 @@ public final class TransactionRecovery {
         return null;
     }
 
-    public static void discardAppliedOps(String txId, List<String> opIds) {
-        try {
-            AdminOperationHelper.deleteTransactionOps(opIds);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.warning(leftoverOpsMessage(txId));
-        } catch (Exception e) {
-            logger.warning(leftoverOpsMessage(txId) + ": " + e.getMessage());
-        }
-    }
-
-    private static String leftoverOpsMessage(String txId) {
-        return "Transaction " + txId
-                + " committed but some of its buffered op records were not deleted; the startup orphan sweep removes them";
-    }
-
     private static void abortFromDurable(String dtxId) throws Exception {
         final var orphanedRuns = TriggerRunRecovery.consumedBySlice(dtxId);
-        AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
-        recordAborted(dtxId);
+        recordAborted(dtxId, Tx2pcLog.sliceOpIds(dtxId));
         TriggerRunRecovery.requeueRuns(orphanedRuns);
     }
 
@@ -118,9 +102,11 @@ public final class TransactionRecovery {
         }
     }
 
-    public static void recordAborted(String dtxId) throws Exception {
-        Tx2pcLog.deleteParticipantMarker(dtxId);
-        Tx2pcLog.recordOutcome(dtxId, false, null);
+    public static void recordAborted(String dtxId, List<String> opIds) throws Exception {
+        final var cleared = new ArrayList<String>(opIds.size() + 1);
+        cleared.add(Tx2pcLog.participantMarkerId(dtxId));
+        cleared.addAll(opIds);
+        AdminOperationHelper.writeTransactionRecords(List.of(Tx2pcLog.outcomeMarker(dtxId, false, null)), cleared);
     }
 
     private static int triggerDepthOf(List<AdminTransactionEntry> ops) {

@@ -49,7 +49,7 @@ public class OrphanedPageRecordsTest {
         for (final var page : pages) {
             pageNumbers.add(page);
         }
-        return OrphanedPageRecords.adoptAll(f.paths, f.store, DB, COLL, pageNumbers);
+        return OrphanedPageRecords.adoptAll(f.paths, new PkRowsSession(f.store, DB, COLL), pageNumbers);
     }
 
     private List<String> indexedIds() throws IOException {
@@ -74,6 +74,26 @@ public class OrphanedPageRecordsTest {
 
     private static List<String> retiredIds(List<PkIndexEntry> retired) {
         return retired.stream().map(PkIndexEntry::getValue).sorted().toList();
+    }
+
+    private static PkIndexEntry row(String id, long position, long length, long page) {
+        return new PkIndexEntry(DB, COLL, id, position, length, page, 0L);
+    }
+
+    @Test
+    public void test_indexed_ends_by_page_takes_the_max_end_per_page() {
+        final var ends = OrphanedPageRecords.indexedEndsByPage(
+                List.of(row("a", 40, 10, 0), row("b", 0, 20, 0), row("c", 5, 5, 2), row("d", 90, 30, 2)));
+
+        assertEquals(Map.of(0L, 50L, 2L, 120L), ends);
+    }
+
+    @Test
+    public void test_a_page_with_no_rows_ends_at_zero() {
+        final var ends = OrphanedPageRecords.indexedEndsByPage(List.of(row("a", 0, 10, 1)));
+
+        assertEquals(0L, ends.getOrDefault(0L, 0L));
+        assertTrue(OrphanedPageRecords.indexedEndsByPage(List.of()).isEmpty());
     }
 
     @Test
@@ -315,7 +335,7 @@ public class OrphanedPageRecordsTest {
         truncateFirstPage(neighbourEnd);
         final var pageBytes = Files.readAllBytes(f.page(0).toPath());
 
-        final var retired = OrphanedPageRecords.retireDangling(f.store, DB, COLL, pageLengths(0));
+        final var retired = OrphanedPageRecords.retireDangling(new PkRowsSession(f.store, DB, COLL), pageLengths(0));
 
         assertEquals(List.of("x"), retiredIds(retired));
         assertEquals(List.of("w"), indexedIds());
@@ -329,7 +349,7 @@ public class OrphanedPageRecordsTest {
         f.seed(0, "x");
         truncateFirstPage(neighbourEnd + 5);
 
-        final var retired = OrphanedPageRecords.retireDangling(f.store, DB, COLL, pageLengths(0));
+        final var retired = OrphanedPageRecords.retireDangling(new PkRowsSession(f.store, DB, COLL), pageLengths(0));
         TornPageTail.healAll(f.paths, DB, COLL, List.of(0L), f::indexedRows);
 
         assertEquals(List.of("x"), retiredIds(retired));
@@ -342,7 +362,7 @@ public class OrphanedPageRecordsTest {
         f.seed(1, "y");
         Files.delete(f.page(1).toPath());
 
-        final var retired = OrphanedPageRecords.retireDangling(f.store, DB, COLL, pageLengths(0, 1));
+        final var retired = OrphanedPageRecords.retireDangling(new PkRowsSession(f.store, DB, COLL), pageLengths(0, 1));
 
         assertEquals(List.of("y"), retiredIds(retired));
         assertEquals(List.of("w"), indexedIds());
@@ -354,7 +374,7 @@ public class OrphanedPageRecordsTest {
         f.seed(0, "x");
         final var pkBytes = Files.readAllBytes(f.paths.pkIndexFile(DB, COLL).toPath());
 
-        assertTrue(OrphanedPageRecords.retireDangling(f.store, DB, COLL, pageLengths(0)).isEmpty());
+        assertTrue(OrphanedPageRecords.retireDangling(new PkRowsSession(f.store, DB, COLL), pageLengths(0)).isEmpty());
 
         assertArrayEquals(pkBytes, Files.readAllBytes(f.paths.pkIndexFile(DB, COLL).toPath()));
     }
@@ -365,7 +385,7 @@ public class OrphanedPageRecordsTest {
         final var pkFile = f.paths.pkIndexFile(DB, COLL);
         Files.writeString(pkFile.toPath(), "garbage\nmore garbage\n", StandardCharsets.UTF_8);
 
-        assertTrue(OrphanedPageRecords.retireDangling(f.store, DB, COLL, Map.of()).isEmpty());
+        assertTrue(OrphanedPageRecords.retireDangling(new PkRowsSession(f.store, DB, COLL), Map.of()).isEmpty());
 
         assertEquals("garbage\nmore garbage\n", Files.readString(pkFile.toPath(), StandardCharsets.UTF_8));
     }
@@ -378,7 +398,7 @@ public class OrphanedPageRecordsTest {
         truncateFirstPage(fullLength - 1);
 
         TornPageTail.healAll(f.paths, DB, COLL, List.of(0L), f::indexedRows);
-        final var retired = OrphanedPageRecords.retireDangling(f.store, DB, COLL, pageLengths(0));
+        final var retired = OrphanedPageRecords.retireDangling(new PkRowsSession(f.store, DB, COLL), pageLengths(0));
 
         assertTrue(retired.isEmpty());
         assertEquals(fullLength, f.page(0).length());

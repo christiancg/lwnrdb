@@ -276,7 +276,8 @@ public class TwoPhaseParticipantFencingTest {
 
         final var recorded = calls.indexOf("recordDeterministic");
         assertTrue(recorded >= 0, "the prepared commit recorded no trigger run: " + calls);
-        assertTrue(recorded < calls.lastIndexOf("deleteTransactionOps"), "recorded after its ops were gone: " + calls);
+        assertTrue(recorded < calls.lastIndexOf("writeTransactionRecords"),
+                "recorded after its ops were gone: " + calls);
     }
 
     private static JsonObject bareDocument(String id) {
@@ -318,6 +319,7 @@ public class TwoPhaseParticipantFencingTest {
         bufferSave(clientId, "kept");
         bufferSave(clientId, "destroyed");
         final var transaction = clientTracker.getActiveTransaction(clientId);
+        org.techhouse.test.TransactionRecordCalls.persistBufferedOps(transaction);
         AdminOperationHelper.deleteTransactionOps(List.of(transaction.getBufferedOpIds().getLast()));
 
         final var response = TwoPhaseParticipant.commitPrepared(clientId);

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollectionUsageEntry;
@@ -17,7 +18,11 @@ public class UsageTracker {
     private final Configuration config = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ConcurrentHashMap<String, UsageCounter> counters = new ConcurrentHashMap<>();
-    private final Set<String> dirtyKeys = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<AccessKey, UsageCounter> byAccess = new ConcurrentHashMap<>();
+    private final Set<UsageCounter> unflushed = ConcurrentHashMap.newKeySet();
+
+    private record AccessKey(AccessKind kind, String dbName, String collName, String indexKey) {
+    }
 
     private boolean isCachingDisabled() {
         return config.isCachingDisabled();
@@ -35,22 +40,38 @@ public class UsageTracker {
         if (isCachingDisabled()) {
             return;
         }
-        final var key = buildKey(kind, dbName, collName, indexKey);
-        final var counter = counters.computeIfAbsent(key,
-                _ -> new UsageCounter(kind, dbName, collName, indexKey == null ? "" : indexKey, 0L, 0L));
+        final var counter = counterOf(kind, dbName, collName, indexKey);
         counter.increment(System.currentTimeMillis());
-        dirtyKeys.add(key);
+        if (counter.markUnflushed()) {
+            unflushed.add(counter);
+        }
+    }
+
+    private UsageCounter counterOf(AccessKind kind, String dbName, String collName, String indexKey) {
+        final var access = accessKeyOf(kind, dbName, collName, indexKey);
+        final var known = byAccess.get(access);
+        if (known != null) {
+            return known;
+        }
+        return byAccess.computeIfAbsent(access,
+                _ -> counters.computeIfAbsent(buildKey(kind, dbName, collName, indexKey),
+                        _ -> new UsageCounter(kind, dbName, collName, access.indexKey(), 0L, 0L)));
+    }
+
+    private static AccessKey accessKeyOf(AccessKind kind, String dbName, String collName, String indexKey) {
+        return new AccessKey(kind, dbName, collName, indexKey == null ? "" : indexKey);
     }
 
     public List<UsageCounter> drainDirtyCounters() {
-        if (dirtyKeys.isEmpty()) {
+        if (unflushed.isEmpty()) {
             return List.of();
         }
         final var drained = new ArrayList<UsageCounter>();
-        for (final var key : List.copyOf(dirtyKeys)) {
-            dirtyKeys.remove(key);
-            final var counter = counters.get(key);
-            if (counter != null) {
+        for (final var counter : List.copyOf(unflushed)) {
+            unflushed.remove(counter);
+            counter.clearUnflushed();
+            final var key = buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey());
+            if (counters.get(key) == counter) {
                 drained.add(counter);
             }
         }
@@ -67,10 +88,26 @@ public class UsageTracker {
 
     public void clearCounter(AccessKind kind, String dbName, String collName, String indexKey) {
         counters.remove(buildKey(kind, dbName, collName, indexKey));
+        byAccess.remove(accessKeyOf(kind, dbName, collName, indexKey));
+    }
+
+    public void forgetCollection(String dbName, String collName) {
+        forgetWhere(counter -> dbName.equals(counter.dbName()) && collName.equals(counter.collName()));
+    }
+
+    public void forgetDatabase(String dbName) {
+        forgetWhere(counter -> dbName.equals(counter.dbName()));
+    }
+
+    private void forgetWhere(Predicate<UsageCounter> dropped) {
+        counters.values().removeIf(dropped);
+        byAccess.values().removeIf(dropped);
+        unflushed.removeIf(dropped);
     }
 
     public void putCounter(UsageCounter counter) {
         counters.put(buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()), counter);
+        byAccess.remove(accessKeyOf(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()));
     }
 
     public void loadProfileFromAdmin() {
@@ -88,9 +125,7 @@ public class UsageTracker {
                             final var counter = new UsageCounter(usage.getKind(), usage.getDbName(),
                                     usage.getCollName(), usage.getIndexKey(), usage.getAccessCount(),
                                     usage.getLastAccessMillis());
-                            counters.put(
-                                    buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()),
-                                    counter);
+                            putCounter(counter);
                         } catch (Exception inner) {
                             logger.warning("Skipping malformed collection_usage entry '" + e.get_id() + "': "
                                     + inner.getMessage());

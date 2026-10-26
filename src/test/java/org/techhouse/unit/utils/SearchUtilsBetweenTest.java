@@ -89,4 +89,16 @@ public class SearchUtilsBetweenTest {
             }
         }
     }
+
+    @Test
+    public void test_the_between_result_is_detached_from_the_index_entries() {
+        final var live = new java.util.HashSet<>(Set.of("b", "c"));
+        final var entries = List.of(new FieldIndexEntry<Number>("db", "coll", 20, live));
+
+        final var result = SearchUtils.findingBetween(entries,
+                bounds(bound(10, FieldOperatorType.GREATER_THAN), bound(30, FieldOperatorType.SMALLER_THAN)));
+        live.add("late");
+
+        assertEquals(Set.of("b", "c"), result);
+    }
 }

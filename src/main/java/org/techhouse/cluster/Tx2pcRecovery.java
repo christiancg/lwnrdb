@@ -1,6 +1,8 @@
 package org.techhouse.cluster;
 
+import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -32,6 +34,7 @@ public class Tx2pcRecovery implements MembershipListener {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final AtomicBoolean pendingRecovery = new AtomicBoolean();
+    private final Set<String> drivenByCommit = ConcurrentHashMap.newKeySet();
     private final AtomicReference<Thread> recoveryThreadRef = new AtomicReference<>();
     private volatile ScheduledExecutorService recoveryThread = newRecoveryThread();
     private volatile boolean stopping;
@@ -188,8 +191,19 @@ public class Tx2pcRecovery implements MembershipListener {
         }
     }
 
+    public void commitDriving(String dtxId) {
+        drivenByCommit.add(dtxId);
+    }
+
+    public void commitDriven(String dtxId) {
+        drivenByCommit.remove(dtxId);
+    }
+
     private void recoverCoordinator() {
         for (final var dtxId : Tx2pcLog.committedDtxIds()) {
+            if (drivenByCommit.contains(dtxId)) {
+                continue;
+            }
             try {
                 var allResolved = true;
                 final var sessionId = Tx2pcLog.readCoordinatorSessionId(dtxId);

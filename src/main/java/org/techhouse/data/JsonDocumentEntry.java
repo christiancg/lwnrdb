@@ -34,6 +34,12 @@ public abstract class JsonDocumentEntry extends CollectionScopedEntry {
         return _id;
     }
 
+    public void adoptId(String equalId) {
+        if (equalId != null && equalId.equals(_id)) {
+            _id = equalId;
+        }
+    }
+
     public void set_id(String _id) {
         if (_id != null && _id.equals(this._id)) {
             return;

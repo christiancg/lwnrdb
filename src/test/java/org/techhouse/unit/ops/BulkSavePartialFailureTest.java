@@ -12,7 +12,6 @@ import java.io.File;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +19,7 @@ import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
+import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -104,7 +104,7 @@ public class BulkSavePartialFailureTest {
         save.set_id(UPDATED_ID);
         assertNotNull(SaveOperationHelper.executeSave(save));
         pending.clear(TestGlobals.DB, TestGlobals.COLL, UPDATED_ID, 0L);
-        taskQueue().clear();
+        TestUtils.discardQueuedBackgroundEvents(stubTaskManager);
     }
 
     private void blockThePageTheInsertHalfWillTarget() {
@@ -128,8 +128,8 @@ public class BulkSavePartialFailureTest {
         assertTrue(pageFile(1).mkdir(), "the second entry's page must be unwritable for this test to inject a failure");
     }
 
-    private LinkedBlockingQueue<?> taskQueue() throws Exception {
-        return TestUtils.getPrivateField(stubTaskManager, "queue", LinkedBlockingQueue.class);
+    private List<Event> taskQueue() throws Exception {
+        return TestUtils.queuedBackgroundEvents(stubTaskManager);
     }
 
     private List<BulkEntityEvent> queuedBulkEvents() throws Exception {

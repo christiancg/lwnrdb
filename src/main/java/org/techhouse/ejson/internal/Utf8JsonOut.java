@@ -95,6 +95,40 @@ public final class Utf8JsonOut implements JsonOut {
     }
 
     @Override
+    public void appendEscaped(String text) {
+        final var length = text.length();
+        ensure(length);
+        var i = 0;
+        while (i < length) {
+            final var c = text.charAt(i);
+            if (c >= ' ' && c < 0x80 && c != '"' && c != '\\') {
+                if (size == buffer.length) {
+                    ensure(length - i);
+                }
+                buffer[size++] = (byte) c;
+                i++;
+            } else {
+                i = appendEscapedSlow(text, i);
+            }
+        }
+    }
+
+    private int appendEscapedSlow(String text, int index) {
+        final var c = text.charAt(index);
+        if (JsonStrings.needsEscaping(text, index)) {
+            JsonStrings.appendEscape(this, c);
+            return index + 1;
+        }
+        ensure((long) (text.length() - index) * MAX_BYTES_PER_CHAR);
+        if (Character.isHighSurrogate(c)) {
+            encodeSupplementary(Character.toCodePoint(c, text.charAt(index + 1)));
+            return index + 2;
+        }
+        encodeBmp(c);
+        return index + 1;
+    }
+
+    @Override
     public void appendLong(long value) {
         ensure(MAX_LONG_DIGITS);
         var remaining = value;

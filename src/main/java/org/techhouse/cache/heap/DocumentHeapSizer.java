@@ -50,15 +50,16 @@ public final class DocumentHeapSizer {
 
     private static long objectSize(JsonObject object, HeapLayout layout) {
         final var capacity = object.capacity();
+        final var sharedKeys = object.shape() != null && object.shape().isPinned();
         var total = layout.shallowSize(JsonObject.class);
         if (capacity > 0) {
-            total += 2 * layout.referenceArraySize(capacity);
+            total += (sharedKeys ? 1 : 2) * layout.referenceArraySize(capacity);
         }
-        if (object.indexSlots() > 0) {
+        if (object.indexSlots() > 0 && !sharedKeys) {
             total += layout.arraySize(Integer.BYTES, object.indexSlots());
         }
         for (var i = 0; i < object.size(); i++) {
-            total += keySize(object.keyAt(i), layout) + sizeOf(object.valueAt(i), layout);
+            total += (sharedKeys ? 0L : keySize(object.keyAt(i), layout)) + sizeOf(object.valueAt(i), layout);
         }
         return total;
     }
