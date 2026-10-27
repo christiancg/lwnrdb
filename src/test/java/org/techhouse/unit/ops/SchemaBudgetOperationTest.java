@@ -95,7 +95,7 @@ public class SchemaBudgetOperationTest {
         assertEquals(ErrorCode.SCHEMA_TOO_COMPLEX.getCode(), response.getErrorCode());
         assertTrue(response.getMessage().startsWith(ErrorCode.SCHEMA_TOO_COMPLEX.getDefaultMessage()));
         assertNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
-        assertNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
@@ -107,7 +107,7 @@ public class SchemaBudgetOperationTest {
             assertEquals(ErrorCode.SCHEMA_PATTERN_TOO_LONG.getCode(), tooLong.getErrorCode());
             assertTrue(tooLong.getMessage().startsWith(ErrorCode.SCHEMA_PATTERN_TOO_LONG.getDefaultMessage()));
             assertNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
-            assertNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+            assertNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
             assertInstanceOf(SaveSchemaResponse.class,
                     processor.processMessage(saveSchema("{\"properties\":{\"name\":{\"pattern\":\"^[a-z]+$\"}}}")));
         } finally {

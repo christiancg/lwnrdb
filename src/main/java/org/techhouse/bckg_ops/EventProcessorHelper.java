@@ -8,13 +8,14 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.CollectionScopedEvent;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
+import org.techhouse.bckg_ops.events.UsageProfileFlushEvent;
+import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -109,20 +110,30 @@ public class EventProcessorHelper {
 
     private static List<WorkUnit> workUnitsOf(List<Event> batch) {
         final var entityGroups = new LinkedHashMap<String, List<EntityEvent>>();
+        final var historyGroups = new LinkedHashMap<String, List<ScriptRunHistoryEvent>>();
         final var others = new ArrayList<Event>();
         for (final var event : batch) {
             if (event instanceof EntityEvent entityEvent) {
                 final var key = entityEvent.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR + entityEvent.getCollName()
                         + Globals.COLL_IDENTIFIER_SEPARATOR + entityEvent.getIncarnation();
                 entityGroups.computeIfAbsent(key, _ -> new ArrayList<>()).add(entityEvent);
+            } else if (event instanceof ScriptRunHistoryEvent history && history.getRecord() != null
+                    && history.getRecord().database() != null) {
+                final var key = Cache.getCollectionIdentifier(history.getRecord().database(),
+                        Globals.SCRIPT_RUNS_COLLECTION_NAME);
+                historyGroups.computeIfAbsent(key, _ -> new ArrayList<>()).add(history);
             } else {
                 others.add(event);
             }
         }
-        final var units = new ArrayList<WorkUnit>(entityGroups.size() + others.size());
+        final var units = new ArrayList<WorkUnit>(entityGroups.size() + historyGroups.size() + others.size());
         for (final var group : entityGroups.entrySet()) {
             final var events = group.getValue();
             units.add(new WorkUnit(group.getKey(), events, true, budget -> processEntityGroup(events, budget)));
+        }
+        for (final var group : historyGroups.entrySet()) {
+            final var events = group.getValue();
+            units.add(new WorkUnit(group.getKey(), events, false, _ -> ScriptRunHistory.writeAll(events)));
         }
         for (final var event : others) {
             units.add(new WorkUnit(collectionOf(event), List.of(event), isIndexMaintenance(event),
@@ -239,12 +250,27 @@ public class EventProcessorHelper {
         switch (event) {
             case EntityEvent entityEvent -> processEntityEvent(entityEvent, lockBudgetMs);
             case BulkEntityEvent bulkEntityEvent -> processBulkEntityEvent(bulkEntityEvent, lockBudgetMs);
-            case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
-            case UsageProfileCleanupEvent ignored ->
-                AdminOperationHelper.cleanupCollectionUsage(memoryManagement.usageRetentionMillis());
-            case ScriptRunHistoryEvent historyEvent ->
-                ScriptRunHistory.write(historyEvent.getRecord(), historyEvent.getRetries());
+            case ScriptRunHistoryEvent historyEvent -> ScriptRunHistory.writeAll(List.of(historyEvent));
             default -> throw new IllegalStateException("Unexpected value: " + event);
+        }
+    }
+
+    public static void processMaintenance(Event event) throws IOException, InterruptedException {
+        switch (event) {
+            case UsageProfileFlushEvent _ -> flushUsage();
+            case UsageProfileCleanupEvent _ ->
+                AdminOperationHelper.cleanupCollectionUsage(memoryManagement.usageRetentionMillis());
+            default -> throw new IllegalStateException("Unexpected maintenance event: " + event);
+        }
+    }
+
+    private static void flushUsage() throws IOException, InterruptedException {
+        final var dirty = memoryManagement.takeDirtyUsage();
+        try {
+            AdminOperationHelper.flushCollectionUsage(dirty);
+        } catch (IOException | InterruptedException | RuntimeException e) {
+            memoryManagement.requeueUsage(dirty);
+            throw e;
         }
     }
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import threading
 import time
 
 import base_utils as bu
@@ -8,6 +9,7 @@ from base_utils import check, check_code, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PROC_TEST_PORT", "8996"))
+HISTORY_CAP = 50
 CLUSTER_PORT = int(os.environ.get("PROC_TEST_CLUSTER_PORT", "9996"))
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
@@ -29,6 +31,10 @@ REVOKE_COLL = "revoke_source"
 DROPPED_RUNS_COLL = "dropped_runs"
 FIRST_RUN_COLL = "first_run"
 FIRST_RUN_BLOCK_COLL = "first_run_block"
+GROUPED_COLL = "grouped_hooked"
+GROUPED_AUDIT = "grouped_audit"
+GROUPED_WRITERS = 16
+GROUPED_SAVES_EACH = 10
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -119,7 +125,7 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                  history_enabled: bool = True, history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE",
                  history_retention_ms: int = 604800000, max_attempts: int = 1, retry_backoff_ms: int = 0,
                  retry_max_backoff_ms: int = 2000, shutdown_timeout_ms: int = SHUTDOWN_BUDGET_MS,
-                 clustered: bool = False):
+                 clustered: bool = False, **extra):
     cluster = {"clusterEnabled": True, "clusterPort": CLUSTER_PORT, "clusterBindAddress": "127.0.0.1",
                "clusterAdvertisedAddress": "127.0.0.1", "clusterSeeds": "", "clusterExpectedSize": 2,
                "clusterSecret": "proc-test-cluster-secret-of-32-plus-chars"} if clustered else {}
@@ -155,7 +161,7 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                     triggerRetryMaxBackoffMs=retry_max_backoff_ms,
                     triggerDeadLetterRetentionMs=604800000,
                     shutdownTimeoutMs=shutdown_timeout_ms,
-                    **cluster)
+                    **cluster, **extra)
 
 
 def setup_data(conn: Conn):
@@ -1715,6 +1721,59 @@ def test_a_run_left_pending_standalone_is_replayed_once_clustered(conn: Conn):
         check("every configured attempt was spent", dead[0].get("attempts") == 3, f"entry={dead[0]!r}")
 
 
+def test_concurrent_hooked_and_triggered_saves_fire_once_each(conn: Conn):
+    section(f"{GROUPED_WRITERS} writers save concurrently through a before hook and an after trigger")
+    for coll in (GROUPED_COLL, GROUPED_AUDIT):
+        check_status(f"create {coll}", conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                                                  "collectionName": coll}), "OK")
+    check_status("install the pass-through hook procedure",
+                 conn.save_procedure("grouped_hook", "export default (doc) => undefined;"), "OK")
+    check_status("install the hook", conn.save_trigger("grouped_hook", ["CREATED", "UPDATED"], "grouped_hook",
+                                                       coll=GROUPED_COLL, timing="before"), "OK")
+    check_status("install the audit procedure", conn.save_procedure(
+        "grouped_auditor", "import db from 'db'; import args from 'args';"
+                           " db.save(db.name, '" + GROUPED_AUDIT + "', { doc: args.id, event: args.event });"
+                           " return 1;"), "OK")
+    check_status("install the after trigger", conn.save_trigger("grouped_audit", ["CREATED", "UPDATED"],
+                                                                "grouped_auditor", coll=GROUPED_COLL), "OK")
+    answered = []
+    lock = threading.Lock()
+
+    def writer(number: int):
+        with admin_conn() as own:
+            for i in range(GROUPED_SAVES_EACH):
+                response = own.save_doc({"_id": f"w{number}-{i}", "n": i}, coll=GROUPED_COLL)
+                with lock:
+                    answered.append(response.get("status"))
+
+    threads = [threading.Thread(target=writer, args=(number,)) for number in range(GROUPED_WRITERS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    writes = GROUPED_WRITERS * GROUPED_SAVES_EACH
+    check("every concurrent save was acknowledged", answered.count("OK") == writes,
+          f"{answered.count('OK')} of {writes}")
+
+    def audited():
+        return conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": GROUPED_AUDIT,
+                          "aggregationSteps": [{"type": "COUNT"}]})
+
+    bu.wait_until(lambda: bu.count_of(audited()) == writes, timeout_s=60, interval_s=0.25)
+    time.sleep(1.0)
+    check("every write fired its trigger exactly once", bu.count_of(audited()) == writes,
+          f"{bu.count_of(audited())} audit rows for {writes} writes")
+    docs = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": GROUPED_AUDIT,
+                      "aggregationSteps": [{"type": "DISTINCT", "fieldName": "doc"}, {"type": "COUNT"}]})
+    check("one audit row per written document", bu.count_of(docs) == writes, f"got {docs}")
+    bu.wait_until(lambda: not [run for run in trigger_runs(conn) if run.get("trigger") == "grouped_audit"],
+                  timeout_s=30, interval_s=0.25)
+    left = [run for run in trigger_runs(conn) if run.get("trigger") == "grouped_audit"]
+    check("no trigger run is left behind", not left, f"left {left!r}")
+    for name in ("grouped_audit", "grouped_hook"):
+        conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": GROUPED_COLL, "name": name})
+
+
 def trigger_runs(conn: Conn, status: str = None) -> list:
     payload = {"type": "LIST_TRIGGER_RUNS"}
     if status:
@@ -1962,6 +2021,75 @@ def test_stats(conn: Conn):
           f"got {triggers}")
 
 
+def node_stats(conn: Conn) -> dict:
+    return conn.send({"type": "GET_DATABASE_STATS"}).get("stats") or {}
+
+
+def history_count(conn: Conn, name: str) -> int:
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                          "aggregationSteps": [bu.filter_step("name", "EQUALS", name), {"type": "COUNT"}]})
+    return bu.count_of(response) or 0
+
+
+def test_a_burst_of_runs_lands_in_history(conn: Conn):
+    section("A burst of procedure calls lands in history in batches")
+    check_status("install the burst procedure", conn.save_procedure("burst", "return 1;"), "OK")
+    recorded_before = node_stats(conn).get("scripts", {}).get("historyRecorded", 0)
+    for i in range(500):
+        conn.call("burst")
+    landed = await_latest(lambda: history_count(conn, "burst"), lambda count: count >= 500, 30.0, 0.3)
+    check("every one of the 500 runs has a history row", landed == 500, f"rows={landed}")
+    scripts = node_stats(conn).get("scripts", {})
+    check("historyRecorded grew by the burst", scripts.get("historyRecorded", 0) - recorded_before >= 500,
+          f"scripts={scripts}")
+    check("historyQueued is reported", "historyQueued" in scripts, f"scripts={scripts}")
+
+
+def test_a_read_only_trigger_consumes_its_run(conn: Conn):
+    section("A trigger that writes nothing consumes its run")
+    pending_before = node_stats(conn).get("triggers", {}).get("pendingRuns")
+    check_status("install a read-only procedure", conn.save_procedure("only_reads", "return 'looked';"), "OK")
+    check_status("install a read-only trigger", conn.save_trigger("read_only_watch", ["CREATED"], "only_reads"), "OK")
+    check_status("write a document so it fires", conn.save_doc({"_id": "read-only-fired", "n": 1}), "OK")
+    rows = await_history(conn, kind="TRIGGER", name="read_only_watch")
+    check("the read-only run is recorded ok", bool(rows) and rows[0].get("outcome") == "ok", f"rows={rows!r}")
+    pending_after = await_latest(lambda: node_stats(conn).get("triggers", {}).get("pendingRuns"),
+                                 lambda count: count == pending_before, 10.0, 0.2)
+    check("pendingRuns is back to its baseline", pending_after == pending_before,
+          f"before={pending_before} after={pending_after}")
+    check_status("remove the read-only trigger", conn.send({"type": "DELETE_TRIGGER", "databaseName": DB,
+                                                            "collectionName": COLL, "name": "read_only_watch"}),
+                 "OK")
+
+
+def test_pending_runs_count_the_dead_letters(conn: Conn):
+    section("pendingRuns counts the trigger-run records without reading them")
+    listed = len(trigger_runs(conn))
+    pending = node_stats(conn).get("triggers", {}).get("pendingRuns")
+    check("pendingRuns equals the listed runs", pending == listed, f"pendingRuns={pending} listed={listed}")
+    background = node_stats(conn).get("background", {})
+    check("the background block reports pending and maintenance",
+          "pending" in background and "maintenance" in background, f"background={background}")
+
+
+def test_the_history_size_cap_keeps_the_newest_rows(conn: Conn):
+    section("scriptRunHistoryMaxRows keeps the newest rows")
+    check_status("install the capped procedure", conn.save_procedure("capped", "return 2;"), "OK")
+    for i in range(80):
+        conn.call("capped")
+    await_latest(lambda: history_count(conn, "capped"), lambda count: count >= 80, 30.0, 0.3)
+    total = await_latest(lambda: len(history_rows(conn)), lambda count: count <= HISTORY_CAP, 15.0, 0.5)
+    check(f"the sweep trims history to {HISTORY_CAP} rows", total <= HISTORY_CAP, f"rows={total}")
+    newest = history_rows(conn)
+    check("the rows kept are the newest", bool(newest) and newest[0].get("name") == "capped", f"rows={newest[:1]!r}")
+
+
+def test_retention_empties_history(conn: Conn):
+    section("A short retention empties history")
+    remaining = await_latest(lambda: len(history_rows(conn)), lambda count: count == 0, 20.0, 0.5)
+    check("every stale row is swept", remaining == 0, f"rows={remaining}")
+
+
 def test_triggers_per_collection_are_capped(conn: Conn):
     section("A collection holds at most triggerMaxPerCollection triggers")
     check_status("create a collection to fill",
@@ -2204,6 +2332,7 @@ def main():
             test_before_hook_in_transaction(conn)
             test_before_hook_that_shrinks_an_oversized_document(conn)
             test_before_hook_validation(conn)
+            test_concurrent_hooked_and_triggered_saves_fire_once_each(conn)
             test_dry_run(conn)
             test_result_cap(conn)
         test_definer_rights()
@@ -2225,6 +2354,8 @@ def main():
             test_triggers_per_collection_are_capped(conn)
             test_a_first_run_delivers_the_document_as_it_is_when_it_runs(conn)
             test_stats(conn)
+            test_a_burst_of_runs_lands_in_history(conn)
+            test_a_read_only_trigger_consumes_its_run(conn)
             test_storage_placement(work_dir)
             test_cascade_deletes(conn, work_dir)
             test_before_hook_definer_is_not_enforced(conn)
@@ -2260,6 +2391,7 @@ def main():
             test_a_retried_trigger_sees_its_original_fired_at(conn)
             test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn)
             test_a_post_commit_error_applies_its_effects_once(conn)
+            test_pending_runs_count_the_dead_letters(conn)
 
         bu.stop_server(proc)
         proc = None
@@ -2276,6 +2408,22 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_a_run_left_pending_standalone_is_replayed_once_clustered(conn)
+        bu.stop_server(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True,
+                     scriptRunHistoryMaxRows=HISTORY_CAP, scriptRunHistorySweepMs=1000)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_the_history_size_cap_keeps_the_newest_rows(conn)
+        bu.stop_server(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True, history_retention_ms=1000,
+                     scriptRunHistorySweepMs=1000)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_retention_empties_history(conn)
         bu.stop_server(proc)
         proc = None
 

@@ -1,6 +1,7 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -33,11 +34,10 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         }
     };
     private static final Comparator<DbEntry> BY_ID = Comparator.comparing(DbEntry::get_id);
-    private static final Comparator<DbEntry> BY_PAGE_THEN_ID = Comparator.comparingLong(DbEntry::getPage)
-            .thenComparing(DbEntry::get_id);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final AdminCache adminCache = IocContainer.get(AdminCache.class);
     private final UserCache userCache = IocContainer.get(UserCache.class);
+    private final ScanOrderMemo scanOrder = new ScanOrderMemo();
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private final AbsentIndexTypes absentIndexTypes = new AbsentIndexTypes();
     private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
@@ -133,6 +133,16 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return userCache.getEntriesByIds(dbName, collName, ids);
     }
 
+    public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids, PkRows pinned)
+            throws IOException {
+        return userCache.getEntriesByIds(dbName, collName, ids, pinned);
+    }
+
+    public Set<String> getIdsEqualToAny(String dbName, String collName, String fieldName, List<Object> lookupValues)
+            throws IOException {
+        return IndexLookupResolver.idsEqualToAny(userCache, dbName, collName, fieldName, lookupValues);
+    }
+
     public void evictDatabase(String dbName) {
         CollectionIdentifiers.forgetDatabase(dbName);
         absentIndexTypes.forgetDatabase(dbName);
@@ -176,11 +186,8 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
-        final var wholeCollection = userCache.getCachedCollection(dbName, collName);
-        // Gate completeness on the synchronous PK index size, never on the admin page entry counts:
-        // those lag behind committed writes and would accept an incomplete cached map.
-        if (wholeCollection != null && !wholeCollection.isEmpty()
-                && wholeCollection.size() == pkIndexSize(dbName, collName)) {
+        final var wholeCollection = completeCachedCollection(dbName, collName);
+        if (wholeCollection != null) {
             return wholeCollection;
         }
         try {
@@ -195,30 +202,54 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public int pkIndexSize(String dbName, String collName) {
         try {
-            return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
+            return userCache.pkIndexSize(dbName, collName);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
+    private Map<String, DbEntry> completeCachedCollection(String dbName, String collName) {
+        final var cached = userCache.getCachedCollection(dbName, collName);
+        return cached != null && !cached.isEmpty() && cached.size() == pkCountForCoverage(dbName, collName)
+                ? cached
+                : null;
+    }
+
+    private Map<String, DbEntry> usableCachedCollection(String dbName, String collName) {
+        return userCache.isCachingDisabled(dbName) ? null : completeCachedCollection(dbName, collName);
+    }
+
+    public boolean holdsWholeCollection(String dbName, String collName) {
+        return usableCachedCollection(dbName, collName) != null;
+    }
+
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
-        if (!userCache.isCachingDisabled(dbName)) {
-            final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
-                return cached.values().stream();
-            }
+        final var cached = usableCachedCollection(dbName, collName);
+        return cached != null ? cached.values().stream() : streamCollectionFromDisk(dbName, collName);
+    }
+
+    public Stream<DbEntry> streamCollectionSkipping(String dbName, String collName, long skip) throws IOException {
+        if (skip <= 0) {
+            return streamCollection(dbName, collName);
         }
-        return streamCollectionFromDisk(dbName, collName);
+        final var cached = usableCachedCollection(dbName, collName);
+        if (cached != null) {
+            return cached.values().stream().skip(skip);
+        }
+        final var sortedPages = completeSortedPages(dbName, collName);
+        if (sortedPages == null || !locks.holdsCollectionLock(dbName, collName)) {
+            return streamCollectionFromDisk(dbName, collName).skip(skip);
+        }
+        final var plan = PageSkip.plan(sortedPages, userCache.getPkIndexAndLoadIfNecessary(dbName, collName), skip);
+        final var scan = new ScanAdmission(plan.pages(), false, pageReader(dbName, collName), memoryManagement, null);
+        return StreamSupport.stream(scan, false).skip(plan.remainder());
     }
 
     public Stream<DbEntry> streamCollectionInScanOrder(String dbName, String collName) throws IOException {
-        if (!userCache.isCachingDisabled(dbName)) {
-            final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
-                return cached.values().stream().sorted(BY_PAGE_THEN_ID);
-            }
-        }
-        return streamCollectionFromDisk(dbName, collName, true);
+        final var cached = usableCachedCollection(dbName, collName);
+        return cached != null
+                ? Arrays.stream(scanOrder.inScanOrder(getCollectionIdentifier(dbName, collName), cached))
+                : streamCollectionFromDisk(dbName, collName, true);
     }
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
@@ -227,26 +258,36 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName, boolean inScanOrder)
             throws IOException {
-        final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-        if (collPages == null || collPages.isEmpty() || collPages.size() < fs.pageFileCount(dbName, collName)) {
+        final var sortedPages = completeSortedPages(dbName, collName);
+        if (sortedPages == null) {
             return inScanOrder
                     ? fs.streamPages(dbName, collName).flatMap(page -> sortedById(page.values()))
                     : fs.streamEntries(dbName, collName);
         }
-        final var sortedPages = collPages.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).toList();
-        final var scan = new ScanAdmission(sortedPages, inScanOrder,
-                page -> fs.readWholeCollectionPage(dbName, collName, page).values(), memoryManagement,
+        final var scan = new ScanAdmission(sortedPages, inScanOrder, pageReader(dbName, collName), memoryManagement,
                 scanCompletion(dbName, collName));
         return StreamSupport.stream(scan, false);
+    }
+
+    private List<AdminPageEntry> completeSortedPages(String dbName, String collName) throws IOException {
+        final var collPages = adminCache.getAdminPageEntries(dbName, collName);
+        if (collPages == null || collPages.isEmpty() || collPages.size() < fs.pageFileCount(dbName, collName)) {
+            return null;
+        }
+        return collPages.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).toList();
+    }
+
+    private ScanAdmission.PageReader pageReader(String dbName, String collName) {
+        return page -> fs.readWholeCollectionPage(dbName, collName, page).values();
     }
 
     private ScanAdmission.Completion scanCompletion(String dbName, String collName) {
         if (userCache.isCachingDisabled(dbName) || !locks.holdsCollectionLock(dbName, collName)) {
             return null;
         }
-        return collected -> {
+        return (collected, measuredBytes) -> {
             if (locks.holdsCollectionLock(dbName, collName) && collected.size() == pkIndexSize(dbName, collName)) {
-                userCache.admitWholeCollection(dbName, collName, collected);
+                userCache.admitScannedCollection(dbName, collName, collected, measuredBytes);
             }
         };
     }
@@ -261,6 +302,12 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
             pagesStream.forEach(result::putAll);
         }
         return result;
+    }
+
+    public boolean mayAdmitFieldIndexLookup(String dbName, String collName, String fieldName, int ids) {
+        return locks.holdsCollectionLock(dbName, collName)
+                && userCache.wouldAdmit(new AdmissionRequest(AccessKind.FIELD_INDEX, dbName, collName, fieldName,
+                        CacheSizeEstimator.estimateFieldIndexLookupSize(ids)));
     }
 
     public boolean hasNoIndex(String dbName, String collName, String fieldName) {

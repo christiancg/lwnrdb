@@ -2,10 +2,12 @@ package org.techhouse.unit.ejson.internal;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -158,5 +160,48 @@ public class Utf8JsonOutTest {
         assertEquals(100, frame.bytes().length);
         assertEquals(100, frame.length());
         out.release();
+    }
+
+    @Test
+    public void anExactlyFilledBufferIsTakenWithoutACopy() throws Exception {
+        final var pool = TestUtils.getPrivateStaticField(Utf8JsonOut.class, "POOL", ArrayBlockingQueue.class);
+        pool.clear();
+        final var out = Utf8JsonOut.acquire(400);
+        out.append("x".repeat(400));
+        final var buffer = TestUtils.getPrivateField(out, "buffer", byte[].class);
+
+        final var taken = out.takeExact();
+
+        assertSame(buffer, taken);
+        assertFalse(out.release());
+        assertFalse(pool.contains(buffer));
+    }
+
+    @Test
+    public void aBufferWithSlackIsCopiedByTakeExact() throws Exception {
+        final var out = Utf8JsonOut.acquire(4000);
+        out.append("é".repeat(10));
+        final var buffer = TestUtils.getPrivateField(out, "buffer", byte[].class);
+
+        final var taken = out.takeExact();
+
+        assertNotSame(buffer, taken);
+        assertArrayEquals("é".repeat(10).getBytes(StandardCharsets.UTF_8), taken);
+        out.release();
+    }
+
+    @Test
+    public void digestIntoHashesOnlyTheGivenSlice() throws Exception {
+        final var out = Utf8JsonOut.acquire(64);
+        try {
+            out.append("[{\"a\":1},{\"b\":\"中\"}]");
+            final var digest = MessageDigest.getInstance("SHA-256");
+            out.digestInto(digest, 1, 8);
+
+            assertArrayEquals(MessageDigest.getInstance("SHA-256").digest("{\"a\":1}".getBytes(StandardCharsets.UTF_8)),
+                    digest.digest());
+        } finally {
+            out.release();
+        }
     }
 }

@@ -5,8 +5,10 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -48,7 +50,7 @@ public class AdminCache {
     private final Map<String, PkIndexEntry> usersPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
-    private final Map<String, PkIndexEntry> triggerRunsPkIndex = new ConcurrentHashMap<>();
+    private final NavigableMap<String, PkIndexEntry> triggerRunsPkIndex = new ConcurrentSkipListMap<>();
     // Evictable because disk is authoritative, unlike every other map here. Misses are kept in a separate
     // cache so a caller naming thousands of nonexistent procedures cannot evict the ones in use.
     private final BoundedLruCache<JsonObject> collectionSchemas = new BoundedLruCache<>(Integer.MAX_VALUE,
@@ -268,7 +270,7 @@ public class AdminCache {
 
     public JsonObject loadSchemaUncached(String dbName, String collName) {
         try {
-            final var raw = fs.readCollectionSchema(dbName, collName);
+            final var raw = fs.metadataFiles().readCollectionSchema(dbName, collName);
             if (raw == null || raw.isBlank()) {
                 return null;
             }
@@ -302,7 +304,7 @@ public class AdminCache {
 
     public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
         try {
-            final var raw = fs.readProcedure(dbName, name);
+            final var raw = fs.metadataFiles().readProcedure(dbName, name);
             if (raw == null || raw.isBlank()) {
                 return null;
             }
@@ -333,7 +335,7 @@ public class AdminCache {
 
     public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
         try {
-            final var raw = fs.readSchedule(dbName, name);
+            final var raw = fs.metadataFiles().readSchedule(dbName, name);
             if (raw == null || raw.isBlank()) {
                 return null;
             }
@@ -378,7 +380,7 @@ public class AdminCache {
 
     public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
         try {
-            final var raw = fs.readTriggers(dbName, collName);
+            final var raw = fs.metadataFiles().readTriggers(dbName, collName);
             if (raw == null || raw.isBlank()) {
                 return List.of();
             }
@@ -483,7 +485,7 @@ public class AdminCache {
         triggerRunsPkIndex.remove(recordId);
     }
 
-    public Map<String, PkIndexEntry> getTriggerRunPkIndexes() {
+    public NavigableMap<String, PkIndexEntry> getTriggerRunPkIndexes() {
         return triggerRunsPkIndex;
     }
 }

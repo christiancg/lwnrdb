@@ -15,13 +15,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Random;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.utils.JsonUtils;
 
 public class JsonObjectMapContractTest {
     private static final int OPERATIONS = 400;
@@ -174,7 +174,7 @@ public class JsonObjectMapContractTest {
         }
 
         final var withoutId = object.copyWithout("_id");
-        final var forWrites = object.copyForWrites(Set.of("nested"));
+        final var forWrites = object.copyForWrites(JsonUtils.writeTreeOf(List.of("nested.inner")));
         final var deep = object.deepCopy();
 
         assertEquals("nested", withoutId.keyAt(0));

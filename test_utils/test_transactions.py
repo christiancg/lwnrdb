@@ -447,6 +447,122 @@ def test_entry_size_is_checked_after_the_id_is_assigned(c):
     check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
 
 
+def test_a_buffered_save_over_max_entry_size_is_refused(c):
+    section("A buffered SAVE or BULK_SAVE element over maxEntrySize is refused and buffers nothing")
+    padding = "x" * (1024 * 1024)
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_code("an oversized SAVE is refused at buffer time", save(c, {"_id": "too_big_single", "pad": padding}),
+               "ERROR", "400-2")
+    check_code("a BULK_SAVE holding one oversized element is refused whole",
+               bulk_save(c, [{"_id": "fits_in_bulk", "n": 1}, {"_id": "too_big_bulk", "pad": padding}]),
+               "ERROR", "400-2")
+    check_status("a small SAVE still buffers after the refusals", save(c, {"_id": "fits_after", "n": 1}), "OK")
+    check_status("COMMIT", commit_txn(c), "OK")
+    check_status("the small document committed", find_by_id(c, "fits_after"), "OK")
+    for doc_id in ("too_big_single", "fits_in_bulk", "too_big_bulk"):
+        check_status(f"{doc_id} was never written", find_by_id(c, doc_id), "NOT_FOUND")
+    delete(c, "fits_after")
+
+
+MANY_COLLS = ("txn_many_a", "txn_many_b")
+
+
+def count_of(c, coll, steps) -> int:
+    rows = aggregate(c, steps + [{"type": "COUNT"}], coll=coll).get("results") or [{}]
+    return rows[0].get("count", 0)
+
+
+def test_a_many_write_transaction_commits_every_write(c):
+    section("A 500-write transaction over two collections (inserts, updates, deletes) commits every write")
+    for coll in MANY_COLLS:
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+        check_status(f"seed {coll}", bulk_save(c, [{"_id": f"m{i}", "v": 1} for i in range(150)], coll=coll), "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    buffered = 0
+    for i in range(250):
+        for coll in MANY_COLLS:
+            if i < 100:
+                response = save(c, {"_id": f"m{i}", "v": 2}, coll=coll)
+            elif i < 150:
+                response = delete(c, f"m{i}", coll=coll)
+            else:
+                response = save(c, {"_id": f"m{i}", "v": 2}, coll=coll)
+            buffered += response.get("status") == "OK"
+    check("every write buffered", buffered == 500, f"buffered={buffered}")
+    check_status("COMMIT the 500 writes", commit_txn(c), "OK")
+    for coll in MANY_COLLS:
+        check(f"{coll} holds the 100 updates and the 100 inserts", count_of(c, coll, []) == 200,
+              f"count={count_of(c, coll, [])}")
+        updated = count_of(c, coll, [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v",
+                                                                     "value": 2}}])
+        check(f"every surviving document of {coll} carries the committed value", updated == 200, f"v=2: {updated}")
+        check_status(f"a deleted document of {coll} is gone", find_by_id(c, "m120", coll=coll), "NOT_FOUND")
+        check_status(f"an inserted document of {coll} is present", find_by_id(c, "m249", coll=coll), "OK")
+
+
+INDEXED_COLL = "txn_indexed"
+
+
+def filter_grp(value) -> dict:
+    return {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "grp", "value": value}}
+
+
+def test_an_indexed_filter_inside_a_transaction_reads_your_writes(c):
+    section("An indexed FILTER inside a transaction answers through the index and sees the buffered writes")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": INDEXED_COLL})
+    check_status("seed", bulk_save(c, [{"_id": f"ix{i}", "grp": i % 4} for i in range(40)], coll=INDEXED_COLL), "OK")
+    check_status("CREATE_INDEX grp", c.send({"type": "CREATE_INDEX", "databaseName": DB,
+                                             "collectionName": INDEXED_COLL, "fieldName": "grp"}), "OK")
+    committed = {f"ix{i}" for i in range(40) if i % 4 == 1}
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "ix_new", "grp": 1}, coll=INDEXED_COLL)
+    save(c, {"_id": "ix1", "grp": 2}, coll=INDEXED_COLL)
+    save(c, {"_id": "ix2", "grp": 1}, coll=INDEXED_COLL)
+    delete(c, "ix5", coll=INDEXED_COLL)
+    expected = (committed - {"ix1", "ix5"}) | {"ix_new", "ix2"}
+
+    analyzed = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": INDEXED_COLL, "analyze": True,
+                       "aggregationSteps": [filter_grp(1)]})
+    check("the FILTER saw the buffered insert, updates and delete", set(result_ids(analyzed)) == expected,
+          f"got {result_ids(analyzed)}")
+    used = (analyzed.get("analyzeResult") or {}).get("indexesUsed") or []
+    check("the FILTER answered through the grp index", "grp" in used, f"indexesUsed={used}")
+    check("FILTER + COUNT counts the merged rows", count_of(c, INDEXED_COLL, [filter_grp(1)]) == len(expected),
+          f"count={count_of(c, INDEXED_COLL, [filter_grp(1)])} expected={len(expected)}")
+    limited = aggregate(c, [filter_grp(1), {"type": "LIMIT", "limit": 3}], coll=INDEXED_COLL)
+    check("FILTER + LIMIT stops at the limit inside the merge",
+          len(result_ids(limited)) == 3 and set(result_ids(limited)) <= expected, f"got {result_ids(limited)}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+    after = aggregate(c, [filter_grp(1)], coll=INDEXED_COLL)
+    check("the rollback leaves the committed matches", set(result_ids(after)) == committed,
+          f"got {result_ids(after)}")
+
+
+def test_an_indexed_join_inside_a_transaction_reads_your_writes(c):
+    section("A JOIN on an indexed remote field inside a transaction sees the buffered remote writes")
+    left, right = "txn_ijoin_left", "txn_ijoin_right"
+    for coll in (left, right):
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    check_status("seed the left side", bulk_save(c, [{"_id": "l1", "k": "k1"}, {"_id": "l2", "k": "k2"}],
+                                                 coll=left), "OK")
+    check_status("seed the right side", bulk_save(c, [{"_id": "r-a", "k": "k1"}, {"_id": "r-b", "k": "k2"}],
+                                                  coll=right), "OK")
+    check_status("CREATE_INDEX k on the right side", c.send({"type": "CREATE_INDEX", "databaseName": DB,
+                                                             "collectionName": right, "fieldName": "k"}), "OK")
+    steps = [{"type": "JOIN", "joinCollection": right, "localField": "k", "remoteField": "k", "asField": "m"}]
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "r-new", "k": "k1"}, coll=right)
+    save(c, {"_id": "r-b", "k": "k3"}, coll=right)
+    joined = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": left, "analyze": True,
+                     "aggregationSteps": steps})
+    by_id = {row.get("_id"): sorted(d.get("_id") for d in (row.get("m") or [])) for row in joined.get("results") or []}
+    check("a buffered insert joins", by_id.get("l1") == ["r-a", "r-new"], f"got {by_id}")
+    check("a buffered update moves the document out of the join", by_id.get("l2") == [], f"got {by_id}")
+    used = (joined.get("analyzeResult") or {}).get("indexesUsed") or []
+    check("the remote index still answers the JOIN", "k" in used, f"indexesUsed={used}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+
 def test_auto_rollback_on_disconnect():
     section("Disconnecting with an open transaction auto-rolls-back")
 
@@ -727,6 +843,14 @@ def main():
         test_entry_size_is_checked_after_the_id_is_assigned(c)
     with authed_conn() as (c):
         test_a_transaction_over_four_megabytes_commits_whole(c)
+    with authed_conn() as (c):
+        test_a_buffered_save_over_max_entry_size_is_refused(c)
+    with authed_conn() as (c):
+        test_a_many_write_transaction_commits_every_write(c)
+    with authed_conn() as (c):
+        test_an_indexed_filter_inside_a_transaction_reads_your_writes(c)
+    with authed_conn() as (c):
+        test_an_indexed_join_inside_a_transaction_reads_your_writes(c)
     with authed_conn() as (c):
         test_a_non_admin_user_can_use_transactions(c)
     with authed_conn() as (c):

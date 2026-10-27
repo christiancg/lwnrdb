@@ -64,7 +64,7 @@ public final class SchemaOperationHelper {
             return new OperationResponse(OperationType.DELETE_SCHEMA, "Collection '" + collName + "' not found",
                     ErrorCode.DATABASE_NOT_FOUND);
         }
-        if (fs.deleteCollectionSchema(dbName, collName)) {
+        if (fs.metadataFiles().deleteCollectionSchema(dbName, collName)) {
             AdminStamp.tombstone(AdminRecordKey.schema(dbName, collName));
         }
         cache.removeCollectionSchema(dbName, collName);

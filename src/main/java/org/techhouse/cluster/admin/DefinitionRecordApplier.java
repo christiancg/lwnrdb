@@ -37,15 +37,15 @@ final class DefinitionRecordApplier {
         return underLock(key, () -> {
             switch (key.kind()) {
                 case SCHEMA -> {
-                    fs.writeCollectionSchema(key.dbName(), key.name(), json);
+                    fs.metadataFiles().writeCollectionSchema(key.dbName(), key.name(), json);
                     SchemaPatternCaps.warnWhenOver(
                             "Stored the replicated schema of "
                                     + Cache.getCollectionIdentifier(key.dbName(), key.name()),
                             AdminStamp.unwrappedSchema(record.body()));
                 }
-                case TRIGGERS -> fs.writeTriggers(key.dbName(), key.name(), json);
-                case PROCEDURE -> fs.writeProcedure(key.dbName(), key.name(), json);
-                default -> fs.writeSchedule(key.dbName(), key.name(), json);
+                case TRIGGERS -> fs.metadataFiles().writeTriggers(key.dbName(), key.name(), json);
+                case PROCEDURE -> fs.metadataFiles().writeProcedure(key.dbName(), key.name(), json);
+                default -> fs.metadataFiles().writeSchedule(key.dbName(), key.name(), json);
             }
             invalidate(key);
         });
@@ -54,10 +54,10 @@ final class DefinitionRecordApplier {
     static boolean remove(AdminRecordKey key) throws Exception {
         return underLock(key, () -> {
             switch (key.kind()) {
-                case SCHEMA -> fs.deleteCollectionSchema(key.dbName(), key.name());
-                case TRIGGERS -> fs.deleteTriggers(key.dbName(), key.name());
-                case PROCEDURE -> fs.deleteProcedure(key.dbName(), key.name());
-                default -> fs.deleteSchedule(key.dbName(), key.name());
+                case SCHEMA -> fs.metadataFiles().deleteCollectionSchema(key.dbName(), key.name());
+                case TRIGGERS -> fs.metadataFiles().deleteTriggers(key.dbName(), key.name());
+                case PROCEDURE -> fs.metadataFiles().deleteProcedure(key.dbName(), key.name());
+                default -> fs.metadataFiles().deleteSchedule(key.dbName(), key.name());
             }
             invalidate(key);
         });

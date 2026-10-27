@@ -1,7 +1,9 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import org.techhouse.cache.PkIndexList;
 import org.techhouse.data.PkIndexEntry;
@@ -22,6 +24,20 @@ final class PkIndexEdits {
                 rows.add(-at - 1, row);
             }
         }
+    }
+
+    static void removeAll(List<PkIndexEntry> rows, Collection<String> ids) {
+        if (rows instanceof PkIndexList || ids.size() <= POINT_EDIT_LIMIT) {
+            for (final var id : ids) {
+                final var at = PkIndexList.positionOf(rows, id);
+                if (at >= 0) {
+                    rows.remove(at);
+                }
+            }
+            return;
+        }
+        final var removed = new HashSet<>(ids);
+        rows.removeIf(row -> removed.contains(row.getValue()));
     }
 
     static void insertAll(List<PkIndexEntry> rows, List<PkIndexEntry> inserted) {

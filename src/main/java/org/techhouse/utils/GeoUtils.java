@@ -11,7 +11,9 @@ public final class GeoUtils {
     private GeoUtils() {
     }
 
-    private static final char[] BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz".toCharArray();
+    private static final String BASE32_ALPHABET = "0123456789bcdefghjkmnpqrstuvwxyz";
+    private static final char[] BASE32 = BASE32_ALPHABET.toCharArray();
+    private static final int BITS_PER_CHARACTER = 5;
     // The box must be a superset of the true circle: FILTER can drop a false positive but can never
     // recover a point the box excluded, so it is sized from the same sphere haversineMeters uses.
     private static final double BBOX_SAFETY = 1.001;
@@ -59,6 +61,48 @@ public final class GeoUtils {
             }
         }
         return hash.toString();
+    }
+
+    public static long geoHashBits(double lat, double lng, int precision) {
+        double latMin = -90;
+        double latMax = 90;
+        double lngMin = -180;
+        double lngMax = 180;
+        var bits = 0L;
+        for (var at = 0; at < BITS_PER_CHARACTER * precision; at++) {
+            final boolean set;
+            if (at % 2 == 0) {
+                final var mid = (lngMin + lngMax) / 2;
+                set = lng >= mid;
+                if (set) {
+                    lngMin = mid;
+                } else {
+                    lngMax = mid;
+                }
+            } else {
+                final var mid = (latMin + latMax) / 2;
+                set = lat >= mid;
+                if (set) {
+                    latMin = mid;
+                } else {
+                    latMax = mid;
+                }
+            }
+            bits = bits << 1 | (set ? 1L : 0L);
+        }
+        return bits;
+    }
+
+    public static long prefixBits(String prefix, int precision) {
+        var bits = 0L;
+        for (var i = 0; i < prefix.length(); i++) {
+            bits = bits << BITS_PER_CHARACTER | BASE32_ALPHABET.indexOf(prefix.charAt(i));
+        }
+        return bits << BITS_PER_CHARACTER * (precision - prefix.length());
+    }
+
+    public static long prefixWidth(String prefix, int precision) {
+        return 1L << BITS_PER_CHARACTER * (precision - prefix.length());
     }
 
     public static double haversineMeters(GeoPoint a, GeoPoint b) {

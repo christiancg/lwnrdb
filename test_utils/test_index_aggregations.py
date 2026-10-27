@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import threading
 import time
 from typing import Callable
@@ -9,6 +10,7 @@ from base_utils import Conn, check, check_code, check_status, section
 
 HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("INDEX_TEST_PORT", "8989"))
+DEADLINE_PORT = int(os.environ.get("INDEX_DEADLINE_TEST_PORT", "9449"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
@@ -57,6 +59,10 @@ def stats(c) -> dict:
     return c.send({"type": "GET_DATABASE_STATS"})
 
 
+def caching_disabled(c) -> bool:
+    return bool(stats(c).get("stats", {}).get("memory", {}).get("cachingDisabled"))
+
+
 def agg(c, coll, steps) -> dict:
     return c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
                        "aggregationSteps": steps})
@@ -78,7 +84,7 @@ def forced_scan(steps) -> list:
     return [{"type": "SKIP", "skip": 0}] + steps
 
 
-def timed_once(c, coll, steps):
+def timed_once(c: Conn, coll, steps):
     t0 = time.perf_counter()
     resp = agg(c, coll, steps)
     return time.perf_counter() - t0, resp
@@ -298,6 +304,58 @@ def probe_filter_limit_is_a_matching_subset(c):
         check(f"{window} answers only rows the scan matches", set(ids) <= everything)
         check(f"{window} rows all carry the filtered value",
               all(row.get("category") == FILTER_LIMIT_CATEGORY for row in rows))
+
+
+MANY_MATCHES = "idxagg_many_matches"
+MANY_MATCHES_DOCS = int(os.environ.get("INDEX_TEST_MANY_MATCHES", "10000"))
+
+
+def documents_scanned(c, coll, steps):
+    r = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "aggregationSteps": steps,
+                "analyze": True})
+    return (r.get("analyzeResult") or {}).get("documentsScanned")
+
+
+def probe_a_limit_over_many_matches_reads_only_its_rows(c):
+    section(f"FILTER + LIMIT 10 over {MANY_MATCHES_DOCS} matches reads only the rows it returns")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": MANY_MATCHES})
+    bulk_load(c, MANY_MATCHES, ({"_id": f"m{v:06d}", "v": "same", "n": v + 1} for v in range(MANY_MATCHES_DOCS)))
+    build_index(c, MANY_MATCHES, "v", "n")
+    wait_for_background()
+    for label, operator, field, value in (("EQUALS", "EQUALS", "v", "same"),
+                                          ("GREATER_THAN 0", "GREATER_THAN", "n", 0)):
+        steps = [bu.filter_step(field, operator, value), {"type": "LIMIT", "limit": 10}]
+        ids = agg_ids(c, MANY_MATCHES, steps)
+        everything = set(agg_ids(c, MANY_MATCHES, forced_scan([bu.filter_step(field, operator, value)])))
+        check(f"{label} LIMIT 10 answers 10 distinct matching rows", len(set(ids)) == 10 and set(ids) <= everything,
+              detail=f"got {ids[:12]}")
+        check(f"{label} LIMIT 10 is answered through the index", index_used(c, MANY_MATCHES, steps))
+        scanned = documents_scanned(c, MANY_MATCHES, steps)
+        check(f"{label} LIMIT 10 reads at most 10 documents (read {scanned})",
+              scanned is not None and scanned <= 10)
+
+
+REINDEX_PROBES = [
+    [bu.filter_step("category", "EQUALS", category_for(5))],
+    [bu.filter_step("score", "GREATER_THAN_EQUALS", NUM_DOCS // 3), bu.filter_step("score", "SMALLER_THAN", NUM_DOCS)],
+    [bu.filter_step("score", "IN", [1, 2, 3, NUM_DOCS // 2])],
+    [bu.filter_step("meta", "EQUALS", {"n": 7, "category": category_for(7)})],
+    [bu.filter_step("tags", "EQUALS", ["t", "9"])],
+    FILTER_GEO_DISTANCE_STEPS,
+]
+
+
+def probe_reindex_of_every_field_matches_the_scan(c):
+    section("A REINDEX of every field rebuilds indexes that answer exactly like a scan")
+    check_status("REINDEX every field of the main collection",
+                 c.send({"type": "REINDEX", "databaseName": DB, "collectionName": COLL}, timeout=120), "OK")
+    for steps in REINDEX_PROBES:
+        by_index = sorted(agg_ids(c, COLL, steps))
+        by_scan = sorted(agg_ids(c, COLL, forced_scan(steps)))
+        check(f"after the REINDEX {steps[0]['operator'].get('field')} answers like a scan ({len(by_scan)} rows)",
+              by_index == by_scan and by_scan, detail=f"index={by_index[:5]} scan={by_scan[:5]}")
+        check(f"after the REINDEX {steps[0]['operator'].get('field')} is served by its index",
+              index_used(c, COLL, steps))
 
 
 def distinct_signature(r):
@@ -910,6 +968,8 @@ AGREE_NOT_EQUALS_MIXED = "idxagg_agree_ne_mixed"
 AGREE_NOT_EQUALS_HOMOGENEOUS = "idxagg_agree_ne_homogeneous"
 AGREE_DOTTED_GROUP = "idxagg_agree_dotted_group"
 AGREE_DOTTED_DISTINCT = "idxagg_agree_dotted_distinct"
+AGREE_LARGE_IN = "idxagg_agree_large_in"
+AGREE_BROAD = "idxagg_agree_broad"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
@@ -1318,9 +1378,43 @@ def probe_dotted_group_by_and_distinct_agree_with_scan(c):
           extract=agree_nested_keys("a.b"), expected=[("x", [], False), ("y", [], False)])
 
 
+def probe_large_in_list_agrees_with_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": AGREE_LARGE_IN})
+    words = [f"Word{i}" for i in range(1500)]
+    bulk_load(c, AGREE_LARGE_IN, ({"_id": f"w{i:05d}", "tag": words[i % 1500] if i % 3 else i % 700}
+                                  for i in range(4500)))
+    operands = [word.upper() if i % 2 else word.lower() for i, word in enumerate(words[:1000])]
+    operands += list(range(0, 1400, 2))
+    for operator in ("IN", "NOT_IN"):
+        steps = [bu.filter_step("tag", operator, operands)]
+        agree(c, f"{operator} over 1000 mixed-case strings and 700 numbers", AGREE_LARGE_IN, steps,
+              AGREE_LARGE_IN, "tag")
+        check(f"{operator} over the large list matches the forced scan",
+              sorted(agg_ids(c, AGREE_LARGE_IN, steps)) == sorted(agg_ids(c, AGREE_LARGE_IN, forced_scan(steps))))
+
+
+def probe_a_broad_filter_agrees_with_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": AGREE_BROAD})
+    bulk_load(c, AGREE_BROAD, ({"_id": f"b{i:05d}", "n": i, "even": i % 2 == 0} for i in range(6000)))
+    build_index(c, AGREE_BROAD, "n", "even")
+    for label, steps in (("a 90%-selective range", [bu.filter_step("n", "GREATER_THAN_EQUALS", 600)]),
+                         ("a 50%-selective EQUALS", [bu.filter_step("even", "EQUALS", True)]),
+                         ("a broad NOT_IN", [bu.filter_step("n", "NOT_IN", [1, 2, 3])]),
+                         ("a GROUP_BY", [{"type": "GROUP_BY", "fieldName": "even"}])):
+        answer, scan = index_matches_scan(c, AGREE_BROAD, steps,
+                                          agree_nested_keys("even") if "GROUP_BY" in str(steps) else agree_ids)
+        check(f"{label} over 6000 documents answers what the forced scan answers", answer == scan,
+              detail=f"rows={len(answer)} vs {len(scan)}")
+    ordered = [{"type": "SORT", "fieldName": "n", "ascending": False}]
+    answer, scan = index_matches_scan(c, AGREE_BROAD, ordered, agree_ordered_ids)
+    check("an unbounded SORT over 6000 documents keeps the forced scan's order", answer == scan)
+
+
 def agreement_suite(c):
     section("Index / scan agreement: an index-backed answer must equal the full-scan answer")
     setup_agreement(c)
+    probe_large_in_list_agrees_with_scan(c)
+    probe_a_broad_filter_agrees_with_scan(c)
     probe_contains_agrees_with_scan_per_type(c)
     probe_not_in_agrees_with_scan(c)
     probe_join_agrees_with_scan_for_non_scalar_keys(c)
@@ -2232,7 +2326,35 @@ def test_wide_and_conjunction_stays_within_memory(c):
     check("the AND keeps only the documents every child matched", bu.count_of(r) == WIDE_AND_DOCS // 1000,
           detail=f"count={bu.count_of(r)}")
     check_status("the server stays alive afterwards (LIST_DATABASES)", c.send({"type": "LIST_DATABASES"}), "OK")
+    test_unindexed_conjunction_reads_the_collection_once(c)
     c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": WIDE_AND})
+
+
+def three_leg(conjunction: str) -> dict:
+    return {"type": "FILTER", "operator": {"conjunctionType": conjunction, "operators": [
+        {"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "n", "value": 100},
+        {"fieldOperatorType": "NOT_EQUALS", "field": "n", "value": 500},
+        {"fieldOperatorType": "SMALLER_THAN", "field": "n", "value": 900}]}}
+
+
+def test_unindexed_conjunction_reads_the_collection_once(c):
+    section("An unindexed conjunction reads the collection once and stops at a LIMIT")
+    limited = [three_leg("AND"), {"type": "LIMIT", "limit": 10}]
+    rows = agg(c, WIDE_AND, limited).get("results") or []
+    check("AND3 + LIMIT 10 answers ten matching rows",
+          len(rows) == 10 and all(100 <= row["n"] < 900 and row["n"] != 500 for row in rows), detail=f"{rows[:3]}")
+    read = documents_scanned(c, WIDE_AND, limited) or 0
+    check(f"AND3 + LIMIT 10 reads far fewer than {WIDE_AND_DOCS} documents (read {read})", read < WIDE_AND_DOCS // 10)
+    whole = documents_scanned(c, WIDE_AND, [three_leg("AND"), {"type": "COUNT"}]) or 0
+    check(f"AND3 + COUNT reads each document once (read {whole})", whole == WIDE_AND_DOCS)
+    for conjunction in ("NOR", "NAND"):
+        steps = [three_leg(conjunction)]
+        check(f"{conjunction} answers what the forced scan answers",
+              sorted(agg_ids(c, WIDE_AND, steps)) == sorted(agg_ids(c, WIDE_AND, forced_scan(steps))))
+        check(f"{conjunction} COUNT agrees with the forced scan",
+              agg_count(c, WIDE_AND, steps) == agg_count(c, WIDE_AND, forced_scan(steps)))
+        read = documents_scanned(c, WIDE_AND, steps + [{"type": "COUNT"}]) or 0
+        check(f"{conjunction} reads each document once (read {read})", read == WIDE_AND_DOCS)
 
 
 def colliding_strings(blocks: int) -> list:
@@ -2254,7 +2376,11 @@ def check_colliding_groups(c: Conn, coll, values, label):
     check(f"{label}: CREATE_INDEX over {len(values)} colliding values took {built_in:.2f}s, under "
           f"{COLLIDING_BUDGET_S:.0f}s", built_in < COLLIDING_BUDGET_S)
     group_by = [{"type": "GROUP_BY", "fieldName": "k"}]
-    check(f"{label}: GROUP_BY uses the index", index_used(c, coll, group_by))
+    agg(c, coll, [{"type": "SKIP", "skip": 0}, {"type": "COUNT"}])
+    if caching_disabled(c):
+        check(f"{label}: GROUP_BY stays on the scan while caching is disabled", not index_used(c, coll, group_by))
+    else:
+        check(f"{label}: GROUP_BY uses the index", index_used(c, coll, group_by))
     started = time.perf_counter()
     indexed = agg(c, coll, group_by)
     elapsed = time.perf_counter() - started
@@ -2278,6 +2404,63 @@ def test_colliding_values_group_exactly_and_fast(c: Conn):
     keys = colliding_strings(COLLIDING_BLOCKS)
     check_colliding_groups(c, COLLIDING_STRINGS, keys, "strings")
     check_colliding_groups(c, COLLIDING_OBJECTS, [{key: 1} for key in keys], "objects")
+
+
+def test_materialising_steps_obey_the_deadline():
+    section("Index-built GROUP_BY and a NOR over 50k documents stop at aggregateTimeoutMs")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-idxagg-deadline-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, DEADLINE_PORT, aggregateTimeoutMs=1, indexScanFallbackPercent=100)
+    proc = bu.start_server(work_dir, log_path, port=DEADLINE_PORT)
+    try:
+        with Conn(port=DEADLINE_PORT) as c:
+            check_status("authenticate", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+            c.send({"type": "CREATE_DATABASE", "databaseName": DB})
+            c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
+            bulk_load(c, COLL, ({"_id": f"t{i:06d}", "kind": f"k{i % 50}", "n": i} for i in range(50_000)))
+            build_index(c, COLL, "kind")
+            check_code("an index-built GROUP_BY is cut at the deadline",
+                       agg(c, COLL, [{"type": "GROUP_BY", "fieldName": "kind"}]), "ERROR", "408-6")
+            check_code("a NOR over the whole collection is cut at the deadline",
+                       agg(c, COLL, [three_leg("NOR"), {"type": "COUNT"}]), "ERROR", "408-6")
+            check_code("an unbounded SORT is cut at the deadline",
+                       agg(c, COLL, [{"type": "SORT", "fieldName": "kind", "ascending": True}]), "ERROR", "408-6")
+            c.send({"type": "DROP_DATABASE", "databaseName": DB})
+    finally:
+        bu.stop_server(proc, port=DEADLINE_PORT)
+
+
+MANY_LEFT = "idxagg_many_left"
+MANY_RIGHT = "idxagg_many_right"
+MANY_VALUES = 1000
+MANY_RIGHT_DOCS = 3000
+
+
+def test_join_by_index_with_many_distinct_values(c: Conn):
+    section(f"JOIN by index with {MANY_VALUES} distinct local values reads the remote index once")
+    for coll in (MANY_LEFT, MANY_RIGHT):
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    bulk_load(c, MANY_LEFT, ({"_id": f"l{i:05d}", "ref": f"key-{i}" if i % 10 else f"KEY-{i}"}
+                             for i in range(MANY_VALUES)))
+    bulk_load(c, MANY_RIGHT, ({"_id": f"r{i:05d}", "key": f"key-{i % (MANY_VALUES + 200)}",
+                               "keyPlain": f"key-{i % (MANY_VALUES + 200)}", "label": f"label-{i}"}
+                              for i in range(MANY_RIGHT_DOCS)))
+    build_indexes(c, [(MANY_RIGHT, "key")])
+    steps = [{"type": "JOIN", "joinCollection": MANY_RIGHT, "localField": "ref", "remoteField": "key",
+              "asField": "joined"}]
+    scan_steps = [dict(steps[0], remoteField="keyPlain")]
+    check("the JOIN resolves through the index", index_used(c, MANY_LEFT, steps))
+    elapsed, indexed = timed_once(c, MANY_LEFT, steps)
+    check_status(f"the indexed JOIN answers (took {elapsed * 1000:.0f} ms)", indexed, "OK")
+    scanned = agg(c, MANY_LEFT, scan_steps)
+    check("the indexed JOIN matches the scan row for row",
+          join_by_row_signature(indexed) == join_by_row_signature(scanned),
+          "the per-value index reads and the one-pass resolution disagree")
+    matched = sum(1 for row in (indexed.get("results") or []) if row.get("joined"))
+    check(f"every local value with a remote match joined ({matched} of {MANY_VALUES})", matched >= MANY_VALUES * 0.9)
+    for coll in (MANY_LEFT, MANY_RIGHT):
+        c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
 
 
 def main():
@@ -2358,6 +2541,8 @@ def main():
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         probe_join_on_id_matches_the_scan(c)
         probe_filter_limit_is_a_matching_subset(c)
+        probe_a_limit_over_many_matches_reads_only_its_rows(c)
+        probe_reindex_of_every_field_matches_the_scan(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
@@ -2393,6 +2578,10 @@ def main():
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_join_by_index_with_many_distinct_values(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         agreement_suite(c)
 
     with Conn() as c:
@@ -2402,6 +2591,8 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(c)
+
+    test_materialising_steps_obey_the_deadline()
 
     bu.summary()
 

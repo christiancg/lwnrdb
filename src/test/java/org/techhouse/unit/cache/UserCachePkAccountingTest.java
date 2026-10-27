@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.cache.Measure;
@@ -157,18 +158,16 @@ public class UserCachePkAccountingTest {
         assertEquals(0L, pkBytes(cache));
     }
 
-    private static Map<String, List<FieldIndexEntry<?>>> publishFieldIndex(UserCache cache, int entries)
-            throws Exception {
+    private static Map<String, List<FieldIndexEntry<?>>> publishFieldIndex(UserCache cache, int entries) {
         final List<FieldIndexEntry<?>> published = new ArrayList<>();
         for (var i = 0; i < entries; i++) {
             published.add(new FieldIndexEntry<>(DB, COLL, "a-rather-long-value-" + i,
                     new java.util.HashSet<>(List.of("id-with-a-long-name-" + i))));
         }
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
-        };
         final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
         indexes.put(Cache.getIndexIdentifier(FIELD, String.class), published);
-        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(Cache.getCollectionIdentifier(DB, COLL), indexes);
+        CacheResidents.residentUnmeasuredFieldIndex(cache, Cache.getCollectionIdentifier(DB, COLL),
+                Cache.getIndexIdentifier(FIELD, String.class), published);
         return indexes;
     }
 
@@ -201,14 +200,14 @@ public class UserCachePkAccountingTest {
     }
 
     @Test
-    public void test_busy_field_index_reuses_its_last_measure_scaled_by_count() throws Exception {
+    public void test_busy_field_index_reuses_its_last_measure() throws Exception {
         final var cache = new UserCache();
         final var indexes = publishFieldIndex(cache, 3);
         final var measured = fieldIndexBytes(cache);
         final var list = indexes.values().iterator().next();
         list.add(list.getFirst());
 
-        assertEquals(4 * (measured / 3), fieldIndexBytesWhileItsWriterHoldsTheLock(cache));
+        assertEquals(measured, fieldIndexBytesWhileItsWriterHoldsTheLock(cache));
     }
 
     @Test

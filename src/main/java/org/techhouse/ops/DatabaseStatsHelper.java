@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.lang.management.ManagementFactory;
 import java.util.Set;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.bckg_ops.TriggerExecutor;
@@ -18,6 +19,7 @@ import org.techhouse.ops.resp.OperationResponse;
 
 public final class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
@@ -48,6 +50,7 @@ public final class DatabaseStatsHelper {
             stats.add("triggers", buildTriggerStats());
             stats.add("schedules", buildScheduleStats());
             stats.add("scripts", buildScriptStats());
+            stats.add("background", buildBackgroundStats());
         }
         final var dbArray = new JsonArray();
         final var totals = new Totals();
@@ -77,7 +80,7 @@ public final class DatabaseStatsHelper {
         triggers.addProperty("beforeReplaced", BeforeHookContext.getReplaced());
         triggers.addProperty("beforeRejected", BeforeHookContext.getRejected());
         triggers.addProperty("beforeFailed", BeforeHookContext.getFailed());
-        triggers.addProperty("pendingRuns", (long) pendingRunCount());
+        triggers.addProperty("pendingRuns", (long) TriggerRunLog.pendingRecordCount());
         return triggers;
     }
 
@@ -114,15 +117,15 @@ public final class DatabaseStatsHelper {
         scripts.addProperty("compiledCacheEntries", (long) compiledScripts.size());
         scripts.addProperty("historyRecorded", ScriptRunHistory.getRecorded());
         scripts.addProperty("historyDropped", ScriptRunHistory.getDropped());
+        scripts.addProperty("historyQueued", (long) backgroundTaskManager.queuedHistory());
         return scripts;
     }
 
-    private static int pendingRunCount() {
-        try {
-            return TriggerRunLog.pending().size();
-        } catch (Exception e) {
-            return -1;
-        }
+    private static JsonObject buildBackgroundStats() {
+        final var background = new JsonObject();
+        background.addProperty("pending", (long) backgroundTaskManager.gatedPending());
+        background.addProperty("maintenance", (long) backgroundTaskManager.maintenancePending());
+        return background;
     }
 
     private static JsonObject buildInDoubtTransactions() {

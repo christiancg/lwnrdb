@@ -4,8 +4,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
-import org.techhouse.ejson.custom_types.JsonGeo;
-import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -78,13 +76,8 @@ public final class DocumentHeapSizer {
     }
 
     private static long customSize(JsonCustom<?> custom, HeapLayout layout) {
-        final var derived = switch (custom) {
-            case JsonGeo geo -> stringSize(geo.cachedGeoHash(), layout);
-            case JsonVector vector -> stringSize(vector.cachedSimHash(), layout);
-            default -> 0L;
-        };
         return layout.shallowSize(custom.getClass()) + stringSize(custom.getValue(), layout)
-                + parsedValueSize(custom.getCustomValue(), layout) + derived;
+                + parsedValueSize(custom.getCustomValue(), layout);
     }
 
     private static long parsedValueSize(Object value, HeapLayout layout) {

@@ -113,7 +113,7 @@ public class FieldIndexOneEntryPerIdTest {
         final var locks = IocContainer.get(ResourceLocking.class);
         locks.lockIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
         try {
-            final var batch = FieldIndexBatch.open(TestGlobals.DB, TestGlobals.COLL, FIELD);
+            final var batch = FieldIndexBatch.open(TestGlobals.DB, TestGlobals.COLL, FIELD, List.of(MOVING_ID));
             for (final var value : values) {
                 batch.apply(MOVING_ID, value);
             }

@@ -14,6 +14,7 @@ import org.techhouse.log.Logger;
 
 final class FieldIndexStore {
     private static final Logger logger = Logger.logFor(FieldIndexStore.class);
+    private static final byte[] EMPTY_FILE = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
 
     private final FilePaths paths;
 
@@ -110,16 +111,17 @@ final class FieldIndexStore {
         if (indexFile == null) {
             return;
         }
-        final var content = new StringBuilder();
-        for (final var entry : entries) {
-            content.append(entry.toFileEntry()).append(Globals.NEWLINE);
-        }
-        if (entries.isEmpty()) {
-            content.append(Globals.NEWLINE);
-        }
         final var lock = FileLocks.lockWrite(indexFile);
         try {
-            FileLocks.rewriteFileAtomically(indexFile.toPath(), content.toString().getBytes(StandardCharsets.UTF_8));
+            FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
+                final var lines = new IndexLineWriter(out);
+                for (final var entry : entries) {
+                    lines.write(entry);
+                }
+                if (entries.isEmpty()) {
+                    out.write(EMPTY_FILE);
+                }
+            });
             PageTails.forget(FilePaths.logFileOf(indexFile));
             if (Files.deleteIfExists(FilePaths.logFileOf(indexFile).toPath())) {
                 syncFolderOf(indexFile);

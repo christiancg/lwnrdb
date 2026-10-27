@@ -92,8 +92,10 @@ public final class GeoSpatialIndexHelper {
     private static Set<String> collectByBoundingBox(List<FieldIndexEntry<JsonGeo>> entries, GeoUtils.BoundingBox bbox) {
         final var ids = new HashSet<String>();
         for (var prefix : GeoUtils.coveringGeohashPrefixes(bbox)) {
-            var i = lowerBound(entries, prefix);
-            while (i < entries.size() && entries.get(i).getValue().geoHash().startsWith(prefix)) {
+            final var from = GeoUtils.prefixBits(prefix, JsonGeo.GEO_HASH_ORDER_PRECISION);
+            final var to = from + GeoUtils.prefixWidth(prefix, JsonGeo.GEO_HASH_ORDER_PRECISION);
+            var i = lowerBound(entries, from);
+            while (i < entries.size() && entries.get(i).getValue().orderKey() < to) {
                 final var geo = entries.get(i).getValue();
                 if (bbox.contains(geo.point())) {
                     ids.addAll(entries.get(i).getIds());
@@ -104,12 +106,12 @@ public final class GeoSpatialIndexHelper {
         return ids;
     }
 
-    private static int lowerBound(List<FieldIndexEntry<JsonGeo>> entries, String prefix) {
+    private static int lowerBound(List<FieldIndexEntry<JsonGeo>> entries, long from) {
         var lo = 0;
         var hi = entries.size();
         while (lo < hi) {
             final var mid = (lo + hi) >>> 1;
-            if (entries.get(mid).getValue().geoHash().compareTo(prefix) < 0) {
+            if (entries.get(mid).getValue().orderKey() < from) {
                 lo = mid + 1;
             } else {
                 hi = mid;

@@ -6,7 +6,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
-import org.techhouse.utils.JsonUtils;
 
 public class CompiledProcedureCache {
     private final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
@@ -17,8 +16,7 @@ public class CompiledProcedureCache {
             return simpleJs.compile(source, false);
         }
         final var key = keyOf(dbName, name, version);
-        final var sourceHash = JsonUtils.sha256(source);
-        final Predicate<CompiledScript> sameSource = compiled -> sourceHash.equals(compiled.sourceHash());
+        final Predicate<CompiledScript> sameSource = compiled -> source.equals(compiled.source());
         final var cached = cache.get(key, sameSource);
         if (cached != null) {
             return cached;

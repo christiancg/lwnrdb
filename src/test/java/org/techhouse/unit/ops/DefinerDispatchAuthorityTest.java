@@ -94,8 +94,8 @@ public class DefinerDispatchAuthorityTest {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TriggerTestSupport.clearTriggersAndProcedures();
         TriggerTestSupport.consumeAllPendingRuns();
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         registry.clear();
@@ -140,7 +140,7 @@ public class DefinerDispatchAuthorityTest {
         args.add("id", new JsonString(id));
         final var definition = new ScheduleDefinition("s", "job", null, 60_000L, args, 0L, true, DEFINER, null, 1L, 1L,
                 1L, DEFINER);
-        fs.writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, "s");
         registry.reload(TestGlobals.DB);
         return registry.get(TestGlobals.DB, "s");
@@ -188,7 +188,7 @@ public class DefinerDispatchAuthorityTest {
         assertFalse(stored.isEnabled());
         assertEquals(2L, stored.getVersion());
         assertTrue(stored.getDisabledReason().contains("READ on collection '" + TestGlobals.COLL + "'"));
-        assertTrue(fs.readTriggers(TestGlobals.DB, TestGlobals.COLL).contains("disabledReason"),
+        assertTrue(fs.metadataFiles().readTriggers(TestGlobals.DB, TestGlobals.COLL).contains("disabledReason"),
                 "the disable is persisted, not only cached");
     }
 

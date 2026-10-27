@@ -17,7 +17,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.BeforeHookContext;
 import org.techhouse.ops.BeforeHookOutcome;
-import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TriggerHelper;
@@ -52,11 +51,6 @@ public final class TransactionWrites {
         try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser, schemaBudget)) {
             return hooks.apply(object, id, type);
         }
-    }
-
-    public static OperationResponse checkEntrySize(String dbName, String collName, JsonObject effective,
-            OperationType type) {
-        return EntrySizeGuard.check(dbName, collName, effective, type);
     }
 
     public static OperationResponse runDeleteBeforeHooks(Transaction transaction, String collId, String dbName,

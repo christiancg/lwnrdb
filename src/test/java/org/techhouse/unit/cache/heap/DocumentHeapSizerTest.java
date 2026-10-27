@@ -160,13 +160,15 @@ public class DocumentHeapSizerTest {
         final var geoBase = LAYOUT.shallowSize(JsonGeo.class) + LAYOUT.stringSize(geo.getValue())
                 + LAYOUT.shallowSize(GeoPoint.class);
         assertEquals(geoBase, size(geo));
-        assertEquals(geoBase + LAYOUT.stringSize(geo.geoHash()), size(geo));
+        geo.orderKey();
+        assertEquals(geoBase, size(geo), "the memoised order key is a long field, not a string");
 
         final var vector = new JsonVector("#vector(0.1,0.2,0.3,0.4)");
         final var vectorBase = LAYOUT.shallowSize(JsonVector.class) + LAYOUT.stringSize(vector.getValue())
                 + LAYOUT.arraySize(Double.BYTES, 4);
         assertEquals(vectorBase, size(vector));
-        assertEquals(vectorBase + LAYOUT.stringSize(vector.simHash()), size(vector));
+        vector.signature();
+        assertEquals(vectorBase, size(vector), "the memoised signature is an int field, not a string");
 
         final var dateTime = new JsonDateTime("#datetime(2024-05-06T07:08:09)");
         assertEquals(LAYOUT.shallowSize(JsonDateTime.class) + LAYOUT.stringSize(dateTime.getValue())

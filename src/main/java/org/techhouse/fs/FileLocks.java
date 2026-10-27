@@ -69,6 +69,16 @@ final class FileLocks {
 
     static <T> void appendLines(File file, List<T> rows, Function<T, String> toLine, String rollbackFailure)
             throws IOException {
+        appendLines(file, rows, toLine, rollbackFailure, true);
+    }
+
+    static <T> void appendLinesUnforced(File file, List<T> rows, Function<T, String> toLine, String rollbackFailure)
+            throws IOException {
+        appendLines(file, rows, toLine, rollbackFailure, false);
+    }
+
+    private static <T> void appendLines(File file, List<T> rows, Function<T, String> toLine, String rollbackFailure,
+            boolean forced) throws IOException {
         final var lock = lockWrite(file);
         try {
             final var lengthBeforeAppend = file.length();
@@ -87,7 +97,9 @@ final class FileLocks {
                         writer.newLine();
                     }
                     writer.flush();
-                    SyncedWrites.content(out.getChannel(), file.toPath());
+                    if (forced) {
+                        SyncedWrites.content(out.getChannel(), file.toPath());
+                    }
                 }
                 appended = true;
             } finally {

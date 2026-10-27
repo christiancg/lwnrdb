@@ -134,8 +134,8 @@ public class ProcedureImportIntegrationTest {
     }
 
     private void clearProcedures(String dbName) throws Exception {
-        for (final var name : fs.listProcedureNames(dbName)) {
-            fs.deleteProcedure(dbName, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(dbName)) {
+            fs.metadataFiles().deleteProcedure(dbName, name);
         }
         cache.removeProceduresForDatabase(dbName);
         IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(dbName);

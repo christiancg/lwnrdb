@@ -48,6 +48,22 @@ public final class VectorUtils {
         return !(scale > 0.0 && Double.isFinite(scale));
     }
 
+    public static int simHashBits(double[] vector, int bits) {
+        final var dimension = vector.length;
+        final var planes = planesFor(bits, dimension);
+        var signature = 0;
+        var offset = 0;
+        for (var plane = 0; plane < bits; plane++) {
+            var dot = 0.0;
+            for (var i = 0; i < dimension; i++) {
+                dot += vector[i] * planes[offset + i];
+            }
+            signature = signature << 1 | (dot >= 0 ? 1 : 0);
+            offset += dimension;
+        }
+        return signature;
+    }
+
     public static String simHash(double[] vector, int bits) {
         final var dimension = vector.length;
         final var planes = planesFor(bits, dimension);

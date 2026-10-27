@@ -19,6 +19,7 @@ final class WalWriteGroup {
     private long logLengthBefore;
     private int records;
     private boolean failed;
+    private boolean forced;
 
     private record DeferredBlanks(File page, List<long[]> regions) {
     }
@@ -47,8 +48,16 @@ final class WalWriteGroup {
         failed = true;
     }
 
-    boolean holdsWork() {
-        return records > 0 || !blanks.isEmpty();
+    boolean forced() {
+        return forced;
+    }
+
+    void markForced() {
+        forced = true;
+    }
+
+    boolean idle() {
+        return records == 0 && blanks.isEmpty();
     }
 
     void rememberLength(File file, long length) {
@@ -108,5 +117,6 @@ final class WalWriteGroup {
         lengthsBefore.clear();
         blanks.clear();
         records = 0;
+        forced = false;
     }
 }

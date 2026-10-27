@@ -189,7 +189,7 @@ public class ProcedureBindingGuardTest {
     @Test
     public void test_a_binding_whose_procedure_was_deleted_reaches_only_its_name() throws Exception {
         bindTrigger("audit", BOUND, TriggerDefinition.TIMING_AFTER, DEFINER);
-        fs.deleteProcedure(TestGlobals.DB, BOUND);
+        fs.metadataFiles().deleteProcedure(TestGlobals.DB, BOUND);
         cache.removeProcedure(TestGlobals.DB, BOUND);
 
         assertEquals(REFUSAL, refusal(BOUND, INTRUDER).getErrorCode());
@@ -215,7 +215,7 @@ public class ProcedureBindingGuardTest {
     @Test
     public void test_an_unreadable_definition_propagates_as_a_read_failure() throws Exception {
         bindTrigger("audit", BOUND, TriggerDefinition.TIMING_AFTER, DEFINER);
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "{not json");
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL, "{not json");
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
 
         assertThrows(MetadataReadException.class, () -> refusal(BOUND, INTRUDER));

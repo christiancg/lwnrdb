@@ -16,7 +16,6 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -213,13 +212,34 @@ public class PageVacuumTest {
 
     @Test
     public void theRowsOfAKnownPageAreFoundWithoutIteratingTheResidentRows() throws Exception {
-        final var rows = new NeverIterated(rf.fx.indexedRows());
+        final var rows = new NeverIteratedRows(rf.fx.indexedRows());
 
         rf.vacuum.vacuum(DB, COLL, 0, rows, occupancyOf(pageRows()), null);
 
         assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("c", "old-c")
                 + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+    }
+
+    @Test
+    public void aGroupOfAppendedRowsVacuumsAKnownPageWithoutAWalk() throws Exception {
+        final var configuration = org.techhouse.config.Configuration.getInstance();
+        final var maxPageSize = configuration.getMaxPageSize();
+        rf.replacer.delete(rf.fx.indexed("c"));
+        final var rows = new NeverIteratedRows(rf.fx.indexedRows());
+        final var group = 3L * ReplacerFixture.line("n", "new-n").length;
+        final var occupancy = occupancyOf(rf.fx.indexedRows());
+        TestUtils.setPrivateField(configuration, "maxPageSize", rf.fx.page(0).length() + 4);
+        try {
+            final var vacuumed = rf.vacuum.vacuumIfNeeded(DB, COLL, 0, group, null, rows, _ -> occupancy);
+
+            assertNotNull(vacuumed, "the page lacks room for the group and holds a quarter page dead");
+            assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("d", "old-d"),
+                    rf.fx.firstPageText());
+            assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+        } finally {
+            TestUtils.setPrivateField(configuration, "maxPageSize", maxPageSize);
+        }
     }
 
     @Test
@@ -276,17 +296,5 @@ public class PageVacuumTest {
         assertEquals(20L, moved.getPosition());
         assertEquals(80L, replaced.getPosition(), "a row no longer at the move's origin is left alone");
         assertEquals(90L, elsewhere.getPosition(), "a row on another page is left alone");
-    }
-
-    private static final class NeverIterated extends ArrayList<PkIndexEntry> {
-        NeverIterated(List<PkIndexEntry> rows) {
-            super(rows);
-        }
-
-        @Override
-        @SuppressWarnings("NullableProblems")
-        public Iterator<PkIndexEntry> iterator() {
-            throw new AssertionError("the resident rows were walked");
-        }
     }
 }

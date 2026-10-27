@@ -8,10 +8,12 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
 import org.techhouse.config.Globals;
@@ -179,6 +181,26 @@ final class PkIndexStore {
                     + collectionName);
         }
         return folded.live();
+    }
+
+    Map<String, PkIndexEntry> rowsFor(String dbName, String collectionName, Collection<String> ids) throws IOException {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        final var readLock = FileLocks.lockRead(indexFile);
+        try (var in = Files.newInputStream(indexFile.toPath())) {
+            return PkPointScan.rowsFor(in, indexFile, dbName, collectionName, ids);
+        } catch (NoSuchFileException e) {
+            return Map.of();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    OptionalLong trustedLiveRows(String dbName, String collectionName) {
+        final var state = trusted(paths.pkIndexFile(dbName, collectionName));
+        return state == null ? OptionalLong.empty() : OptionalLong.of(state.liveRows());
     }
 
     Optional<List<PkIndexEntry>> readRecognisedPkIndex(String dbName, String collectionName) throws IOException {

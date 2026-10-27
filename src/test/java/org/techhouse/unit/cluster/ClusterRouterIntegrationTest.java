@@ -12,7 +12,6 @@ import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -191,11 +190,11 @@ public class ClusterRouterIntegrationTest {
         cluster.configureMembership(1, node("self", cluster.serverPort()));
         final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, SECRET, null, null);
         message.setActingUser(ClusterTestHarness.ACTING_ADMIN);
-        message.setForwardBody(ForwardBody.encode(rawSave(TestGlobals.COLL, "h1")));
+        message.setForwardBody(rawSave(TestGlobals.COLL, "h1"));
         final var response = pool.request(cluster.serverAddress(), message, 3000);
 
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, response.getType());
-        assertTrue(ForwardBody.decode(response.getForwardBody()).contains("h1"));
+        assertTrue(response.getForwardBody().contains("h1"));
         final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         find.set_id("h1");
         assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus());

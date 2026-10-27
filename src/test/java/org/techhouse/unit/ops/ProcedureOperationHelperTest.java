@@ -7,6 +7,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -37,6 +38,8 @@ public class ProcedureOperationHelperTest {
     @AfterAll
     static void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
+        TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes",
+                ConfigKey.SCRIPT_MAX_SOURCE_BYTES.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -45,8 +48,8 @@ public class ProcedureOperationHelperTest {
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes", 262_144L);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
     }
@@ -171,7 +174,7 @@ public class ProcedureOperationHelperTest {
         assertEquals(OperationStatus.OK, ProcedureOperationHelper
                 .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "p"), ACTOR).getStatus());
         assertNull(cache.getProcedure(TestGlobals.DB, "p"));
-        assertTrue(fs.listProcedureNames(TestGlobals.DB).isEmpty());
+        assertTrue(fs.metadataFiles().listProcedureNames(TestGlobals.DB).isEmpty());
     }
 
     @Test

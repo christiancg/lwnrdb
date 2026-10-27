@@ -1,6 +1,7 @@
 package org.techhouse.unit.utils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -129,5 +130,50 @@ public class SearchUtilsChunkedTest {
                 SearchUtils.findingInNotIn(chunked, FieldOperatorType.IN, operands));
         assertEquals(SearchUtils.findingInNotIn(plain, FieldOperatorType.NOT_IN, operands),
                 SearchUtils.findingInNotIn(chunked, FieldOperatorType.NOT_IN, operands));
+    }
+
+    private static <T> Set<String> idsIn(List<FieldIndexEntry<T>> entries, List<int[]> runs) {
+        final var ids = new HashSet<String>();
+        for (final var run : runs) {
+            for (var index = run[0]; index < run[1]; index++) {
+                ids.addAll(entries.get(index).getIds());
+            }
+        }
+        return ids;
+    }
+
+    @Test
+    public void test_a_window_holds_exactly_the_ids_its_operator_finds() {
+        final var plain = numbers();
+        final var chunked = ChunkedList.copyOf(plain);
+        final var operators = new ArrayList<>(RANGE_TYPES);
+        operators.add(FieldOperatorType.EQUALS);
+        for (final var type : operators) {
+            for (final var limit : List.<Number>of(-1.0, -0.0, 0.0, 0.5, 511.0, 512.0, 1_023.5, 2_099.0, 2_100.0)) {
+                final var expected = SearchUtils.findingByOperator(plain, type, limit);
+                final var plainWindow = SearchUtils.windowOf(plain, type, limit);
+                final var chunkedWindow = SearchUtils.windowOf(chunked, type, limit);
+                assertEquals(expected, plainWindow == null ? Set.of() : idsIn(plain, List.of(plainWindow)),
+                        type + " " + limit);
+                assertEquals(plainWindow == null ? null : List.of(plainWindow[0], plainWindow[1]),
+                        chunkedWindow == null ? null : List.of(chunkedWindow[0], chunkedWindow[1]), type + " " + limit);
+            }
+        }
+    }
+
+    @Test
+    public void test_membership_runs_are_distinct_sorted_and_hold_the_in_answer() {
+        final var plain = spellings();
+        final var chunked = ChunkedList.copyOf(plain);
+        final var operands = List.of("v00510", "V00255", "v00255", "nothing", "A0000");
+
+        final var runs = SearchUtils.membershipRuns(chunked, operands);
+
+        assertEquals(3, runs.size());
+        for (var i = 1; i < runs.size(); i++) {
+            assertTrue(runs.get(i - 1)[1] <= runs.get(i)[0], "runs are sorted and disjoint");
+        }
+        assertEquals(SearchUtils.findingInNotIn(plain, FieldOperatorType.IN, operands), idsIn(chunked, runs));
+        assertEquals(0, SearchUtils.membershipRuns(chunked, List.of("nothing")).size());
     }
 }

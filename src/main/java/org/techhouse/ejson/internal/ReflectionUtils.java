@@ -145,11 +145,17 @@ public class ReflectionUtils {
             if (typeArguments.length != 1) {
                 return _ -> null;
             }
-            final var itemAdapter = TypeAdapterFactory.getAdapter(Class.forName(typeArguments[0].getTypeName()));
+            final var itemClass = Class.forName(typeArguments[0].getTypeName());
+            final var itemAdapter = TypeAdapterFactory.getAdapter(itemClass);
+            final var narrowsItems = Number.class.isAssignableFrom(itemClass);
             return fieldValue -> {
                 final var items = new ArrayList<>();
                 for (final var item : fieldValue.asJsonArray()) {
-                    items.add(itemAdapter.fromJson(item));
+                    final var value = itemAdapter.fromJson(item);
+                    final var narrowed = narrowsItems && value instanceof Number
+                            ? narrowNumber(itemClass, value)
+                            : null;
+                    items.add(narrowed != null ? narrowed : value);
                 }
                 return items;
             };

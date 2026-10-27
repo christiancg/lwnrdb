@@ -317,7 +317,7 @@ public final class TriggerOperationHelper {
     private static void persist(String dbName, String collName, List<TriggerDefinition> definitions)
             throws IOException {
         if (definitions.isEmpty()) {
-            if (fs.deleteTriggers(dbName, collName)) {
+            if (fs.metadataFiles().deleteTriggers(dbName, collName)) {
                 AdminStamp.tombstone(AdminRecordKey.triggers(dbName, collName));
             }
             cache.removeTriggers(dbName, collName);

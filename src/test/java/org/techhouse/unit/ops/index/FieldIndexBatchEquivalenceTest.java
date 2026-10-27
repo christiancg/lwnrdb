@@ -3,14 +3,18 @@ package org.techhouse.unit.ops.index;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.List;
 import java.util.Random;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.LegacyIndexMaintenance;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.IndexBuild;
 import org.techhouse.test.TestUtils;
 
 public class FieldIndexBatchEquivalenceTest {
@@ -18,6 +22,7 @@ public class FieldIndexBatchEquivalenceTest {
     private static final int ID_POOL = 120;
     private static final String LEGACY_FIELD = "legacy";
     private static final String BATCH_FIELD = "batched";
+    private static final String BUILT_FIELD = "built";
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -47,6 +52,37 @@ public class FieldIndexBatchEquivalenceTest {
     @ValueSource(ints = {1, 40, 300})
     public void bothSidesOfThePointEditLimitMatchLegacy(int batchSize) throws Exception {
         runAgainstLegacy(20261019L + batchSize, true, batchSize, batchSize * 2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {3L, 20261025L})
+    public void aBuiltFieldEqualsTheBatchMaintainedOne(long seed) throws Exception {
+        final var random = new Random(seed);
+        final var support = new FieldIndexBatchSupport();
+        for (var batch = 0; batch < 40; batch++) {
+            final var ids = FieldIndexBatchSupport.randomIds(random, 1 + random.nextInt(30), ID_POOL);
+            for (final var id : ids) {
+                support.mutate(id, random);
+            }
+            support.applyBatchHoldingTheCollection(BATCH_FIELD, ids);
+        }
+        final var cache = IocContainer.get(Cache.class);
+        for (var i = 0; i < ID_POOL; i++) {
+            final var document = support.documentOf("id" + i, BUILT_FIELD);
+            if (document != null) {
+                TestUtils.cacheEntry(cache, FieldIndexBatchSupport.DB, FieldIndexBatchSupport.COLL, document);
+            }
+        }
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lock(FieldIndexBatchSupport.DB, FieldIndexBatchSupport.COLL);
+        try {
+            IndexBuild.buildAll(FieldIndexBatchSupport.DB, FieldIndexBatchSupport.COLL, List.of(BUILT_FIELD));
+        } finally {
+            locks.release(FieldIndexBatchSupport.DB, FieldIndexBatchSupport.COLL);
+        }
+
+        assertEquals(FieldIndexBatchSupport.snapshot(BATCH_FIELD), FieldIndexBatchSupport.snapshot(BUILT_FIELD),
+                "seed " + seed);
     }
 
     private void runAgainstLegacy(long seed, boolean holdingTheCollection) throws Exception {

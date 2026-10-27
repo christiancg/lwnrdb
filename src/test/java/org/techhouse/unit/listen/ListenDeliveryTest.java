@@ -93,9 +93,14 @@ public class ListenDeliveryTest {
         worker.join(1000);
     }
 
+    private UUID workOf(UUID listenId) {
+        final var registration = manager.getRegistration(listenId);
+        return registration != null ? registration.groupId() : listenId;
+    }
+
     private void drainOnce(UUID listenId) throws InterruptedException {
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
+        queue.offer(workOf(listenId));
         drain(queue);
     }
 
@@ -118,7 +123,7 @@ public class ListenDeliveryTest {
         manager.markDelivered(listenId);
         manager.markDelivered(listenId);
 
-        assertEquals(List.of(listenId), List.copyOf(managerQueue()));
+        assertEquals(List.of(manager.getRegistration(listenId).groupId()), List.copyOf(managerQueue()));
         assertTrue(manager.getRegistration(listenId).delivered().get());
     }
 

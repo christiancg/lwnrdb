@@ -50,8 +50,10 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class IteratorBuiltins {
-    public static final Set<String> HELPERS = Set.of("map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
+    public static final List<String> HELPERS = List.of("map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
             "forEach", "some", "every", "find", "chunks", "windows", "includes", "join");
+
+    private static final Set<String> HELPER_NAMES = Set.copyOf(HELPERS);
 
     public static final Set<String> ZERO_ARG_HELPERS = Set.of("toArray");
 
@@ -69,7 +71,7 @@ public final class IteratorBuiltins {
     }
 
     public static boolean isHelperName(String name) {
-        return HELPERS.contains(name);
+        return HELPER_NAMES.contains(name);
     }
 
     public static JsNativeFunction create(InterpreterOps ops, JsObject objectProto) {
@@ -83,13 +85,15 @@ public final class IteratorBuiltins {
         prototype.setProto(objectProto);
         objectProto.setInternalSlot(
                 new RealmProtos(helperPrototype(prototype, objectProto), wrapPrototype(ops, prototype, objectProto)));
-        for (final var name : HELPERS) {
-            Intrinsics.defineHidden(prototype, name, helper(ops, name, objectProto));
-        }
-        installIteratorSymbol(prototype);
-        installDispose(ops, prototype);
-        installIgnoringAccessor(prototype, "@@toStringTag", JsSymbol.TO_STRING_TAG, new JsString("Iterator"), ops);
-        installIgnoringAccessor(prototype, "constructor", null, ctor, ops);
+        prototype.deferSetup(target -> {
+            for (final var name : HELPERS) {
+                Intrinsics.defineHidden(target, name, helper(ops, name, objectProto));
+            }
+            installIteratorSymbol(target);
+            installDispose(ops, target);
+            installIgnoringAccessor(target, "@@toStringTag", JsSymbol.TO_STRING_TAG, new JsString("Iterator"), ops);
+            installIgnoringAccessor(target, "constructor", null, ctor, ops);
+        });
         ctor.setProperty("prototype", prototype);
         ctor.ownProperties().setFlags("prototype", new PropertyFlags(false, false, false));
         ctor.setPrototype(prototype);

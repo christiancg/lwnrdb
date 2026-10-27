@@ -2,7 +2,6 @@ package org.techhouse.ops;
 
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
-import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.resp.OperationResponse;
 
 // maxEntrySize is enforced on every write path, transactional or not - one error for one condition.
@@ -15,10 +14,6 @@ public final class EntrySizeGuard {
 
     public static OperationResponse check(DbEntry entry, OperationType type) {
         return checkSize(entry.byteSize(), type);
-    }
-
-    public static OperationResponse check(String dbName, String collName, JsonObject object, OperationType type) {
-        return checkSize(DbEntry.fromJsonObject(dbName, collName, object).byteSize(), type);
     }
 
     public static boolean exceedsMaxEntrySize(CharSequence text) {

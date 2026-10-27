@@ -2,23 +2,19 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
-import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.JsonElementWriter;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ResultHasher;
@@ -40,7 +36,6 @@ import org.techhouse.utils.SaltedKey;
 public final class AggregationOperationHelper {
     private AggregationOperationHelper() {
     }
-    private static final String GROUP_FIELD_NAME = "group";
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final Configuration configuration = Configuration.getInstance();
 
@@ -71,8 +66,14 @@ public final class AggregationOperationHelper {
 
     public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source,
             Transaction transaction, PipelineContext context) throws IOException {
-        return applySteps(request.getAggregationSteps(), source, request.getDatabaseName(), request.getCollectionName(),
-                context, transaction);
+        return applySteps(request.getAggregationSteps(), source, 0, request.getDatabaseName(),
+                request.getCollectionName(), context, transaction);
+    }
+
+    public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source,
+            int firstStep, Transaction transaction, PipelineContext context) throws IOException {
+        return applySteps(request.getAggregationSteps(), source, firstStep, request.getDatabaseName(),
+                request.getCollectionName(), context, transaction);
     }
 
     private static long aggregateTimeoutMs() {
@@ -102,14 +103,15 @@ public final class AggregationOperationHelper {
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
             String dbName, String collName, Transaction transaction, long timeoutMs) throws IOException {
         try (var context = PipelineContext.of(timeoutMs, PipelineContext.configuredMaxResultBytes(), null)) {
-            return applySteps(steps, initialStream, dbName, collName, context, transaction);
+            return applySteps(steps, initialStream, 0, dbName, collName, context, transaction);
         }
     }
 
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
-            String dbName, String collName, PipelineContext context, Transaction transaction) throws IOException {
-        Stream<JsonObject> resultStream = initialStream;
-        var startIndex = 0;
+            int firstStep, String dbName, String collName, PipelineContext context, Transaction transaction)
+            throws IOException {
+        Stream<JsonObject> resultStream = context.watch(initialStream);
+        var startIndex = firstStep;
         if (resultStream == null) {
             final var fast = IndexedSource.of(steps, dbName, collName, sortBound(steps, 1), context);
             if (fast != null) {
@@ -122,7 +124,8 @@ public final class AggregationOperationHelper {
             resultStream = switch (step.getType()) {
                 case FILTER -> processFilterStep(step, resultStream, dbName, collName, context);
                 case MAP -> processMapStep(step, resultStream, dbName, collName, context);
-                case GROUP_BY -> processGroupByStep(step, resultStream, dbName, collName, context);
+                case GROUP_BY -> GroupByOperatorHelper.processGroupByStep((GroupByAggregationStep) step, resultStream,
+                        dbName, collName, context);
                 case JOIN -> processJoinStep(step, resultStream, dbName, collName, transaction, context);
                 case COUNT -> processCountStep(resultStream, dbName, collName);
                 case DISTINCT -> processDistinctStep(step, resultStream, dbName, collName, context);
@@ -198,38 +201,22 @@ public final class AggregationOperationHelper {
     private static Stream<JsonObject> processMapStep(BaseAggregationStep baseMapStep, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineContext context) throws IOException {
         resultStream = context.source(resultStream, dbName, collName);
-        final var mapStep = (MapAggregationStep) baseMapStep;
-        final var operators = mapStep.getOperators();
-        final var writtenRoots = writtenRoots(operators);
+        final var operators = ((MapAggregationStep) baseMapStep).getOperators();
+        final var writes = JsonUtils.writeTreeOf(operators.stream().map(MapOperator::getFieldName).toList());
+        final var writtenRoots = writes.roots();
+        final var conditions = new ArrayList<Predicate<JsonObject>>(operators.size());
+        for (var operator : operators) {
+            conditions.add(MapOperatorHelper.conditionOf(operator, context, writtenRoots));
+        }
         return resultStream.map(jsonObject -> {
-            var mapped = jsonObject.copyForWrites(writtenRoots);
+            var mapped = jsonObject.copyForWrites(writes);
             final var budget = new MapResultBudget(context);
-            for (var step : operators) {
-                mapped = MapOperatorHelper.processOperator(step, mapped, context, budget);
+            for (var i = 0; i < operators.size(); i++) {
+                mapped = MapOperatorHelper.processOperator(operators.get(i), mapped, context, budget, conditions.get(i),
+                        writtenRoots);
             }
             return mapped;
         });
-    }
-
-    private static Set<String> writtenRoots(List<MapOperator> operators) {
-        final var roots = new HashSet<String>();
-        for (var operator : operators) {
-            addRoot(roots, operator.getFieldName());
-        }
-        return roots;
-    }
-
-    private static Set<String> writtenRoot(String path) {
-        final var roots = new HashSet<String>();
-        addRoot(roots, path);
-        return roots;
-    }
-
-    private static void addRoot(Set<String> roots, String path) {
-        final var root = path == null ? null : JsonUtils.rootOf(path);
-        if (root != null) {
-            roots.add(root);
-        }
     }
 
     private static Stream<JsonObject> processReduceStep(BaseAggregationStep baseReduceStep,
@@ -237,75 +224,6 @@ public final class AggregationOperationHelper {
             throws IOException {
         return ReduceOperatorHelper.processReduceStep((ReduceAggregationStep) baseReduceStep, resultStream, dbName,
                 collName, context);
-    }
-
-    private static Stream<JsonObject> processGroupByStep(BaseAggregationStep baseGroupByStep,
-            Stream<JsonObject> resultStream, String dbName, String collName, PipelineContext context)
-            throws IOException {
-        final var groupByStep = (GroupByAggregationStep) baseGroupByStep;
-        final var fieldName = groupByStep.getFieldName();
-        if (resultStream == null) {
-            final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName, context);
-            if (indexEntries != null) {
-                return groupByViaIndex(indexEntries, dbName, collName, fieldName, context);
-            }
-        }
-        final Map<SaltedKey, List<JsonObject>> grouped;
-        try (var documents = context.source(resultStream, dbName, collName)) {
-            grouped = documents.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).collect(
-                    Collectors.groupingBy(jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, fieldName))));
-        }
-        return grouped.entrySet().stream().map(jsonElementListEntry -> {
-            final var groupedEntry = new JsonObject();
-            JsonUtils.setPath(groupedEntry, fieldName, jsonElementListEntry.getKey().element());
-            groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(jsonElementListEntry.getValue()));
-            return groupedEntry;
-        });
-    }
-
-    private static String documentId(JsonObject document) {
-        final var id = document.get(Globals.PK_FIELD);
-        return id instanceof JsonString jsonString ? jsonString.getValue() : "";
-    }
-
-    static JsonArray inIdOrder(List<JsonObject> documents) {
-        final var ordered = new ArrayList<>(documents);
-        ordered.sort(Comparator.comparing(AggregationOperationHelper::documentId));
-        final var array = new JsonArray();
-        ordered.forEach(array::add);
-        return array;
-    }
-
-    private static Stream<JsonObject> groupByViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
-            String collName, String fieldName, PipelineContext context) throws IOException {
-        final var allIds = new HashSet<String>();
-        for (var indexEntry : indexEntries) {
-            allIds.addAll(indexEntry.getIds());
-        }
-        final var docById = new HashMap<String, JsonObject>();
-        final var fetched = cache.getEntriesByIds(dbName, collName, allIds);
-        context.scanned(fetched.size());
-        for (var dbEntry : fetched) {
-            docById.put(dbEntry.get_id(), dbEntry.getData());
-        }
-        final var grouped = new ArrayList<JsonObject>();
-        for (var indexEntry : indexEntries) {
-            final var groupDocuments = new ArrayList<JsonObject>();
-            for (var id : indexEntry.getIds()) {
-                final var doc = docById.get(id);
-                if (doc != null) {
-                    groupDocuments.add(doc);
-                }
-            }
-            if (groupDocuments.isEmpty()) {
-                continue;
-            }
-            final var groupedEntry = new JsonObject();
-            JsonUtils.setPath(groupedEntry, fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
-            groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(groupDocuments));
-            grouped.add(groupedEntry);
-        }
-        return grouped.stream();
     }
 
     private static Stream<JsonObject> processJoinStep(BaseAggregationStep baseJoinStep, Stream<JsonObject> resultStream,
@@ -322,7 +240,7 @@ public final class AggregationOperationHelper {
         final var joinedCollection = JoinLookup.build(dbName, joinCollectionName, joinCollectionRemoteField,
                 leftEntries, joinCollectionLocalField, transaction, context);
         final var joinedBytes = new HashMap<SaltedKey, Long>();
-        final var asRoot = writtenRoot(as);
+        final var asWrites = JsonUtils.writeTreeOf(List.of(as));
         return leftEntries.stream().map(jsonObject -> {
             final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
             if (localValue != null) {
@@ -331,7 +249,7 @@ public final class AggregationOperationHelper {
                 if (joined != null) {
                     chargeJoinedRow(joinedBytes.computeIfAbsent(key, _ -> serialisedBytes(joined)), context);
                 }
-                final var copy = jsonObject.copyForWrites(asRoot);
+                final var copy = jsonObject.copyForWrites(asWrites);
                 JsonUtils.setPath(copy, as, joined);
                 return copy;
             }
@@ -395,9 +313,11 @@ public final class AggregationOperationHelper {
 
     private static Stream<JsonObject> processSkipStep(BaseAggregationStep baseSkipStep, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineContext context) throws IOException {
-        resultStream = context.source(resultStream, dbName, collName);
-        final var skipStep = (SkipAggregationStep) baseSkipStep;
-        return resultStream.skip(skipStep.getSkip());
+        final var skip = ((SkipAggregationStep) baseSkipStep).getSkip();
+        if (resultStream == null) {
+            return context.scan(cache.streamCollectionSkipping(dbName, collName, skip)).map(DbEntry::getData);
+        }
+        return resultStream.skip(skip);
     }
 
     private static final class RowWithoutId {

@@ -48,6 +48,7 @@ abstract class ParserContext extends GrammarPredicates {
     protected final boolean strictScriptGoal;
     protected boolean inFunctionBody;
     protected boolean inNonArrowFunction;
+    protected int closureNodes;
     protected static final int MAX_NESTING = 200;
     private int nesting;
 
@@ -114,6 +115,11 @@ abstract class ParserContext extends GrammarPredicates {
 
     protected SourcePosition positionAt(int index) {
         return positions == null ? null : positions.get(Math.min(index, positions.size() - 1));
+    }
+
+    protected final String closureSource(int start) {
+        closureNodes++;
+        return spanFrom(start);
     }
 
     protected String spanFrom(int start) {

@@ -14,6 +14,7 @@ import java.util.Set;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.ChunkedList;
+import org.techhouse.cache.FieldIndexList;
 import org.techhouse.cache.FieldIndexLookup;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IdSet;
@@ -44,6 +45,8 @@ final class FieldIndexSlot {
     private final Map<FieldIndexEntry<Object>, Boolean> emptied = new IdentityHashMap<>();
     private Map<String, Map<String, Boolean>> logged;
     private List<FieldIndexEntry<Object>> resident;
+    private FieldIndexList shared;
+    private long sharedDelta;
     private boolean onDisk;
     private List<FieldIndexEntry<Object>> entries;
     private int previousCount;
@@ -97,6 +100,7 @@ final class FieldIndexSlot {
         resident = cast(cache.residentFieldIndex(dbName, collName, identifier));
         if (resident != null) {
             entries = resident;
+            shared = FieldIndexList.sharingPkIds(resident);
         } else {
             final var fromDisk = loader.load();
             onDisk = fromDisk != null;
@@ -118,10 +122,33 @@ final class FieldIndexSlot {
         return resident != null;
     }
 
-    void indexInto(FieldIndexLookup lookup) {
+    long idCount() {
+        var ids = 0L;
         for (final var entry : entries) {
-            for (final var id : entry.getIds()) {
-                lookup.add(id, identifier, entry);
+            ids += entry.getIds().size();
+        }
+        return ids;
+    }
+
+    void indexInto(FieldIndexLookup lookup, Set<String> only) {
+        for (final var entry : entries) {
+            final var ids = entry.getIds();
+            if (only == null) {
+                for (final var id : ids) {
+                    lookup.add(id, identifier, entry);
+                }
+            } else if (ids.size() > only.size()) {
+                for (final var id : only) {
+                    if (ids.contains(id)) {
+                        lookup.add(id, identifier, entry);
+                    }
+                }
+            } else {
+                for (final var id : ids) {
+                    if (only.contains(id)) {
+                        lookup.add(id, identifier, entry);
+                    }
+                }
             }
         }
     }
@@ -168,9 +195,9 @@ final class FieldIndexSlot {
         } else {
             touch(entry);
         }
-        if (entry.getIds().add(id) && resident != null) {
-            idBytesDelta += CacheSizeEstimator.fieldIndexIdSize(id);
-            changedIds++;
+        final var canonical = shared == null ? null : cache.canonicalPkId(dbName, collName, id);
+        if (entry.getIds().add(canonical != null ? canonical : id) && resident != null) {
+            charge(id, canonical != null, 1);
         }
         log(key, id, true);
         dirty = true;
@@ -179,10 +206,10 @@ final class FieldIndexSlot {
 
     void removeId(String id, FieldIndexEntry<Object> entry) {
         touch(entry);
+        final var wasShared = shared != null && heldTheCanonicalId(entry, id);
         if (entry.getIds().remove(id)) {
             if (resident != null) {
-                idBytesDelta -= CacheSizeEstimator.fieldIndexIdSize(id);
-                changedIds++;
+                charge(id, wasShared, -1);
             }
             log(FieldIndexEntry.fileKeyOf(entry.getValue()), id, false);
             dirty = true;
@@ -190,6 +217,28 @@ final class FieldIndexSlot {
                 emptied.put(entry, Boolean.TRUE);
             }
         }
+    }
+
+    private void charge(String id, boolean sharedWithPk, int sign) {
+        final var bytes = sign * CacheSizeEstimator.fieldIndexIdSize(id);
+        if (sharedWithPk) {
+            sharedDelta += bytes;
+        } else {
+            idBytesDelta += bytes;
+        }
+        changedIds++;
+    }
+
+    private boolean heldTheCanonicalId(FieldIndexEntry<Object> entry, String id) {
+        if (!(entry.getIds() instanceof IdSet ids)) {
+            return false;
+        }
+        final var canonical = cache.canonicalPkId(dbName, collName, id);
+        return canonical == null || sameInstance(canonical, ids.stored(id));
+    }
+
+    private static boolean sameInstance(Object canonical, Object held) {
+        return canonical == held;
     }
 
     private void log(String key, String id, boolean present) {
@@ -354,6 +403,9 @@ final class FieldIndexSlot {
         if (entries.isEmpty()) {
             cache.evictFieldIndex(dbName, collName, identifier);
             return;
+        }
+        if (shared != null) {
+            shared.adjustSharedIdBytes(sharedDelta);
         }
         cache.rememberFieldIndexBatch(dbName, collName, identifier, previousCount, bytesDelta(), changedIds);
     }

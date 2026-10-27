@@ -60,6 +60,7 @@ public class ConfigReaderTest {
         expectedConfig.put("maxPageSize", "2Mb");
         expectedConfig.put("syncWrites", "true");
         expectedConfig.put("walCheckpointBytes", "8Mb");
+        expectedConfig.put("walIdleCheckpointMs", "60000");
         expectedConfig.put("maxEntrySize", "1Mb");
         expectedConfig.put("schemaValidationBudget", "5000000");
         expectedConfig.put("schemaMaxPatternLength", "4096");
@@ -129,6 +130,9 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptRunHistoryRetentionMs", "604800000");
         expectedConfig.put("scriptRunHistoryIncludeLogs", "false");
         expectedConfig.put("scriptRunHistoryMaxErrorChars", "2000");
+        expectedConfig.put("scriptRunHistoryMaxQueued", "10000");
+        expectedConfig.put("scriptRunHistoryMaxRows", "0");
+        expectedConfig.put("scriptRunHistorySweepMs", "3600000");
         expectedConfig.put("scriptFetchEnabled", "true");
         expectedConfig.put("scriptFetchAllowlist", "*");
         expectedConfig.put("scriptFetchTimeoutMs", "5000");
@@ -281,10 +285,12 @@ public class ConfigReaderTest {
         expectedConfig.put("listenMaxRequestBytes", "1Mb");
         expectedConfig.put("listenMaxRetainedBytes", "64Mb");
         expectedConfig.put("listenRerunTimeoutMs", "10000");
+        expectedConfig.put("listenThreads", "2");
         expectedConfig.put("maxFilterOperands", "10000");
         expectedConfig.put("maxVectorDimensions", "16384");
         expectedConfig.put("aggregateTimeoutMs", "300000");
         expectedConfig.put("aggregateMaxResultBytes", "256Mb");
+        expectedConfig.put("indexScanFallbackPercent", "25");
         expectedConfig.put("backgroundQueueMaxEvents", "200000");
         expectedConfig.put("backgroundBacklogWaitMs", "5000");
         expectedConfig.put("transientLoadPermits", "4");

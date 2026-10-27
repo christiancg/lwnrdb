@@ -17,6 +17,7 @@ import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.BinaryExpression;
+import org.techhouse.simplejs.nodes.BinaryOperator;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.Identifier;
@@ -30,6 +31,7 @@ import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.UnaryExpression;
+import org.techhouse.simplejs.nodes.UnaryOperator;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -62,12 +64,30 @@ public final class ExpressionEvaluator {
     public JsValue evalTemplate(TemplateLiteral template, Environment env) {
         final var quasis = template.getQuasis();
         final var expressions = template.getExpressions();
-        final var sb = new StringBuilder(quasis.getFirst());
+        final var ops = interp.ops();
+        final var head = quasis.getFirst();
+        JsString base = null;
+        final var tail = new StringBuilder();
         for (var i = 0; i < expressions.size(); i++) {
-            sb.append(JsCoercion.toStr(interp.eval(expressions.get(i), env), interp.ops()));
-            sb.append(quasis.get(i + 1));
+            final var value = interp.eval(expressions.get(i), env);
+            if (i == 0 && head.isEmpty() && value instanceof JsString string) {
+                base = string;
+            } else {
+                appendCharged(tail, JsCoercion.toStr(value, ops), ops);
+            }
+            appendCharged(tail, quasis.get(i + 1), ops);
         }
-        return new JsString(sb.toString());
+        if (base == null) {
+            InterpreterOps.noteChars(ops, (long) head.length() + tail.length());
+            return new JsString(head.isEmpty() ? tail.toString() : head + tail);
+        }
+        InterpreterOps.noteChars(ops, (long) base.length() + tail.length());
+        return base.concat(tail.toString());
+    }
+
+    private static void appendCharged(StringBuilder tail, String piece, InterpreterOps ops) {
+        InterpreterOps.chargeChars(ops, piece.length());
+        tail.append(piece);
     }
 
     public JsValue evalTaggedTemplate(TaggedTemplateExpression tagged, Environment env) {
@@ -166,11 +186,11 @@ public final class ExpressionEvaluator {
     }
 
     public JsValue evalUnary(UnaryExpression unary, Environment env) {
-        final var operator = unary.getOperator();
-        if ("typeof".equals(operator)) {
+        final var operator = unary.kind();
+        if (operator == UnaryOperator.TYPEOF) {
             return evalTypeof(unary.getArgument(), env);
         }
-        if ("delete".equals(operator)) {
+        if (operator == UnaryOperator.DELETE) {
             return deletes.evalDelete(unary.getArgument(), env);
         }
         return JsOperators.unary(operator, interp.eval(unary.getArgument(), env), interp.ops());
@@ -195,11 +215,11 @@ public final class ExpressionEvaluator {
     }
 
     public JsValue evalBinary(BinaryExpression binary, Environment env) {
-        final var operator = binary.getOperator();
-        if ("instanceof".equals(operator)) {
+        final var operator = binary.kind();
+        if (operator == BinaryOperator.INSTANCEOF) {
             return classes.evalInstanceof(interp.eval(binary.getLeft(), env), interp.eval(binary.getRight(), env));
         }
-        if ("in".equals(operator)) {
+        if (operator == BinaryOperator.IN) {
             if (binary.getLeft() instanceof PrivateIdentifier priv) {
                 return classes.evalBrandCheck(priv, interp.eval(binary.getRight(), env), env);
             }

@@ -61,6 +61,7 @@ public final class FolderQuarantine {
         WriteIntentJournal.forgetUnder(folder);
         WriteAheadLog.forgetUnder(folder);
         PkIndexStore.forgetUnder(folder);
+        TombstoneStore.forgetUnder(folder);
         FieldIndexLog.forgetUnder(folder);
         SyncedWrites.entriesOfLanded(target.getAbsoluteFile().getParentFile().toPath(),
                 "Moving " + folder.getName() + " aside");

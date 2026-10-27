@@ -17,6 +17,7 @@ public final class BoundedLineReader {
     private static final byte LINE_FEED = '\n';
     private static final byte CARRIAGE_RETURN = '\r';
     private static final int UNSET_TIMEOUT = -1;
+    private static final int SHRINK_ABOVE_BYTES = 1 << 20;
 
     private final InputStream in;
     private final ReadTimeout readTimeout;
@@ -89,7 +90,20 @@ public final class BoundedLineReader {
             start = 0;
             end = 0;
         }
+        dropOversizedBuffer();
         return line;
+    }
+
+    private void dropOversizedBuffer() {
+        final var leftover = end - start;
+        if (buffer.length <= SHRINK_ABOVE_BYTES || leftover > Globals.BUFFER_SIZE) {
+            return;
+        }
+        final var fresh = new byte[Globals.BUFFER_SIZE];
+        System.arraycopy(buffer, start, fresh, 0, leftover);
+        buffer = fresh;
+        start = 0;
+        end = leftover;
     }
 
     private RequestTooLargeException refuse(int maxLineBytes) {

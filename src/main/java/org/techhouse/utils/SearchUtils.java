@@ -1,5 +1,7 @@
 package org.techhouse.utils;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -17,12 +19,9 @@ public final class SearchUtils {
     public static <T> Set<String> findingByOperator(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType,
             T value) {
         return switch (operatorType) {
-            case EQUALS -> findingEquals(entries, value);
+            case EQUALS, GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS ->
+                findingWindow(entries, operatorType, value);
             case NOT_EQUALS -> findingMembership(entries, List.of(value), false);
-            case GREATER_THAN -> findingRange(entries, value, GreaterSmallerEqualsType.GREATER_THAN);
-            case GREATER_THAN_EQUALS -> findingRange(entries, value, GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
-            case SMALLER_THAN -> findingRange(entries, value, GreaterSmallerEqualsType.SMALLER_THAN);
-            case SMALLER_THAN_EQUALS -> findingRange(entries, value, GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
             case IN, NOT_IN -> throw new UnsupportedOperationException();
             case CONTAINS -> findingContains(entries, value);
         };
@@ -85,26 +84,44 @@ public final class SearchUtils {
         };
     }
 
-    private static <T> Set<String> findingEquals(List<FieldIndexEntry<T>> entries, T value) {
-        final var run = equalRun(entries, value);
-        return run == null ? Set.of() : toIdSet(entries, run[0], run[1]);
+    public static <T> int[] windowOf(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType, T value) {
+        return switch (operatorType) {
+            case EQUALS -> equalRun(entries, value);
+            case GREATER_THAN, GREATER_THAN_EQUALS -> {
+                final var index = boundaryIndex(entries, value, typeOf(operatorType));
+                yield index < 0 ? null : new int[]{index, entries.size()};
+            }
+            case SMALLER_THAN, SMALLER_THAN_EQUALS -> {
+                final var index = boundaryIndex(entries, value, typeOf(operatorType));
+                yield index < 0 ? null : new int[]{0, index + 1};
+            }
+            default -> throw new IllegalArgumentException("Not a window operator: " + operatorType);
+        };
+    }
+
+    public static <T> List<int[]> membershipRuns(List<FieldIndexEntry<T>> entries, List<T> operands) {
+        final var runs = new ArrayList<int[]>();
+        final var starts = new HashSet<Integer>();
+        for (final var operand : operands) {
+            final var run = equalRun(entries, operand);
+            if (run != null && starts.add(run[0])) {
+                runs.add(run);
+            }
+        }
+        runs.sort(Comparator.comparingInt(run -> run[0]));
+        return runs;
+    }
+
+    private static <T> Set<String> findingWindow(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType,
+            T value) {
+        final var window = windowOf(entries, operatorType, value);
+        return window == null ? Set.of() : toIdSet(entries, window[0], window[1]);
     }
 
     private static <T> int[] equalRun(List<FieldIndexEntry<T>> entries, T value) {
         final var from = partitionPoint(entries, entry -> entry.compareTo(value) < 0);
         final var to = partitionPoint(entries, entry -> entry.compareTo(value) <= 0);
         return from < to ? new int[]{from, to} : null;
-    }
-
-    private static <T> Set<String> findingRange(List<FieldIndexEntry<T>> entries, T value,
-            GreaterSmallerEqualsType type) {
-        final int index = boundaryIndex(entries, value, type);
-        if (index < 0) {
-            return Set.of();
-        }
-        return type == GreaterSmallerEqualsType.GREATER_THAN || type == GreaterSmallerEqualsType.GREATER_THAN_EQUALS
-                ? toIdSet(entries, index, entries.size())
-                : toIdSet(entries, 0, index + 1);
     }
 
     private static <T> int boundaryIndex(List<FieldIndexEntry<T>> entries, Object value,
@@ -186,12 +203,8 @@ public final class SearchUtils {
 
     private static <T> Set<String> findingMembership(List<FieldIndexEntry<T>> entries, List<T> value, boolean present) {
         final var matched = new HashSet<String>();
-        final var mergedRunStarts = new HashSet<Integer>();
-        for (final var operand : value) {
-            final var run = equalRun(entries, operand);
-            if (run != null && mergedRunStarts.add(run[0])) {
-                matched.addAll(toIdSet(entries, run[0], run[1]));
-            }
+        for (final var run : membershipRuns(entries, value)) {
+            matched.addAll(toIdSet(entries, run[0], run[1]));
         }
         if (present) {
             return matched;

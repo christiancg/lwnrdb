@@ -11,7 +11,6 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.conn.InFlightRequests;
@@ -31,7 +30,7 @@ public class ClusterConnectionHandlerShutdownTest extends ClusterConnectionHandl
         final var raw = "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"object\":{\"_id\":\"" + id + "\",\"v\":1}}";
         final var message = envelope(ClusterMessageType.FORWARD_REQUEST);
-        message.setForwardBody(ForwardBody.encode(raw));
+        message.setForwardBody(raw);
         return message;
     }
 
@@ -49,7 +48,7 @@ public class ClusterConnectionHandlerShutdownTest extends ClusterConnectionHandl
         final var message = envelope(ClusterMessageType.FORWARD_TX_REQUEST);
         message.setTxSessionId(UUID.randomUUID().toString());
         message.setTxId(UUID.randomUUID().toString());
-        message.setForwardBody(ForwardBody.encode("{\"type\":\"ROLLBACK_TRANSACTION\"}"));
+        message.setForwardBody("{\"type\":\"ROLLBACK_TRANSACTION\"}");
         return message;
     }
 
@@ -58,7 +57,7 @@ public class ClusterConnectionHandlerShutdownTest extends ClusterConnectionHandl
     }
 
     private static String bodyOf(ClusterMessage response) {
-        return ForwardBody.decode(response.getForwardBody());
+        return response.getForwardBody();
     }
 
     @Test

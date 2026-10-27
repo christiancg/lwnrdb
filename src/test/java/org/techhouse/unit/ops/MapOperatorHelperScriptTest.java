@@ -174,4 +174,30 @@ public class MapOperatorHelperScriptTest {
                 new ScriptMidOperator("export default (doc) => 1;"));
         assertThrows(ScriptCallableException.class, () -> MapOperatorHelper.processOperator(operator, document(1, 1)));
     }
+
+    private static JsonObject tagged(String tag) {
+        final var meta = new JsonObject();
+        meta.add("tag", new JsonString(tag));
+        final var document = new JsonObject();
+        document.add("meta", meta);
+        return document;
+    }
+
+    @Test
+    public void test_a_row_kept_by_the_script_does_not_see_the_fields_map_writes_after_the_call() {
+        try (var context = PipelineContext.of(0L, Long.MAX_VALUE, null)) {
+            final var operator = new AddFieldMapOperator("meta.tag", null, new ScriptMidOperator("""
+                    let previous;
+                    export default (doc) => {
+                        const seen = previous === undefined ? "none" : previous.meta.tag;
+                        previous = doc;
+                        return seen;
+                    };"""));
+            final var first = MapOperatorHelper.processOperator(operator, tagged("a"), context);
+            final var second = MapOperatorHelper.processOperator(operator, tagged("b"), context);
+
+            assertEquals("none", first.get("meta").asJsonObject().get("tag").asJsonString().getValue());
+            assertEquals("a", second.get("meta").asJsonObject().get("tag").asJsonString().getValue());
+        }
+    }
 }

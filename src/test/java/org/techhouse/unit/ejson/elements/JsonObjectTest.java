@@ -12,6 +12,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.utils.JsonUtils;
 
 public class JsonObjectTest {
     @Test
@@ -411,7 +412,7 @@ public class JsonObjectTest {
     }
 
     @Test
-    public void test_copy_for_writes_deep_copies_only_the_written_roots() {
+    public void test_copy_for_writes_copies_only_the_containers_on_a_written_path() {
         final var nested = new JsonObject();
         nested.addProperty("inner", 1);
         final var kept = new JsonObject();
@@ -420,7 +421,7 @@ public class JsonObjectTest {
         source.add("written", nested);
         source.add("kept", kept);
 
-        final var copy = source.copyForWrites(Set.of("written"));
+        final var copy = source.copyForWrites(JsonUtils.writeTreeOf(List.of("written.inner")));
 
         assertNotSame(source, copy);
         assertEquals(source, copy);
@@ -435,7 +436,7 @@ public class JsonObjectTest {
         source.addProperty("a", 2);
         source.addProperty("c", 3);
 
-        final var copy = source.copyForWrites(Set.of("a"));
+        final var copy = source.copyForWrites(JsonUtils.writeTreeOf(List.of("a")));
 
         assertEquals(List.of("b", "a", "c"), copy.entrySet().stream().map(Map.Entry::getKey).toList());
     }

@@ -48,7 +48,7 @@ abstract class ClassProductions extends ExpressionProductions {
         declareBoundNames(id, true);
         final var superClass = parseClassHeritage();
         final var declaration = new ClassDeclaration(id, superClass, parseClassBody(superClass != null));
-        declaration.setSourceText(spanFrom(start));
+        declaration.setSourceText(closureSource(start));
         return declaration;
     }
 
@@ -61,7 +61,7 @@ abstract class ClassProductions extends ExpressionProductions {
         }
         final var superClass = parseClassHeritage();
         final var expression = new ClassExpression(id, superClass, parseClassBody(superClass != null));
-        expression.setSourceText(spanFrom(start));
+        expression.setSourceText(closureSource(start));
         return expression;
     }
 
@@ -145,7 +145,7 @@ abstract class ClassProductions extends ExpressionProductions {
                     "constructor".equals(resolvedKind) && classHasHeritage, true);
             checkAccessorParams(resolvedKind, parts.params());
             final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
-            value.setSourceText(spanFrom(start));
+            value.setSourceText(closureSource(start));
             declarePrivateName(privateNames, memberKey, resolvedKind, isStatic);
             return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
         }

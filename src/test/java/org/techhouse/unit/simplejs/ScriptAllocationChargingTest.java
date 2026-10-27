@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -16,6 +18,10 @@ import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptErrorNames;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
+import org.techhouse.simplejs.internal.JsOperators;
+import org.techhouse.simplejs.nodes.BinaryOperator;
+import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsString;
 
 public class ScriptAllocationChargingTest {
     private static final long MEMORY_BUDGET = 8L * 1024 * 1024;
@@ -266,5 +272,38 @@ public class ScriptAllocationChargingTest {
                 + " return 'listed'; } catch (e) { return e.name; }");
         assertSucceeds(mixed);
         assertEquals("TypeError", mixed.getValue().asJsonString().getValue());
+    }
+
+    @Test
+    public void test_appending_to_a_string_charges_only_the_characters_it_adds() {
+        final var ops = mock(InterpreterOps.class);
+        final var left = new JsString("x".repeat(1000));
+        final var joined = JsOperators.binary(BinaryOperator.ADD, left, new JsString("yz"), ops);
+        verify(ops).charge(2 * InterpreterOps.STRING_BYTES_PER_CHAR);
+        assertEquals(1002, ((JsString) joined).length());
+        final var numberFirst = mock(InterpreterOps.class);
+        JsOperators.binary(BinaryOperator.ADD, new JsNumber(12), new JsString("ab"), numberFirst);
+        verify(numberFirst).charge(4 * InterpreterOps.STRING_BYTES_PER_CHAR);
+    }
+
+    @Test
+    public void test_a_hundred_thousand_appends_charge_the_final_length_once() {
+        final var result = run("let s = ''; for (let i = 0; i < 100000; i++) { s += 'x'; } return s.length;");
+        assertSucceeds(result);
+        assertEquals(100000, result.getValue().asJsonNumber().getValue().intValue());
+        assertFailsWith(ScriptErrorNames.MEMORY,
+                run("const c = 'x'.repeat(1000); let s = ''; for (let i = 0; i < 5000; i++) { s += c; } return 1;"));
+    }
+
+    @Test
+    public void test_a_template_literal_is_charged_like_an_append() {
+        final var grown = run("const c = 'x'.repeat(1000); let s = '';"
+                + " for (let i = 0; i < 2000; i++) { s = `${s}${c}`; } return s.length;");
+        assertSucceeds(grown);
+        assertEquals(2_000_000, grown.getValue().asJsonNumber().getValue().intValue());
+        assertFailsWith(ScriptErrorNames.MEMORY, run("const c = 'x'.repeat(1000); let s = '';"
+                + " for (let i = 0; i < 5000; i++) { s = `${s}${c}`; } return 1;"));
+        assertFailsWith(ScriptErrorNames.MEMORY, run("const c = 'x'.repeat(1000); const rows = [];"
+                + " for (let i = 0; i < 5000; i++) { rows.push(`<${c}>`); } return 1;"));
     }
 }

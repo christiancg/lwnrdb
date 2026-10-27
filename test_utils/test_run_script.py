@@ -300,6 +300,19 @@ def test_compiled_script_cache(conn: Conn):
           f"compiledCacheEntries before={entries!r} after={after!r}")
 
 
+def test_procedure_cache_checks_the_source_text(conn: Conn):
+    section("Compiled procedure cache")
+    call = {"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "cached_proc"}
+    check_status("save a procedure for the compiled cache", conn.save_procedure("cached_proc", "return 70;"), "OK")
+    for attempt in range(2):
+        check_result(f"a cached procedure answers from its source (call {attempt + 1})", conn.send(call), 70)
+    check_status("re-save it with a source differing only at the end",
+                 conn.save_procedure("cached_proc", "return 71;"), "OK")
+    check_result("the next call runs the new source", conn.send(call), 71)
+    check_status("drop the cached procedure",
+                 conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "cached_proc"}), "OK")
+
+
 def test_console_output(conn: Conn):
     section("Console output")
     response = conn.run("console.log('one'); console.log('two'); return 'done';")
@@ -528,6 +541,21 @@ def test_allocations_are_charged_before_they_happen(conn: Conn):
                           "const s = 'x'.repeat(50000);\n"
                           f'for (let i = 0; i < 20; i++) {{ db.save(db.name, "{COLL}", {{ _id: "loop", body: s }}); }}\n'
                           'return "saved";'), "saved")
+    for label, script, expected in [
+        ("400k single-character appends", "let s = ''; for (let i = 0; i < 400000; i++) s += 'x'; return s.length;",
+         400_000),
+        ("a 40k-row CSV built with +=",
+         "let s = ''; const row = 'x'.repeat(19) + '\\n'; for (let i = 0; i < 40000; i++) s += row; return s.length;",
+         800_000),
+        ("a 10k-row report built with a template literal",
+         "let s = ''; for (let i = 0; i < 10000; i++) s = `${s}row ${i % 10}\\n`; return s.length;", 60_000),
+    ]:
+        response, elapsed = timed_run(conn, script)
+        check_result(f"{label} finish with the right length", response, expected)
+        check("… well inside scriptTimeoutMs", elapsed < TIMEOUT_MS / 1000, f"took {elapsed:.2f}s")
+    check_code("a template literal counts against scriptMaxMemoryBytes like +",
+               conn.run("const c = 'x'.repeat(1000); let s = ''; for (let i = 0; i < 3000; i++) s = `${s}${c}`;"
+                        " return s.length;"), "ERROR", "400-12")
     check_result("the server is still serving", conn.run("return [1, 2, 3].length;"), 3)
 
 
@@ -1546,6 +1574,13 @@ def test_language_surface(conn: Conn):
                                        "if (i === 2) break outer; } }\nreturn seen;", 5),
         ("closures capture per-iteration let",
          "const fns = [];\nfor (let i = 0; i < 3; i++) fns.push(() => i);\nreturn fns.map(f => f());", [0, 1, 2]),
+        ("a closure in the for header captures the first iteration",
+         "let first;\nfor (let i = 0, f = () => i; i < 3; i++) first ??= f;\nreturn first();", 0),
+        ("a closure inside a template substitution captures per iteration",
+         "const out = [];\nfor (let i = 0; i < 3; i++) out.push(`${(() => i)()}`);\nreturn out;", ["0", "1", "2"]),
+        ("a loop with no closure still counts every iteration",
+         "const out = [];\nfor (let i = 0; i < 4; i++) { const twice = i * 2; out.push(twice); }\nreturn out;",
+         [0, 2, 4, 6]),
         ("Map, Set and Set operations",
          "const m = new Map([['a', 1]]);\nconst s = new Set([1, 2]);\n"
          "return { got: m.get('a'), union: [...s.union(new Set([3]))], "
@@ -1985,6 +2020,7 @@ def main():
             test_locale_arguments(conn)
             test_request_validation(conn)
             test_host_reads(conn)
+            test_procedure_cache_checks_the_source_text(conn)
             test_host_writes(conn)
             test_a_script_array_is_stored_as_the_script_sees_it(conn)
             test_host_round_trip_keeps_custom_spelling(conn)

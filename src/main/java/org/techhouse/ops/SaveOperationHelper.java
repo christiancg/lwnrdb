@@ -165,6 +165,11 @@ public final class SaveOperationHelper {
     // A non-null versions list supplies the owner's version per object, so replicas do not assign their own.
     public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest, List<Long> versions,
             DirtySink sink) throws Exception {
+        return executeBulkSave(bulkSaveRequest, versions, sink, true);
+    }
+
+    public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest, List<Long> versions,
+            DirtySink sink, boolean populateCache) throws Exception {
         final var names = Cache.canonicalNames(bulkSaveRequest.getDatabaseName(), bulkSaveRequest.getCollectionName());
         final var dbName = names.dbName();
         final var collName = names.collName();
@@ -220,7 +225,7 @@ public final class SaveOperationHelper {
             final List<IndexedDbEntry> bulkUpdated;
             try {
                 bulkUpdated = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate, primaryKeyIndex,
-                        updated -> linesById.get(updated.get_id()));
+                        updated -> linesById.get(updated.get_id()), cache.pageOccupancy(dbName, collName));
             } catch (Exception e) {
                 clearUncommitted(dbName, collName, entries, List.of(), pendingGeneration);
                 cache.userCache().evictPkIndex(dbName, collName);
@@ -252,7 +257,8 @@ public final class SaveOperationHelper {
         } catch (Exception e) {
             final var committedUpdates = toDbEntries(updatedIndexEntries);
             final var committedInserts = toDbEntries(insertedIndexEntries);
-            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts, pendingGeneration, sink);
+            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts, pendingGeneration,
+                    bulkSaveRequest.isBackgroundFollowOn(), sink, populateCache);
             final var committed = new ArrayList<>(committedUpdates);
             committed.addAll(committedInserts);
             clearUncommitted(dbName, collName, entries, committed, pendingGeneration);
@@ -260,9 +266,12 @@ public final class SaveOperationHelper {
         }
         final var updatedDbEntries = toDbEntries(updatedIndexEntries);
         final var insertedDbEntries = toDbEntries(insertedIndexEntries);
-        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration, sink);
+        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration,
+                bulkSaveRequest.isBackgroundFollowOn(), sink, populateCache);
         cache.signalIfOverBudget();
-        CollectionAccessHelper.recordCollectionAccess(dbName, collName);
+        if (populateCache) {
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
+        }
         return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
     }
 
@@ -291,11 +300,17 @@ public final class SaveOperationHelper {
     }
 
     private static void publishCommittedWrites(String dbName, String collName, List<DbEntry> updated,
-            List<DbEntry> inserted, long pendingGeneration, DirtySink sink) {
-        cache.addEntriesToCache(dbName, collName, updated);
-        cache.addEntriesToCache(dbName, collName, inserted);
-        taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, inserted, updated,
-                CollectionIncarnation.current(dbName, collName), pendingGeneration));
+            List<DbEntry> inserted, long pendingGeneration, boolean followOn, DirtySink sink, boolean populateCache) {
+        if (populateCache) {
+            cache.addEntriesToCache(dbName, collName, updated);
+            cache.addEntriesToCache(dbName, collName, inserted);
+        } else {
+            for (final var entry : updated) {
+                cache.evictEntry(dbName, collName, entry.get_id());
+            }
+        }
+        submit(new BulkEntityEvent(dbName, collName, inserted, updated, CollectionIncarnation.current(dbName, collName),
+                pendingGeneration), followOn);
         sink.markDirty(dbName, collName);
     }
 

@@ -87,13 +87,13 @@ public class MetadataDeleteFailureTest {
         TestUtils.setPrivateField(configuration, "schedulesEnabled", true);
         TestUtils.setPrivateField(configuration, "scheduleMaxPerDatabase", 100);
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeProceduresForDatabase(TestGlobals.DB);
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
@@ -169,7 +169,7 @@ public class MetadataDeleteFailureTest {
 
     @Test
     public void test_listing_procedures_answers_an_error_when_a_definition_is_unparseable() throws Exception {
-        fs.writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
 
         final var response = ProcedureOperationHelper.executeList(new ListProceduresRequest(TestGlobals.DB), null);
 
@@ -178,7 +178,7 @@ public class MetadataDeleteFailureTest {
 
     @Test
     public void test_listing_triggers_answers_an_error_when_a_trigger_file_is_unparseable() throws Exception {
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, UNPARSEABLE);
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL, UNPARSEABLE);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
 
         final var response = TriggerOperationHelper
@@ -189,7 +189,7 @@ public class MetadataDeleteFailureTest {
 
     @Test
     public void test_listing_schedules_answers_an_error_when_a_definition_is_unparseable() throws Exception {
-        fs.writeSchedule(TestGlobals.DB, "broken", UNPARSEABLE);
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, "broken", UNPARSEABLE);
 
         final var response = ScheduleOperationHelper.executeList(new ListSchedulesRequest(TestGlobals.DB));
 
@@ -198,7 +198,7 @@ public class MetadataDeleteFailureTest {
 
     @Test
     public void test_calling_a_procedure_answers_an_error_when_its_definition_is_unparseable() throws Exception {
-        fs.writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, "broken", UNPARSEABLE);
         final var request = new CallProcedureRequest(TestGlobals.DB, "broken", new JsonObject());
 
         final var response = ProcedureCallHelper.execute(request, ADMIN, null);

@@ -2,10 +2,12 @@ package org.techhouse.unit.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
@@ -55,6 +57,12 @@ public class FieldIndexLookupTest {
         return userCache.fieldIndexLookup(TestGlobals.DB, TestGlobals.COLL, FIELD);
     }
 
+    private static FieldIndexLookup.Located placed(FieldIndexLookup lookup, String id) {
+        final var located = lookup.locate(id);
+        assertNotNull(located);
+        return located;
+    }
+
     @Test
     public void locateReturnsTheEntryAnIdSitsIn() {
         final var lookup = new FieldIndexLookup();
@@ -62,7 +70,7 @@ public class FieldIndexLookupTest {
 
         lookup.add("a", "tag|String", red);
 
-        final var located = lookup.locate("a");
+        final var located = placed(lookup, "a");
         assertSame(red, located.entry());
         assertEquals("tag|String", located.typeIdentifier());
         assertNull(located.next());
@@ -79,7 +87,7 @@ public class FieldIndexLookupTest {
         lookup.add("a", "tag|String", red);
         lookup.add("a", "tag|String", blue);
 
-        final var located = lookup.locate("a");
+        final var located = placed(lookup, "a");
         assertSame(blue, located.entry());
         assertSame(red, located.next().entry());
         assertNull(located.next().next());
@@ -94,7 +102,7 @@ public class FieldIndexLookupTest {
         final var now = new FieldIndexLookup.Located("tag|Number", entry(1.0), null);
 
         lookup.moved("a", now);
-        assertSame(now, lookup.locate("a"));
+        assertEquals(now, lookup.locate("a"));
 
         lookup.moved("a", null);
         assertNull(lookup.locate("a"));
@@ -147,13 +155,90 @@ public class FieldIndexLookupTest {
     }
 
     @Test
-    public void theLookupEstimateGrowsPerIdFromAFixedBase() {
+    public void theLookupEstimateIsItsTableAndGrowsWithIt() {
         final var empty = CacheSizeEstimator.estimateFieldIndexLookupSize(0, LAYOUT);
-        final var one = CacheSizeEstimator.estimateFieldIndexLookupSize(1, LAYOUT);
-        final var thousand = CacheSizeEstimator.estimateFieldIndexLookupSize(1000, LAYOUT);
+        final var twelve = CacheSizeEstimator.estimateFieldIndexLookupSize(12, LAYOUT);
+        final var thirteen = CacheSizeEstimator.estimateFieldIndexLookupSize(13, LAYOUT);
+        final var million = CacheSizeEstimator.estimateFieldIndexLookupSize(1_000_000, LAYOUT);
 
-        assertTrue(empty > 0);
-        assertTrue(one > empty);
-        assertTrue(thousand - empty >= 1000 * (one - empty - LAYOUT.hashTableSize(1)));
+        assertEquals(FieldIndexLookup.estimatedBytes(13, LAYOUT), thirteen);
+        assertEquals(empty, twelve);
+        assertEquals(2 * (LAYOUT.referenceArraySize(32) - LAYOUT.referenceArraySize(16)) + LAYOUT.arraySize(1, 32)
+                - LAYOUT.arraySize(1, 16), thirteen - twelve);
+        assertTrue(million < 1_000_000L * 20, "a lookup costs under 20 bytes per id, got " + million);
+    }
+
+    @Test
+    public void collidingIdsAreBothLocatedAndSurviveTheOtherRemoval() {
+        final var lookup = new FieldIndexLookup();
+        final var red = entry("red");
+        final var blue = entry("blue");
+        assertEquals("Aa".hashCode(), "BB".hashCode());
+
+        lookup.add("Aa", "tag|String", red);
+        lookup.add("BB", "tag|Number", blue);
+
+        assertSame(red, placed(lookup, "Aa").entry());
+        assertSame(blue, placed(lookup, "BB").entry());
+        assertEquals("tag|Number", placed(lookup, "BB").typeIdentifier());
+        lookup.moved("Aa", null);
+        assertNull(lookup.locate("Aa"));
+        assertSame(blue, placed(lookup, "BB").entry());
+        assertEquals(1, lookup.size());
+    }
+
+    @Test
+    public void theTableGrowsAndShrinksKeepingEveryPlacement() {
+        final var lookup = new FieldIndexLookup();
+        final var entries = new ArrayList<FieldIndexEntry<Object>>();
+        for (var i = 0; i < 5000; i++) {
+            entries.add(entry("v" + i));
+            lookup.add("id" + i, i % 2 == 0 ? "tag|String" : "tag|Number", entries.get(i));
+        }
+        assertEquals(5000, lookup.size());
+        for (var i = 0; i < 5000; i += 3) {
+            lookup.moved("id" + i, null);
+        }
+        for (var i = 0; i < 5000; i++) {
+            final var located = lookup.locate("id" + i);
+            if (i % 3 == 0) {
+                assertNull(located);
+            } else {
+                assertNotNull(located);
+                assertSame(entries.get(i), located.entry());
+                assertEquals(i % 2 == 0 ? "tag|String" : "tag|Number", located.typeIdentifier());
+            }
+        }
+        for (var i = 0; i < 5000; i++) {
+            lookup.moved("id" + i, null);
+        }
+        assertEquals(0, lookup.size());
+        assertNull(lookup.locate("id1"));
+    }
+
+    @Test
+    public void anIdPlacedTwiceMovesBackToOnePlacement() {
+        final var lookup = new FieldIndexLookup(4);
+        final var red = entry("red");
+        final var one = entry(1.0);
+        lookup.add("a", "tag|String", red);
+        lookup.add("a", "tag|Number", one);
+        lookup.add("a", "tag|Number", one);
+
+        assertEquals(1, lookup.size());
+        final var located = placed(lookup, "a");
+        assertSame(one, located.entry());
+        assertSame(red, located.next().entry());
+
+        lookup.moved("a", new FieldIndexLookup.Located("tag|String", red, null));
+        assertSame(red, placed(lookup, "a").entry());
+        assertNull(placed(lookup, "a").next());
+        assertEquals(1, lookup.size());
+
+        lookup.moved("b", new FieldIndexLookup.Located("tag|String", red, located));
+        assertSame(located, placed(lookup, "b").next());
+        assertEquals(2, lookup.size());
+        lookup.moved("b", null);
+        assertEquals(1, lookup.size());
     }
 }

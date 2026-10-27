@@ -12,11 +12,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.UserCache;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
@@ -33,7 +36,7 @@ public class UserCacheEvictionTest {
     }
 
     @Test
-    public void evict_entry_from_populated_collection() throws NoSuchFieldException, IllegalAccessException {
+    public void evict_entry_from_populated_collection() {
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -43,9 +46,7 @@ public class UserCacheEvictionTest {
         Map<String, DbEntry> collection = new HashMap<>();
         collection.put(pk, new DbEntry());
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         collectionMap.put(collectionIdentifier, collection);
 
@@ -55,7 +56,7 @@ public class UserCacheEvictionTest {
     }
 
     @Test
-    public void evict_entry_from_empty_collection_map() throws NoSuchFieldException, IllegalAccessException {
+    public void evict_entry_from_empty_collection_map() {
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -63,9 +64,7 @@ public class UserCacheEvictionTest {
 
         cache.evictEntry(dbName, collName, pk);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         assertNull(collectionMap.get(Cache.getCollectionIdentifier(dbName, collName)));
     }
@@ -83,9 +82,7 @@ public class UserCacheEvictionTest {
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         pkIndexMap.put(collId, List.of(pkIndexEntry));
         collectionMap.put(collId, Map.of("key", dbEntry));
@@ -110,9 +107,7 @@ public class UserCacheEvictionTest {
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         pkIndexMap.put(collId, List.of(pkIndexEntry));
         collectionMap.put(collId, Map.of("key", dbEntry));
@@ -156,9 +151,7 @@ public class UserCacheEvictionTest {
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         assertFalse(pkIndexMap.containsKey(collIdentifier));
         assertFalse(collectionMap.containsKey(collIdentifier));
@@ -207,9 +200,7 @@ public class UserCacheEvictionTest {
         fieldIndexMap.put(collId2, inner2);
         fieldIndexMap.put(siblingId, inner3);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         collectionMap.put(collId1, new ConcurrentHashMap<>());
         collectionMap.put(collId2, new ConcurrentHashMap<>());
 
@@ -270,9 +261,7 @@ public class UserCacheEvictionTest {
         final var pkType = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", pkType);
-        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"),
                 List.of(new PkIndexEntry("db1", "c1", "id1", 0, 1, 0)));
         collectionMap.put(Cache.getCollectionIdentifier("db1", "c1"), new ConcurrentHashMap<>());
@@ -291,9 +280,7 @@ public class UserCacheEvictionTest {
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         pkIndexMap.put(collIdFoo, List.of(new PkIndexEntry("foo", "coll1", "1", 0, 10, 0)));
         pkIndexMap.put(collIdFoobar, List.of(new PkIndexEntry("foobar", "coll2", "2", 0, 10, 0)));
@@ -348,19 +335,12 @@ public class UserCacheEvictionTest {
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
-        final var typeBytes = new ReflectionUtils.TypeToken<Map<String, java.util.concurrent.atomic.AtomicLong>>() {
-        };
-        final var collectionBytes = TestUtils.getPrivateField(TestUtils.getPrivateField(cache, "sizes", Object.class),
-                "collectionBytes", typeBytes);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         final var typeField = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
         };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", typeField);
         pkIndexMap.put(collId, List.of(new PkIndexEntry("testDb", "coll1", "1", 0, 10, 0)));
-        collectionMap.put(collId, new ConcurrentHashMap<>());
-        collectionBytes.put(collId, new java.util.concurrent.atomic.AtomicLong(10L));
+        CacheResidents.residentDocument(cache, collId, DbEntry.fromJsonObject("testDb", "coll1", documentD1()));
         fieldIndexMap.put(collId, new ConcurrentHashMap<>());
 
         cache.evictCollectionDocuments("testDb", "coll1");
@@ -368,7 +348,13 @@ public class UserCacheEvictionTest {
 
         assertFalse(pkIndexMap.containsKey(collId));
         assertFalse(collectionMap.containsKey(collId));
-        assertFalse(collectionBytes.containsKey(collId));
+        assertEquals(0L, CacheResidents.footprint(cache, AccessKind.COLLECTION));
         assertFalse(fieldIndexMap.containsKey(collId));
+    }
+
+    private static JsonObject documentD1() {
+        final var data = new JsonObject();
+        data.addProperty("_id", "d1");
+        return data;
     }
 }

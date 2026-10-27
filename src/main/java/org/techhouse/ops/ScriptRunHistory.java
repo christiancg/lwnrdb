@@ -1,13 +1,16 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
@@ -17,6 +20,7 @@ import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
@@ -27,21 +31,21 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
-import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 
 public class ScriptRunHistory {
-    private static final long SWEEP_INTERVAL_SECONDS = 3600L;
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
     private static final int MAX_NOT_READY_RETRIES = 5;
     private static final long FIRST_RETRY_DELAY_MILLIS = 100L;
 
     private static final Logger logger = Logger.logFor(ScriptRunHistory.class);
-    private static final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
@@ -56,11 +60,22 @@ public class ScriptRunHistory {
     private static final LongAdder recorded = new LongAdder();
     private static final LongAdder dropped = new LongAdder();
     private static final AtomicReference<ScheduledExecutorService> sweeper = new AtomicReference<>();
+    private static final AtomicBoolean queueFull = new AtomicBoolean();
 
     public static void record(ScriptRunRecord runRecord) {
         if (runRecord == null || !isEnabled() || !recordsKind(runRecord.kind())) {
             return;
         }
+        final var cap = configuration.intValue(ConfigKey.SCRIPT_RUN_HISTORY_MAX_QUEUED);
+        if (taskManager.queuedHistory() >= cap) {
+            dropped.increment();
+            if (queueFull.compareAndSet(false, true)) {
+                logger.warning("The script run history queue holds " + cap + " rows (scriptRunHistoryMaxQueued);"
+                        + " runs are not recorded until it drains");
+            }
+            return;
+        }
+        queueFull.set(false);
         taskManager.submitBackgroundTask(new ScriptRunHistoryEvent(runRecord));
     }
 
@@ -91,22 +106,17 @@ public class ScriptRunHistory {
         }
         try {
             final var dbName = runRecord.database();
-            if (dbName == null || !ensureCollection(dbName)) {
+            if (dbName == null || historyUnavailable(dbName)) {
                 dropped.increment();
                 return;
             }
-            final var document = toDocument(runRecord);
-            if (runRecord.runId() != null) {
-                document.addProperty(Globals.PK_FIELD, runRecord.runId());
-            }
             final var request = new SaveRequest(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME);
-            request.setObject(document);
+            request.setObject(documentOf(runRecord));
             request.set_id(runRecord.runId());
             request.setBackgroundFollowOn(true);
             final var response = dispatch(request, runRecord.username());
             if (response.getStatus() != OperationStatus.OK) {
-                if (ErrorCode.COLLECTION_NOT_READY.getCode().equals(response.getErrorCode())
-                        && retryLater(runRecord, retries)) {
+                if (isNotReady(response) && retryLater(runRecord, retries)) {
                     return;
                 }
                 dropped.increment();
@@ -121,17 +131,82 @@ public class ScriptRunHistory {
         }
     }
 
+    public static void writeAll(List<ScriptRunHistoryEvent> events) {
+        if (!isEnabled()) {
+            return;
+        }
+        final var byRun = new LinkedHashMap<Object, ScriptRunHistoryEvent>();
+        for (final var event : events) {
+            final var runRecord = event.getRecord();
+            if (runRecord != null) {
+                byRun.put(runRecord.runId() == null ? event : runRecord.runId(), event);
+            }
+        }
+        if (byRun.isEmpty()) {
+            return;
+        }
+        final var batch = List.copyOf(byRun.values());
+        if (batch.size() == 1) {
+            write(batch.getFirst().getRecord(), batch.getFirst().getRetries());
+            return;
+        }
+        try {
+            final var dbName = batch.getFirst().getRecord().database();
+            if (dbName == null || historyUnavailable(dbName)) {
+                dropped.add(batch.size());
+                return;
+            }
+            final var documents = new ArrayList<JsonObject>(batch.size());
+            for (final var event : batch) {
+                documents.add(documentOf(event.getRecord()));
+            }
+            final var request = new BulkSaveRequest(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+            request.setObjects(documents);
+            request.setBackgroundFollowOn(true);
+            final var response = dispatch(request, null);
+            if (response.getStatus() == OperationStatus.OK) {
+                recorded.add(batch.size());
+            } else if (isNotReady(response)) {
+                for (final var event : batch) {
+                    if (!retryLater(event.getRecord(), event.getRetries())) {
+                        dropped.increment();
+                    }
+                }
+            } else {
+                for (final var event : batch) {
+                    write(event.getRecord(), event.getRetries());
+                }
+            }
+        } catch (Exception e) {
+            dropped.add(batch.size());
+            logger.warning("Failed to record " + batch.size() + " script runs in history: " + e.getMessage());
+        }
+    }
+
+    private static boolean isNotReady(OperationResponse response) {
+        return ErrorCode.COLLECTION_NOT_READY.getCode().equals(response.getErrorCode());
+    }
+
+    private static JsonObject documentOf(ScriptRunRecord runRecord) {
+        final var document = toDocument(runRecord);
+        if (runRecord.runId() != null) {
+            document.addProperty(Globals.PK_FIELD, runRecord.runId());
+        }
+        return document;
+    }
+
     public static void sweepOnce() {
         if (!isEnabled()) {
             return;
         }
         final var cutoff = System.currentTimeMillis() - Math.max(1L, configuration.getScriptRunHistoryRetentionMs());
+        final var maxRows = configuration.longValue(ConfigKey.SCRIPT_RUN_HISTORY_MAX_ROWS);
         for (final var dbName : databasesWithHistory()) {
             if (!ownsHistoryOf(dbName)) {
                 continue;
             }
             try {
-                pruneDatabase(dbName, cutoff);
+                ScriptRunPrune.prune(dbName, cutoff, maxRows);
             } catch (Exception e) {
                 logger.warning("Failed to prune the script run history of '" + dbName + "': " + e.getMessage());
             }
@@ -170,8 +245,8 @@ public class ScriptRunHistory {
             scheduler.shutdownNow();
             return;
         }
-        scheduler.scheduleAtFixedRate(ScriptRunHistory::sweepQuietly, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
-                TimeUnit.SECONDS);
+        final var interval = configuration.longValue(ConfigKey.SCRIPT_RUN_HISTORY_SWEEP_MS);
+        scheduler.scheduleAtFixedRate(ScriptRunHistory::sweepQuietly, interval, interval, TimeUnit.MILLISECONDS);
     }
 
     public void stopSweep() {
@@ -202,6 +277,7 @@ public class ScriptRunHistory {
         knownDatabases.clear();
         recorded.reset();
         dropped.reset();
+        queueFull.set(false);
     }
 
     public static void sweepQuietly() {
@@ -219,48 +295,24 @@ public class ScriptRunHistory {
         return names;
     }
 
-    private static void pruneDatabase(String dbName, long cutoff) throws Exception {
-        if (cache.getAdminCollectionEntry(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME) == null) {
-            return;
-        }
-        final var stale = new ArrayList<String>();
-        try (var entries = cache.streamCollection(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME)) {
-            entries.forEach(entry -> {
-                final var data = entry.getData();
-                if (data != null && data.has("startedAt")
-                        && data.get("startedAt").asJsonNumber().getValue().longValue() < cutoff) {
-                    stale.add(entry.get_id());
-                }
-            });
-        }
-        for (final var id : stale) {
-            final var request = new DeleteRequest(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME);
-            request.set_id(id);
-            dispatch(request, null);
-        }
-        if (!stale.isEmpty()) {
-            logger.info("Pruned " + stale.size() + " script run history row(s) from '" + dbName + "'");
-        }
-    }
-
-    private static boolean ensureCollection(String dbName) {
+    private static boolean historyUnavailable(String dbName) {
         if (cache.getAdminDbEntry(dbName) == null) {
             knownDatabases.remove(dbName);
-            return false;
+            return true;
         }
         if (cache.getAdminCollectionEntry(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME) != null) {
             knownDatabases.add(dbName);
-            return true;
+            return false;
         }
         knownDatabases.remove(dbName);
         final var response = dispatch(new CreateCollectionRequest(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME), null);
         if (response.getStatus() != OperationStatus.OK) {
             logger.warning(
                     "Could not create the script run history collection in '" + dbName + "': " + response.getMessage());
-            return false;
+            return true;
         }
         knownDatabases.add(dbName);
-        return true;
+        return false;
     }
 
     private static OperationResponse dispatch(OperationRequest request, String actingUser) {

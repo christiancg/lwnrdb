@@ -48,9 +48,9 @@ public class OperationProcessorTriggerDispatchTest {
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         processor.processMessage(new SaveProcedureRequest(TestGlobals.DB, "audit", "export default () => 1;"));

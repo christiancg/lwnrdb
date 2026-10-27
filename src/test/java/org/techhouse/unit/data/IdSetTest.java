@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -260,5 +263,23 @@ public class IdSetTest {
         assertInstanceOf(IdSet.class, many.getIds());
         assertEquals(Set.of("a"), one.getIds());
         assertEquals(10, many.getIds().size());
+    }
+
+    @Test
+    public void test_stored_returns_the_instance_the_set_holds() {
+        for (final var count : List.of(3, 40)) {
+            final var set = new IdSet();
+            final var held = new HashMap<String, String>();
+            for (var i = 0; i < count; i++) {
+                final var id = "id" + i;
+                set.add(id);
+                held.put(id, id);
+            }
+            for (var i = 0; i < count; i++) {
+                final var probe = "id" + i;
+                assertSame(held.get(probe), set.stored(probe));
+            }
+            assertNull(set.stored("absent"));
+        }
     }
 }

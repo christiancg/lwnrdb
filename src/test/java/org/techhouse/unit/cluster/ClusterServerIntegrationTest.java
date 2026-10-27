@@ -19,7 +19,6 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
@@ -128,7 +127,7 @@ public class ClusterServerIntegrationTest {
     @Test
     public void test_forward_with_unparseable_body_is_error() throws Exception {
         final var request = message(ClusterMessageType.FORWARD_REQUEST, SECRET, node("J", 9999), null);
-        request.setForwardBody(ForwardBody.encode("not-valid-json"));
+        request.setForwardBody("not-valid-json");
         final var response = pool.request(serverAddress(), request, 3000);
         assertEquals(ClusterMessageType.ERROR, response.getType());
     }

@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Transaction;
 import org.techhouse.ioc.IocContainer;
@@ -49,7 +48,7 @@ public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBas
         message.setActingUser(actingUser);
         message.setTxSessionId(sessionId);
         message.setTxId(txId);
-        message.setForwardBody(ForwardBody.encode(body));
+        message.setForwardBody(body);
         return message;
     }
 
@@ -77,7 +76,7 @@ public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBas
     private OperationResponse send(String txId, String body, String actingUser) throws Exception {
         final var reply = pool.request(cluster.serverAddress(), forwarded(txId, body, actingUser), ACK_TIMEOUT_MS);
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, reply.getType(), reply.getErrorMessage());
-        return eJson.fromJson(ForwardBody.decode(reply.getForwardBody()), OperationResponse.class);
+        return eJson.fromJson(reply.getForwardBody(), OperationResponse.class);
     }
 
     private ClusterMessage sendControl(ClusterMessageType type, String txId) throws Exception {

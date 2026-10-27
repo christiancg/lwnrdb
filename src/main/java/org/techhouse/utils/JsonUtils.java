@@ -21,6 +21,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.elements.WriteTree;
 import org.techhouse.ejson.internal.JsonStrings;
 
 public final class JsonUtils {
@@ -285,9 +286,14 @@ public final class JsonUtils {
         parent.remove(segments.getLast());
     }
 
-    public static String rootOf(String path) {
-        final var segments = pathSegments(path);
-        return segments.isEmpty() ? null : segments.getFirst();
+    public static WriteTree writeTreeOf(Collection<String> paths) {
+        final var segmented = new ArrayList<List<String>>(paths.size());
+        for (final var path : paths) {
+            if (path != null) {
+                segmented.add(pathSegments(path));
+            }
+        }
+        return WriteTree.of(segmented);
     }
 
     private static List<String> pathSegments(String path) {

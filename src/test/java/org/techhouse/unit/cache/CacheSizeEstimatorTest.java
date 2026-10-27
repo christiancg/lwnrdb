@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.CacheSizeEstimator;
+import org.techhouse.cache.FieldIndexLookup;
 import org.techhouse.cache.heap.DocumentHeapSizer;
 import org.techhouse.cache.heap.HeapLayout;
 import org.techhouse.data.DbEntry;
@@ -166,6 +167,21 @@ public class CacheSizeEstimatorTest {
         assertEquals(3 * singleIdEntry, CacheSizeEstimator.estimateFieldIndexSizeByCount(3, LAYOUT));
         assertNotEquals(3 * OLD_FLAT_FIELD_ENTRY_BYTES, CacheSizeEstimator.estimateFieldIndexSizeByCount(3));
         assertEquals(0L, CacheSizeEstimator.estimateFieldIndexSizeByCount(0));
+    }
+
+    @Test
+    public void test_a_lookup_is_charged_its_open_table_of_ids_entries_and_type_bytes() {
+        final var tableFor1000 = IdSet.tableLengthFor(1000);
+        final var empty = CacheSizeEstimator.estimateFieldIndexLookupSize(0, LAYOUT);
+
+        assertEquals(2048, tableFor1000);
+        assertEquals(
+                2 * (LAYOUT.referenceArraySize(2048) - LAYOUT.referenceArraySize(16)) + LAYOUT.arraySize(1, 2048)
+                        - LAYOUT.arraySize(1, 16),
+                CacheSizeEstimator.estimateFieldIndexLookupSize(1000, LAYOUT) - empty);
+        assertTrue(empty > 2 * LAYOUT.referenceArraySize(16) + LAYOUT.arraySize(1, 16));
+        assertEquals(FieldIndexLookup.estimatedBytes(1000, LAYOUT),
+                CacheSizeEstimator.estimateFieldIndexLookupSize(1000, LAYOUT));
     }
 
     @Test

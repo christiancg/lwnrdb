@@ -60,13 +60,20 @@ public final class SliceCommit {
             boolean recordsOutcome) throws Exception {
         final var txId = transaction.getTransactionId().toString();
         coordinator.reserveTransactionTombstones(transaction);
+        final var groups = CommitWriteGroups.plan(ops);
         final VersionedApply applier;
         final boolean applied;
+        final boolean durable;
         try (var batch = listenManager.openBatch(transaction.getHeldLocks())) {
             applier = new VersionedApply(batch);
-            applied = TransactionRecovery.applyAllWithRetry(ops, txId, applier);
+            applier.groupWritesIn(groups);
+            try {
+                applied = TransactionRecovery.applyAllWithRetry(ops, txId, applier);
+            } finally {
+                durable = groups.settle();
+            }
         }
-        if (!applied) {
+        if (!applied || !durable) {
             return Result.HALF_APPLIED;
         }
         final var stagedTriggers = CommittedOpTriggers.stage(ops, actingUser, transaction.getTriggerDepth(),

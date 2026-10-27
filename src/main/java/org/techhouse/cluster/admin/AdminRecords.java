@@ -38,9 +38,9 @@ public final class AdminRecords {
                 keys.add(AdminRecordKey.schema(dbName, collName));
                 keys.add(AdminRecordKey.triggers(dbName, collName));
             }
-            listed(dbName, Globals.PROCEDURES_FOLDER, () -> fs.listProcedureNames(dbName))
+            listed(dbName, Globals.PROCEDURES_FOLDER, () -> fs.metadataFiles().listProcedureNames(dbName))
                     .forEach(name -> keys.add(AdminRecordKey.procedure(dbName, name)));
-            listed(dbName, Globals.SCHEDULES_FOLDER, () -> fs.listScheduleNames(dbName))
+            listed(dbName, Globals.SCHEDULES_FOLDER, () -> fs.metadataFiles().listScheduleNames(dbName))
                     .forEach(name -> keys.add(AdminRecordKey.schedule(dbName, name)));
         }
         for (final var user : cache.getAllAdminUserEntries()) {

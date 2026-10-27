@@ -13,6 +13,8 @@ import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptErrorNames;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.simplejs.internal.JsOperators;
+import org.techhouse.simplejs.nodes.BinaryOperator;
+import org.techhouse.simplejs.nodes.UnaryOperator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNull;
@@ -184,6 +186,24 @@ public class JsOperatorsTest {
     public void test_unknown_operators_throw() {
         assertThrows(TypeErrorException.class, () -> JsOperators.binary("bogus", new JsNumber(1), new JsNumber(2)));
         assertThrows(TypeErrorException.class, () -> JsOperators.unary("bogus", new JsNumber(1)));
+        assertThrows(TypeErrorException.class,
+                () -> JsOperators.binary(BinaryOperator.IN, new JsNumber(1), new JsNumber(2), null));
+        assertThrows(TypeErrorException.class,
+                () -> JsOperators.binary(BinaryOperator.INSTANCEOF, new JsNumber(1), new JsNumber(2), null));
+        assertThrows(TypeErrorException.class, () -> JsOperators.unary(UnaryOperator.DELETE, new JsNumber(1), null));
+    }
+
+    @Test
+    public void test_resolved_operators_answer_like_their_tokens() {
+        for (final var operator : BinaryOperator.values()) {
+            if (operator == BinaryOperator.IN || operator == BinaryOperator.INSTANCEOF) {
+                continue;
+            }
+            assertTrue(JsOperators.strictEquals(JsOperators.binary(operator.token(), new JsNumber(6), new JsNumber(4)),
+                    JsOperators.binary(operator, new JsNumber(6), new JsNumber(4), null)), operator.token());
+        }
+        assertEquals(-6, num(JsOperators.unary(UnaryOperator.NEGATE, new JsNumber(6), null)));
+        assertTrue(bool(JsOperators.unary(UnaryOperator.NOT, new JsNumber(0), null)));
     }
 
     @Test

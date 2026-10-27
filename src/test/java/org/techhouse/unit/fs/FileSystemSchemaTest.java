@@ -31,33 +31,34 @@ public class FileSystemSchemaTest {
 
     @BeforeEach
     void resetSchema() throws Exception {
-        fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 
     @Test
     public void test_read_absent_schema_returns_null() throws Exception {
-        assertNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
     public void test_write_then_read() throws Exception {
         final var json = "{\"type\":\"object\"}";
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, json);
-        assertEquals(json, fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, json);
+        assertEquals(json, fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
     public void test_overwrite() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"string\"}");
-        assertEquals("{\"type\":\"string\"}", fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"string\"}");
+        assertEquals("{\"type\":\"string\"}",
+                fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
     public void test_delete() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
-        assertTrue(fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
-        assertNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
-        assertFalse(fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
+        assertTrue(fs.metadataFiles().deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertFalse(fs.metadataFiles().deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 }

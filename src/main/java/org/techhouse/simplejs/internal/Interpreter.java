@@ -382,6 +382,10 @@ public final class Interpreter {
         dispatch.hoistBlock(block, env);
     }
 
+    public boolean blockIsScopeFree(org.techhouse.simplejs.nodes.BlockStatement block) {
+        return dispatch.planFor(block).scopeFree();
+    }
+
     public boolean blockDeclaresUsing(org.techhouse.simplejs.nodes.BlockStatement block) {
         return dispatch.planFor(block).declaresUsing();
     }

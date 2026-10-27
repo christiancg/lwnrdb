@@ -2,6 +2,7 @@ package org.techhouse.unit.bckg_ops;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -13,6 +14,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +31,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.listen.ListenProcessorThread;
 import org.techhouse.listen.ListenRegistration;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.test.TestUtils;
 
 public class WorkerErrorSurvivalTest {
@@ -117,9 +120,13 @@ public class WorkerErrorSurvivalTest {
     public void test_a_listen_worker_keeps_running_after_an_error() throws Exception {
         final var calls = new AtomicInteger();
         final var bothProcessed = new CountDownLatch(2);
+        final var armed = new AtomicBoolean();
         final var manager = new ListenManager() {
             @Override
             public ListenRegistration getRegistration(UUID listenId) {
+                if (!armed.get()) {
+                    return super.getRegistration(listenId);
+                }
                 bothProcessed.countDown();
                 if (calls.incrementAndGet() == 1) {
                     throw new OutOfMemoryError("simulated");
@@ -128,8 +135,14 @@ public class WorkerErrorSurvivalTest {
             }
         };
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(UUID.randomUUID());
-        queue.offer(UUID.randomUUID());
+        for (final var collection : List.of("first_coll", "second_coll")) {
+            final var request = new AggregateRequest("db", collection);
+            request.setAggregationSteps(List.of());
+            final var registration = manager.getRegistration(manager.register(UUID.randomUUID(), request, "hash"));
+            assertNotNull(registration);
+            queue.offer(registration.groupId());
+        }
+        armed.set(true);
         final var thread = new Thread(new ListenProcessorThread(queue, manager));
         thread.setDaemon(true);
         thread.start();

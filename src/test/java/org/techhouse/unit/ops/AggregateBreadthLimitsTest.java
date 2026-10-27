@@ -19,15 +19,14 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregateLimitException;
+import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
-import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.RequestParser;
-import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.validations.AggregationStepValidator;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateResponse;
@@ -138,20 +137,18 @@ public class AggregateBreadthLimitsTest {
     }
 
     @Test
-    public void test_the_deadline_counts_eager_conjunction_elements() throws Exception {
+    public void test_the_deadline_covers_a_lazy_conjunction_over_an_input() throws Exception {
         final var rows = IntStream.range(0, 5_000).mapToObj(i -> {
             final var row = new JsonObject();
             row.add("n", new JsonNumber(-i));
             return row;
         }).toList();
-        final var operator = ((AggregateRequest) RequestParser
-                .parseRequest(aggregate(filter(conjunction("OR", equalsOperators(2)))))).getAggregationSteps()
-                .getFirst();
-        final var conjunction = ((FilterAggregationStep) operator).getOperator();
+        final var request = (AggregateRequest) RequestParser
+                .parseRequest(aggregate(filter(conjunction("OR", equalsOperators(2)))));
         try (var context = PipelineContext.of(1L, Long.MAX_VALUE, null)) {
             Thread.sleep(5);
-            final var refused = assertThrows(AggregateLimitException.class, () -> FilterOperatorHelper
-                    .processOperator(conjunction, rows.stream(), TestGlobals.DB, TestGlobals.COLL, context).toList());
+            final var refused = assertThrows(AggregateLimitException.class,
+                    () -> AggregationOperationHelper.processAggregation(request, rows.stream(), null, context));
             assertEquals(ErrorCode.AGGREGATE_TIMEOUT, refused.getErrorCode());
         }
     }

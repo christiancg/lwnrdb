@@ -116,10 +116,21 @@ A document write (`SAVE`/`BULK_SAVE`/`DELETE`) is coordinated by the owner:
    the owner's address. (Request routing normally forwards to the owner rather than
    reaching this rejection — it is the backstop for a direct-to-non-owner write.)
 2. **Local commit.** The owner takes the collection write lock and commits through the
-   normal execute path.
+   normal execute path. Concurrent single-document `SAVE`s and `DELETE`s on one owner share
+   one group commit, exactly as standalone: one log force for the whole group, taken under
+   the exclusive lock. Each writer still re-checks ownership and reserves its own delete
+   tombstone; a group whose force fails is taken back and retracts those tombstones.
 3. **Replicate.** Still holding the lock, the owner re-reads the committed document(s) and
    broadcasts a `REPLICATE` to all ALIVE peers in parallel, waiting for a **majority** to
-   ack within `replicationAckTimeoutMs`. The owner counts as one vote, so it needs
+   ack within `replicationAckTimeoutMs`. A group ships once, after its force: one
+   `REPLICATE` for its final documents (or its deletes), or one single-collection
+   `REPLICATE_TX` with the deletes first and then the upserts when it mixes both, so an id
+   saved and deleted inside the group ships only its delete. During that wait the owner
+   holds the collection lock shared: point reads (`FIND_BY_ID`) proceed and may see the
+   group's writes before the quorum acknowledged them, while scans, LISTEN re-runs and other
+   writers wait until the `REPLICATE` returns. Every write of the group gets the outcome:
+   `503-3` on a timeout, `503-8` when ownership moved meanwhile; a write refused before it
+   applied keeps its own code. The owner counts as one vote, so it needs
    `majority − 1` peer acks, where
    `majority = ⌊max(clusterExpectedSize, knownMembers) / 2⌋ + 1`.
 4. **Ack or timeout.** On a majority the client gets `OK`. On timeout it gets
@@ -157,8 +168,14 @@ and failing on the missing page folder. A clustered node deliberately never answ
 COLLECTION_NOT_FOUND` for this, because it cannot tell a collection that was never created from
 one whose metadata has not reached it yet — only a node with clustering off can make that call.
 
-Forwarded bodies are Base64-wrapped (`cluster/msg/ForwardBody`) because EJson does not
-escape string values, so raw JSON cannot be embedded directly in the outer message.
+A forwarded body travels as raw JSON text in the `forwardBody` string: EJson escapes every
+string value (RFC 8259, quotes, newlines, control characters and lone surrogates included), so the
+body round-trips inside the outer frame unchanged. The owner parses it with
+`RequestParser.parseRequest(String)` (nesting limit kept) and the edge relays the response string
+verbatim. Peer frames (`ClusterMessage` and the payloads inside it) are annotated with `ejson/NullsOmitted`,
+so the reflection serializer leaves their unset fields out instead of writing a `null` for every
+envelope field; a missing key reads back as the field's default. Client responses still emit every
+field.
 
 ### Joins across collections
 
@@ -741,12 +758,20 @@ cannot converge — a lagging replica still holding the document would resurrect
 On any membership change, `cluster/AntiEntropyService` reconciles each of this node's
 collections against the live members:
 
-1. It builds a local **digest** (`id → version` for live documents, plus tombstones) and
-   requests each peer's digest. The request carries a **summary** of that digest — the entry
-   count plus a hash over every `id|version|deleted|length` line — and a peer whose own summary
-   matches answers `summaryMatch` and omits the digest entirely, which is what keeps a converged
-   cluster's sweeps cheap. Both sides must build their entries identically, byte length included,
-   or the two summaries never agree and every sweep ships a full digest instead.
+1. It describes its collection (live documents with their version and byte length, plus tombstones)
+   in one pass under the collection read lock, without sorting or building strings: each entry
+   hashes to a 64-bit `DigestHash.entryHash` (FNV-1a of the id, mixed with the version, the length
+   and the deleted flag), and the **summary** is the entry count plus the wrapping sum of those
+   hashes, so it is independent of order. A tombstone older than the live row of the same id is
+   left out on both sides, so a superseded delete cannot keep two converged nodes apart. Entries
+   also fall into `B` **buckets** by the top bits of the id hash alone (`B` a power of two between
+   16 and 4096, about 64 entries per bucket, chosen by the requester). The first `DIGEST` carries
+   the summary and `B`: a peer whose own summary matches answers `summaryMatch`; a peer holding at
+   most `2B` entries answers them all; any other answers its `B` bucket summaries. The requester
+   then asks only for the entries of the buckets that differ, so one changed document among a
+   million ships one bucket, and a converged round builds no per-entry map at all. The answering
+   node's id travels once per payload. Both sides must hash identically, byte length included, or
+   the summaries never agree and every sweep ships every bucket.
 2. It computes, per id, the **highest version seen anywhere** — a tombstone wins a tie with
    a live document, so a delete beats a concurrent write at the same version. Two live copies at
    exactly equal versions are ordered by node id, and the pull gate and the replicated-apply check
@@ -805,9 +830,12 @@ a node that was down catches up when it rejoins.
 Beyond the membership-triggered pass, a **periodic sweep** runs the same reconciliation
 every `antiEntropyIntervalMs` (default 60s), so a replica left behind by a replication
 timeout is repaired without waiting for a membership change. At the end of each
-collection's reconciliation the tombstone file is **garbage-collected**: duplicates collapse
-to the highest version per id, and any tombstone older than `tombstoneRetentionMs` (default
-24h) is dropped. Retention must comfortably exceed the longest expected node downtime,
+collection's reconciliation the tombstone file is **garbage-collected** when something is due —
+its oldest tombstone is past `tombstoneRetentionMs` (default 24h) or it holds more than twice as
+many lines as ids — and left alone otherwise, so a converged round rewrites nothing: duplicates
+collapse to the highest version per id and expired tombstones are dropped. Each collection's
+tombstones are held in memory once read (`fs/TombstoneStore`), revalidated by the file's size and
+modification time on every access. Retention must comfortably exceed the longest expected node downtime,
 otherwise a delete could be collected before a still-down replica has converged on it and
 would be resurrected on rejoin. Owner cache warm-up on handoff is deliberately lazy.
 
@@ -948,9 +976,16 @@ contain a secret holder; they do not make `actingUser` trustworthy, because whoe
 secret chooses it.
 
 Every peer shares **one** connection, so what a node does with an inbound frame decides what the
-rest of that peer's traffic waits for. `ClusterConnectionHandler` answers replication, admin and 2PC
-messages on a single ordered executor and answers `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` concurrently beside it.
-The last two are there because they wait out a whole `replicationAckTimeoutMs` on a busy collection
+rest of that peer's traffic waits for. `ClusterConnectionHandler` answers a `REPLICATE`, and a `REPLICATE_TX`
+whose entries all name one collection, on that collection's own ordered lane (`ApplyLanes`, keyed `db|coll`): writes
+to one collection apply in the order the peer sent them, while a write parked on one collection's lock no longer holds
+up a peer's writes to every other collection. A lane exists only while it has work and runs on a virtual thread.
+Admin, 2PC and forwarded-transaction messages, a `REPLICATE_TX` spanning several collections and a payload naming an
+invalid collection stay on one ordered control lane. Lanes can reorder across collections, which is safe because every
+apply is version-checked and incarnation-guarded; a coordinator owning a new collection may see its `REPLICATE`
+overtake the `REPLICATE_ADMIN` that created the collection on a replica, which then answers `ERROR` once (the write is
+unregistered there) and anti-entropy repairs it. `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` are answered
+concurrently beside the lanes. The last two are there because they wait out a whole `replicationAckTimeoutMs` on a busy collection
 lock: on the ordered lane that wait was the peer's entire inbound channel, so an ordinary long write
 holding a collection lock made the *requester's* next forwarded transaction op time out and the
 client's write be refused. They mutate nothing, and anti-entropy's two sides already snapshot at
@@ -970,7 +1005,7 @@ cluster listener has its own caps, described above.
 | `JOIN_REQUEST` / `JOIN_RESPONSE` | `sender`, `members` | discovery |
 | `GOSSIP` / `GOSSIP_ACK` | `sender`, `members` (+ heartbeat and telemetry) | membership, failure detection, script load |
 | `REPLICATE` | `replication`: `{dbName, collName, op: UPSERT\|DELETE, documents, ids, versions}` | document write replication |
-| `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (Base64 JSON), `actingUser` | request routing and script placement |
+| `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (raw JSON text), `actingUser` | request routing and script placement |
 | `REPLICATE_ADMIN` | `adminSnapshot`: the `{key, version, body}` admin records an op touched (`body` absent for a tombstone) | admin/DDL replication by record-shipping |
 | `REINDEX_BROADCAST` | `forwardBody` (the `REINDEX` request, `primaryKey` included) | a cluster-wide index rebuild |
 | `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted, length}` digest and its summary, or pulled documents | document anti-entropy |

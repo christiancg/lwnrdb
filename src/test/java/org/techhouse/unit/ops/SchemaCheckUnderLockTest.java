@@ -53,7 +53,7 @@ public class SchemaCheckUnderLockTest {
     void reset() throws Exception {
         TestUtils.releaseAllLocks();
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
-        fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 
     private void schemaSavedAfterTheEdgeCheck() {

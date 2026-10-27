@@ -16,7 +16,7 @@ public class AntiEntropySummaryTest {
     }
 
     private static DigestEntry entry(long length) {
-        return new DigestEntry("x", 7, false, "self", length);
+        return new DigestEntry("x", 7, false, length);
     }
 
     @Test
@@ -40,17 +40,39 @@ public class AntiEntropySummaryTest {
     }
 
     @Test
-    public void test_the_local_side_and_the_peer_side_describe_a_document_the_same_way() {
-        final var asBuildDigestEmitsIt = List.of(new DigestEntry("a", 7, false, "peer", 120));
-        final var asReconcileEmitsIt = List.of(new DigestEntry("a", 7, false, null, 120));
+    public void test_identical_entries_fill_identical_bucket_vectors() {
+        final var entries = new java.util.ArrayList<DigestEntry>();
+        for (var i = 0; i < 500; i++) {
+            entries.add(new DigestEntry("d" + i, 7 + i, i % 7 == 0, i % 7 == 0 ? 0 : 40 + i));
+        }
+        final var reversed = new java.util.ArrayList<>(entries);
+        java.util.Collections.reverse(reversed);
 
-        assertEquals(summaryOf(asBuildDigestEmitsIt), summaryOf(asReconcileEmitsIt),
-                "the node id rides beside the summary and must not enter it, or no two nodes ever match");
+        final var mine = LocalDigest.ofEntries(entries, 64);
+        final var theirs = LocalDigest.ofEntries(reversed, 64);
+
+        assertEquals(mine.bucketSummaries(), theirs.bucketSummaries());
+        assertTrue(mine.differingBuckets(theirs).isEmpty());
+        assertTrue(mine.differingBuckets(theirs.bucketSummaries()).isEmpty());
+    }
+
+    @Test
+    public void test_one_changed_entry_differs_in_exactly_its_bucket() {
+        final var entries = new java.util.ArrayList<DigestEntry>();
+        for (var i = 0; i < 500; i++) {
+            entries.add(new DigestEntry("d" + i, 7, false, 40));
+        }
+        final var changed = new java.util.ArrayList<>(entries);
+        changed.set(123, new DigestEntry("d123", 8, false, 40));
+
+        final var differing = LocalDigest.ofEntries(entries, 64).differingBuckets(LocalDigest.ofEntries(changed, 64));
+
+        assertEquals(java.util.Set.of(DigestHash.bucket(DigestHash.idHash("d123"), 64)), differing);
     }
 
     @Test
     public void test_omitting_the_length_changes_the_summary() {
-        assertNotEquals(summaryOf(List.of(new DigestEntry("a", 7, false, null, 120))),
+        assertNotEquals(summaryOf(List.of(new DigestEntry("a", 7, false, 120))),
                 summaryOf(List.of(new DigestEntry("a", 7, false))),
                 "a live entry built without its length can never match the peer's, which is why reconcile"
                         + " must not use the length-less constructor");

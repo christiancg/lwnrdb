@@ -86,4 +86,16 @@ public class JsonVectorOrderingTest {
     public void test_equal_vectors_share_a_signature() {
         assertEquals(vector(1.5, -2.5, 3.5).simHash(), vector(1.5, -2.5, 3.5).simHash());
     }
+
+    @Test
+    public void test_the_signature_sorts_exactly_like_the_simhash_string() {
+        final var vectors = sample();
+        for (final var a : vectors) {
+            assertEquals(Integer.parseInt(a.simHash(), 2), a.signature());
+            for (final var b : vectors) {
+                assertEquals(Integer.signum(a.simHash().compareTo(b.simHash())),
+                        Integer.signum(Integer.compareUnsigned(a.signature(), b.signature())));
+            }
+        }
+    }
 }

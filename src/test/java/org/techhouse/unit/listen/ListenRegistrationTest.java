@@ -22,9 +22,10 @@ public class ListenRegistrationTest {
         request.setAggregationSteps(List.of());
         final var keys = Set.of("db|coll");
         final var lastHash = new AtomicReference<>("initialHash");
+        final var groupId = UUID.randomUUID();
 
         final var reg = new ListenRegistration(listenId, clientId, request, keys, lastHash, new AtomicBoolean(true),
-                "listener", 42L);
+                "listener", 42L, groupId);
 
         assertEquals(listenId, reg.listenId());
         assertEquals(clientId, reg.clientId());
@@ -34,12 +35,14 @@ public class ListenRegistrationTest {
         assertTrue(reg.delivered().get());
         assertEquals("listener", reg.username());
         assertEquals(42L, reg.retainedBytes());
+        assertEquals(groupId, reg.groupId());
     }
 
     @Test
     public void lastHash_canBeUpdated() {
         final var reg = new ListenRegistration(UUID.randomUUID(), UUID.randomUUID(), new AggregateRequest("db", "coll"),
-                Set.of("db|coll"), new AtomicReference<>("hash1"), new AtomicBoolean(false), null, 0L);
+                Set.of("db|coll"), new AtomicReference<>("hash1"), new AtomicBoolean(false), null, 0L,
+                UUID.randomUUID());
 
         reg.lastHash().set("hash2");
 
@@ -55,5 +58,21 @@ public class ListenRegistrationTest {
         final var listenId = manager.register(UUID.randomUUID(), request, "hash");
 
         assertFalse(manager.getRegistration(listenId).delivered().get());
+    }
+
+    @Test
+    public void identicalRegistrationsShareOneParsedRequest() {
+        final var manager = new ListenManager();
+        final var first = new AggregateRequest("db", "coll");
+        first.setAggregationSteps(List.of());
+        final var second = new AggregateRequest("db", "coll");
+        second.setAggregationSteps(List.of());
+
+        final var a = manager.getRegistration(manager.register(UUID.randomUUID(), "u", first, "hash", 1L));
+        final var b = manager.getRegistration(manager.register(UUID.randomUUID(), "u", second, "hash", 1L));
+
+        assertEquals(a.groupId(), b.groupId());
+        assertSame(a.request(), b.request());
+        assertSame(a.collectionKeys(), b.collectionKeys());
     }
 }

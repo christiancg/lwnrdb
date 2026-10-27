@@ -27,6 +27,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
@@ -171,12 +172,12 @@ public class AggregateResultBudgetTest {
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
         final var pushed = new ByteArrayOutputStream();
         clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(pushed));
-        final var sentinel = UUID.randomUUID();
+        final var sentinel = new UUID[1];
         final var sentinelReached = new CountDownLatch(1);
         final var manager = new ListenManager() {
             @Override
             public ListenRegistration getRegistration(UUID id) {
-                if (sentinel.equals(id)) {
+                if (id.equals(sentinel[0])) {
                     sentinelReached.countDown();
                 }
                 return super.getRegistration(id);
@@ -187,9 +188,13 @@ public class AggregateResultBudgetTest {
         request.setDirtyRead(true);
         final var listenId = manager.register(clientId, request, STALE_HASH);
         manager.markDelivered(listenId);
+        final var sentinelRequest = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        sentinelRequest.setAggregationSteps(List.of(new LimitAggregationStep(1)));
+        final var sentinelId = manager.register(clientId, sentinelRequest, STALE_HASH);
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
-        queue.offer(sentinel);
+        queue.offer(manager.getRegistration(listenId).groupId());
+        queue.offer(manager.getRegistration(sentinelId).groupId());
+        sentinel[0] = sentinelId;
         final var worker = new Thread(new ListenProcessorThread(queue, manager));
         worker.setDaemon(true);
         worker.start();

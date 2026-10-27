@@ -145,4 +145,36 @@ public class MapFilterAgreementTest {
         assertEquals(expected, byFilter);
         assertEquals(expected, byMapCondition);
     }
+
+    private static FieldOperator isTrue(String field) {
+        return new FieldOperator(FieldOperatorType.EQUALS, field, JsonBoolean.of(true));
+    }
+
+    private static List<JsonObject> threeFlags() {
+        final var documents = new ArrayList<JsonObject>();
+        for (var bits = 0; bits < 8; bits++) {
+            final var jsonObject = new JsonObject();
+            jsonObject.addProperty(Globals.PK_FIELD, "bits" + bits);
+            jsonObject.addProperty("a", (bits & 1) != 0);
+            jsonObject.addProperty("b", (bits & 2) != 0);
+            jsonObject.addProperty("c", (bits & 4) != 0);
+            jsonObject.addProperty(MARKER_FIELD, "present");
+            documents.add(jsonObject);
+        }
+        return documents;
+    }
+
+    @Test
+    public void test_nested_conjunctions_agree_between_filter_and_map_condition() throws IOException {
+        for (final var outer : ConjunctionOperatorType.values()) {
+            for (final var inner : ConjunctionOperatorType.values()) {
+                final var nested = new ConjunctionOperator(inner, List.of(isTrue("b"), isTrue("c")));
+                final var condition = new ConjunctionOperator(outer, List.of(isTrue("a"), nested,
+                        new ConjunctionOperator(ConjunctionOperatorType.XOR, List.of(isTrue("a"), isTrue("c")))));
+
+                assertEquals(idsSelectedByFilter(condition, threeFlags()),
+                        idsSelectedByMapCondition(condition, threeFlags()), outer + " over " + inner);
+            }
+        }
+    }
 }

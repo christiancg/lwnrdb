@@ -176,4 +176,31 @@ public class PkIndexSnapshotTest {
         assertEquals(1, userCache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).size(),
                 "a published index is still served to a lock-free reader; only republishing is refused");
     }
+
+    @Test
+    public void test_a_lock_free_count_reads_the_published_size_without_a_copy() throws Exception {
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            final var resident = userCache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL);
+            for (var i = 0; i < 2_000; i++) {
+                resident.add(new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, String.format("r%05d", i), 0, 1, 0));
+            }
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+        final var threads = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+        for (var warm = 0; warm < 1_000; warm++) {
+            userCache.pkIndexSize(TestGlobals.DB, TestGlobals.COLL);
+        }
+        final var before = threads.getThreadAllocatedBytes(Thread.currentThread().threadId());
+        var counted = 0L;
+        for (var call = 0; call < 1_000; call++) {
+            counted += userCache.pkIndexSize(TestGlobals.DB, TestGlobals.COLL)
+                    + userCache.pkCountForCoverage(TestGlobals.DB, TestGlobals.COLL);
+        }
+        final var allocated = threads.getThreadAllocatedBytes(Thread.currentThread().threadId()) - before;
+
+        assertEquals(1_000L * 4_000, counted);
+        assertTrue(allocated / 2_000 < 1_024, "a lock-free count copied the list: " + allocated + " bytes");
+    }
 }

@@ -2,6 +2,7 @@ package org.techhouse.simplejs.nodes;
 
 public class AssignmentExpression extends Expression {
     private final String operator;
+    private final BinaryOperator compoundKind;
     private final JsNode target;
     private final Expression value;
     private final boolean targetParenthesized;
@@ -12,6 +13,7 @@ public class AssignmentExpression extends Expression {
 
     public AssignmentExpression(String operator, JsNode target, Expression value, boolean targetParenthesized) {
         this.operator = operator;
+        this.compoundKind = BinaryOperator.compoundOf(operator);
         this.target = target;
         this.value = value;
         this.targetParenthesized = targetParenthesized;
@@ -19,6 +21,10 @@ public class AssignmentExpression extends Expression {
 
     public String getOperator() {
         return operator;
+    }
+
+    public BinaryOperator compoundKind() {
+        return compoundKind;
     }
 
     public JsNode getTarget() {

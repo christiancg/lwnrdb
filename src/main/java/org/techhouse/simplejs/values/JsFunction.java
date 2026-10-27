@@ -2,6 +2,7 @@ package org.techhouse.simplejs.values;
 
 import java.util.List;
 import org.techhouse.simplejs.internal.Environment;
+import org.techhouse.simplejs.internal.FunctionShape;
 import org.techhouse.simplejs.nodes.JsNode;
 
 public final class JsFunction extends JsValue implements JsCallableProperties {
@@ -16,7 +17,7 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     private final CallableMetadata metadata = new CallableMetadata();
     private JsValue prototype;
     private String sourceText;
-    private boolean usesArguments = true;
+    private FunctionShape shape;
     private String moduleName;
     private boolean method;
     private boolean derivedConstructor;
@@ -57,11 +58,18 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
 
     public void setSourceText(String sourceText) {
         this.sourceText = sourceText;
-        this.usesArguments = sourceText == null || sourceText.contains("\\u") || sourceText.contains("arguments");
+    }
+
+    public void setShape(FunctionShape shape) {
+        this.shape = shape;
+    }
+
+    public FunctionShape shape() {
+        return shape;
     }
 
     public boolean usesArguments() {
-        return usesArguments;
+        return shape == null || shape.usesArguments();
     }
 
     public List<JsNode> getParams() {
@@ -149,7 +157,7 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
 
     @Override
     public List<String> enumerablePropertyKeys() {
-        return metadata.table().keys().stream().filter(metadata.table()::isEnumerable).toList();
+        return metadata.enumerablePropertyKeys();
     }
 
     @Override

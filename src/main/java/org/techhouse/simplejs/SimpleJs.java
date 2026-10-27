@@ -11,6 +11,7 @@ import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
@@ -60,7 +61,6 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
-import org.techhouse.utils.JsonUtils;
 
 public final class SimpleJs {
     private static final String INTERNAL_ERROR = "InternalError";
@@ -69,7 +69,7 @@ public final class SimpleJs {
 
     public CompiledScript compile(String source, boolean strictScriptGoal) {
         final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal);
-        return new CompiledScript(program, source, strictScriptGoal, JsonUtils.sha256(source));
+        return new CompiledScript(program, source, strictScriptGoal);
     }
 
     public List<String> moduleSpecifiers(CompiledScript compiled) {
@@ -215,19 +215,19 @@ public final class SimpleJs {
 
     private record SessionCallable(Session session, JsValue function, int maxErrorChars) implements ScriptCallable {
         @Override
-        public JsonBaseElement apply(JsonObject document) {
-            return invoke(List.of(EJsonInterop.fromEjson(document)), document, null, NonFiniteResult.NULLED);
+        public JsonBaseElement apply(JsonObject document, Set<String> mutableRoots) {
+            return invoke(List.of(EJsonInterop.viewOf(document, mutableRoots)), document, null, NonFiniteResult.NULLED);
         }
 
         @Override
-        public boolean test(JsonObject document) {
-            return JsCoercion.toBoolean(call(List.of(EJsonInterop.fromEjson(document)), document));
+        public boolean test(JsonObject document, Set<String> mutableRoots) {
+            return JsCoercion.toBoolean(call(List.of(EJsonInterop.viewOf(document, mutableRoots)), document));
         }
 
         @Override
         public JsonBaseElement apply(JsonBaseElement accumulator, JsonObject document) {
-            return invoke(List.of(EJsonInterop.fromEjson(accumulator), EJsonInterop.fromEjson(document)), document,
-                    accumulator, NonFiniteResult.NULLED);
+            return invoke(List.of(EJsonInterop.viewOrValue(accumulator), EJsonInterop.viewOf(document, Set.of())),
+                    document, accumulator, NonFiniteResult.NULLED);
         }
 
         @Override

@@ -123,6 +123,7 @@ public class ServerMain {
         scriptRunHistory.startSweep();
         StartupWarnings.warnIfXmxExceedsMaxMemory();
         StartupWarnings.warnIfCachesExceedHeap();
+        StartupWarnings.warnIfCollectionsOutgrowMaxMemory();
         StartupWarnings.warnIfScriptFetchEnabled();
         StartupWarnings.warnIfPlaintextClients();
         StartupWarnings.warnIfDefaultKeystorePassword();
@@ -259,9 +260,7 @@ public class ServerMain {
                 highest = Math.max(highest, collEntry.getIncarnation());
             }
             highest = Math.max(highest, fs.highestPkVersion(dbName, collName));
-            for (final var tombstoneVersion : fs.tombstones().read(dbName, collName).values()) {
-                highest = Math.max(highest, tombstoneVersion);
-            }
+            highest = Math.max(highest, fs.tombstones().highestVersion(dbName, collName));
         } catch (Exception e) {
             logger.error("Could not seed the write clock from " + dbName + "|" + collName
                     + "; versions written to it could regress after this restart", e);

@@ -77,7 +77,7 @@ public class AdminRecordsTest extends AdminRecordTestBase {
 
     @Test
     public void test_an_unreadable_definition_is_left_out() throws Exception {
-        fs.writeProcedure(TestGlobals.DB, "broken", "{not json");
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, "broken", "{not json");
 
         assertNull(AdminRecords.live(AdminRecordKey.procedure(TestGlobals.DB, "broken")));
         assertFalse(ids(AdminRecords.all()).contains(AdminRecordKey.procedure(TestGlobals.DB, "broken").id()));
@@ -132,8 +132,8 @@ public class AdminRecordsTest extends AdminRecordTestBase {
 
     @Test
     public void test_legacy_definitions_are_stamped_once_and_keep_their_content() throws Exception {
-        fs.writeProcedure(TestGlobals.DB, "legacy", "{\"name\":\"legacy\",\"source\":\"return 1;\"}");
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, "legacy", "{\"name\":\"legacy\",\"source\":\"return 1;\"}");
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
 
         AdminRecords.stampUnversioned();
 

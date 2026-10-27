@@ -294,6 +294,12 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         return sessionClientId != null;
     }
 
+    public boolean transactionBufferedNoWrites() {
+        final var transaction = sessionClientId == null ? null : clientTracker.getActiveTransaction(sessionClientId);
+        return transaction != null && transaction.getPendingOps().isEmpty() && transaction.getHeldLocks().isEmpty()
+                && clientTracker.transactionParticipants(sessionClientId).isEmpty();
+    }
+
     public boolean lastCommitWasFenced() {
         return lastCommitFenced;
     }

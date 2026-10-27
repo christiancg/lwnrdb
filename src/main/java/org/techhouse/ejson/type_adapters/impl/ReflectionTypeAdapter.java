@@ -38,23 +38,37 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     public void toJson(T value, JsonOut out) {
         out.append('{');
         final var actualClass = value.getClass();
-        final var bindings = ClassPlan.of(actualClass).bindings();
-        for (var i = 0; i < bindings.length; i++) {
-            out.append(bindings[i].nameToken());
+        final var plan = ClassPlan.of(actualClass);
+        final var bindings = plan.bindings();
+        var separated = false;
+        for (final var binding : bindings) {
+            if (plan.omitsNulls() && holdsNull(binding, value)) {
+                continue;
+            }
+            if (separated) {
+                out.append(',');
+            }
+            separated = true;
+            out.append(binding.nameToken());
             final var mark = out.mark();
             try {
-                appendFieldValue(bindings[i], value, out);
+                appendFieldValue(binding, value, out);
             } catch (Exception e) {
-                logger.error("Serialising " + actualClass.getName() + "." + bindings[i].name()
+                logger.error("Serialising " + actualClass.getName() + "." + binding.name()
                         + " failed; emitting null in its place", e);
                 out.reset(mark);
                 out.append("null");
             }
-            if (i < bindings.length - 1) {
-                out.append(',');
-            }
         }
         out.append('}');
+    }
+
+    private static boolean holdsNull(FieldBinding binding, Object instance) {
+        try {
+            return binding.get(instance) == null;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @Override

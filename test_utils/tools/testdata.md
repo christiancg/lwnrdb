@@ -3073,7 +3073,9 @@ saves above are refused, and so is this one.
 {"type": "SAVE_SCHEDULE", "databaseName": "test", "name": "oneTooMany", "procedureName": "beat", "intervalMs": 60000}
 ```
 
-The schedule counters appear in the stats
+The schedule counters appear in the stats, beside `triggers.pendingRuns` (the trigger-run records still held),
+`scripts.historyQueued` (history rows waiting to be written) and the `background` block (`pending`: index and page
+events the write backlog gate counts; `maintenance`: queued usage-profile flushes and cleanups, never more than two)
 
 ```json
 {"type": "GET_DATABASE_STATS"}

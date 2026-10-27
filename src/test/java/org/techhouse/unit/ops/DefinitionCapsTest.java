@@ -62,8 +62,8 @@ public class DefinitionCapsTest {
         TestUtils.setPrivateField(configuration, "schedulesEnabled", true);
         TriggerTestSupport.clearTriggersAndProcedures();
         for (final var db : List.of(TestGlobals.DB, OTHER_DB)) {
-            for (final var name : fs.listScheduleNames(db)) {
-                fs.deleteSchedule(db, name);
+            for (final var name : fs.metadataFiles().listScheduleNames(db)) {
+                fs.metadataFiles().deleteSchedule(db, name);
             }
             cache.removeSchedulesForDatabase(db);
         }
@@ -137,7 +137,7 @@ public class DefinitionCapsTest {
     public void test_a_stored_interval_below_the_minimum_runs_at_the_minimum() throws Exception {
         final var definition = new ScheduleDefinition("legacy", "job", null, 10L, null, 0L, true, ACTOR, null, 1L, 1L,
                 1L, ACTOR);
-        fs.writeSchedule(TestGlobals.DB, "legacy", eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, "legacy", eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, "legacy");
         registry.reload(TestGlobals.DB);
         final var entry = registry.get(TestGlobals.DB, "legacy");

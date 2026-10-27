@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.List;
+import java.util.Set;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
@@ -74,6 +75,32 @@ public class PipelineContextTest {
     }
 
     @Test
+    public void test_a_tick_of_256_units_past_the_deadline_times_out() throws Exception {
+        try (var context = PipelineContext.of(1L, Long.MAX_VALUE, null)) {
+            Thread.sleep(20);
+            final var refused = assertThrows(AggregateLimitException.class, () -> context.tick(256));
+            assertEquals(ErrorCode.AGGREGATE_TIMEOUT, refused.getErrorCode());
+        }
+    }
+
+    @Test
+    public void test_ticks_carry_their_count_across_calls() throws Exception {
+        try (var context = PipelineContext.of(1L, Long.MAX_VALUE, null)) {
+            Thread.sleep(20);
+            assertDoesNotThrow(() -> context.tick(255));
+            assertThrows(AggregateLimitException.class, () -> context.tick(1));
+        }
+    }
+
+    @Test
+    public void test_a_tick_without_a_timeout_never_throws() throws Exception {
+        try (var context = unbounded(null)) {
+            Thread.sleep(5);
+            assertDoesNotThrow(() -> context.tick(1_000_000));
+        }
+    }
+
+    @Test
     public void chargeResultRefusesPastTheBudget() {
         try (var context = PipelineContext.of(0L, 10L, null)) {
             context.chargeResult(10);
@@ -121,8 +148,8 @@ public class PipelineContextTest {
         final var first = context.callableFor("export default (doc) => 1;");
         final var second = context.callableFor("export default (doc) => 2;");
         context.close();
-        assertThrows(RuntimeException.class, () -> first.apply(document()));
-        assertThrows(RuntimeException.class, () -> second.apply(document()));
+        assertThrows(RuntimeException.class, () -> first.apply(document(), Set.of()));
+        assertThrows(RuntimeException.class, () -> second.apply(document(), Set.of()));
         assertDoesNotThrow(() -> unbounded(null).close());
     }
 
@@ -132,8 +159,8 @@ public class PipelineContextTest {
             final var source = "let seen = 0; export default (doc) => ++seen;";
             final var first = context.callableFor(source);
             assertSame(first, context.callableFor(source));
-            assertEquals(1d, first.apply(document()).asJsonNumber().getValue().doubleValue());
-            assertEquals(2d, first.apply(document()).asJsonNumber().getValue().doubleValue());
+            assertEquals(1d, first.apply(document(), Set.of()).asJsonNumber().getValue().doubleValue());
+            assertEquals(2d, first.apply(document(), Set.of()).asJsonNumber().getValue().doubleValue());
             assertNotSame(first, context.callableFor("export default (doc) => 2;"));
         }
     }

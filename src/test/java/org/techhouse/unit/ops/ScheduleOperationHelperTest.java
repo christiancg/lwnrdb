@@ -59,11 +59,11 @@ public class ScheduleOperationHelperTest {
         TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes", 262_144L);
         TestUtils.setPrivateField(configuration, "scheduleMaxPerDatabase", 100);
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         cache.removeProceduresForDatabase(TestGlobals.DB);

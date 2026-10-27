@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -19,12 +20,18 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.JsonParser;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.JsonUtils;
 
 public class JsonObjectShapeTest {
     private static final int WIDE = 20;
     private static final int PAST_THE_SHAPE_BOUND = 40;
 
     private static JsonObject parse(String json) {
+        parseOnce(json);
+        return parseOnce(json);
+    }
+
+    private static JsonObject parseOnce(String json) {
         return JsonParser.parse(json, 64, Integer.MAX_VALUE).asJsonObject();
     }
 
@@ -143,7 +150,7 @@ public class JsonObjectShapeTest {
         final var original = parse("{\"_id\":\"a\",\"copyName\":{\"inner\":1}}");
 
         final var deep = original.deepCopy();
-        final var forWrites = original.copyForWrites(Set.of("copyName"));
+        final var forWrites = original.copyForWrites(JsonUtils.writeTreeOf(List.of("copyName.inner")));
 
         assertSame(original.shape(), deep.shape());
         assertSame(original.shape(), forWrites.shape());

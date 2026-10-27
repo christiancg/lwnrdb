@@ -66,7 +66,7 @@ public class ReplicatedTxNotificationTest {
         final var request = new AggregateRequest(TestGlobals.DB, collName);
         request.setAggregationSteps(List.of());
         request.setDirtyRead(true);
-        return listenManager.register(UUID.randomUUID(), request, "hash");
+        return listenManager.getRegistration(listenManager.register(UUID.randomUUID(), request, "hash")).groupId();
     }
 
     private static JsonObject doc(String id) {

@@ -475,7 +475,7 @@ the stored schema cannot be read (an unreadable schema is reported, never mistak
 
 Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
 
-Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection. A connection may hold at most `maxListensPerConnection` (default `64`) registrations and the server at most `maxListens` (default `10000`); past either, `LISTEN` answers `400-25` without running the query. One user may hold at most `maxListensPerUser` (default `256`, `0` = unlimited) across all of their connections; past it, `400-38`. A registration keeps its request for as long as it lives, so a `LISTEN` line longer than `listenMaxRequestBytes` (default `1Mb`) is refused with `400-37` before it runs, and the requests every registration keeps (counted as each serialized request's length) may total at most `listenMaxRetainedBytes` (default `64Mb`) on the server; past it, `LISTEN` answers `503-15` until registrations end. The bytes and the per-user count are given back when a registration stops, ends, or its connection closes. Each background re-run is bounded by `listenRerunTimeoutMs` (default `10000`) rather than `aggregateTimeoutMs`; a re-run past it is logged and pushes nothing, and the next change to a collection it reads re-runs it again.
+Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection. A connection may hold at most `maxListensPerConnection` (default `64`) registrations and the server at most `maxListens` (default `10000`); past either, `LISTEN` answers `400-25` without running the query. One user may hold at most `maxListensPerUser` (default `256`, `0` = unlimited) across all of their connections; past it, `400-38`. A registration keeps its request for as long as it lives, so a `LISTEN` line longer than `listenMaxRequestBytes` (default `1Mb`) is refused with `400-37` before it runs, and the requests every registration keeps (counted as each serialized request's length) may total at most `listenMaxRetainedBytes` (default `64Mb`) on the server; past it, `LISTEN` answers `503-15` until registrations end. The bytes and the per-user count are given back when a registration stops, ends, or its connection closes. Each background re-run is bounded by `listenRerunTimeoutMs` (default `10000`) rather than `aggregateTimeoutMs`; a re-run past it is logged and pushes nothing, and the next change to a collection it reads re-runs it again. Identical registrations (the same user listening with the same query, on one connection or many) share one re-run: the query runs once per change and every registration whose last pushed hash differs gets its own frame, carrying its own `listenId`. Re-runs of distinct queries spread over `listenThreads` workers (default `2`).
 
 ```json
 {
@@ -669,7 +669,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - **Importing shared code**: a script may import any stored procedure of its own database with `import … from "procedures/<name>"` — a library is just a procedure that `export`s instead of returning. `SAVE_PROCEDURE` refuses an import that does not resolve (`400-18`), so libraries must be installed before their users. A caller without script `MANAGE` (or ownership, or admin) on the database runs imported code but cannot read it: `toString()` of an imported function or class answers the `function name() { [native code] }` stub. Only `export`ed bindings are visible, so a procedure written in the `CALL_PROCEDURE` style (a top-level `return`) imports as `undefined`.
 - **Outbound HTTP** is available: `scriptFetchEnabled` is on and `scriptFetchAllowlist` is `*`, which means any **public** host. Every address a host resolves to is checked and the connection goes to that checked address, so loopback, private (10/8, 172.16/12, 192.168/16), link-local (the 169.254.169.254 metadata endpoint), CGNAT, multicast, reserved and unique-local addresses are refused with `fetch: host not allowed` — even through a DNS name or a later DNS answer — unless the **exact** host is listed (`10.0.0.5`, `localhost`); a `*.example.com` wildcard never re-opens them, and listing an internal host logs a SECURITY WARNING at startup. Only `http`/`https` URLs are fetched, redirects are never followed, the body is read as a stream and abandoned past `scriptFetchMaxResponseBytes`, a run may have at most `scriptFetchMaxConcurrent` (default 8) fetches in flight (one more rejects with `fetch: too many concurrent requests`), and any other network failure rejects with the bare `fetch failed` — the cause goes to the server log, not to the script. `*` still lets any script make the server call any public host, and the server warns at every startup — **narrow it**. `fetch` stays unavailable to pipeline scripts and before-write hooks, which hold collection locks.
 - **Native work is budgeted too**: a builtin's own loop (`indexOf`, `includes`, `splice`, typed-array scans…) is charged about one instruction per element, so a scan over a sparse `new Array(2 ** 32 - 1)` ends with `400-11` and honours `CANCEL_SCRIPT` and the timeout; native recursion over script data (`JSON.parse`/`JSON.stringify`, `structuredClone`, `flat`, `String()` of nested arrays, and converting a returned or stored value to the host document form) stops at 256 levels with a catchable `RangeError: Maximum nesting depth exceeded`; a BigInt result over 2^24 bits (2 MiB) is a catchable `RangeError: Maximum BigInt size exceeded` and a large one (from any operator, or converted to text) is charged to `scriptMaxMemoryBytes`; `JSON.parse` is charged per value it builds, and a builtin that writes past an array's dense end is charged for the holes it pads; a locale argument (`toLocaleString`, `localeCompare`) resolves to the closest locale the JDK ships, dropping extensions and private-use subtags (`'en-x-foo'` formats as `en`, an unknown language as `scriptLocale`, an ill-formed tag is a `RangeError`); and a JVM stack or heap exhaustion inside an async function or generator ends the run with `400-12` instead of hanging it. `import … from "procedures/<name>"` resolves only a name the wire would accept (3-64 letters, digits, `_` or `-`); anything else is `Cannot find module`.
-- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes.
+- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes. Rows are written in batches (one per database), at most `scriptRunHistoryMaxQueued` wait to be written, and the sweep (every `scriptRunHistorySweepMs`) applies the retention and the optional `scriptRunHistoryMaxRows` cap.
 - **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`, the name and message each clipped to `scriptMaxLogLineChars` like every stack frame; an engine failure with no script-level meaning reads `InternalError: Internal script error`, the detail going only to the server log), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-30` an array-like past `scriptMaxArrayLength`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `503-7` the run was placed on another node that never reported an outcome — it is deliberately **not** re-run here, because it may already have run there, so retrying is only safe if the script is idempotent, `409-6` sent with a transaction open.
 - Under clustering the run is **placed** on a live node chosen by script load and ownership share (`scriptRoutingEnabled`, on by default); each operation it issues is then routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
@@ -1279,6 +1279,8 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `WRITE_OWNER_PROBED` | Right after `WRITE_OWNERSHIP_RECHECKED`, at the same statement; a separate point so a test can find a collection's owner without releasing a write parked on `WRITE_OWNERSHIP_RECHECKED` | `<db>\|<collection>` |
 | `DELETE_TOMBSTONE_RESERVED` | A clustered delete wrote its tombstone and has not deleted the document yet | `<db>\|<collection>` |
 | `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
+| `REPLICATED_APPLY_LOCKED` | A replica took the collection write lock for a peer's replicated write and has not applied it yet | `<db>\|<collection>` |
+| `REPLICATED_TOMBSTONES_APPENDED` | A replica appended a replicated delete batch's missing tombstones, unforced, and has not deleted the documents yet | `<db>\|<collection>` |
 | `PK_INDEX_REPLACED` | A `REINDEX` with `"primaryKey": true` wrote the rebuilt `pk.idx` and has not rebuilt the page rows or field indexes yet | `<db>\|<collection>` |
 | `INDEX_BATCH_FLUSHED` | A background field-index batch appended to the first of the type logs it changed and has not appended to the others yet | `<db>\|<collection>` |
 | `PAGE_COPY_APPENDED` | An update, relocation or bulk update logged its record in the write-ahead log and has not written its copies, `pk.idx` rows or blanks yet | `<db>\|<collection>` |
@@ -1289,6 +1291,7 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `WAL_CHECKPOINT_FORCED` | A checkpoint forced the pages and `pk.idx` the log touched and has not rewritten the log as a single checkpoint yet | `<db>\|<collection>` |
 | `WAL_GROUP_APPENDED` | A write group appended its records to the log, unforced, and has not forced it yet | `<db>\|<collection>` |
 | `WAL_GROUP_FORCED` | A write group forced its records and has not applied the blanks they wait for yet | `<db>\|<collection>` |
+| `GROUP_RUNS_STAGED` | A write group recorded the after-trigger runs of all its writes in one forced record and has not appended any write yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
 
 | Action | Effect |
@@ -1654,6 +1657,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `listenMaxRequestBytes` | Human-readable size (default `1Mb`). Largest `LISTEN` request line; a longer one is answered `400-37` before it runs |
 | `listenMaxRetainedBytes` | Human-readable size (default `64Mb`). Total serialized length of the requests every `LISTEN` registration on the server keeps; past it, `503-15` |
 | `listenRerunTimeoutMs` | Valid number ≥ 1 (default `10000`). Wall-clock budget of one background `LISTEN` re-run; past it the re-run is dropped with a warning and nothing is pushed |
+| `listenThreads` | Valid number ≥ 1 (default `2`). Workers that re-run `LISTEN` queries after a write. Identical registrations (same user, same query) share one re-run; distinct queries re-run on these workers in parallel, each holding its own result while it runs |
 | `transactionIdleTimeoutMs` | Valid number ≥ 1 (default `30000`). Milliseconds a connection with an open transaction may stay silent before the transaction is rolled back and its locks released; the next request answers `409-16` once |
 | `filePath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing; see [File permissions](#file-permissions) |
 | `logPath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing. Log cleanup deletes only expired files named `yyyy-MM-dd.log` here, so pointing it at a populated folder (even `.`) deletes nothing else |
@@ -1665,6 +1669,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
 | `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory (Windows, for one) logs that warning and falls back to `false` instead of refusing to start |
 | `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, the pages and `pk.idx` its records touched are synced together and the log is rewritten as a single checkpoint. Larger means fewer checkpoints and a longer replay after a crash |
+| `walIdleCheckpointMs` | Long (default `60000`). A background worker checkpoints a collection's log once it has sat this long with records past its checkpoint, no open write group and no pending field-index work, so an idle collection is not replayed after a crash. `0` turns it off |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
 | `schemaMaxPatterns` | Valid number > 0 (default `256`). Most regular expressions (`pattern` values plus `patternProperties` keys, counted through `$ref`s) one schema may hold; `SAVE_SCHEMA` refuses more with `400-39` before compiling any. A stored or replicated schema with more still loads, with a warning. Keep it equal on every node of a cluster |
@@ -1673,6 +1678,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminPassword` | Required (at least 8 characters, not `administrator`) when no admin user exists; may be blank once one does. `administrator`, a commonly used password and the admin username itself (all ignoring case) are always refused at startup, and a non-blank value shorter than 8 characters is a validation error |
 | `maxMemory` | Human-readable size; `0` (unlimited, named in the startup `SECURITY WARNING`) and `-1` (caching disabled) are also valid |
 | `transientLoadPermits` | Valid number ≥ 1 (default `4`). Whole `pk.idx` or field-index loads that may not be cached, allowed to run at once: one whose upper-bound estimate from the file lengths (`pk.idx`, or an `.idx` plus its `.idxlog`) does not fit in `maxMemory`, every load while caching is disabled, and every load by a lock-free reader. Further ones wait; nothing is refused |
+| `indexScanFallbackPercent` | Valid number, 1–100 (default `25`). Share of a collection of at least 4096 documents an index match may cover before a `FILTER` reads the collection instead of fetching the matches by id; a `GROUP_BY` and an unbounded `SORT` at the start of a pipeline also read the collection while it is not wholly cached. Index and scan answer identically, so this only changes speed; analyze still lists an index it consulted. `100` always uses the index |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
 | `deadEvictionMs` | Valid number ≥ 1, and greater than `deadTimeoutMs`. Milliseconds a node must stay DEAD before it is dropped from the membership view. Until then it still counts towards the quorum denominator, so this must comfortably exceed any outage a node is expected to return from |
 | `deadProbeIntervalMs` | Valid number ≥ 1 (default `10000`), and not smaller than `gossipIntervalMs`. How often a peer this node sees as `SUSPECT` or `DEAD` is probed with a gossip message. This is how two sides of a partition that each marked the other `DEAD` find each other again once it heals |
@@ -1772,6 +1778,7 @@ logPath=logs
 maxPageSize=2Mb
 syncWrites=true
 walCheckpointBytes=8Mb
+walIdleCheckpointMs=60000
 maxEntrySize=1Mb
 # schema evaluation steps one write request may spend before it is refused (400-23)
 schemaValidationBudget=5000000
@@ -1800,19 +1807,22 @@ transactionMaxOps=100000
 transactionMaxBytes=256Mb
 transactionMaxAgeMs=600000
 # LISTEN registrations per connection and per server (400-25), per user (400-38), request line (400-37),
-# request bytes kept server-wide (503-15) and the re-run wall clock
+# request bytes kept server-wide (503-15), the re-run wall clock and the re-run workers
 maxListensPerConnection=64
 maxListens=10000
 maxListensPerUser=256
 listenMaxRequestBytes=1Mb
 listenMaxRetainedBytes=64Mb
 listenRerunTimeoutMs=10000
+listenThreads=2
 # IN/NOT_IN operands and within-polygon vertices (400-27), #vector components, AGGREGATE wall clock (408-6)
 # and the bytes one AGGREGATE may build (400-36)
 maxFilterOperands=10000
 maxVectorDimensions=16384
 aggregateTimeoutMs=300000
 aggregateMaxResultBytes=256Mb
+# share of a large collection an index match may cover before the query reads the collection instead
+indexScanFallbackPercent=25
 # TLS: when enabled, plaintext clients are rejected at the handshake
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
@@ -1853,6 +1863,9 @@ scriptRunHistoryKinds=CALL_PROCEDURE,TRIGGER,SCHEDULE
 scriptRunHistoryRetentionMs=604800000
 scriptRunHistoryIncludeLogs=false
 scriptRunHistoryMaxErrorChars=2000
+scriptRunHistoryMaxQueued=10000
+scriptRunHistoryMaxRows=0
+scriptRunHistorySweepMs=3600000
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
 procedureCacheMaxBytes=16Mb
@@ -2043,8 +2056,9 @@ With `syncWrites=true` a write is acknowledged once its record in the collection
 update, a delete, a relocation and a whole bulk write each log one record holding the exact bytes they put on each
 page and in `pk.idx`, then write those files without forcing them. A checkpoint forces every page and `pk.idx` the log
 touched since the last one, in parallel, then rewrites the log as a single checkpoint record; it runs once the log
-passes `walCheckpointBytes`, before a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`, and at
-shutdown. A page vacuum does not checkpoint: it forces only the page it rewrites, logs a forced `REWRITE_BEGIN`, moves
+passes `walCheckpointBytes`, before a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`, once the log
+has been idle for `walIdleCheckpointMs`, and at shutdown, where up to eight logs are checkpointed in parallel within
+`shutdownTimeoutMs`. A page vacuum does not checkpoint: it forces only the page it rewrites, logs a forced `REWRITE_BEGIN`, moves
 the rewritten page into place and syncs its folder, then logs `REWRITE_END` with the page's new length together with
 the record of the rows it moved. Replay skips every older change to that page and cuts it back to that new length (or,
 without the `REWRITE_END`, never below its length at `REWRITE_BEGIN`). After a power loss startup replays the log over whatever the files hold and cuts each file back to
@@ -2064,15 +2078,22 @@ rows of a user collection are kept in memory and written back within a second (a
 from the page files anyway, so a crash costs nothing there.
 
 Concurrent single-document `SAVE`s and `DELETE`s on one collection share one force (group commit): each writer queues
-its write and takes the collection lock; the first one in runs every queued write, appends their records without
-forcing, forces the log once, and answers them all, so the others find their answer ready. A write's page appends
-and `pk.idx` rows are written before that force, but the blanks of the copies it supersedes wait for it, because a
-blank cannot be undone; startup cuts every page and `pk.idx` back to their logged ends, so an append whose record never
-reached the disk leaves nothing. When the force fails, every write of the group is taken back and answered with its
-error. Writes inside a transaction, on a collection with triggers or before-hooks, nested in a trigger, with
-`syncWrites=false` or with clustering on take the one-force-per-write path. A dirty read (`"dirtyRead":true`) can see a
-grouped write before its force. A force costs what the disk makes it cost, and the per-collection write lock is held
-across it, so it bounds the write rate of one collection: with 8 clients the Docker bench measured 4-5k synced inserts
+its write and waits for its turn; the one whose turn it is takes the collection lock, runs every queued write, appends
+their records without forcing, forces the log once, and answers them all, so the others find their answer ready
+without ever queueing on the lock. A write's page appends and `pk.idx` rows are written before that force, but the
+blanks of the copies it supersedes wait for it, because a blank cannot be undone; startup cuts every page and `pk.idx`
+back to their logged ends, so an append whose record never reached the disk leaves nothing. During the force the
+writer downgrades the collection lock to a shared one: a `FIND_BY_ID` proceeds and may see a grouped write before its
+force, while scans and other writers wait until the blanks landed. When the force fails, the writer takes the lock
+back exclusively, takes every write of the group back and answers each with its error. Before hooks run for every
+write of the group before anything is written, and the group's after-trigger runs are staged in one forced record
+before the first write is appended and submitted only after the force; a write whose `_id` a hooked or triggered
+write earlier in the group already names starts the next group. Writes inside a transaction, nested in a trigger, or
+with `syncWrites=false` take the one-force-per-write path. With clustering on, the owner forces a group under the
+exclusive lock, then replicates it as one `REPLICATE` (or one single-collection `REPLICATE_TX` when it mixes saves and
+deletes) while point reads proceed and scans wait. A dirty read (`"dirtyRead":true`) can see a grouped write before
+its force. A force costs what the disk makes it cost, and one collection's writes wait for it, so it bounds the write
+rate of one collection: with 8 clients the Docker bench measured 4-5k synced inserts
 and updates and 7-8k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
 Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed
 there; the Docker image on Linux is the production target). Different collections write in parallel. Logs and the generated TLS keystore are not forced.

@@ -73,8 +73,8 @@ public class ProcedureCallHelperTest {
         TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes", 262_144L);
         TestUtils.setPrivateField(configuration, "scriptMaxMemoryBytes", 67_108_864L);
         TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         // Deleting the files directly bypasses the handler that would invalidate the compiled cache, and

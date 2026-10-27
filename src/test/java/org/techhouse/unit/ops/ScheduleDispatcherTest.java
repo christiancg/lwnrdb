@@ -92,11 +92,11 @@ public class ScheduleDispatcherTest {
         TestUtils.setPrivateField(configuration, "scriptMaxResultBytes", 16_777_216L);
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
         TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         cache.removeProceduresForDatabase(TestGlobals.DB);
@@ -117,7 +117,7 @@ public class ScheduleDispatcherTest {
             JsonObject args) throws Exception {
         final var definition = new ScheduleDefinition("s", procedureName, null, 60_000L, args, timeoutMs, enabled,
                 definer, null, 1L, 1L, 1L, definer);
-        fs.writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, "s");
         registry.reload(TestGlobals.DB);
         return registry.get(TestGlobals.DB, "s");
@@ -248,7 +248,7 @@ public class ScheduleDispatcherTest {
     public void test_a_run_queued_before_its_schedule_was_deleted_does_not_fire() throws Exception {
         storeWritingProcedure();
         final var queued = register("job", OWNER, true, 0L, idArgs("deleted-while-queued"));
-        fs.deleteSchedule(TestGlobals.DB, "s");
+        fs.metadataFiles().deleteSchedule(TestGlobals.DB, "s");
         cache.removeSchedule(TestGlobals.DB, "s");
         registry.reload(TestGlobals.DB);
 

@@ -2,6 +2,7 @@ import json
 import os
 import random
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -22,6 +23,8 @@ CONCURRENT_COLL = "group_writers"
 CONCURRENT_SAVES = 40
 DELETE_VACUUM_DOCS = 24
 DELETE_CHECKPOINT_DOCS = 300
+AUDIT_SOURCE = ("import db from 'db'; import args from 'args';"
+                " db.save(db.name, '{audit}', {{ doc: args.id, event: args.event }}); return 1;")
 
 
 def doc(i: int, value: str, pad: str = PAD) -> dict:
@@ -40,6 +43,7 @@ class KillCase:
     intents_while_paused: int = 0
     logged_while_paused: bool = True
     writers: int = 1
+    triggered: bool = False
     observed: dict = field(default_factory=dict)
     acknowledged: list = field(default_factory=list)
 
@@ -177,6 +181,10 @@ def cases() -> list:
                   indexed=True, writers=GROUP_WRITERS),
          KillCase("wal_group_forced", "WAL_GROUP_FORCED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
                   indexed=True, writers=GROUP_WRITERS)],
+        [KillCase("wal_group_forced_triggered", "WAL_GROUP_FORCED", GROUP_WRITERS, update_own_doc,
+                  acknowledged_or_grouped, indexed=True, writers=GROUP_WRITERS, triggered=True),
+         KillCase("group_runs_staged", "GROUP_RUNS_STAGED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
+                  indexed=True, writers=GROUP_WRITERS, triggered=True)],
     ]
 
 
@@ -226,21 +234,56 @@ def seed(conn, rounds: list):
                                                                "collectionName": case.coll, "fieldName": "v"}), "OK")
         for i in range(case.seed_docs):
             check_status(f"save k{i} into {case.coll}", save(conn, case.coll, doc(i, "acknowledged")), "OK")
+        if case.triggered:
+            install_audit_trigger(conn, case.coll)
 
 
-def run_writer(conn_factory, case: KillCase):
-    for writer in range(case.writers):
-        threading.Thread(target=write_once, args=(conn_factory, case, writer), daemon=True).start()
+def audit_coll(coll: str) -> str:
+    return f"{coll}_audit"
 
 
-def write_once(conn_factory, case: KillCase, writer: int):
+def install_audit_trigger(conn, coll: str):
+    check_status(f"create {audit_coll(coll)}", conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                                                          "collectionName": audit_coll(coll)}), "OK")
+    check_status(f"install the audit procedure of {coll}",
+                 conn.send({"type": "SAVE_PROCEDURE", "databaseName": DB, "name": f"{coll}_auditor",
+                            "script": AUDIT_SOURCE.format(audit=audit_coll(coll))}), "OK")
+    check_status(f"install the after trigger on {coll}",
+                 conn.send({"type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": coll, "name": "audit",
+                            "events": ["CREATED", "UPDATED"], "procedureName": f"{coll}_auditor"}), "OK")
+
+
+def run_writers(conn_factory, case: KillCase, writers: range, connected: threading.Semaphore):
+    for writer in writers:
+        threading.Thread(target=write_once, args=(conn_factory, case, writer, connected), daemon=True).start()
+
+
+def write_once(conn_factory, case: KillCase, writer: int, connected: threading.Semaphore):
     try:
         conn = conn_factory()
         conn.coll = case.coll
         conn.writer = writer
+        connected.release()
         case.write(conn)
     except Exception:
         pass
+
+
+def queue_a_group_behind_a_parked_writer(conn, conn_factory, case: KillCase):
+    subject = f"{DB}|{case.coll}"
+    connected = threading.Semaphore(0)
+    check_status(f"park the first writer of {case.coll} under its collection lock",
+                 conn.send({"type": "ARM_FAULT", "point": "WRITE_OWNER_PROBED", "action": "PAUSE",
+                            "match": subject}), "OK")
+    run_writers(conn_factory, case, range(1), connected)
+    check_status(f"the first writer of {case.coll} is parked",
+                 conn.send({"type": "AWAIT_FAULT", "point": "WRITE_OWNER_PROBED", "timeoutMs": 30000}), "OK")
+    run_writers(conn_factory, case, range(1, case.writers), connected)
+    queued = all(connected.acquire(timeout=30) for _ in range(case.writers))
+    check(f"every writer of {case.coll} connected", queued)
+    time.sleep(0.5)
+    check_status(f"release the first writer of {case.coll} so the queued ones form a group",
+                 conn.send({"type": "RELEASE_FAULT", "point": "WRITE_OWNER_PROBED"}), "OK")
 
 
 def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
@@ -250,7 +293,10 @@ def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
                          conn.send({"type": "ARM_FAULT", "point": case.point, "action": "PAUSE",
                                     "match": f"{DB}|{case.coll}"}), "OK")
         for case in kill_round:
-            threading.Thread(target=run_writer, args=(conn_factory, case), daemon=True).start()
+            if case.writers > 1:
+                queue_a_group_behind_a_parked_writer(conn, conn_factory, case)
+            else:
+                run_writers(conn_factory, case, range(case.writers), threading.Semaphore(0))
             check_status(f"the write to {case.coll} reached {case.point}",
                          conn.send({"type": "AWAIT_FAULT", "point": case.point, "timeoutMs": 30000}), "OK")
             case.observed["intents"] = len(intents_left(work_dir, case.coll))
@@ -322,10 +368,36 @@ def test_a_killed_group_recovers_whole_documents(conn, case: KillCase):
           index_agrees(conn, case.coll, found, allowed))
 
 
+def audited_docs(conn, coll: str) -> list:
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": audit_coll(coll),
+                          "aggregationSteps": FULL_SCAN})
+    return sorted((row.get("doc") for row in response.get("results") or []), key=str)
+
+
+def test_a_killed_triggered_group_audits_each_landed_write_once(conn, case: KillCase):
+    section(f"A triggered group in {case.coll} killed at {case.point} fires exactly one trigger per landed write")
+    found = values_by_id(conn, case.coll, sorted(case.expected(case)))
+    landed = sorted(doc_id for doc_id, value in found.items() if value.startswith("grouped-"))
+    bu.wait_until(lambda: audited_docs(conn, case.coll) == landed, timeout_s=30, interval_s=0.25)
+    time.sleep(1.0)
+    check("every landed write has exactly one audit row and no other write has one",
+          audited_docs(conn, case.coll) == landed, f"landed {landed} audited {audited_docs(conn, case.coll)}")
+    bu.wait_until(lambda: not trigger_runs_of(conn, case.coll), timeout_s=30, interval_s=0.25)
+    left = trigger_runs_of(conn, case.coll)
+    check("no staged run of the group is left behind", not left, f"left {left}")
+
+
+def trigger_runs_of(conn, coll: str) -> list:
+    runs = conn.send({"type": "LIST_TRIGGER_RUNS"}).get("runs") or []
+    return [trigger_run for trigger_run in runs if coll in json.dumps(trigger_run)]
+
+
 def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list):
     for case in (case for kill_round in rounds for case in kill_round):
         if case.writers > 1:
             test_a_killed_group_recovers_whole_documents(conn, case)
+            if case.triggered:
+                test_a_killed_triggered_group_audits_each_landed_write_once(conn, case)
             continue
         section(f"A write killed at {case.point} in {case.coll} recovers to what its write-ahead log committed")
         expected = case.expected(case)

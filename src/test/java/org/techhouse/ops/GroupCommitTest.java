@@ -5,11 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.LockSupport;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
@@ -24,31 +21,29 @@ import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
-import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
-import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class GroupCommitTest {
-    private static final long WAIT_MS = 10_000L;
-    private static final long QUEUE_POLL_NANOS = 1_000_000L;
-    private static final String WAL = TestGlobals.COLL + ".wal";
+    private static final long WAIT_MS = GroupCommitFixture.WAIT_MS;
     private static final long GROUP_BASE_FORCE = 1L;
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private RecordingForcer recorder;
+    private GroupCommitFixture fixture;
 
     @BeforeEach
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         recorder = RecordingForcer.install(true);
+        fixture = new GroupCommitFixture(recorder);
         assertEquals(OperationStatus.OK, save("seed", "v0").getStatus());
     }
 
@@ -56,85 +51,38 @@ public class GroupCommitTest {
     public void tearDown() throws Exception {
         recorder.close();
         TestUtils.setPrivateField(Configuration.getInstance(), "triggersEnabled", false);
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
 
     private static SaveRequest saveRequest(String id, String value) {
-        final var object = new JsonObject();
-        object.addProperty("_id", id);
-        object.addProperty("v", value);
-        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setObject(object);
-        return request;
+        return GroupCommitFixture.saveRequest(id, value);
     }
 
     private OperationResponse save(String id, String value) {
-        return processor.processMessage(saveRequest(id, value));
+        return fixture.save(id, value);
     }
 
     private OperationResponse delete(String id) {
-        final var request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.set_id(id);
-        return processor.processMessage(request);
+        return fixture.delete(id);
     }
 
     private String valueOf(String id) {
-        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
-        find.set_id(id);
-        final var response = processor.processMessage(find);
-        if (!(response instanceof FindByIdResponse found)) {
-            return null;
-        }
-        return found.getObject().get("v").asJsonString().getValue();
+        return fixture.valueOf(id);
     }
 
     private long walForces() {
-        return recorder.forcedNames().stream().filter(WAL::equals).count();
-    }
-
-    private static void awaitQueued(int expected) {
-        final var deadline = System.currentTimeMillis() + WAIT_MS;
-        while (GroupCommit.queuedFor(TestGlobals.DB, TestGlobals.COLL) < expected) {
-            assertTrue(System.currentTimeMillis() < deadline, "the writers never queued");
-            LockSupport.parkNanos(QUEUE_POLL_NANOS);
-        }
+        return fixture.walForces();
     }
 
     private List<OperationResponse> runQueued(List<Supplier<OperationResponse>> writes) throws Exception {
-        final var responses = new ConcurrentHashMap<Integer, OperationResponse>();
-        final var threads = new ArrayList<Thread>();
-        locks.lock(TestGlobals.DB, TestGlobals.COLL);
-        try {
-            for (var index = 0; index < writes.size(); index++) {
-                final var slot = index;
-                final var write = writes.get(index);
-                threads.add(Thread.ofVirtual().start(() -> responses.put(slot, write.get())));
-                awaitQueued(index + 1);
-            }
-            recorder.clear();
-        } finally {
-            locks.release(TestGlobals.DB, TestGlobals.COLL);
-        }
-        for (final var thread : threads) {
-            thread.join(WAIT_MS);
-        }
-        final var ordered = new ArrayList<OperationResponse>();
-        for (var index = 0; index < writes.size(); index++) {
-            ordered.add(responses.get(index));
-        }
-        return ordered;
+        return fixture.runQueued(writes);
     }
 
     private static List<Supplier<OperationResponse>> times(int count, IntFunction<OperationResponse> write) {
-        final var writes = new ArrayList<Supplier<OperationResponse>>();
-        for (var index = 0; index < count; index++) {
-            final var number = index;
-            writes.add(() -> write.apply(number));
-        }
-        return writes;
+        return GroupCommitFixture.times(count, write);
     }
 
     @Test
@@ -170,7 +118,7 @@ public class GroupCommitTest {
 
     @Test
     public void test_a_failed_force_answers_every_writer_with_its_error_and_takes_the_writes_back() throws Exception {
-        recorder.failingFor(WAL);
+        recorder.failingFor(GroupCommitFixture.WAL);
 
         final var responses = runQueued(
                 List.of(() -> save("lost-1", "v"), () -> save("seed", "changed"), () -> delete("seed")));
@@ -195,14 +143,19 @@ public class GroupCommitTest {
     }
 
     @Test
-    public void test_a_write_that_fires_a_trigger_or_runs_deeper_is_not_grouped() throws Exception {
-        assertTrue(GroupCommit.forSave(saveRequest("x", "v")).getAsBoolean());
+    public void test_a_write_that_runs_deeper_or_follows_on_is_not_grouped() throws Exception {
+        assertTrue(GroupCommit.forSave(saveRequest("x", "v")).groupable().getAsBoolean());
         final var nested = saveRequest("x", "v");
         nested.setTriggerDepth(1);
-        assertFalse(GroupCommit.forSave(nested).getAsBoolean());
+        assertFalse(GroupCommit.forSave(nested).groupable().getAsBoolean());
         final var followOn = saveRequest("x", "v");
         followOn.setBackgroundFollowOn(true);
-        assertFalse(GroupCommit.forSave(followOn).getAsBoolean());
+        assertFalse(GroupCommit.forSave(followOn).groupable().getAsBoolean());
+        final var nestedDelete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        nestedDelete.set_id("seed");
+        nestedDelete.setTriggerDepth(1);
+        assertFalse(GroupCommit.forDelete(nestedDelete).groupable().getAsBoolean());
+        assertFalse(GroupCommit.forSave(saveRequest("x", "v")).sideEffects().getAsBoolean());
 
         TestUtils.setPrivateField(Configuration.getInstance(), "triggersEnabled", true);
         final var procedure = ProcedureOperationHelper
@@ -213,16 +166,23 @@ public class GroupCommitTest {
         assertEquals(OperationStatus.OK, procedure.getStatus(), procedure.getMessage());
         assertEquals(OperationStatus.OK, trigger.getStatus(), trigger.getMessage());
 
-        assertFalse(GroupCommit.forSave(saveRequest("x", "v")).getAsBoolean());
+        final var triggered = GroupCommit.forSave(saveRequest("x", "v"));
+        assertTrue(triggered.groupable().getAsBoolean());
+        assertTrue(triggered.sideEffects().getAsBoolean());
+        assertEquals("x", triggered.id());
         final var deleteRequest = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         deleteRequest.set_id("seed");
-        assertFalse(GroupCommit.forDelete(deleteRequest).getAsBoolean());
+        final var triggeredDelete = GroupCommit.forDelete(deleteRequest);
+        assertTrue(triggeredDelete.groupable().getAsBoolean());
+        assertTrue(triggeredDelete.sideEffects().getAsBoolean());
+        assertEquals("seed", triggeredDelete.id());
     }
 
     @Test
     public void test_without_synced_writes_writes_take_the_plain_path() throws Exception {
         recorder.close();
         recorder = RecordingForcer.install(false);
+        fixture.useRecorder(recorder);
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
         final Thread writer;
         try {
@@ -270,6 +230,24 @@ public class GroupCommitTest {
             throw new IllegalStateException("triggers file unreadable");
         }));
         assertTrue(GroupCommit.groupable(() -> true));
+        assertTrue(GroupCommit.sideEffecting(() -> {
+            throw new IllegalStateException("triggers file unreadable");
+        }));
+        assertFalse(GroupCommit.sideEffecting(() -> false));
+    }
+
+    @Test
+    public void test_a_save_names_its_object_id_when_the_request_has_none() {
+        final var request = saveRequest("from-object", "v");
+        assertEquals("from-object", GroupCommit.forSave(request).id());
+        final var generated = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        generated.setObject(new JsonObject());
+        assertNull(GroupCommit.forSave(generated).id());
+        final var numeric = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.addProperty("_id", 7);
+        numeric.setObject(object);
+        assertNull(GroupCommit.forSave(numeric).id());
     }
 
     @SuppressWarnings("unchecked")
@@ -304,7 +282,7 @@ public class GroupCommitTest {
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
         try {
             writer = Thread.ofVirtual().start(() -> response[0] = save("late", "v"));
-            awaitQueued(1);
+            GroupCommitFixture.awaitQueued(1);
             GroupCommit.forget(TestGlobals.DB, TestGlobals.COLL);
         } finally {
             locks.release(TestGlobals.DB, TestGlobals.COLL);

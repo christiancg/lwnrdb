@@ -1,4 +1,8 @@
+import json
 import os
+import random
+import select
+import threading
 import time
 from typing import Callable
 
@@ -881,6 +885,180 @@ def test_listener_survives_a_concurrent_bulk_save(writer_conn: Conn, listener_co
         delete_doc(writer_conn, f"bulk_{i:03d}")
 
 
+HEX = set("0123456789abcdef")
+
+
+def is_64_hex(value) -> bool:
+    return isinstance(value, str) and len(value) == 64 and set(value) <= HEX
+
+
+def test_a_pushed_frame_parses_with_its_own_listen_id_and_a_64_hex_hash(writer: Conn, listener: Conn):
+    section("LISTEN: every pushed frame is strict JSON carrying its own listenId and a 64-hex hash")
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "framed"}}]
+    first = listen(listener, steps)
+    second = listen(listener, steps)
+    check_status("two identical listens register on one connection", first, "OK")
+    check_status("the second identical listen registers", second, "OK")
+    ids = {first.get("listenId"), second.get("listenId")}
+    save_doc(writer, {"_id": "framed-1", "kind": "framed", "text": "quote\" 日本 \"results\":[]"})
+    frames = []
+    for _ in range(2):
+        listener.s.settimeout(5.0)
+        raw = listener.f.readline().decode()
+        try:
+            frames.append(json.loads(raw, parse_constant=bu._refuse_non_rfc_constant))
+        except (json.JSONDecodeError, ValueError) as error:
+            check("a pushed frame parses as strict JSON", False, f"{error}: {raw[:200]!r}")
+    check("each listen got exactly one frame with its own listenId",
+          sorted(frame.get("listenId") for frame in frames) == sorted(ids), str(frames)[:300])
+    for frame in frames:
+        check("the pushed frame is an OK LISTEN update",
+              frame.get("type") == "LISTEN" and frame.get("status") == "OK" and frame.get("isUpdate") is True,
+              str(frame)[:200])
+        check("the pushed hash is 64 lowercase hex characters", is_64_hex(frame.get("resultHash")),
+              str(frame.get("resultHash")))
+        check("the pushed results carry the written document unchanged",
+              [row.get("text") for row in frame.get("results") or []] == ["quote\" 日本 \"results\":[]"],
+              str(frame.get("results"))[:200])
+    for listen_id in ids:
+        stop_listen(listener, listen_id)
+    delete_doc(writer, "framed-1")
+
+
+def test_identical_listeners_on_many_connections_each_get_their_own_push(writer: Conn):
+    section("LISTEN: identical listens on many connections each get their own push")
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "shared"}}]
+    other_steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind",
+                                                   "value": "not-shared"}}]
+    listeners = [Conn.authenticated() for _ in range(11)]
+    try:
+        registered = [listen(conn, steps if i < 10 else other_steps) for i, conn in enumerate(listeners)]
+        check("all eleven listens register", all(r.get("status") == "OK" for r in registered),
+              str([r.get("status") for r in registered]))
+        save_doc(writer, {"_id": "shared-1", "kind": "shared"})
+        pushes = [conn.recv(timeout=5.0) for conn in listeners[:10]]
+        check("each of the ten identical listeners is pushed", all(p is not None for p in pushes),
+              f"{sum(p is None for p in pushes)} got nothing")
+        check("each push carries its own connection's listenId",
+              all(p is not None and p.get("listenId") == r.get("listenId")
+                  for p, r in zip(pushes, registered[:10])), "")
+        check("the identical listeners all see the same hash",
+              len({p.get("resultHash") for p in pushes if p is not None}) == 1, "")
+        check("the listener with a different query is not pushed", listeners[10].recv(timeout=1.5) is None)
+        save_doc(writer, {"_id": "shared-1", "kind": "shared", "v": 2})
+        again = [conn.recv(timeout=5.0) for conn in listeners[:10]]
+        check("a second change pushes every identical listener again", all(p is not None for p in again),
+              f"{sum(p is None for p in again)} got nothing")
+    finally:
+        for conn in listeners:
+            conn.close()
+        delete_doc(writer, "shared-1")
+
+
+def test_revoking_one_user_ends_only_their_listen_in_a_shared_query(writer: Conn):
+    section("LISTEN: revoking one reader ends only that reader's listen on a query others share")
+    reader_name = "listen_shared_reader"
+    writer.send({"type": "DELETE_USER", "username": reader_name})
+    check_status("create a reader on the listen database", writer.send({
+        "type": "CREATE_USER", "username": reader_name, "password": "listen_reader1234", "admin": False,
+        "globalPermissions": [], "databasePermissions": {DB: "READ"}, "collectionPermissions": {}}), "OK")
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "revshare"}}]
+    try:
+        with Conn() as reader, Conn.authenticated() as admin_a, Conn.authenticated() as admin_b:
+            check_status("AUTHENTICATE as the reader", reader.authenticate(reader_name, "listen_reader1234"), "OK")
+            reader_id = listen(reader, steps).get("listenId")
+            admin_ids = [listen(admin_a, steps).get("listenId"), listen(admin_b, steps).get("listenId")]
+            check_status("revoke the reader's database permission", writer.send({
+                "type": "CHANGE_PERMISSIONS", "username": reader_name, "admin": False, "globalPermissions": [],
+                "databasePermissions": {}, "collectionPermissions": {}}), "OK")
+            save_doc(writer, {"_id": "revshare-1", "kind": "revshare"})
+            check_listen_ended("the revoked reader is told its listen ended", reader.recv(timeout=5.0), reader_id)
+            for conn, listen_id in zip((admin_a, admin_b), admin_ids):
+                pushed = conn.recv(timeout=5.0)
+                check("an admin sharing the query is still pushed",
+                      pushed is not None and pushed.get("listenId") == listen_id and pushed.get("status") == "OK",
+                      str(pushed)[:200])
+    finally:
+        delete_doc(writer, "revshare-1")
+        writer.send({"type": "DELETE_USER", "username": reader_name})
+
+
+SORTED_COLL = "listen_sorted"
+SORTED_SEED = 300
+SORTED_WRITERS = 3
+SORTED_WRITES_PER_WRITER = 120
+SORTED_STEPS = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "sorted"}},
+                {"type": "SORT", "fieldName": "score", "ascending": False},
+                {"type": "LIMIT", "limit": 5}]
+
+
+def sorted_signature(results) -> list:
+    return [(d.get("_id"), d.get("score")) for d in (results or [])]
+
+
+def pushed_frames(conn: Conn, buffered: bytearray, timeout: float) -> list:
+    ready, _, _ = select.select([conn.s], [], [], timeout)
+    if ready:
+        buffered.extend(conn.s.recv(1 << 20))
+    frames = []
+    while b"\n" in buffered:
+        line, _, rest = bytes(buffered).partition(b"\n")
+        buffered[:] = rest
+        if line.strip():
+            frames.append(json.loads(line))
+    return frames
+
+
+def test_sorted_listen_under_concurrent_writes_ends_with_final_state(writer: Conn, listener: Conn):
+    section("LISTEN: an index-sorted top 5 re-run under concurrent writers ends on the final state")
+    writer.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SORTED_COLL})
+    writer.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": SORTED_COLL,
+                 "objects": [{"_id": f"s{i:04d}", "kind": "sorted", "score": i} for i in range(SORTED_SEED)]})
+    check_status("score indexed", writer.send({"type": "CREATE_INDEX", "databaseName": DB,
+                                               "collectionName": SORTED_COLL, "fieldName": "score"}), "OK")
+    started = listen(listener, SORTED_STEPS, coll=SORTED_COLL)
+    check_status("sorted LISTEN registered", started, "OK")
+    listen_id = started.get("listenId")
+    last = [started.get("results")]
+
+    def write(seed: int):
+        rng = random.Random(seed)
+        with Conn() as conn:
+            conn.authenticate()
+            for _ in range(SORTED_WRITES_PER_WRITER):
+                conn.send({"type": "SAVE", "databaseName": DB, "collectionName": SORTED_COLL,
+                           "object": {"_id": f"s{rng.randrange(SORTED_SEED + 50):04d}", "kind": "sorted",
+                                      "score": rng.randrange(10_000)}})
+
+    writers = [threading.Thread(target=write, args=(seed,)) for seed in range(SORTED_WRITERS)]
+    for thread in writers:
+        thread.start()
+    pushes = 0
+    buffered = bytearray()
+    quiet_since = None
+    while quiet_since is None or time.time() - quiet_since < 3.0:
+        frames = pushed_frames(listener, buffered, 0.5)
+        for frame in frames:
+            if frame.get("results") is not None:
+                last[0] = frame.get("results")
+                pushes += 1
+        writing = any(thread.is_alive() for thread in writers)
+        if writing or frames:
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = time.time()
+    for thread in writers:
+        thread.join(60)
+    final = writer.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": SORTED_COLL,
+                         "aggregationSteps": SORTED_STEPS})
+    check(f"the listener was notified while the writers ran ({pushes} pushes)", pushes > 0)
+    check("the last pushed top 5 equals the final state",
+          sorted_signature(last[0]) == sorted_signature(final.get("results")),
+          f"last={sorted_signature(last[0])} final={sorted_signature(final.get('results'))}")
+    stop_listen(listener, listen_id)
+    writer.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": SORTED_COLL})
+
+
 def main():
     bu.banner("Listenable queries (LISTEN / STOP_LISTEN) test suite", HOST, PORT)
 
@@ -915,8 +1093,12 @@ def main():
                 test_stop_listen(writer_conn, listener_conn)
                 test_stop_listen_from_another_client_is_refused(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)
+                test_a_pushed_frame_parses_with_its_own_listen_id_and_a_64_hex_hash(writer_conn, listener_conn)
+                test_identical_listeners_on_many_connections_each_get_their_own_push(writer_conn)
+                test_revoking_one_user_ends_only_their_listen_in_a_shared_query(writer_conn)
                 test_transactional_commit_pushes_once_with_the_final_state(writer_conn, listener_conn)
                 test_listener_survives_a_concurrent_bulk_save(writer_conn, listener_conn)
+                test_sorted_listen_under_concurrent_writes_ends_with_final_state(writer_conn, listener_conn)
                 test_a_revoked_reader_is_told_its_listen_ended(writer_conn)
                 test_dropping_the_collection_ends_the_listen(writer_conn, listener_conn)
                 test_dropping_a_joined_collection_ends_the_listen(writer_conn, listener_conn)

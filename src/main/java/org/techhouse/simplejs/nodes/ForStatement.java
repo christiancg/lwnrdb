@@ -5,12 +5,22 @@ public class ForStatement extends Statement {
     private final Expression test;
     private final Expression update;
     private final Statement body;
+    private final boolean bindingsCapturable;
 
     public ForStatement(JsNode init, Expression test, Expression update, Statement body) {
+        this(init, test, update, body, true);
+    }
+
+    public ForStatement(JsNode init, Expression test, Expression update, Statement body, boolean bindingsCapturable) {
         this.init = init;
         this.test = test;
         this.update = update;
         this.body = body;
+        this.bindingsCapturable = bindingsCapturable;
+    }
+
+    public boolean bindingsCapturable() {
+        return bindingsCapturable;
     }
 
     public JsNode getInit() {

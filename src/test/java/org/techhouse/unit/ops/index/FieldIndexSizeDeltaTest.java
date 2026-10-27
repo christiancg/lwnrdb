@@ -1,6 +1,7 @@
 package org.techhouse.unit.ops.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheSizeEstimator;
+import org.techhouse.cache.FieldIndexList;
 import org.techhouse.cache.Measure;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
@@ -75,10 +77,47 @@ public class FieldIndexSizeDeltaTest {
         }
     }
 
+    private static long measured(List<FieldIndexEntry<?>> list) {
+        final var shared = FieldIndexList.sharingPkIds(list);
+        return CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(list))
+                - (shared == null ? 0L : shared.sharedIdBytes());
+    }
+
     @Test
     public void test_the_remembered_size_equals_a_full_measure_after_adds_removes_moves_and_empties() throws Exception {
-        final var random = new Random(91);
+        assertRememberedTracksTheMeasure(91, false);
+    }
+
+    @Test
+    public void test_a_list_sharing_the_pk_ids_charges_them_once_and_keeps_the_measure_exact() throws Exception {
+        final var pkIds = new HashMap<String, String>();
+        for (var i = 0; i < 40; i++) {
+            final var document = support.documentOf("id" + i);
+            assertNotNull(document);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, document);
+            pkIds.put(document.get_id(), document.get_id());
+        }
+        assertRememberedTracksTheMeasure(92, true);
+
+        var sharedIds = 0;
+        for (final var list : residentLists().values()) {
+            for (final var entry : list) {
+                for (final var id : entry.getIds()) {
+                    sharedIds += sameInstance(pkIds.get(id), id) ? 1 : 0;
+                }
+            }
+        }
+        assertTrue(sharedIds > 0, "ids the batches added are the pk rows' own strings");
+    }
+
+    private static boolean sameInstance(Object pkId, Object id) {
+        return pkId == id;
+    }
+
+    private void assertRememberedTracksTheMeasure(long seed, boolean sharedWithPk) throws Exception {
+        final var random = new Random(seed);
         var checked = 0;
+        var shared = 0;
         for (var batch = 0; batch < 300; batch++) {
             if (batch % 20 == 0) {
                 support.admitEveryType(FIELD);
@@ -86,8 +125,7 @@ public class FieldIndexSizeDeltaTest {
             final var before = residentLists();
             final var rememberedBefore = remembered();
             final var measuredBefore = new HashMap<String, Long>();
-            before.forEach((identifier, list) -> measuredBefore.put(identifier,
-                    CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(list))));
+            before.forEach((identifier, list) -> measuredBefore.put(identifier, measured(list)));
             final var ids = FieldIndexBatchSupport.randomIds(random, 1 + random.nextInt(12), 40);
             ids.forEach(id -> support.mutate(id, random));
 
@@ -101,14 +139,15 @@ public class FieldIndexSizeDeltaTest {
                 if (list != resident.getValue() || list.isEmpty()) {
                     continue;
                 }
-                final var delta = CacheSizeEstimator.estimateFieldIndexSize(list) - measuredBefore.get(identifier);
-                final var count = list.size();
-                final var expected = count * (Math.max(0L, rememberedBefore.get(identifier) + delta) / count);
+                final var delta = measured(list) - measuredBefore.get(identifier);
+                final var expected = Math.max(0L, rememberedBefore.get(identifier) + delta);
                 assertEquals(expected, rememberedAfter.get(identifier), identifier + " after batch " + batch);
                 checked++;
+                shared += FieldIndexList.sharingPkIds(list) != null ? 1 : 0;
             }
         }
         assertTrue(checked > 100, "the batches must have run against resident lists, checked " + checked);
+        assertEquals(sharedWithPk, shared > 0, "lists shared the pk ids " + shared + " times");
     }
 
     @Test
@@ -132,6 +171,6 @@ public class FieldIndexSizeDeltaTest {
         assertEquals(LARGE_ENTRY_IDS + 1, resident.getFirst().getIds().size());
         final var rememberedBytes = remembered().get(Cache.getIndexIdentifier(FIELD, String.class));
         assertEquals(CacheSizeEstimator.estimateFieldIndexSize(resident), rememberedBytes,
-                "one entry, so the per-entry division is exact");
+                "the remembered size is the measure plus the batch's delta");
     }
 }

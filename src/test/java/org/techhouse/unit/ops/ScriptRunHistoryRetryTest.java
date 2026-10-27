@@ -15,11 +15,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -38,6 +38,7 @@ import org.techhouse.test.TestUtils;
 public class ScriptRunHistoryRetryTest {
     private static final String OWNER = "127.0.0.1:59996";
     private static final long WAIT_MILLIS = 15_000L;
+    private static final String OWN_RUN_ID_PREFIX = "\"run-";
     private final Configuration configuration = Configuration.getInstance();
     private final ClusterRouter router = IocContainer.get(ClusterRouter.class);
     private final ScriptRunHistory history = IocContainer.get(ScriptRunHistory.class);
@@ -110,16 +111,35 @@ public class ScriptRunHistoryRetryTest {
         assertEquals(1, forwards.get());
     }
 
+    @Test
+    public void test_a_batch_the_owner_has_not_caught_up_with_retries_each_row() throws Exception {
+        ownerAnswers(List.of(notReady(), saved()));
+        ScriptRunHistory.writeAll(
+                List.of(new ScriptRunHistoryEvent(row("run-batch-a")), new ScriptRunHistoryEvent(row("run-batch-b"))));
+        assertTrue(eventually(() -> ScriptRunHistory.getRecorded() == 2L), "the retried rows never landed");
+        assertEquals(0L, ScriptRunHistory.getDropped());
+        assertTrue(forwards.get() >= 2);
+    }
+
     private void ownerAnswers(List<String> answers) throws Exception {
         final var pool = mock(PeerConnectionPool.class);
-        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+        when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {
+            final ClusterMessage request = invocation.getArgument(1);
+            final var body = request.getForwardBody();
+            if (body == null || !body.contains(OWN_RUN_ID_PREFIX)) {
+                return reply(saved());
+            }
             final var index = forwards.getAndIncrement();
-            final var reply = new ClusterMessage();
-            reply.setType(ClusterMessageType.FORWARD_RESPONSE);
-            reply.setForwardBody(ForwardBody.encode(answers.get(Math.min(index, answers.size() - 1))));
-            return reply;
+            return reply(answers.get(Math.min(index, answers.size() - 1)));
         });
         TestUtils.setPrivateField(router, "pool", pool);
+    }
+
+    private static ClusterMessage reply(String body) {
+        final var reply = new ClusterMessage();
+        reply.setType(ClusterMessageType.FORWARD_RESPONSE);
+        reply.setForwardBody(body);
+        return reply;
     }
 
     private String notReady() {

@@ -9,7 +9,6 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -50,7 +49,7 @@ public class Replicator {
     public ReplicationOutcome broadcastReindex(String rawRequest) {
         return awaitQuorum(ClusterMessageType.REINDEX_BROADCAST_ACK, () -> {
             final var message = replicateMessage(ClusterMessageType.REINDEX_BROADCAST);
-            message.setForwardBody(ForwardBody.encode(rawRequest));
+            message.setForwardBody(rawRequest);
             return message;
         });
     }
