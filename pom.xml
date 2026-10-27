@@ -138,6 +138,7 @@
                         </goals>
                         <configuration>
                             <forkCount>1</forkCount>
+                            <argLine>@{argLine} --enable-final-field-mutation=ALL-UNNAMED -Xbatch</argLine>
                             <includes>
                                 <include>**/perf/*AllocationBudgetTest.java</include>
                             </includes>

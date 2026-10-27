@@ -23,6 +23,7 @@ public class ScriptAllocationBudgetTest {
     private static final long REDUCE_PER_DOC = 2_800;
     private static final long MAP_PER_DOC = 2_750;
     private static final int RUNS = 5;
+    private static final int WARM_UP_RUNS = 10;
     private static final int LOOP_COUNT = 200_000;
     private static final int REDUCE_DOCS = 2_000;
     private static final com.sun.management.ThreadMXBean THREADS = (com.sun.management.ThreadMXBean) ManagementFactory
@@ -37,7 +38,9 @@ public class ScriptAllocationBudgetTest {
     }
 
     private static long cheapestOf(Action action) {
-        action.run();
+        for (var i = 0; i < WARM_UP_RUNS; i++) {
+            action.run();
+        }
         var cheapest = Long.MAX_VALUE;
         for (var i = 0; i < RUNS; i++) {
             final var before = THREADS.getTotalThreadAllocatedBytes();
