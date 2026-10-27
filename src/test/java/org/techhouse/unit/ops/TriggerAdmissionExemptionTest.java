@@ -88,11 +88,11 @@ public class TriggerAdmissionExemptionTest {
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
         TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         cache.removeProceduresForDatabase(TestGlobals.DB);
@@ -123,7 +123,7 @@ public class TriggerAdmissionExemptionTest {
         args.add("id", new JsonString("schedule-under-saturation"));
         final var definition = new ScheduleDefinition("s", "job", null, 60_000L, args, 0L, true, OWNER, null, 1L, 1L,
                 1L, OWNER);
-        fs.writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, "s");
         registry.reload(TestGlobals.DB);
         return registry.get(TestGlobals.DB, "s");

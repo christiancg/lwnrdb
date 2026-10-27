@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 
 public final class PropertyTable {
@@ -53,9 +54,23 @@ public final class PropertyTable {
         return existing;
     }
 
+    public boolean isPristine() {
+        return extensible && keyOrder == null && symbolKeyOrder == null && properties == null && descriptors == null
+                && symbolProperties == null;
+    }
+
     public JsValue get(String key) {
         final var value = properties == null ? null : properties.get(key);
+        if (value instanceof DeferredEJson deferred) {
+            final var resolved = deferred.resolve();
+            properties.put(key, resolved);
+            return resolved;
+        }
         return value == null ? JsUndefined.getInstance() : value;
+    }
+
+    void defineDeferred(String key, JsonBaseElement element) {
+        defineValue(key, new DeferredEJson(element));
     }
 
     public boolean set(String key, JsValue value) {

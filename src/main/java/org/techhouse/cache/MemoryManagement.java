@@ -1,8 +1,7 @@
 package org.techhouse.cache;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -10,8 +9,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
+import org.techhouse.bckg_ops.events.UsageProfileFlushEvent;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
@@ -36,6 +35,7 @@ public class MemoryManagement {
     private final AtomicBoolean sweepOutOfMemory = new AtomicBoolean(false);
     private final AtomicBoolean requestedSweepOutOfMemory = new AtomicBoolean(false);
     private final AtomicBoolean flushOutOfMemory = new AtomicBoolean(false);
+    private final AtomicBoolean usageFlushQueued = new AtomicBoolean(false);
     private volatile ScheduledExecutorService scheduler;
 
     public static String buildKey(AccessKind kind, String dbName, String collName, String indexKey) {
@@ -96,6 +96,7 @@ public class MemoryManagement {
             return t;
         });
         scheduler = started;
+        usageFlushQueued.set(false);
         started.scheduleAtFixedRate(this::runEvictionSweepSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
                 TimeUnit.SECONDS);
         started.scheduleAtFixedRate(this::flushUsageProfileSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
@@ -156,18 +157,27 @@ public class MemoryManagement {
     }
 
     public void flushUsageProfile() {
-        if (isCachingDisabled()) {
+        if (isCachingDisabled() || !usageTracker.hasDirtyCounters()) {
             return;
         }
-        for (final var counter : usageTracker.drainDirtyCounters()) {
-            taskManager.submitBackgroundTask(new CollectionUsageEvent(counter.kind(), counter.dbName(),
-                    counter.collName(), counter.indexKey(), counter.getLastAccessMillis()));
+        if (usageFlushQueued.compareAndSet(false, true)
+                && !taskManager.submitMaintenance(new UsageProfileFlushEvent())) {
+            usageFlushQueued.set(false);
         }
+    }
+
+    public List<UsageCounter> takeDirtyUsage() {
+        usageFlushQueued.set(false);
+        return usageTracker.drainDirtyCounters();
+    }
+
+    public void requeueUsage(List<UsageCounter> dirty) {
+        usageTracker.requeue(dirty);
     }
 
     private void submitCleanupTask() {
         try {
-            taskManager.submitBackgroundTask(new UsageProfileCleanupEvent());
+            taskManager.submitMaintenance(new UsageProfileCleanupEvent());
         } catch (Exception | Error e) {
             logger.error("Failed to submit usage profile cleanup", e);
         }
@@ -180,7 +190,7 @@ public class MemoryManagement {
         if (config.isCacheUnlimited()) {
             return AdmissionDecision.ADMIT;
         }
-        return userCacheBytes(Measure.REMEMBERED) + estimatedBytes > config.getMaxMemoryBytes()
+        return userCache.footprintBytes() + estimatedBytes > config.getMaxMemoryBytes()
                 ? AdmissionDecision.REJECT
                 : AdmissionDecision.ADMIT;
     }
@@ -198,7 +208,7 @@ public class MemoryManagement {
         }
         try {
             final var maxBytes = config.getMaxMemoryBytes();
-            final var remembered = userCacheBytes(Measure.REMEMBERED);
+            final var remembered = userCache.footprintBytes();
             if (remembered > maxBytes) {
                 evictDownTo(maxBytes, overBudgetMeasure, OVER_CAP_LOCK_WAIT_MILLIS);
             } else if (remembered * 100L >= maxBytes * FULL_MEASURE_FROM_PERCENT) {
@@ -214,13 +224,10 @@ public class MemoryManagement {
             return;
         }
         final var maxBytes = config.getMaxMemoryBytes();
-        if (userCacheBytes(Measure.REMEMBERED) + nextPageEstimateBytes <= maxBytes) {
+        if (userCache.footprintBytes() + nextPageEstimateBytes <= maxBytes) {
             return;
         }
         evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes), Measure.REMEMBERED, NO_LOCK_WAIT);
-    }
-
-    private record RankedResource(CacheableResource resource, int tier, long accessCount, long lastAccess) {
     }
 
     private void evictDownTo(long targetBytes, Measure measure, long lockWaitMillis) {
@@ -229,19 +236,11 @@ public class MemoryManagement {
         if (remaining <= targetBytes) {
             return;
         }
-        final var ranked = new ArrayList<RankedResource>(resources.size());
-        for (var resource : resources) {
-            ranked.add(new RankedResource(resource, tierOrdinal(resource.kind()), usageTracker.accessCountFor(resource),
-                    usageTracker.lastAccessFor(resource)));
-        }
-        ranked.sort(Comparator.comparingInt(RankedResource::tier).thenComparingLong(RankedResource::accessCount)
-                .thenComparingLong(RankedResource::lastAccess));
         final var busyCollections = new HashSet<String>();
-        for (var candidate : ranked) {
+        for (var resource : EvictionRanking.rank(resources, usageTracker)) {
             if (remaining <= targetBytes) {
                 break;
             }
-            final var resource = candidate.resource();
             final var collection = Cache.getCollectionIdentifier(resource.dbName(), resource.collName());
             if (busyCollections.contains(collection)) {
                 continue;
@@ -256,14 +255,7 @@ public class MemoryManagement {
                 continue;
             }
             try {
-                switch (resource.kind()) {
-                    case PK_INDEX -> userCache.evictPkIndex(resource.dbName(), resource.collName());
-                    case FIELD_INDEX ->
-                        userCache.evictFieldIndex(resource.dbName(), resource.collName(), resource.indexKey());
-                    case COLLECTION -> userCache.evictCollectionDocuments(resource.dbName(), resource.collName());
-                    default -> {
-                    }
-                }
+                userCache.evict(resource);
                 remaining -= resource.estimatedSizeBytes();
             } finally {
                 if (indexedField != null) {
@@ -294,27 +286,15 @@ public class MemoryManagement {
     }
 
     public long userCacheBytes() {
-        return userCacheBytes(Measure.FULL);
+        return sumBytes(userCache.listCacheableResources(Measure.FULL));
     }
 
-    private long userCacheBytes(Measure measure) {
-        return sumBytes(userCache.listCacheableResources(measure));
-    }
-
-    private long sumBytes(java.util.List<CacheableResource> resources) {
+    private long sumBytes(List<CacheableResource> resources) {
         long total = 0L;
         for (var r : resources) {
             total += r.estimatedSizeBytes();
         }
         return total;
-    }
-
-    private int tierOrdinal(AccessKind kind) {
-        return switch (kind) {
-            case COLLECTION -> 0;
-            case FIELD_INDEX -> 1;
-            case PK_INDEX -> 2;
-        };
     }
 
 }

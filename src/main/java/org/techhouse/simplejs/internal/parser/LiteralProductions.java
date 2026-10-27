@@ -116,7 +116,7 @@ abstract class LiteralProductions extends ClassProductions {
                 } else {
                     arrow = new ArrowFunctionExpression(params, parseAssignment(), true, async);
                 }
-                arrow.setSourceText(spanFrom(start));
+                arrow.setSourceText(closureSource(start));
                 return arrow;
             }));
         } finally {
@@ -197,7 +197,7 @@ abstract class LiteralProductions extends ClassProductions {
             final var parts = parseFunctionParts(generator, async, false, true);
             checkAccessorParams(kind, parts.params());
             final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
-            value.setSourceText(spanFrom(start));
+            value.setSourceText(closureSource(start));
             return new Property(key, value, computed, false, "init".equals(kind) ? "method" : kind);
         }
         if (async || generator || !"init".equals(kind)) {
@@ -268,7 +268,9 @@ abstract class LiteralProductions extends ClassProductions {
         }
         final var expressions = new ArrayList<Expression>();
         for (final var expressionTokens : template.getExpressions()) {
-            expressions.add(forTemplateExpression(expressionTokens).parseTemplateExpression());
+            final var nested = forTemplateExpression(expressionTokens);
+            expressions.add(nested.parseTemplateExpression());
+            closureNodes += nested.closureNodes;
         }
         return new TemplateLiteral(template.getQuasis(), template.getRawQuasis(), expressions);
     }

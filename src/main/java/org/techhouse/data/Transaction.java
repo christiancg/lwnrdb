@@ -125,7 +125,7 @@ public class Transaction {
     }
 
     public void recordSave(String collId, String id, JsonObject doc, long version) {
-        overlay.computeIfAbsent(collId, _ -> new LinkedHashMap<>()).put(id, doc.deepCopy());
+        overlay.computeIfAbsent(collId, _ -> new LinkedHashMap<>()).put(id, doc);
         recordVersion(collId, id, version);
     }
 

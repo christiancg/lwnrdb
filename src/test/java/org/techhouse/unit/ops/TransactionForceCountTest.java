@@ -62,10 +62,20 @@ public class TransactionForceCountTest {
     }
 
     private void bufferOneSave(UUID clientId) {
+        bufferSaves(clientId, TestGlobals.COLL, 1);
+    }
+
+    private void bufferSaves(UUID clientId, String collName, int count) {
+        for (var i = 0; i < count; i++) {
+            bufferSave(clientId, collName);
+        }
+    }
+
+    private void bufferSave(UUID clientId, String collName) {
         final var id = "forced-" + sequence++;
         final var object = new JsonObject();
         object.add(Globals.PK_FIELD, new JsonString(id));
-        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var request = new SaveRequest(TestGlobals.DB, collName);
         request.setObject(object);
         request.set_id(id);
         assertEquals(OperationStatus.OK, TransactionOperationHelper
@@ -75,6 +85,54 @@ public class TransactionForceCountTest {
     private void warmUp() {
         assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(openTransactionWithOneSave()).getStatus());
         recorder.clear();
+    }
+
+    private void warmUpGrouped(String... collNames) {
+        final var clientId = openTransactionWithOneSave();
+        bufferOneSave(clientId);
+        for (final var collName : collNames) {
+            bufferSaves(clientId, collName, 2);
+        }
+        assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
+        recorder.clear();
+    }
+
+    @Test
+    public void test_a_ten_save_commit_forces_three_times() {
+        warmUpGrouped();
+        final var clientId = openTransactionWithOneSave();
+        bufferSaves(clientId, TestGlobals.COLL, 9);
+
+        assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
+
+        assertEquals(3, forces(), "begin record, one grouped apply and the finish record: " + recorder.forcedNames());
+    }
+
+    @Test
+    public void test_a_ten_save_participant_forces_four_times() {
+        warmUpGrouped();
+        final var clientId = openTransactionWithOneSave();
+        bufferSaves(clientId, TestGlobals.COLL, 9);
+
+        assertTrue(TwoPhaseParticipant.prepare(clientId, COORDINATOR, List.of(COORDINATOR)));
+        assertEquals(OperationStatus.OK, TwoPhaseParticipant.commitPrepared(clientId).getStatus());
+
+        assertEquals(4, forces(), "prepare, begin, one grouped apply and the finish record: " + recorder.forcedNames());
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_a_commit_over_two_collections_forces_once_per_collection() throws Exception {
+        TestUtils.createTestJoinCollection();
+        warmUpGrouped(TestGlobals.JOIN_COLL);
+        final var clientId = openTransactionWithOneSave();
+        bufferSaves(clientId, TestGlobals.COLL, 4);
+        bufferSaves(clientId, TestGlobals.JOIN_COLL, 5);
+
+        assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
+
+        assertEquals(4, forces(),
+                "begin record, one grouped apply per collection and the finish record: " + recorder.forcedNames());
     }
 
     @Test

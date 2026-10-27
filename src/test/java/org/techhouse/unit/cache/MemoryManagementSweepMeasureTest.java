@@ -10,9 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -24,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.cache.Measure;
 import org.techhouse.cache.MemoryManagement;
@@ -33,7 +32,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.ReflectionUtils;
 
 public class MemoryManagementSweepMeasureTest {
     private static final long MAX_BYTES = 1000L;
@@ -77,6 +75,7 @@ public class MemoryManagementSweepMeasureTest {
     }
 
     private void rememberedBytes(long bytes) {
+        when(userCache.footprintBytes()).thenReturn(bytes);
         when(userCache.listCacheableResources(Measure.REMEMBERED))
                 .thenReturn(List.of(new CacheableResource(AccessKind.COLLECTION, "userDb", "coll", null, bytes)));
     }
@@ -87,7 +86,8 @@ public class MemoryManagementSweepMeasureTest {
 
         memoryManagement.runEvictionSweep();
 
-        verify(userCache, atLeastOnce()).listCacheableResources(Measure.REMEMBERED);
+        verify(userCache, atLeastOnce()).footprintBytes();
+        verify(userCache, never()).listCacheableResources(Measure.REMEMBERED);
         verify(userCache, never()).listCacheableResources(Measure.FULL);
         verify(userCache, never()).listCacheableResources(Measure.FULL_FORCED);
     }
@@ -120,16 +120,12 @@ public class MemoryManagementSweepMeasureTest {
         verify(userCache, never()).listCacheableResources(Measure.FULL_FORCED);
     }
 
-    private static void measuredIndexIn(UserCache cache) throws Exception {
+    private static void measuredIndexIn(UserCache cache) {
         final var list = new CountingList();
         for (var i = 0; i < IDS; i++) {
             list.add(new FieldIndexEntry<>(DB, COLL, "value-" + i, Set.of("id-" + i)));
         }
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
-        };
-        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
-        indexes.put(INDEX_KEY, list);
-        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(Cache.getCollectionIdentifier(DB, COLL), indexes);
+        CacheResidents.residentUnmeasuredFieldIndex(cache, Cache.getCollectionIdentifier(DB, COLL), INDEX_KEY, list);
         WALKS.set(0);
         cache.listCacheableResources(Measure.FULL);
         assertTrue(WALKS.getAndSet(0) > 0, "an index with no remembered measure is measured");
@@ -155,7 +151,7 @@ public class MemoryManagementSweepMeasureTest {
     }
 
     @Test
-    public void test_an_index_changed_by_a_tenth_is_measured_once_and_reset() throws Exception {
+    public void test_an_index_changed_by_a_tenth_is_measured_once_and_reset() {
         final var cache = new UserCache();
         measuredIndexIn(cache);
 
@@ -190,10 +186,10 @@ public class MemoryManagementSweepMeasureTest {
     public void test_signals_while_a_sweep_is_queued_collapse_into_one() throws Exception {
         final var sweeping = new CountDownLatch(1);
         final var release = new CountDownLatch(1);
-        when(userCache.listCacheableResources(Measure.REMEMBERED)).thenAnswer(_ -> {
+        when(userCache.footprintBytes()).thenAnswer(_ -> {
             sweeping.countDown();
             assertTrue(release.await(10, TimeUnit.SECONDS));
-            return List.of();
+            return 0L;
         });
         memoryManagement.startSweepThread();
         try {
@@ -213,7 +209,7 @@ public class MemoryManagementSweepMeasureTest {
             release.countDown();
             scheduler.submit(() -> {
             }).get(10, TimeUnit.SECONDS);
-            verify(userCache, atLeast(2)).listCacheableResources(Measure.REMEMBERED);
+            verify(userCache, atLeast(2)).footprintBytes();
         } finally {
             release.countDown();
             memoryManagement.stopSweepThread();

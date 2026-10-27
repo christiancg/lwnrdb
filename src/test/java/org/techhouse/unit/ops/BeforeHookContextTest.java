@@ -55,10 +55,10 @@ public class BeforeHookContextTest {
         TestUtils.setPrivateField(configuration, "triggersEnabled", true);
         TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget", 200_000L);
         TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs", 2_000L);
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
@@ -238,7 +238,7 @@ public class BeforeHookContextTest {
     @Test
     public void test_rejects_when_the_procedure_no_longer_exists() throws Exception {
         installHook("v", "gone", "export default function (doc) { };", EventType.CREATED);
-        fs.deleteProcedure(TestGlobals.DB, "gone");
+        fs.metadataFiles().deleteProcedure(TestGlobals.DB, "gone");
         cache.removeProceduresForDatabase(TestGlobals.DB);
         final var outcome = run(document("a"), EventType.CREATED);
         assertTrue(outcome.isRejected());

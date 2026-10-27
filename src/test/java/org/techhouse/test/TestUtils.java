@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -28,6 +29,7 @@ import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.PartitionedMissCache;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -65,6 +67,7 @@ public class TestUtils {
     public static void standardTearDown() throws NoSuchFieldException, IllegalAccessException {
         deleteDir(new File(TestGlobals.PATH));
         clearCache();
+        discardQueuedBackgroundEvents(IocContainer.get(BackgroundTaskManager.class));
     }
 
     private static void clearCache() throws NoSuchFieldException, IllegalAccessException {
@@ -76,11 +79,7 @@ public class TestUtils {
         TestUtils.setPrivateField(adminCache, "databasesPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionsPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "usersPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(userCache, "collectionMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(userCache, "fieldIndexMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(TestUtils.getPrivateField(userCache, "fieldLookups", Object.class), "byCollection",
-                new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(userCache, "pkIndexMap", new ConcurrentHashMap<>());
+        CacheResidents.reset(userCache);
         TestUtils.setPrivateField(
                 TestUtils.getPrivateField(IocContainer.get(Cache.class), "absentIndexTypes", Object.class),
                 "byCollection", new ConcurrentHashMap<>());
@@ -88,7 +87,7 @@ public class TestUtils {
         TestUtils.setPrivateField(pageCacheOf(adminCache), "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "transactionsPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(adminCache, "triggerRunsPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "triggerRunsPkIndex", new ConcurrentSkipListMap<>());
         clearBoundedCache(adminCache, "collectionSchemas");
         clearBoundedCache(adminCache, "procedures");
         clearBoundedCache(adminCache, "triggers");
@@ -426,6 +425,7 @@ public class TestUtils {
 
     public static void discardQueuedBackgroundEvents(BackgroundTaskManager manager)
             throws NoSuchFieldException, IllegalAccessException {
-        getPrivateField(manager, "lanes", BackgroundLanes.class).discardAll();
+        final var discarded = getPrivateField(manager, "lanes", BackgroundLanes.class).discardAll();
+        getPrivateField(manager, "inFlight", AtomicInteger.class).addAndGet(-discarded);
     }
 }

@@ -139,6 +139,27 @@ def test_script_map_values_are_budgeted(conn: Conn):
           f"rows={len(results(limited))}")
 
 
+def test_map_script_sees_a_stable_document(conn: Conn):
+    section("MAP SCRIPT: a row the script keeps does not change when MAP writes to it afterwards")
+    remember = """
+        let previous;
+        export default (doc) => {
+            const seen = previous === undefined ? null : Object.keys(previous.info).join(",");
+            previous = doc;
+            return seen;
+        };"""
+    step = {"type": "MAP", "operators": [
+        {"fieldName": "info", "operator": {"type": "SCRIPT", "script": "export default (doc) => ({ seen: doc._id });"}},
+        {"fieldName": "info.prev", "operator": {"type": "SCRIPT", "script": remember}}]}
+    response = conn.aggregate([step])
+    check_status("the two-operator MAP runs", response, "OK")
+    kept = [row.get("info", {}).get("prev") for row in results(response)]
+    check("every row is mapped", len(kept) == DOCUMENT_COUNT, f"got {len(kept)} rows")
+    check("the first row had no previous row", kept.count(None) == 1, f"got {kept}")
+    check("each kept row shows only the fields it had when the script saw it",
+          all(value == "seen" for value in kept if value is not None), f"got {kept}")
+
+
 def test_script_predicate(conn: Conn):
     section("FILTER: a SCRIPT predicate")
     response = conn.aggregate([script_filter("export default (doc) => doc.price > 50 && doc.qty % 2 === 0;")])
@@ -182,6 +203,31 @@ def test_reduce(conn: Conn):
     scanned = conn.aggregate([{"type": "SKIP", "skip": 0}] + priced)
     check("the same fold answered by a scan agrees with the index",
           results(scanned)[0].get("folded") == expected_order, f"got {results(scanned)[0].get('folded')!r}")
+
+    fold_ids = [reduce_step("export default (acc, doc) => acc + '|' + doc._id;", "", "folded")]
+    check("the same fold run again answers in the same order",
+          results(conn.aggregate(fold_ids))[0].get("folded") == expected_order, "the remembered order drifted")
+    save = {"type": "SAVE", "databaseName": DB, "collectionName": COLL}
+    check_status("insert a document that sorts first",
+                 conn.send({**save, "object": {"_id": "o0", "price": 0, "qty": 0, "sku": "none"}}), "OK")
+    check("the fold sees the insert in its place",
+          results(conn.aggregate(fold_ids))[0].get("folded") == "|o0" + expected_order,
+          f"got {results(conn.aggregate(fold_ids))[0].get('folded')!r}")
+    check_status("update an existing document",
+                 conn.send({**save, "object": {"_id": "o1", "price": 10, "qty": 1, "sku": "sku-1"}}), "OK")
+    check("the fold still answers in (page, _id) order after an update",
+          results(conn.aggregate(fold_ids))[0].get("folded") == "|o0" + expected_order,
+          f"got {results(conn.aggregate(fold_ids))[0].get('folded')!r}")
+    check_status("delete the inserted document",
+                 conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "o0"}), "OK")
+    check("the fold drops the deleted document",
+          results(conn.aggregate(fold_ids))[0].get("folded") == expected_order,
+          f"got {results(conn.aggregate(fold_ids))[0].get('folded')!r}")
+    kept = conn.aggregate([reduce_step("export default (acc, doc) => { doc.price = -1; return acc + doc.price; };",
+                                       0, "patched")])
+    check("a fold that writes to its row leaves the stored documents alone",
+          results(kept)[0].get("patched") == -DOCUMENT_COUNT
+          and results(conn.aggregate(fold_ids))[0].get("folded") == expected_order, f"got {results(kept)}")
 
     distinct = conn.aggregate([{"type": "DISTINCT", "fieldName": "sku"},
                                reduce_step("export default (acc, row) => acc + '|' + row.sku;", "", "skus")])
@@ -423,6 +469,7 @@ def main():
             setup_data(conn)
             test_computed_field(conn)
             test_script_map_values_are_budgeted(conn)
+            test_map_script_sees_a_stable_document(conn)
             test_script_predicate(conn)
             test_reduce(conn)
             test_getters_cross_the_boundary(conn)

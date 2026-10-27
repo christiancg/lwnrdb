@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongFunction;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
@@ -57,8 +58,18 @@ final class ReplacerFixture {
     }
 
     List<IndexedDbEntry> bulk(List<IndexedDbEntry> entries) throws IOException {
-        return replacer.bulkReplace(fx.dbName, fx.collName, entries, null,
-                updated -> line(updated.get_id(), updated.getData().get("v").asJsonString().getValue()));
+        return bulk(entries, null, null);
+    }
+
+    List<IndexedDbEntry> bulk(List<IndexedDbEntry> entries, List<PkIndexEntry> residentRows,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
+        return replacer.bulkReplace(fx.dbName, fx.collName, entries, residentRows,
+                updated -> line(updated.get_id(), updated.getData().get("v").asJsonString().getValue()), occupancy);
+    }
+
+    PageOccupancy occupancyOf(long page) throws IOException {
+        final var rows = PageRows.of(fx.store, null, fx.dbName, fx.collName, page);
+        return new PageOccupancy(PageRows.liveBytes(rows), rows.size());
     }
 
     String valueOf(PkIndexEntry row) throws IOException {

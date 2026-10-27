@@ -104,4 +104,22 @@ public class FileSystemQuarantineTest {
                 "a moved-aside database must not ask the operator to REINDEX a collection that does not exist");
         assertTrue(fileSystem.indexMarkers().listMarked().isEmpty());
     }
+
+    @Test
+    public void test_a_re_created_collection_sees_no_stale_tombstones() throws Exception {
+        fileSystem.createDatabaseFolder("tombdb");
+        fileSystem.createCollectionFile("tombdb", "c1");
+        fileSystem.tombstones().append("tombdb", "c1", "gone", 7L);
+        final var file = new File(root(), "tombdb" + File.separator + "c1" + File.separator + "c1-tombstones.idx");
+        final var stamp = Files.getLastModifiedTime(file.toPath());
+        assertEquals(7L, fileSystem.tombstones().versionOf("tombdb", "c1", "gone"));
+
+        assertTrue(fileSystem.deleteCollectionFiles("tombdb", "c1"));
+        fileSystem.createCollectionFile("tombdb", "c1");
+        Files.writeString(file.toPath(), "kept" + Globals.ID_SEPARATOR + "7\n");
+        Files.setLastModifiedTime(file.toPath(), stamp);
+
+        assertEquals(0L, fileSystem.tombstones().versionOf("tombdb", "c1", "gone"));
+        assertEquals(7L, fileSystem.tombstones().versionOf("tombdb", "c1", "kept"));
+    }
 }

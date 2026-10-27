@@ -2,11 +2,9 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
@@ -67,121 +65,22 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
             Stream<JsonObject> resultStream, String dbName, String collName, PipelineContext context)
             throws IOException {
-        final List<JsonObject> buffered;
-        if (resultStream == null) {
-            buffered = null;
-        } else {
-            try (var documents = resultStream) {
-                buffered = documents.toList();
-            }
+        if (OperatorPredicate.holdsRanking(operator)) {
+            return RankedConjunction.filter(operator, resultStream, dbName, collName, context);
         }
-        if (buffered != null) {
-            return combineBuffered(operator, buffered, dbName, collName, context);
+        final var test = OperatorPredicate.of(operator, context);
+        if (resultStream != null) {
+            return resultStream.filter(test);
         }
         final var candidates = ConjunctionCandidates.of(operator, dbName, collName, context);
-        if (candidates != null) {
-            try (var survivors = context.watch(fetched(dbName, collName, candidates, context))) {
-                return combineBuffered(operator, survivors.toList(), dbName, collName, context);
-            }
+        if (candidates != null && !ScanPreference.tooBroad(candidates.size(), dbName, collName)) {
+            return context.watch(fetched(dbName, collName, candidates, context)).filter(test);
         }
-        List<Stream<JsonObject>> combinationResult = new ArrayList<>();
-        for (var step : operator.getOperators()) {
-            combinationResult.add(processConjunctionStep(step, null, dbName, collName, context));
-        }
-        return switch (operator.getConjunctionType()) {
-            case AND -> andXorConjunction(combinationResult, operator.getOperators().size(), context);
-            case OR -> orConjunction(combinationResult, context);
-            case XOR -> andXorConjunction(combinationResult, 1, context);
-            case NOR ->
-                norNandAllStreamAggregation(orConjunction(combinationResult, context), dbName, collName, context);
-            case NAND -> norNandAllStreamAggregation(
-                    andXorConjunction(combinationResult, operator.getOperators().size(), context), dbName, collName,
-                    context);
-        };
-    }
-
-    private static Stream<JsonObject> processConjunctionStep(BaseOperator step, Stream<JsonObject> stepStream,
-            String dbName, String collName, PipelineContext context) throws IOException {
-        return switch (step.getType()) {
-            case CONJUNCTION ->
-                processConjunctionOperator((ConjunctionOperator) step, stepStream, dbName, collName, context);
-            case FIELD -> processFieldOperator((FieldOperator) step, stepStream, dbName, collName, context);
-            case CUSTOM -> processCustomOperator((CustomOperator) step, stepStream, dbName, collName, context);
-            case SCRIPT -> processScriptOperator((ScriptOperator) step, stepStream, dbName, collName, context);
-        };
-    }
-
-    private static Stream<JsonObject> combineBuffered(ConjunctionOperator operator, List<JsonObject> buffered,
-            String dbName, String collName, PipelineContext context) throws IOException {
-        final var matches = new ArrayList<Set<JsonObject>>();
-        for (var step : operator.getOperators()) {
-            final Set<JsonObject> matched = Collections.newSetFromMap(new IdentityHashMap<>());
-            try (var stepResults = processConjunctionStep(step, context.watch(buffered.stream()), dbName, collName,
-                    context)) {
-                stepResults.forEach(matched::add);
-            }
-            matches.add(matched);
-        }
-        final var type = operator.getConjunctionType();
-        return context.watch(buffered.stream())
-                .filter(row -> accepts(type, countMatches(matches, row), matches.size()));
-    }
-
-    private static int countMatches(List<Set<JsonObject>> matches, JsonObject row) {
-        var count = 0;
-        for (final var matched : matches) {
-            if (matched.contains(row)) {
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static boolean accepts(ConjunctionOperatorType type, int matched, int operands) {
-        return switch (type) {
-            case AND -> matched == operands;
-            case OR -> matched > 0;
-            case XOR -> matched == 1;
-            case NOR -> matched == 0;
-            case NAND -> matched < operands;
-        };
-    }
-
-    private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches,
-            PipelineContext context) {
-        final var tally = new ConjunctionTally();
-        for (var index = 0; index < combinationResult.size(); index++) {
-            try (var child = context.watch(distinctByConjunctionKey(combinationResult.set(index, null)))) {
-                child.forEach(tally::add);
-            }
-        }
-        return tally.rowsCounted(matches);
-    }
-
-    private static Stream<JsonObject> distinctByConjunctionKey(Stream<JsonObject> rows) {
-        final var seen = new HashSet<>();
-        return rows.filter(jsonObject -> seen.add(ConjunctionTally.keyOf(jsonObject)));
-    }
-
-    private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult,
-            PipelineContext context) {
-        return distinctByConjunctionKey(
-                context.watch(combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)));
-    }
-
-    private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined, String dbName,
-            String collName, PipelineContext context) {
-        final var collection = cache.getWholeCollection(dbName, collName);
-        context.scanned(collection.size());
-        final var wholeCollection = collection.values().stream().map(DbEntry::getData);
-        final var tally = new ConjunctionTally();
-        context.watch(Stream.concat(distinctByConjunctionKey(wholeCollection), combined)).forEach(tally::add);
-        return tally.rowsCounted(1);
+        return context.source(null, dbName, collName).filter(test);
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineContext context) throws IOException {
-
         final var tester = FieldPredicateFactory.getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName, context);
     }
@@ -189,20 +88,23 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processScriptOperator(ScriptOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineContext context) throws IOException {
         final var stream = context.source(resultStream, dbName, collName);
-        return stream.filter(data -> testScript(operator, data, context));
+        return stream.filter(data -> testScript(operator, data, Set.of(), context));
     }
 
     // JS truthiness, not a strict boolean: 0/""/null/undefined exclude a document.
-    static boolean testScript(ScriptOperator operator, JsonObject document, PipelineContext context) {
-        return callPredicate(operator.getSource(), document, context);
+    static boolean testScript(ScriptOperator operator, JsonObject document, Set<String> mutableRoots,
+            PipelineContext context) {
+        return callPredicate(operator.getSource(), document, mutableRoots, context);
     }
 
-    static JsonBaseElement callScript(String source, JsonObject document, PipelineContext context) {
-        return invokeScript(source, context, callable -> callable.apply(document));
+    static JsonBaseElement callScript(String source, JsonObject document, Set<String> mutableRoots,
+            PipelineContext context) {
+        return invokeScript(source, context, callable -> callable.apply(document, mutableRoots));
     }
 
-    private static boolean callPredicate(String source, JsonObject document, PipelineContext context) {
-        return invokeScript(source, context, callable -> callable.test(document));
+    private static boolean callPredicate(String source, JsonObject document, Set<String> mutableRoots,
+            PipelineContext context) {
+        return invokeScript(source, context, callable -> callable.test(document, mutableRoots));
     }
 
     private static <T> T invokeScript(String source, PipelineContext context, Function<ScriptCallable, T> invocation) {
@@ -221,7 +123,7 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processCustomOperator(CustomOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineContext context) throws IOException {
         if (CustomTypeFactory.isRankingOperator(operator.getCustomOperatorName())) {
-            return processRankingOperator(operator, resultStream, dbName, collName, context);
+            return rankedRows(operator, resultStream, dbName, collName, context);
         }
         final var tester = getCustomTester(operator);
         final var fieldName = operator.getField();
@@ -262,8 +164,8 @@ public class FilterOperatorHelper {
         };
     }
 
-    private static Stream<JsonObject> processRankingOperator(CustomOperator operator, Stream<JsonObject> resultStream,
-            String dbName, String collName, PipelineContext context) throws IOException {
+    static Stream<JsonObject> rankedRows(CustomOperator operator, Stream<JsonObject> resultStream, String dbName,
+            String collName, PipelineContext context) throws IOException {
         final var k = operator.getArgs().get("k").asJsonNumber().getValue().intValue();
         final var fieldName = operator.getField();
         if (resultStream != null) {
@@ -341,8 +243,11 @@ public class FilterOperatorHelper {
         if (resultStream != null) {
             return resultStream.filter(data -> test.test(data, fieldName));
         }
+        if (ScanPreference.prefersScan(operator, dbName, collName, context)) {
+            return context.source(null, dbName, collName).filter(data -> test.test(data, fieldName));
+        }
         final var matchingValues = indexMatchingIds(operator, dbName, collName, context);
-        if (matchingValues != null) {
+        if (matchingValues != null && !ScanPreference.tooBroad(matchingValues.size(), dbName, collName)) {
             // Index hits are candidates only: an object/array element-match index stores just a SHA-256
             // fingerprint, and an entry can be stale, so re-test every fetched document against the operator.
             return fetched(dbName, collName, matchingValues, context).filter(data -> test.test(data, fieldName));
@@ -446,25 +351,27 @@ public class FilterOperatorHelper {
             childSets.add(ids);
         }
         return switch (operator.getConjunctionType()) {
-            case AND -> occurringExactly(childSets, childSets.size());
-            case XOR -> occurringExactly(childSets, 1);
-            case OR -> union(childSets);
-            case NOR -> complement(union(childSets), dbName, collName);
-            case NAND -> complement(occurringExactly(childSets, childSets.size()), dbName, collName);
+            case AND -> occurringExactly(childSets, childSets.size(), context);
+            case XOR -> occurringExactly(childSets, 1, context);
+            case OR -> union(childSets, context);
+            case NOR -> complement(union(childSets, context), dbName, collName, context);
+            case NAND -> complement(occurringExactly(childSets, childSets.size(), context), dbName, collName, context);
         };
     }
 
-    private static Set<String> union(List<Set<String>> sets) {
+    private static Set<String> union(List<Set<String>> sets, PipelineContext context) {
         final var result = new HashSet<String>();
         for (var set : sets) {
+            context.tick(set.size());
             result.addAll(set);
         }
         return result;
     }
 
-    private static Set<String> occurringExactly(List<Set<String>> sets, int times) {
+    private static Set<String> occurringExactly(List<Set<String>> sets, int times, PipelineContext context) {
         final var counts = new HashMap<String, Integer>();
         for (var set : sets) {
+            context.tick(set.size());
             for (var id : set) {
                 counts.merge(id, 1, Integer::sum);
             }
@@ -473,8 +380,10 @@ public class FilterOperatorHelper {
                 .collect(Collectors.toSet());
     }
 
-    private static Set<String> complement(Set<String> matched, String dbName, String collName) throws IOException {
+    private static Set<String> complement(Set<String> matched, String dbName, String collName, PipelineContext context)
+            throws IOException {
         final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        context.tick(pkIndex.size());
         final var result = new HashSet<String>();
         for (var entry : pkIndex) {
             final var id = entry.getValue();

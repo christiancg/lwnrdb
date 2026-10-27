@@ -163,7 +163,12 @@ derived from `getPrototype() != null`, because a script can assign `Array.from.p
 
 `Interpreter` tree-walks the AST. `Environment` is the scope chain (function-scoped `var`
 hoisting, block-scoped `let`/`const` with a TDZ, `this`/home-class binding, per-iteration loop
-bindings, `using` registrations); `Completion` carries control flow (`NORMAL`/`BREAK`/
+bindings, `using` registrations). A scope keeps up to eight bindings in parallel arrays
+(`BindingTable`) before switching to a map, a block that declares nothing reuses its enclosing
+scope, and a `for (let …)` loop copies its bindings into a fresh scope per iteration only when its
+head or body contains a function, class or method that could capture them (the parser counts
+them into `ForStatement.bindingsCapturable`). Operators are resolved to enums when the program is
+parsed and a function's parameter shape once per function node; `Completion` carries control flow (`NORMAL`/`BREAK`/
 `CONTINUE`/`RETURN`, labelled); `JsOperators` and `JsCoercion` hold operator semantics and
 conversions, including a real `OrdinaryToPrimitive` that consults `[Symbol.toPrimitive]` then
 `valueOf`/`toString` by hint. The other **well-known symbol hooks** are wired at their choke
@@ -198,6 +203,22 @@ objects carrying the primitive in a slot, user classes own real `prototype` obje
 the instance's wrapped primitive, which the wrappers unwrap). `Function` exists so
 `Function.prototype` and `instanceof Function` work, but calling it throws — no runtime code
 generation.
+
+**The realm is built lazily.** A run pays only for the builtins it touches. Each prototype is
+created empty with its `[[Prototype]]` chain in place, and its methods, accessors, tags and
+`constructor` are installed by a deferred setup that runs once, the first time anything reads or
+writes that object's own properties (`JsObject.deferSetup`). The steps chain in the order the
+eager build used, so key order and descriptors are unchanged; `RealmShapeTest` pins every
+intrinsic's keys, flags, `name` and `length` against a golden. Most global constructors and
+namespaces are bound to a memoising holder (`LazyBuiltin`) and created on first read, and a
+multi-name installer (timers, the URI functions, `fetch`, `Temporal`) runs once for its whole
+group; a prototype's deferred `constructor` step shares the constructor's holder, so
+`[].constructor === Array` holds even after `delete globalThis.Array`. `Function`,
+`Iterator`/`AsyncIterator` (their prototypes are linked into other chains) and the `Error` family
+stay eager. A setup step never reads another lazy object's current state: what it needs from one
+(the original `Array.prototype.toString` for `%TypedArray%.prototype`, the default iterators,
+`parseInt`/`parseFloat`) is captured when that object is set up, so an early monkey-patch cannot
+leak into a prototype set up later. A trivial run allocates about 37 KB instead of 387 KB.
 
 ### The regex engine
 
@@ -306,7 +327,14 @@ virtual threads, and a `Cleaner`-based scheme would make the limit GC-timing dep
 dividing line is that `tick()` already bounds allocation costing at least one instruction per
 unit, so the budget only covers what is O(N) in a single instruction. String `+` is charged its
 appended delta, not the combined result (charging the result would make `s += "x"` quadratic,
-while `s = s + s` — the case `tick()` cannot see — has a delta equal to the whole string).
+while `s = s + s` — the case `tick()` cannot see — has a delta equal to the whole string). A
+template literal is charged the same way: every substitution and literal piece it appends, but not
+a string it starts from (`` `${s}row` `` charges `row`). The copy is linear too: once a string
+reaches 256 characters, `+` and a template that starts from it append into a shared buffer instead
+of copying the whole string, so a loop of 400,000 `s += "x"` or a 40,000-row CSV built with `+=`
+costs what its final length costs. Only the string at the end of a buffer appends in place; an
+append to an earlier prefix copies it into a buffer of its own, so every string keeps its value.
+`length` and index reads answer from the buffer; anything else reads the text once and keeps it.
 `db.cursor` batches are the one charge credited back, at a fixed deterministic release point.
 `OutOfMemoryError`/`StackOverflowError` are caught at the `SimpleJs.run` boundary as a last
 resort and reported as `ScriptMemoryError`.
@@ -709,7 +737,7 @@ where the run sits relative to the write path.
 | Surface | Authority | `db` | Budgets | Console | Notes |
 |---|---|---|---|---|---|
 | `RUN_SCRIPT` | caller | yes | `script*` | returned | ad-hoc; parse cached by source hash |
-| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version`, checked by source hash |
+| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version`, checked against the source text |
 | After trigger | **definer** (installer) | yes | `script*`, `triggerTimeoutMs` | logged | async, exactly-once, retried |
 | Before-write hook | recorded, not enforced | **no** | `beforeHook*` | discarded | synchronous, in the write lock, fail-closed |
 | Schedule | **definer** | yes | `scheduleTimeoutMs` | logged | at-most-once per due instant under a stable view |
@@ -990,7 +1018,17 @@ final accumulator is measured against `scriptMaxResultBytes`. A `MAP` script's v
 retained in the row, so it is charged as its JSON text to the same budgets a `CONCAT` pays: the
 row's `maxEntrySize` (`400-28`) and the pipeline's `aggregateMaxResultBytes` (`400-36`). Without
 that charge, each distinct script source would bring its own memory budget and a pipeline with many
-of them could retain far more than the result cap. The deadline is the *pipeline's*,
+of them could retain far more than the result cap. A `REDUCE` script sees each row (and an object
+accumulator) as a lazy view: its keys are copied when the call starts, but a field is converted to
+a script value only when the script reads it, and a nested object converts to another view. A
+`FILTER` script and a `MAP` script (and a `MAP` operator's script condition) see the same lazy
+view, except that the top-level fields a `MAP` step writes are converted when the call starts:
+the step writes into those fields after the script returns, and a row the script kept in module
+state must still show what it saw. A before-write hook still receives a fully converted document. The
+rows a `REDUCE` folds over a cached collection come in (page, `_id`) order from
+`cache/ScanOrderMemo`, which remembers the id order of up to eight collections and proves it still
+holds with one strictly increasing pass before reusing it, so a repeated fold does not re-sort. The
+deadline is the *pipeline's*,
 so a query carrying several scripts cannot outlive the timeout by opening more of them. The two
 windows into a misbehaving pipeline script are `analyze` and the error itself, which names the
 failing function and line.
@@ -1015,7 +1053,14 @@ has already committed. `scriptRunHistoryKinds` selects what is recorded (ad-hoc 
 opt-in, since an exploratory client would write a row per keystroke; `BEFORE_HOOK` records
 refusals only). A row carries the run's identity, outcome, attempt number and metrics; `skipped`
 is the outcome no other surface reports — a trigger whose definer was deleted, a schedule whose
-procedure is gone. An hourly owner-only sweep applies the retention.
+procedure is gone. Rows are written by the background workers in batches, one `BULK_SAVE` per database for
+every run queued together (a batch the owner answers `503-10` retries row by row, any other refusal falls back to
+row-by-row writes so one bad row drops only itself). At most `scriptRunHistoryMaxQueued` rows wait to be written; a
+run finishing while the queue is full is counted in `historyDropped` and not recorded, so a burst of runs never
+exhausts the heap, and `GET_DATABASE_STATS` reports the backlog as `scripts.historyQueued`. An owner-only sweep, every
+`scriptRunHistorySweepMs` (hourly by default), applies the retention and, with `scriptRunHistoryMaxRows` above `0`,
+deletes the oldest rows (by `startedAt`) beyond that cap; it deletes in bulk, page by page, 1024 rows per
+write-ahead-log record.
 
 Script-controlled text in a row (`errorName`, `errorMessage`, each `stack` and `logs` line) that is
 shaped like a custom type — `#name(...)` — is stored with a leading backslash, so `#tag(fix)` reads
@@ -1071,7 +1116,7 @@ influence any of them.
 | Before hooks | `beforeHookInstructionBudget`, `beforeHookTimeoutMs` |
 | Schedules | `scheduleThreads`, `scheduleQueueSize`, `scheduleTickMs`, `scheduleRefreshMs`, `scheduleTimeoutMs`, `scheduleMaxPerDatabase`, `scheduleMaxTotalPerUser`, `scheduleMinIntervalMs` |
 | Pipeline scripts | `aggregationScriptInstructionBudget`, `aggregationScriptTimeoutMs`, `aggregationScriptMaxSourceBytes` |
-| History | `scriptRunHistoryEnabled`, `scriptRunHistoryKinds`, `scriptRunHistoryRetentionMs`, `scriptRunHistoryIncludeLogs`, `scriptRunHistoryMaxErrorChars` |
+| History | `scriptRunHistoryEnabled`, `scriptRunHistoryKinds`, `scriptRunHistoryRetentionMs`, `scriptRunHistoryIncludeLogs`, `scriptRunHistoryMaxErrorChars`, `scriptRunHistoryMaxQueued`, `scriptRunHistoryMaxRows`, `scriptRunHistorySweepMs` |
 | Cluster | `scriptRoutingEnabled`, `scriptLocalityWeight` |
 
 ## Known gaps and divergences

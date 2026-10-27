@@ -2,6 +2,7 @@ package org.techhouse.cache;
 
 import java.io.IOException;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -9,7 +10,6 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -81,12 +81,34 @@ final class IndexLookupResolver {
             throws IOException {
         return readingIndex(dbName, collName, fieldName, () -> {
             final var index = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                    (Class<T>) scalarIndexClass(value));
+                    (Class<T>) IndexKind.scalarIndexClassOf(value));
             if (index == null) {
                 return OptionalLong.empty();
             }
             userCache.recordFieldIndexAccess(dbName, collName, fieldName);
             return OptionalLong.of(SearchUtils.countEquals(index, value));
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    static Set<String> idsEqualToAny(UserCache userCache, String dbName, String collName, String fieldName,
+            List<Object> lookupValues) throws IOException {
+        return readingIndex(dbName, collName, fieldName, () -> {
+            final var indexes = new IdentityHashMap<Class<?>, List<FieldIndexEntry<Object>>>();
+            final var ids = new HashSet<String>();
+            for (final var value : lookupValues) {
+                final var type = (Class<Object>) IndexKind.scalarIndexClassOf(value);
+                if (!indexes.containsKey(type)) {
+                    indexes.put(type, userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type));
+                }
+                final var index = indexes.get(type);
+                if (index == null) {
+                    return null;
+                }
+                ids.addAll(SearchUtils.findingByOperator(index, FieldOperatorType.EQUALS, value));
+            }
+            userCache.recordFieldIndexAccess(dbName, collName, fieldName);
+            return ids;
         });
     }
 
@@ -126,22 +148,12 @@ final class IndexLookupResolver {
     private static <T> Set<String> scalarLookup(UserCache userCache, String dbName, String collName, String fieldName,
             FieldOperatorType opType, T value) throws IOException {
         final var index = complementSafeIndex(userCache, dbName, collName, fieldName, opType,
-                (Class<T>) scalarIndexClass(value));
+                (Class<T>) IndexKind.scalarIndexClassOf(value));
         if (index == null || (opType == FieldOperatorType.CONTAINS && value instanceof String
                 && hasAnotherIndex(userCache, dbName, collName, fieldName, String.class, null))) {
             return null;
         }
         return SearchUtils.findingByOperator(index, opType, value);
-    }
-
-    private static Class<?> scalarIndexClass(Object value) {
-        return switch (value) {
-            case Number _ -> Number.class;
-            case Boolean _ -> Boolean.class;
-            case String _ -> String.class;
-            case JsonCustom<?> custom -> CustomTypeFactory.getCustomTypes().get(custom.getCustomTypeName());
-            default -> throw new IllegalStateException("Unexpected value: " + value);
-        };
     }
 
     private static boolean isHeterogeneous(JsonArray arr) {
@@ -275,7 +287,7 @@ final class IndexLookupResolver {
             return null;
         }
         final var index = complementSafeIndex(userCache, dbName, collName, fieldName, opType,
-                (Class<T>) scalarIndexClass(firstValue));
+                (Class<T>) IndexKind.scalarIndexClassOf(firstValue));
         return index != null
                 ? SearchUtils.findingInNotIn(index, opType,
                         (List<T>) arr.asList().stream().map(IndexLookupResolver::indexedValue).toList())

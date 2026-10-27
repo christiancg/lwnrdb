@@ -67,7 +67,7 @@ public final class VectorSimilarityIndexHelper {
 
     private static Set<String> collectNeighbourhood(List<FieldIndexEntry<JsonVector>> entries, double[] query,
             int budget) {
-        final var querySignature = VectorUtils.simHash(query, JsonVector.SIMHASH_BITS);
+        final var querySignature = VectorUtils.simHashBits(query, JsonVector.SIMHASH_BITS);
         final var start = lowerBound(entries, querySignature);
         final var ids = new HashSet<String>();
         var lo = start - 1;
@@ -88,12 +88,12 @@ public final class VectorSimilarityIndexHelper {
         return ids;
     }
 
-    private static int lowerBound(List<FieldIndexEntry<JsonVector>> entries, String signature) {
+    private static int lowerBound(List<FieldIndexEntry<JsonVector>> entries, int signature) {
         var lo = 0;
         var hi = entries.size();
         while (lo < hi) {
             final var mid = (lo + hi) >>> 1;
-            if (entries.get(mid).getValue().simHash().compareTo(signature) < 0) {
+            if (Integer.compareUnsigned(entries.get(mid).getValue().signature(), signature) < 0) {
                 lo = mid + 1;
             } else {
                 hi = mid;

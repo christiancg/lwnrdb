@@ -3,8 +3,10 @@ package org.techhouse.fs;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Function;
 import java.util.function.LongFunction;
@@ -80,31 +82,48 @@ final class RecordReplacer {
             plan.blank(oldRow.getPage(), oldRow.getPosition(), oldRow.getLength());
             plan.commit(null, FaultPoint.PK_ROW_COMMITTED);
             if (before != null) {
-                vacuumAfterDelete(oldRow, residentRows,
-                        new PageOccupancy(before.liveBytes() - oldRow.getLength(), before.rows() - 1), page,
-                        fileLength);
+                vacuumAfterDelete(dbName, collName, oldRow.getPage(), residentRows,
+                        new PageOccupancy(before.liveBytes() - oldRow.getLength(), before.rows() - 1), page, fileLength,
+                        oldRow.getValue());
             }
         } finally {
             lock.unlock();
         }
     }
 
-    private void vacuumAfterDelete(PkIndexEntry deleted, List<PkIndexEntry> residentRows, PageOccupancy after,
-            File page, long fileLength) {
+    void vacuumAfterDeletes(String dbName, String collName, Collection<Long> pages, List<PkIndexEntry> residentRows,
+            LongFunction<PageOccupancy> occupancy) {
+        for (final var pageNumber : new TreeSet<>(pages)) {
+            final var page = paths.collectionPage(dbName, collName, pageNumber);
+            final var lock = FileLocks.lockWrite(page);
+            try {
+                final var after = occupancy.apply(pageNumber);
+                if (after != null) {
+                    vacuumAfterDelete(dbName, collName, pageNumber, residentRows, after, page, page.length(), null);
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+
+    private void vacuumAfterDelete(String dbName, String collName, long pageNumber, List<PkIndexEntry> residentRows,
+            PageOccupancy after, File page, long fileLength, String deletedId) {
         if (!PagePlacement.vacuumsAfterDelete(after.liveBytes(), fileLength, configuration.getMaxPageSize())) {
             return;
         }
         try {
-            vacuum.vacuumAfterDelete(deleted.getDatabaseName(), deleted.getCollectionName(), deleted.getPage(),
-                    residentRows, after, deleted.getValue());
+            vacuum.vacuumAfterDelete(dbName, collName, pageNumber, residentRows, after, deletedId);
         } catch (IOException e) {
-            logger.warning("Deleted '" + deleted.getValue() + "' from " + page.getName() + " but could not vacuum the"
-                    + " page after it; the delete stands and a later write vacuums the page: " + e.getMessage());
+            logger.warning("Deleted " + (deletedId == null ? "records" : "'" + deletedId + "'") + " from "
+                    + page.getName() + " but could not vacuum the page after it; the delete stands and a later write"
+                    + " vacuums the page: " + e.getMessage());
         }
     }
 
     List<IndexedDbEntry> bulkReplace(String dbName, String collName, List<IndexedDbEntry> entries,
-            List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines) throws IOException {
+            List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
         if (entries.isEmpty()) {
             return List.of();
         }
@@ -124,7 +143,8 @@ final class RecordReplacer {
             locks.add(FileLocks.lockWrite(file));
         }
         try {
-            final var positions = positionsAfterVacuums(dbName, collName, entries, lines, groups, files, residentRows);
+            final var positions = positionsAfterVacuums(dbName, collName, entries, lines, groups, files, residentRows,
+                    occupancy);
             final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
             final var newRows = new PkIndexEntry[entries.size()];
             for (final var group : groups.entrySet()) {
@@ -147,8 +167,8 @@ final class RecordReplacer {
     }
 
     private long[] positionsAfterVacuums(String dbName, String collName, List<IndexedDbEntry> entries, byte[][] lines,
-            TreeMap<Long, List<Integer>> groups, TreeMap<Long, File> files, List<PkIndexEntry> residentRows)
-            throws IOException {
+            TreeMap<Long, List<Integer>> groups, TreeMap<Long, File> files, List<PkIndexEntry> residentRows,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
         final var positions = new long[entries.size()];
         for (final var group : groups.entrySet()) {
             var appended = 0L;
@@ -156,7 +176,8 @@ final class RecordReplacer {
                 positions[index] = entries.get(index).getIndex().getPosition();
                 appended += lines[index].length;
             }
-            final var vacuumed = vacuum.vacuumIfNeeded(dbName, collName, group.getKey(), appended, null, residentRows);
+            final var vacuumed = vacuum.vacuumIfNeeded(dbName, collName, group.getKey(), appended, null, residentRows,
+                    occupancy);
             final var pageLength = files.get(group.getKey()).length();
             for (final var index : group.getValue()) {
                 final var oldRow = entries.get(index).getIndex();

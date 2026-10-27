@@ -102,7 +102,7 @@ public class AdminRecordMergeTest extends AdminRecordTestBase {
         final var result = AdminRecordMerge.apply(List.of(schema("gonecoll", schemaVersion)), true);
 
         assertTrue(result.complete());
-        assertNull(fs.readCollectionSchema(TestGlobals.DB, "gonecoll"));
+        assertNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, "gonecoll"));
     }
 
     @Test

@@ -5,6 +5,8 @@ import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.nodes.BinaryOperator;
+import org.techhouse.simplejs.nodes.UnaryOperator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNull;
@@ -24,16 +26,21 @@ public final class JsOperators {
     }
 
     public static JsValue binary(String operator, JsValue left, JsValue right, InterpreterOps ops) {
+        return binary(BinaryOperator.of(operator), left, right, ops);
+    }
+
+    public static JsValue binary(BinaryOperator operator, JsValue left, JsValue right, InterpreterOps ops) {
         return switch (operator) {
-            case "+" -> add(left, right, ops);
-            case "-", "*", "/", "%", "**" -> arithmetic(operator, left, right, ops);
-            case "&", "|", "^", "<<", ">>", ">>>" -> bitwise(operator, left, right, ops);
-            case "<", "<=", ">", ">=" -> JsBoolean.of(relational(operator, left, right, ops));
-            case "==" -> JsBoolean.of(looseEquals(left, right, ops));
-            case "!=" -> JsBoolean.of(!looseEquals(left, right, ops));
-            case "===" -> JsBoolean.of(strictEquals(left, right));
-            case "!==" -> JsBoolean.of(!strictEquals(left, right));
-            default -> throw new TypeErrorException("Unknown binary operator: " + operator);
+            case ADD -> add(left, right, ops);
+            case SUBTRACT, MULTIPLY, DIVIDE, REMAINDER, EXPONENT -> arithmetic(operator, left, right, ops);
+            case BIT_AND, BIT_OR, BIT_XOR, SHIFT_LEFT, SHIFT_RIGHT, UNSIGNED_SHIFT_RIGHT ->
+                bitwise(operator, left, right, ops);
+            case LESS, LESS_EQUAL, GREATER, GREATER_EQUAL -> JsBoolean.of(relational(operator, left, right, ops));
+            case LOOSE_EQUAL -> JsBoolean.of(looseEquals(left, right, ops));
+            case LOOSE_NOT_EQUAL -> JsBoolean.of(!looseEquals(left, right, ops));
+            case STRICT_EQUAL -> JsBoolean.of(strictEquals(left, right));
+            case STRICT_NOT_EQUAL -> JsBoolean.of(!strictEquals(left, right));
+            case INSTANCEOF, IN -> throw new TypeErrorException("Unknown binary operator: " + operator.token());
         };
     }
 
@@ -106,14 +113,18 @@ public final class JsOperators {
     }
 
     public static JsValue unary(String operator, JsValue operand, InterpreterOps ops) {
+        return unary(UnaryOperator.of(operator), operand, ops);
+    }
+
+    public static JsValue unary(UnaryOperator operator, JsValue operand, InterpreterOps ops) {
         return switch (operator) {
-            case "!" -> JsBoolean.of(!JsCoercion.toBoolean(operand));
-            case "-" -> negate(operand, ops);
-            case "+" -> new JsNumber(JsCoercion.toNumber(operand, ops));
-            case "~" -> bitwiseNot(operand, ops);
-            case "typeof" -> new JsString(JsCoercion.typeOf(operand));
-            case "void" -> JsUndefined.getInstance();
-            default -> throw new TypeErrorException("Unknown unary operator: " + operator);
+            case NOT -> JsBoolean.of(!JsCoercion.toBoolean(operand));
+            case NEGATE -> negate(operand, ops);
+            case PLUS -> new JsNumber(JsCoercion.toNumber(operand, ops));
+            case BIT_NOT -> bitwiseNot(operand, ops);
+            case TYPEOF -> new JsString(JsCoercion.typeOf(operand));
+            case VOID -> JsUndefined.getInstance();
+            case DELETE -> throw new TypeErrorException("Unknown unary operator: " + operator.token());
         };
     }
 
@@ -153,11 +164,16 @@ public final class JsOperators {
     private static JsValue add(JsValue left, JsValue right, InterpreterOps ops) {
         final var leftPrim = JsCoercion.toPrimitive(left, "default", ops);
         final var rightPrim = JsCoercion.toPrimitive(right, "default", ops);
-        if (leftPrim instanceof JsString || rightPrim instanceof JsString) {
+        if (leftPrim instanceof JsString leftString) {
+            final var rightText = JsCoercion.toStr(rightPrim, ops);
+            InterpreterOps.chargeChars(ops, unchargedLength(rightPrim, rightText));
+            InterpreterOps.noteChars(ops, (long) leftString.length() + rightText.length());
+            return leftString.concat(rightText);
+        }
+        if (rightPrim instanceof JsString) {
             final var leftText = JsCoercion.toStr(leftPrim, ops);
             final var rightText = JsCoercion.toStr(rightPrim, ops);
-            final var freshLeft = leftPrim instanceof JsString ? 0 : unchargedLength(leftPrim, leftText);
-            InterpreterOps.chargeChars(ops, freshLeft + unchargedLength(rightPrim, rightText));
+            InterpreterOps.chargeChars(ops, unchargedLength(leftPrim, leftText) + rightText.length());
             InterpreterOps.noteChars(ops, (long) leftText.length() + rightText.length());
             return new JsString(leftText + rightText);
         }
@@ -173,7 +189,7 @@ public final class JsOperators {
         return primitive instanceof JsBigInt ? 0 : text.length();
     }
 
-    private static JsValue arithmetic(String operator, JsValue left, JsValue right, InterpreterOps ops) {
+    private static JsValue arithmetic(BinaryOperator operator, JsValue left, JsValue right, InterpreterOps ops) {
         final var lnum = JsCoercion.toNumeric(left, ops);
         final var rnum = JsCoercion.toNumeric(right, ops);
         if (lnum instanceof JsBigInt x && rnum instanceof JsBigInt y) {
@@ -184,23 +200,23 @@ public final class JsOperators {
         final var a = ((JsNumber) lnum).getValue();
         final var b = ((JsNumber) rnum).getValue();
         return new JsNumber(switch (operator) {
-            case "-" -> a - b;
-            case "*" -> a * b;
-            case "/" -> a / b;
-            case "%" -> a % b;
-            case "**" -> Math.pow(a, b);
-            default -> throw new TypeErrorException("Unknown arithmetic operator: " + operator);
+            case SUBTRACT -> a - b;
+            case MULTIPLY -> a * b;
+            case DIVIDE -> a / b;
+            case REMAINDER -> a % b;
+            case EXPONENT -> Math.pow(a, b);
+            default -> throw new TypeErrorException("Unknown arithmetic operator: " + operator.token());
         });
     }
 
-    private static JsValue bigIntArithmetic(String operator, BigInteger a, BigInteger b, InterpreterOps ops) {
+    private static JsValue bigIntArithmetic(BinaryOperator operator, BigInteger a, BigInteger b, InterpreterOps ops) {
         return new JsBigInt(switch (operator) {
-            case "-" -> BigIntLimits.subtract(a, b, ops);
-            case "*" -> BigIntLimits.multiply(a, b, ops);
-            case "/" -> requireNonZero(b) ? sizeChecked(a, b, ops).divide(b) : a;
-            case "%" -> requireNonZero(b) ? sizeChecked(a, b, ops).remainder(b) : a;
-            case "**" -> BigIntLimits.pow(a, b, ops);
-            default -> throw new TypeErrorException("Unknown arithmetic operator: " + operator);
+            case SUBTRACT -> BigIntLimits.subtract(a, b, ops);
+            case MULTIPLY -> BigIntLimits.multiply(a, b, ops);
+            case DIVIDE -> requireNonZero(b) ? sizeChecked(a, b, ops).divide(b) : a;
+            case REMAINDER -> requireNonZero(b) ? sizeChecked(a, b, ops).remainder(b) : a;
+            case EXPONENT -> BigIntLimits.pow(a, b, ops);
+            default -> throw new TypeErrorException("Unknown arithmetic operator: " + operator.token());
         });
     }
 
@@ -216,41 +232,41 @@ public final class JsOperators {
         return true;
     }
 
-    private static JsValue bitwise(String operator, JsValue left, JsValue right, InterpreterOps ops) {
+    private static JsValue bitwise(BinaryOperator operator, JsValue left, JsValue right, InterpreterOps ops) {
         final var lnum = JsCoercion.toNumeric(left, ops);
         final var rnum = JsCoercion.toNumeric(right, ops);
         if (lnum instanceof JsBigInt x && rnum instanceof JsBigInt y) {
             return bigIntBitwise(operator, x.getValue(), y.getValue(), ops);
         }
         requireNoMixedBigInt(lnum, rnum);
-        if (">>>".equals(operator)) {
+        if (operator == BinaryOperator.UNSIGNED_SHIFT_RIGHT) {
             final var result = toUint32(lnum) >>> (toUint32(rnum) & 0x1f);
             return new JsNumber(result);
         }
         final var a = toInt32(lnum);
         final var b = toInt32(rnum);
         return new JsNumber(switch (operator) {
-            case "&" -> a & b;
-            case "|" -> a | b;
-            case "^" -> a ^ b;
-            case "<<" -> a << (b & 0x1f);
-            case ">>" -> a >> (b & 0x1f);
-            default -> throw new TypeErrorException("Unknown bitwise operator: " + operator);
+            case BIT_AND -> a & b;
+            case BIT_OR -> a | b;
+            case BIT_XOR -> a ^ b;
+            case SHIFT_LEFT -> a << (b & 0x1f);
+            case SHIFT_RIGHT -> a >> (b & 0x1f);
+            default -> throw new TypeErrorException("Unknown bitwise operator: " + operator.token());
         });
     }
 
-    private static JsValue bigIntBitwise(String operator, BigInteger a, BigInteger b, InterpreterOps ops) {
+    private static JsValue bigIntBitwise(BinaryOperator operator, BigInteger a, BigInteger b, InterpreterOps ops) {
         return new JsBigInt(switch (operator) {
-            case "&" -> sizeChecked(a, b, ops).and(b);
-            case "|" -> sizeChecked(a, b, ops).or(b);
-            case "^" -> sizeChecked(a, b, ops).xor(b);
-            case "<<" -> BigIntLimits.shiftLeft(a, b, ops);
-            case ">>" -> BigIntLimits.shiftRight(sizeChecked(a, b, ops), b, ops);
+            case BIT_AND -> sizeChecked(a, b, ops).and(b);
+            case BIT_OR -> sizeChecked(a, b, ops).or(b);
+            case BIT_XOR -> sizeChecked(a, b, ops).xor(b);
+            case SHIFT_LEFT -> BigIntLimits.shiftLeft(a, b, ops);
+            case SHIFT_RIGHT -> BigIntLimits.shiftRight(sizeChecked(a, b, ops), b, ops);
             default -> throw new TypeErrorException("BigInts have no unsigned right shift");
         });
     }
 
-    private static boolean relational(String operator, JsValue left, JsValue right, InterpreterOps ops) {
+    private static boolean relational(BinaryOperator operator, JsValue left, JsValue right, InterpreterOps ops) {
         final var leftPrim = JsCoercion.toPrimitive(left, "number", ops);
         final var rightPrim = JsCoercion.toPrimitive(right, "number", ops);
         final var sign = compare(leftPrim, rightPrim);
@@ -258,11 +274,11 @@ public final class JsOperators {
             return false;
         }
         return switch (operator) {
-            case "<" -> sign < 0;
-            case "<=" -> sign <= 0;
-            case ">" -> sign > 0;
-            case ">=" -> sign >= 0;
-            default -> throw new TypeErrorException("Unknown relational operator: " + operator);
+            case LESS -> sign < 0;
+            case LESS_EQUAL -> sign <= 0;
+            case GREATER -> sign > 0;
+            case GREATER_EQUAL -> sign >= 0;
+            default -> throw new TypeErrorException("Unknown relational operator: " + operator.token());
         };
     }
 

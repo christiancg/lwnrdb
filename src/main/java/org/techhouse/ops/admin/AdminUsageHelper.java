@@ -2,11 +2,14 @@ package org.techhouse.ops.admin;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
+import java.util.Set;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.cache.UsageCounter;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -21,6 +24,26 @@ public final class AdminUsageHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
+    private static final int USAGE_ROWS_PER_RECORD = 1024;
+    private static final AdminBatchWrite.PkRows USAGE_ROWS = new AdminBatchWrite.PkRows() {
+        @Override
+        public PkIndexEntry get(String id) {
+            return cache.getPkIndexCollectionUsage(id);
+        }
+
+        @Override
+        public void publish(PkIndexEntry row) {
+            cache.putPkIndexCollectionUsage(row);
+        }
+
+        @Override
+        public void unpublish(Set<String> ids) {
+            for (final var id : ids) {
+                cache.removePkIndexCollectionUsage(id);
+            }
+        }
+    };
+
     private AdminUsageHelper() {
     }
 
@@ -32,45 +55,45 @@ public final class AdminUsageHelper {
         locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
     }
 
-    public static void upsertCollectionUsage(CollectionUsageEvent event) throws IOException, InterruptedException {
-        if (Globals.ADMIN_DB_NAME.equals(event.getDbName())) {
-            return;
-        }
-        if (cache.getAdminCollectionEntry(event.getDbName(), event.getCollName()) == null) {
-            return;
-        }
-        final var counter = memoryManagement.getCounter(event.getKind(), event.getDbName(), event.getCollName(),
-                event.getIndexKey());
-        if (counter == null) {
-            return;
-        }
+    public static void flushCollectionUsage(List<UsageCounter> counters) throws IOException, InterruptedException {
         lockUsageCollection();
         try {
-            final var entryId = AdminCollectionUsageEntry.buildId(counter.dbName(), counter.collName(),
-                    counter.indexKey());
-            final var usageEntry = new AdminCollectionUsageEntry(counter.kind(), counter.dbName(), counter.collName(),
-                    counter.indexKey(), counter.getAccessCount(), counter.getLastAccessMillis());
-            final var existingPk = cache.getPkIndexCollectionUsage(entryId);
-            PkIndexEntry savedPk;
-            final var encodedLine = usageEntry.encodeLine();
-            if (existingPk != null) {
-                usageEntry.setPage(existingPk.getPage());
-                usageEntry.setPreviousByteSize(existingPk.getLength());
-                savedPk = fs.updateFromCollection(usageEntry, existingPk, encodedLine,
-                        AdminResidentRows.of(Globals.ADMIN_COLLECTION_USAGE_NAME));
-                AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.UPDATED,
-                        List.of(usageEntry));
-            } else {
-                usageEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                        encodedLine.length));
-                savedPk = fs.insertIntoCollection(usageEntry, encodedLine);
-                AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.CREATED,
-                        List.of(usageEntry));
+            final var rows = new LinkedHashMap<String, AdminCollectionUsageEntry>();
+            for (final var counter : counters) {
+                final var row = rowOf(counter);
+                if (row != null) {
+                    rows.remove(row.get_id());
+                    rows.put(row.get_id(), row);
+                }
             }
-            cache.putPkIndexCollectionUsage(savedPk);
+            final var lines = new HashMap<String, byte[]>();
+            for (final var row : rows.values()) {
+                lines.put(row.get_id(), row.encodeLine());
+            }
+            final var pending = new ArrayList<>(rows.values());
+            for (var from = 0; from < pending.size(); from += USAGE_ROWS_PER_RECORD) {
+                final var chunk = new ArrayList<>(
+                        pending.subList(from, Math.min(pending.size(), from + USAGE_ROWS_PER_RECORD)));
+                AdminBatchWrite.write(Globals.ADMIN_COLLECTION_USAGE_NAME, USAGE_ROWS, chunk,
+                        row -> lines.get(row.get_id()), List.of());
+            }
         } finally {
             releaseUsageCollection();
         }
+    }
+
+    private static AdminCollectionUsageEntry rowOf(UsageCounter counter) {
+        if (Globals.ADMIN_DB_NAME.equals(counter.dbName())
+                || cache.getAdminCollectionEntry(counter.dbName(), counter.collName()) == null) {
+            return null;
+        }
+        final var live = memoryManagement.getCounter(counter.kind(), counter.dbName(), counter.collName(),
+                counter.indexKey());
+        if (live == null) {
+            return null;
+        }
+        return new AdminCollectionUsageEntry(live.kind(), live.dbName(), live.collName(), live.indexKey(),
+                live.getAccessCount(), live.getLastAccessMillis());
     }
 
     public static void cleanupCollectionUsage(long maxAgeMillis) throws IOException, InterruptedException {

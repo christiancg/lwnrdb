@@ -100,7 +100,7 @@ public class SchemaPatternCapsOperationTest {
         assertTrue(response.getMessage().startsWith(ErrorCode.SCHEMA_TOO_MANY_PATTERNS.getDefaultMessage()));
         assertFalse(compiledPatterns().containsKey("^caps-a$"));
         assertNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
-        assertNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
@@ -110,7 +110,7 @@ public class SchemaPatternCapsOperationTest {
         final var response = processor.processMessage(saveSchema(schemaWithPatterns("^at-a$", "^at-b$", "^at-c$")));
 
         assertInstanceOf(SaveSchemaResponse.class, response);
-        assertNotNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNotNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
@@ -120,12 +120,13 @@ public class SchemaPatternCapsOperationTest {
         final var response = processor.processMessage(saveSchema(schemaWithPatterns(tooLong)));
 
         assertEquals(ErrorCode.SCHEMA_PATTERN_TOO_LONG.getCode(), response.getErrorCode());
-        assertNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(fs.metadataFiles().readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
     public void test_a_stored_schema_over_the_caps_is_loaded_and_still_validates_writes() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, schemaWithPatterns("^stored-[a-z]+$", "^other$"));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL,
+                schemaWithPatterns("^stored-[a-z]+$", "^other$"));
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
         TestUtils.setPrivateField(configuration, MAX_PATTERNS, 1);
 

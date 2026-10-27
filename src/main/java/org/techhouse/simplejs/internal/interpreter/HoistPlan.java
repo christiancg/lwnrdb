@@ -3,6 +3,7 @@ package org.techhouse.simplejs.internal.interpreter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import org.techhouse.simplejs.nodes.ClassDeclaration;
 import org.techhouse.simplejs.nodes.ExportNamedDeclaration;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.JsNode;
@@ -26,10 +27,16 @@ public final class HoistPlan {
 
     private final List<Action> actions;
     private final boolean declaresUsing;
+    private final boolean scopeFree;
 
-    private HoistPlan(List<Action> actions, boolean declaresUsing) {
+    private HoistPlan(List<Action> actions, boolean declaresUsing, boolean scopeFree) {
         this.actions = actions;
         this.declaresUsing = declaresUsing;
+        this.scopeFree = scopeFree;
+    }
+
+    public boolean scopeFree() {
+        return scopeFree;
     }
 
     public List<Action> actions() {
@@ -65,13 +72,16 @@ public final class HoistPlan {
                 actions.add(new Action.DeclareFunction(declaration));
             }
         }
+        var declaresClass = false;
         for (final var statement : body) {
             if (statement instanceof VariableDeclaration declaration && USING_KINDS.contains(declaration.getKind())) {
                 declaresUsing = true;
-                break;
             }
+            declaresClass |= statement instanceof ClassDeclaration;
         }
-        return new HoistPlan(List.copyOf(actions), declaresUsing);
+        final var scopeFree = !declaresUsing && !declaresClass
+                && actions.stream().allMatch(action -> action instanceof Action.DeclareVar);
+        return new HoistPlan(List.copyOf(actions), declaresUsing, scopeFree);
     }
 
     @FunctionalInterface

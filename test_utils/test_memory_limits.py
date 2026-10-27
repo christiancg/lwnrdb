@@ -1,8 +1,10 @@
 import os
-import sys
-import time
 import random
+import shutil
 import string
+import sys
+import tempfile
+import time
 
 import base_utils as bu
 from base_utils import Conn, check, check_status, section
@@ -265,6 +267,221 @@ def test_resident_index_does_not_slow_unrelated_saves(c: Conn):
           "every admission re-measures each resident field index again")
 
 
+ADMISSION_PORT = int(os.environ.get("MEMORY_ADMISSION_TEST_PORT", "9449"))
+ADMISSION_MAX_MEMORY = "6mb"
+ADMISSION_DB = "admission_db"
+ADMISSION_ORDERS = "orders"
+ADMISSION_FILLER = "filler"
+ADMISSION_ORDER_DOCS = 20_000
+ADMISSION_FILLER_DOCS = 6_000
+ADMISSION_UPDATES = 300
+
+
+def admission_save_ms(c: Conn, label: str) -> float:
+    started = time.perf_counter()
+    for i in range(ADMISSION_UPDATES):
+        n = (i * 7919) % ADMISSION_ORDER_DOCS
+        c.send({"type": "SAVE", "databaseName": ADMISSION_DB, "collectionName": ADMISSION_ORDERS,
+                "object": {"_id": f"o{n:06d}", "cat": f"c{(n + len(label)) % 20}", "n": n}})
+    return (time.perf_counter() - started) * 1000.0 / ADMISSION_UPDATES
+
+
+def load_admission_fixture(c: Conn):
+    c.send({"type": "CREATE_DATABASE", "databaseName": ADMISSION_DB})
+    for coll in (ADMISSION_ORDERS, ADMISSION_FILLER):
+        c.send({"type": "CREATE_COLLECTION", "databaseName": ADMISSION_DB, "collectionName": coll})
+    for start in range(0, ADMISSION_ORDER_DOCS, 2_000):
+        c.send({"type": "BULK_SAVE", "databaseName": ADMISSION_DB, "collectionName": ADMISSION_ORDERS,
+                "objects": [{"_id": f"o{i:06d}", "cat": f"c{i % 20}", "n": i}
+                            for i in range(start, start + 2_000)]}, timeout=120)
+    for start in range(0, ADMISSION_FILLER_DOCS, 2_000):
+        c.send({"type": "BULK_SAVE", "databaseName": ADMISSION_DB, "collectionName": ADMISSION_FILLER,
+                "objects": [{"_id": f"f{i:05d}", "payload": rand_str(PAYLOAD_BYTES)}
+                            for i in range(start, start + 2_000)]}, timeout=120)
+    check_status("CREATE_INDEX on orders.cat",
+                 c.send({"type": "CREATE_INDEX", "databaseName": ADMISSION_DB, "collectionName": ADMISSION_ORDERS,
+                         "fieldName": "cat"}, timeout=120), "OK")
+
+
+def test_index_admission_evicts_documents_under_a_full_cache():
+    section(f"Index admission evicts documents when scans have filled a {ADMISSION_MAX_MEMORY} cache")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-admission-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, ADMISSION_PORT, maxMemory=ADMISSION_MAX_MEMORY, syncWrites=False)
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path, port=ADMISSION_PORT)
+        with Conn(port=ADMISSION_PORT) as c:
+            c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+            load_admission_fixture(c)
+        bu.stop_server(proc, port=ADMISSION_PORT)
+        proc = bu.start_server(work_dir, log_path, port=ADMISSION_PORT)
+        with Conn(port=ADMISSION_PORT) as c:
+            c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+            admission_save_ms(c, "warm")
+            baseline_ms = admission_save_ms(c, "baseline")
+        bu.stop_server(proc, port=ADMISSION_PORT)
+        proc = bu.start_server(work_dir, log_path, port=ADMISSION_PORT)
+        with Conn(port=ADMISSION_PORT) as c:
+            c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+            for _ in range(3):
+                c.send({"type": "AGGREGATE", "databaseName": ADMISSION_DB, "collectionName": ADMISSION_FILLER,
+                        "aggregationSteps": [bu.filter_step("payload", "NOT_EQUALS", "none")]}, timeout=120)
+            mem = stats(c).get("stats", {}).get("memory", {})
+            filled = mem.get("userCacheBytes", 0) / max(mem.get("maxMemoryBytes", 1), 1)
+            print(f"  [stats] the filler scans left the cache {filled * 100:.0f}% full of documents")
+            admission_save_ms(c, "warm")
+            full_ms = admission_save_ms(c, "full")
+            snapshot = stats(c).get("stats", {})
+        budget_ms = max(baseline_ms * LATENCY_RATIO_BUDGET, baseline_ms + LATENCY_NOISE_FLOOR_MS)
+        check(f"SAVE updates under a cache full of documents stay within {LATENCY_RATIO_BUDGET:.0f}x the "
+              f"uncached baseline (baseline {baseline_ms:.2f} ms, full {full_ms:.2f} ms)",
+              full_ms <= budget_ms, "index lists and lookups were refused instead of evicting documents")
+        assert_cache_respects_cap("admission eviction keeps the cache within its cap", snapshot)
+    finally:
+        bu.stop_server(proc, port=ADMISSION_PORT, wait_for_port=False)
+        if bu.failure_count():
+            bu.dump_log(log_path)
+
+
+OWN_PORT = int(os.environ.get("MEMORY_TEST_OWN_PORT", "9448"))
+TIGHT_MAX_MEMORY = "2mb"
+TIGHT_DB = "tight_db"
+TIGHT_COLL = "tight_coll"
+SHARED_COLL = "shared_ids_coll"
+TIGHT_DOCS = int(os.environ.get("MEMORY_TEST_TIGHT_DOCS", "20000"))
+SHARED_DOCS = 2_000
+TIGHT_UPDATES = 300
+TIGHT_UPDATE_BUDGET_MS = 50.0
+TIGHT_CONVERGE_S = 60.0
+
+
+def tight_probes() -> list:
+    return [[bu.filter_step("n", "EQUALS", 7)], [bu.filter_step("s", "EQUALS", "s3")],
+            [bu.filter_step("t", "EQUALS", True), {"type": "COUNT"}],
+            [bu.filter_step("n", "GREATER_THAN_EQUALS", 45)]]
+
+
+def answers(c: Conn, coll: str, steps: list):
+    r = c.send({"type": "AGGREGATE", "databaseName": TIGHT_DB, "collectionName": coll, "aggregationSteps": steps},
+               timeout=120)
+    rows = r.get("results") or []
+    return sorted(row.get("_id", str(row)) for row in rows)
+
+
+def mismatched_probes(c: Conn, coll: str) -> list:
+    mismatched = []
+    for steps in tight_probes():
+        if answers(c, coll, steps) != answers(c, coll, [{"type": "SKIP", "skip": 0}] + steps):
+            mismatched.append(steps[0]["operator"])
+    return mismatched
+
+
+def load_indexed(c: Conn, coll: str, documents: int):
+    check_status(f"create {coll}", c.send({"type": "CREATE_COLLECTION", "databaseName": TIGHT_DB,
+                                           "collectionName": coll}), "OK")
+    for start in range(0, documents, BULK_BATCH_SIZE):
+        r = c.send({"type": "BULK_SAVE", "databaseName": TIGHT_DB, "collectionName": coll,
+                    "objects": [{"_id": f"{coll}-{i:06d}", "n": i % 50, "s": f"s{i % 40}", "t": i % 2 == 0,
+                                 "pad": "p" * 64} for i in range(start, min(documents, start + BULK_BATCH_SIZE))]},
+                   timeout=120)
+        if r.get("status") != "OK":
+            check_status(f"BULK_SAVE into {coll}", r, "OK")
+            return
+    for field in ("n", "s", "t"):
+        check_status(f"CREATE_INDEX {coll}.{field}",
+                     c.send({"type": "CREATE_INDEX", "databaseName": TIGHT_DB, "collectionName": coll,
+                             "fieldName": field}, timeout=300), "OK")
+
+
+def test_indexed_updates_stay_cheap_under_max_memory(c: Conn):
+    section(f"{TIGHT_UPDATES} updates on {TIGHT_DOCS} documents with 3 indexes under maxMemory={TIGHT_MAX_MEMORY}")
+    c.send({"type": "CREATE_DATABASE", "databaseName": TIGHT_DB})
+    load_indexed(c, TIGHT_COLL, TIGHT_DOCS)
+    rng = random.Random(20261025)
+    started = time.perf_counter()
+    for _ in range(TIGHT_UPDATES):
+        i = rng.randrange(TIGHT_DOCS)
+        r = c.send({"type": "SAVE", "databaseName": TIGHT_DB, "collectionName": TIGHT_COLL,
+                    "object": {"_id": f"{TIGHT_COLL}-{i:06d}", "n": rng.randrange(60), "s": f"s{rng.randrange(45)}",
+                               "t": rng.random() < 0.5, "pad": "u" * 64}})
+        if r.get("status") != "OK":
+            check_status("an indexed update under a tight maxMemory", r, "OK")
+            return
+    per_update_ms = (time.perf_counter() - started) * 1000.0 / TIGHT_UPDATES
+    converge_started = time.perf_counter()
+    converged = bu.wait_until(lambda: not mismatched_probes(c, TIGHT_COLL), TIGHT_CONVERGE_S, interval_s=1.0)
+    converge_s = time.perf_counter() - converge_started
+    check(f"an indexed update averages under {TIGHT_UPDATE_BUDGET_MS:.0f} ms ({per_update_ms:.2f} ms)",
+          per_update_ms <= TIGHT_UPDATE_BUDGET_MS)
+    check(f"every index answers like a scan once the background batches ran ({converge_s:.1f} s)",
+          converged, detail=str(mismatched_probes(c, TIGHT_COLL)))
+
+
+def test_correctness_after_the_pk_list_is_evicted(c: Conn):
+    section("Index answers stay exact after the pk list their resident ids share is evicted")
+    load_indexed(c, SHARED_COLL, SHARED_DOCS)
+    check("the small collection's indexes answer like a scan before any eviction",
+          not mismatched_probes(c, SHARED_COLL))
+    for _ in range(3):
+        c.send({"type": "AGGREGATE", "databaseName": TIGHT_DB, "collectionName": TIGHT_COLL,
+                "aggregationSteps": [{"type": "SKIP", "skip": 0}, {"type": "COUNT"}]}, timeout=120)
+    time.sleep(6)
+    for i in range(0, SHARED_DOCS, 97):
+        c.send({"type": "SAVE", "databaseName": TIGHT_DB, "collectionName": SHARED_COLL,
+                "object": {"_id": f"{SHARED_COLL}-{i:06d}", "n": 7, "s": "s3", "t": True, "pad": "e"}})
+    converged = bu.wait_until(lambda: not mismatched_probes(c, SHARED_COLL), TIGHT_CONVERGE_S, interval_s=1.0)
+    check("after scans evicted the cache, the re-queried indexes still answer like a scan", converged,
+          detail=str(mismatched_probes(c, SHARED_COLL)))
+
+
+def run_tight_memory_phase():
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-tight-memory-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, OWN_PORT, maxMemory=TIGHT_MAX_MEMORY)
+    print(f"\n  Starting an own server on {HOST}:{OWN_PORT} with maxMemory={TIGHT_MAX_MEMORY} ...")
+    proc = bu.start_server(work_dir, log_path, port=OWN_PORT)
+    try:
+        with Conn(port=OWN_PORT) as c:
+            c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+            test_indexed_updates_stay_cheap_under_max_memory(c)
+            test_correctness_after_the_pk_list_is_evicted(c)
+    finally:
+        bu.stop_server(proc, port=OWN_PORT)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+USAGE_DB = "usage_flat_db"
+USAGE_COLLECTIONS = 200
+USAGE_TOUCH_SECONDS = 12
+
+
+def test_usage_profile_flush_keeps_the_background_queue_flat(c: Conn):
+    section(f"Usage flush: {USAGE_COLLECTIONS} collections read for {USAGE_TOUCH_SECONDS}s keep the queue flat")
+    c.send({"type": "DROP_DATABASE", "databaseName": USAGE_DB})
+    check_status("create the usage database", c.send({"type": "CREATE_DATABASE", "databaseName": USAGE_DB}), "OK")
+    names = [f"u{i:03d}" for i in range(USAGE_COLLECTIONS)]
+    for name in names:
+        c.send({"type": "CREATE_COLLECTION", "databaseName": USAGE_DB, "collectionName": name})
+    deadline = time.time() + USAGE_TOUCH_SECONDS
+    worst_maintenance = 0
+    worst_pending = 0
+    reads = 0
+    while time.time() < deadline:
+        for name in names:
+            c.send({"type": "FIND_BY_ID", "databaseName": USAGE_DB, "collectionName": name, "_id": "missing"})
+            reads += 1
+        background = stats(c).get("stats", {}).get("background", {})
+        worst_maintenance = max(worst_maintenance, background.get("maintenance", 0))
+        worst_pending = max(worst_pending, background.get("pending", 0))
+    print(f"  [usage] {reads} reads, worst maintenance={worst_maintenance}, worst pending={worst_pending}")
+    check("at most two usage maintenance events are ever queued", worst_maintenance <= 2)
+    check("the gated background queue stays near empty", worst_pending <= 20)
+    check_status("drop the usage database", c.send({"type": "DROP_DATABASE", "databaseName": USAGE_DB}), "OK")
+
+
 def test_server_still_alive(c):
     section("Liveness check after the whole run")
 
@@ -324,8 +541,16 @@ def main():
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_resident_index_does_not_slow_unrelated_saves(c)
 
+    test_index_admission_evicts_documents_under_a_full_cache()
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_usage_profile_flush_keeps_the_background_queue_flat(c)
+
     with Conn() as c:
         test_server_still_alive(c)
+
+    run_tight_memory_phase()
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

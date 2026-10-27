@@ -293,7 +293,7 @@ public final class ParserProductions extends LiteralProductions {
         final var name = withAwaitReserved(async, () -> identifierLikeAt(0) ? parseBindingIdentifier() : null);
         final var parts = parseFunctionParts(generator, async);
         final var expression = new FunctionExpression(name, parts.params(), parts.body(), async, generator);
-        expression.setSourceText(spanFrom(start));
+        expression.setSourceText(closureSource(start));
         return expression;
     }
 

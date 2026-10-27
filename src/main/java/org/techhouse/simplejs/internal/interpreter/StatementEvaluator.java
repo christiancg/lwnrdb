@@ -47,6 +47,10 @@ public final class StatementEvaluator {
     }
 
     public Completion evalBlock(BlockStatement block, Environment env) {
+        if (interp.blockIsScopeFree(block)) {
+            interp.hoistBlock(block, env);
+            return execStatements(block.getBody(), env);
+        }
         final var blockEnv = env.child();
         interp.hoistBlock(block, blockEnv);
         if (!interp.blockDeclaresUsing(block)) {

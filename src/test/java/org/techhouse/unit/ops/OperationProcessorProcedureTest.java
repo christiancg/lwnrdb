@@ -56,8 +56,8 @@ public class OperationProcessorProcedureTest {
         TestUtils.setPrivateField(configuration, "scriptTimeoutMs", 5_000L);
         TestUtils.setPrivateField(configuration, "scriptMaxDepth", 200);
         TestUtils.setPrivateField(configuration, "scriptMaxMemoryBytes", 67_108_864L);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         // A leftover cached trigger would make a procedure delete fail the reference check
@@ -116,7 +116,7 @@ public class OperationProcessorProcedureTest {
 
         assertEquals(OperationStatus.OK, processor.processMessage(new DropDatabaseRequest(dbName)).getStatus());
         assertNull(cache.getProcedure(dbName, "p"));
-        assertTrue(fs.listProcedureNames(dbName).isEmpty());
+        assertTrue(fs.metadataFiles().listProcedureNames(dbName).isEmpty());
 
         assertEquals(OperationStatus.OK, processor.processMessage(new CreateDatabaseRequest(dbName)).getStatus());
         assertInstanceOf(SaveProcedureResponse.class,

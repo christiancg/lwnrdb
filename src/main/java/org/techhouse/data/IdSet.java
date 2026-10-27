@@ -31,7 +31,7 @@ public final class IdSet extends AbstractSet<String> {
         return ids <= PACKED_LIMIT ? ids : tableLengthFor(ids);
     }
 
-    private static int tableLengthFor(int ids) {
+    public static int tableLengthFor(int ids) {
         var length = MIN_TABLE_LENGTH;
         while ((long) ids * 4 > (long) length * 3) {
             length <<= 1;
@@ -46,6 +46,18 @@ public final class IdSet extends AbstractSet<String> {
     @Override
     public int size() {
         return size;
+    }
+
+    public int modifications() {
+        return modCount;
+    }
+
+    public String stored(String id) {
+        if (packed()) {
+            final var at = packedIndexOf(id);
+            return at < 0 ? null : slots[at];
+        }
+        return slots[probe(slots, id)];
     }
 
     @Override

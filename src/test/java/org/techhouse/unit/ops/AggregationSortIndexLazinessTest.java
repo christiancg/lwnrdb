@@ -350,6 +350,46 @@ public class AggregationSortIndexLazinessTest {
         assertTrue(cachedDocuments() > 3, "every stale candidate fails the re-test, so later chunks are fetched");
     }
 
+    private void saveGroup(int count) throws IOException, InterruptedException {
+        for (var i = 0; i < count; i++) {
+            save("g" + i, new JsonNumber(9999));
+        }
+        drainBackgroundWrites();
+    }
+
+    @Test
+    public void test_equals_range_and_in_under_a_limit_fetch_only_the_bound() throws Exception {
+        saveGroup(300);
+        final var in = new JsonArray();
+        for (var value = 0; value < 200; value++) {
+            in.add(new JsonNumber(value));
+        }
+        final var filters = List.of(bound(FieldOperatorType.EQUALS, 9999), bound(FieldOperatorType.GREATER_THAN, 0),
+                new FilterAggregationStep(new FieldOperator(FieldOperatorType.IN, FIELD, in)));
+        for (final var filter : filters) {
+            userCache.evictCollectionDocuments(TestGlobals.DB, COLL);
+
+            final var limited = ids(filter, new LimitAggregationStep(4));
+
+            assertEquals(4, Set.copyOf(limited).size());
+            assertTrue(cachedDocuments() <= 4, filter.getOperator() + " fetched " + cachedDocuments());
+            assertTrue(scanned(filter).containsAll(limited));
+        }
+    }
+
+    @Test
+    public void test_a_pending_matching_document_is_emitted_once() throws Exception {
+        saveGroup(5);
+        save("g2", new JsonNumber(9999));
+        save("late", new JsonNumber(9999));
+        save("g4", new JsonNumber(1));
+        assertFalse(IocContainer.get(PendingIndexWrites.class).idsFor(TestGlobals.DB, COLL).isEmpty());
+
+        final var limited = ids(bound(FieldOperatorType.EQUALS, 9999), new LimitAggregationStep(50));
+
+        assertEquals(List.of("g0", "g1", "g2", "g3", "late"), limited.stream().sorted().toList());
+    }
+
     @Test
     public void test_a_skip_and_limit_after_an_indexed_filter_answer_distinct_matching_rows() {
         final var all = scanned(bound(FieldOperatorType.SMALLER_THAN, 50));

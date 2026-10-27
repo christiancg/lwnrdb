@@ -87,7 +87,7 @@ public class TriggerStartupReplayTest {
         TriggerTestSupport.consumeAllPendingRuns();
         captured.clear();
         final var definition = new ProcedureDefinition("noop", "export default 1;", 1L, null, true, 1L, 1L, "admin");
-        fs.writeProcedure(TestGlobals.DB, "noop", eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, "noop", eJson.toJson(definition.toJsonObject()));
         cache.putProcedure(TestGlobals.DB, definition);
         cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
                 List.of(new TriggerDefinition("audit",

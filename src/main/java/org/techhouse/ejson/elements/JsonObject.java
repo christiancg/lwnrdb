@@ -144,14 +144,42 @@ public class JsonObject extends JsonBaseElement {
             return;
         }
         ownKeys();
+        if (memberIndex != null) {
+            if (size - 1 > INDEXED_ABOVE) {
+                removeSlot(at);
+            } else {
+                memberIndex = null;
+            }
+        }
         final var after = size - at - 1;
         System.arraycopy(keys, at + 1, keys, at, after);
         System.arraycopy(values, at + 1, values, at, after);
         size--;
         keys[size] = null;
         values[size] = null;
-        if (memberIndex != null) {
-            rebuildSlots();
+    }
+
+    private void removeSlot(int position) {
+        final var slots = (int[]) memberIndex;
+        final var mask = slots.length - 1;
+        final var stored = position + 1;
+        var hole = homeSlot(keys[position], mask);
+        while (slots[hole] != stored) {
+            hole = (hole + 1) & mask;
+        }
+        slots[hole] = 0;
+        for (var probe = (hole + 1) & mask; slots[probe] != 0; probe = (probe + 1) & mask) {
+            final var home = homeSlot(keys[slots[probe] - 1], mask);
+            if (((probe - home) & mask) >= ((probe - hole) & mask)) {
+                slots[hole] = slots[probe];
+                slots[probe] = 0;
+                hole = probe;
+            }
+        }
+        for (var slot = 0; slot < slots.length; slot++) {
+            if (slots[slot] > stored) {
+                slots[slot]--;
+            }
         }
     }
 
@@ -321,20 +349,27 @@ public class JsonObject extends JsonBaseElement {
         return result;
     }
 
-    public JsonObject copyForWrites(Set<String> writtenRoots) {
+    public JsonObject copyForWrites(WriteTree tree) {
         if (memberIndex instanceof KeyShape shared) {
             final var copied = new JsonBaseElement[size];
             for (var i = 0; i < size; i++) {
-                copied[i] = writtenRoots.contains(keys[i]) ? values[i].deepCopy() : values[i];
+                copied[i] = copiedForWrites(tree, keys[i], values[i]);
             }
             return withShape(shared, copied);
         }
         final var result = new JsonObject(size);
         for (var i = 0; i < size; i++) {
-            final var value = values[i];
-            result.put(keys[i], writtenRoots.contains(keys[i]) ? value.deepCopy() : value);
+            result.put(keys[i], copiedForWrites(tree, keys[i], values[i]));
         }
         return result;
+    }
+
+    private static JsonBaseElement copiedForWrites(WriteTree tree, String key, JsonBaseElement value) {
+        final var node = tree.child(key);
+        if (node != null && node.hasChildren() && value instanceof JsonObject nested) {
+            return nested.copyForWrites(node);
+        }
+        return value;
     }
 
     public JsonObject copyWithout(String key) {

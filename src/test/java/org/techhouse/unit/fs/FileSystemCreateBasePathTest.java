@@ -54,7 +54,7 @@ public class FileSystemCreateBasePathTest {
         fs.createAdminDatabase();
         assertTrue(fs.createDatabaseFolder("ownerdb"));
         assertTrue(fs.createCollectionFile("ownerdb", "ownercoll"));
-        fs.writeProcedure("ownerdb", "ownerproc", "{}");
+        fs.metadataFiles().writeProcedure("ownerdb", "ownerproc", "{}");
 
         for (final var folder : new Path[]{base.resolve("admin"), base.resolve("admin").resolve("pages"),
                 base.resolve("ownerdb"), base.resolve("ownerdb").resolve("ownercoll"),

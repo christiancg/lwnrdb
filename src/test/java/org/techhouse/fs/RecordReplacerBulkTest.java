@@ -148,6 +148,43 @@ public class RecordReplacerBulkTest {
         assertTrue(rf.fx.page(0).length() <= configuration.getMaxPageSize());
     }
 
+    private void makePageZeroVacuumable() throws Exception {
+        rf.replacer.delete(rf.fx.indexed("a"));
+        rf.replacer.delete(rf.fx.indexed("b"));
+        TestUtils.setPrivateField(configuration, "maxPageSize", rf.fx.page(0).length() + 4);
+    }
+
+    @Test
+    public void test_bulk_replace_with_occupancy_vacuums_without_a_pk_walk() throws Exception {
+        makePageZeroVacuumable();
+        final var resident = new NeverIteratedRows(rf.fx.indexedRows());
+        final var occupancy = new java.util.HashMap<Long, PageOccupancy>();
+        occupancy.put(0L, rf.occupancyOf(0));
+        occupancy.put(1L, rf.occupancyOf(1));
+
+        final var result = rf.bulk(updates("c", "x"), resident, occupancy::get);
+
+        assertEquals(1, rf.vacuumed.size());
+        assertEquals(0L, rf.vacuumed.getFirst().page());
+        assertEquals(2, result.size());
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+        assertEquals(StorageFixture.record("c", "bulk-c"), rf.fx.readAt(rf.fx.indexed("c")));
+        assertEquals(StorageFixture.record("x", "bulk-x"), rf.fx.readAt(rf.fx.indexed("x")));
+    }
+
+    @Test
+    public void test_a_stale_occupancy_falls_back_to_the_walk() throws Exception {
+        makePageZeroVacuumable();
+        final var resident = rf.fx.indexedRows();
+
+        final var result = rf.bulk(updates("c"), resident, _ -> new PageOccupancy(1L, 9L));
+
+        assertEquals(1, rf.vacuumed.size(), "a stale count still vacuums, through the exact walk");
+        assertEquals(1, result.size());
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+        assertEquals(StorageFixture.record("c", "bulk-c"), rf.fx.readAt(rf.fx.indexed("c")));
+    }
+
     @Test
     public void aFullPageWithLittleDeadSpaceIsAppendedPastItsCap() throws Exception {
         TestUtils.setPrivateField(configuration, "maxPageSize", rf.fx.page(0).length());

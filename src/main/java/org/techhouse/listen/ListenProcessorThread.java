@@ -1,8 +1,11 @@
 package org.techhouse.listen;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.function.Predicate;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -15,8 +18,6 @@ import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.resp.ListenEndedResponse;
-import org.techhouse.ops.resp.ListenResponse;
-import org.techhouse.ops.resp.OperationResponse;
 
 public class ListenProcessorThread implements Runnable {
     private final Logger logger = Logger.logFor(ListenProcessorThread.class);
@@ -35,9 +36,9 @@ public class ListenProcessorThread implements Runnable {
     public void run() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                final var listenId = dirtyQueue.take();
-                manager.dequeued(listenId);
-                processListen(listenId);
+                final var workId = dirtyQueue.take();
+                manager.dequeued(workId);
+                process(workId);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Exception | Error e) {
@@ -46,52 +47,98 @@ public class ListenProcessorThread implements Runnable {
         }
     }
 
-    private void processListen(UUID listenId) {
-        final var endedListen = manager.endedListen(listenId);
+    private void process(UUID workId) {
+        final var endedListen = manager.endedListen(workId);
         if (endedListen != null) {
-            pushEndedOnceDelivered(listenId, endedListen);
+            pushEndedOnceDelivered(workId, endedListen);
             return;
         }
-        final var registration = authorizedRegistration(listenId);
-        if (registration == null || !registration.delivered().get()) {
+        final var group = manager.group(workId);
+        if (group == null || !group.tryStartRun()) {
             return;
         }
-        final var results = rerunOutsideAnyApply(listenId, registration);
+        try {
+            runGroup(group);
+        } finally {
+            if (group.finishRun()) {
+                manager.enqueueWork(group.id());
+            }
+        }
+    }
+
+    private void runGroup(ListenGroup group) {
+        final var members = deliveredAuthorizedMembers(group);
+        if (members.isEmpty()) {
+            return;
+        }
+        final var results = rerunOutsideAnyApply(group);
         if (results == null) {
             return;
         }
-        final var newHash = ResultHasher.hash(results,
-                ResultHasher.ordersResults(registration.request().getAggregationSteps()));
-        final var oldHash = registration.lastHash().get();
-        if (newHash.equals(oldHash)) {
-            return;
+        try (var encoded = ResultHasher.encode(results, group.ordered())) {
+            final var newHash = encoded.hash();
+            for (final var registration : members) {
+                final var oldHash = registration.lastHash().get();
+                if (newHash.equals(oldHash) || !registration.lastHash().compareAndSet(oldHash, newHash)) {
+                    continue;
+                }
+                final var split = ListenPushFrames.split(registration.listenId(), newHash);
+                push(registration.listenId(), registration.clientId(),
+                        outbound -> outbound.offer(split.head(), encoded.body(), split.tail()), registration);
+            }
         }
-        if (!registration.lastHash().compareAndSet(oldHash, newHash)) {
-            return;
-        }
-        push(listenId, registration.clientId(), new ListenResponse(listenId.toString(), results, newHash, true),
-                registration);
     }
 
-    private List<JsonObject> rerunOutsideAnyApply(UUID listenId, ListenRegistration registration) {
-        final var before = manager.applySnapshot(registration.collectionKeys());
+    private List<ListenRegistration> deliveredAuthorizedMembers(ListenGroup group) {
+        final var members = new ArrayList<ListenRegistration>();
+        final var allowedByUser = new HashMap<String, Boolean>();
+        for (final var listenId : group.members()) {
+            final var registration = manager.getRegistration(listenId);
+            if (registration == null) {
+                continue;
+            }
+            if (!stillAuthorized(registration, group, allowedByUser)) {
+                manager.end(listenId, ListenManager.ACCESS_REVOKED);
+                continue;
+            }
+            if (registration.delivered().get()) {
+                members.add(registration);
+            }
+        }
+        return members;
+    }
+
+    private boolean stillAuthorized(ListenRegistration registration, ListenGroup group,
+            HashMap<String, Boolean> allowedByUser) {
+        final var username = clientTracker.getAuthenticatedUsername(registration.clientId());
+        if (username == null) {
+            return false;
+        }
+        return allowedByUser.computeIfAbsent(username, _ -> {
+            final var user = cache.getAdminUserEntry(username);
+            return user != null && AuthorizationChecker.check(group.request(), user).isAllowed();
+        });
+    }
+
+    private List<JsonObject> rerunOutsideAnyApply(ListenGroup group) {
+        final var before = manager.applySnapshot(group.collectionKeys());
         if (before == null) {
-            manager.holdBack(listenId, registration.collectionKeys());
+            manager.holdBack(group.id(), group.collectionKeys());
             return null;
         }
         final List<JsonObject> results;
         try {
-            results = AggregationOperationHelper.processAggregation(registration.request(),
+            results = AggregationOperationHelper.processAggregation(group.request(),
                     configuration.longValue(ConfigKey.LISTEN_RERUN_TIMEOUT_MS));
         } catch (AggregateLimitException refused) {
-            logger.warning("Listen " + listenId + " was not re-run: " + refused.getMessage());
+            logger.warning("Listen query " + group.id() + " was not re-run: " + refused.getMessage());
             return null;
         } catch (Exception e) {
-            logger.error("Error re-running listen query for " + listenId, e);
+            logger.error("Error re-running listen query " + group.id(), e);
             return null;
         }
         if (!manager.unchangedSince(before)) {
-            manager.holdBack(listenId, registration.collectionKeys());
+            manager.holdBack(group.id(), group.collectionKeys());
             return null;
         }
         return results;
@@ -100,30 +147,12 @@ public class ListenProcessorThread implements Runnable {
     private void pushEndedOnceDelivered(UUID listenId, ListenManager.EndedListen endedListen) {
         final var registration = endedListen.registration();
         if (registration.delivered().get() && manager.consumeEnded(listenId, endedListen)) {
-            push(listenId, registration.clientId(), new ListenEndedResponse(listenId.toString(), endedListen.reason()),
-                    null);
+            final var frame = OutboundQueue.frameOf(new ListenEndedResponse(listenId.toString(), endedListen.reason()));
+            push(listenId, registration.clientId(), outbound -> outbound.offer(frame), null);
         }
     }
 
-    private ListenRegistration authorizedRegistration(UUID listenId) {
-        final var registration = manager.getRegistration(listenId);
-        if (registration == null || stillAuthorized(registration)) {
-            return registration;
-        }
-        manager.end(listenId, ListenManager.ACCESS_REVOKED);
-        return null;
-    }
-
-    private boolean stillAuthorized(ListenRegistration registration) {
-        final var username = clientTracker.getAuthenticatedUsername(registration.clientId());
-        if (username == null) {
-            return false;
-        }
-        final var user = cache.getAdminUserEntry(username);
-        return user != null && AuthorizationChecker.check(registration.request(), user).isAllowed();
-    }
-
-    private void push(UUID listenId, UUID clientId, OperationResponse frame, ListenRegistration expected) {
+    private void push(UUID listenId, UUID clientId, Predicate<OutboundQueue> offer, ListenRegistration expected) {
         final var outbound = clientTracker.getOutbound(clientId);
         final var writerLock = clientTracker.getWriterLock(clientId);
         if (outbound == null || writerLock == null) {
@@ -135,7 +164,7 @@ public class ListenProcessorThread implements Runnable {
             if (expected != null && manager.getRegistration(listenId) != expected) {
                 return;
             }
-            if (!outbound.offer(OutboundQueue.frameOf(frame))) {
+            if (!offer.test(outbound)) {
                 manager.unregister(listenId);
             }
         } finally {

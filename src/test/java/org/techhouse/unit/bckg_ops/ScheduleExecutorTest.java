@@ -56,8 +56,8 @@ public class ScheduleExecutorTest {
         TestUtils.setPrivateField(configuration, "scheduleTickMs", 1000L);
         TestUtils.setPrivateField(configuration, "scheduleRefreshMs", 60000L);
         TestUtils.setPrivateField(configuration, "clusterEnabled", false);
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         registry.clear();
@@ -75,7 +75,7 @@ public class ScheduleExecutorTest {
     private ScheduleRegistry.Entry register(String name, boolean enabled) throws Exception {
         final var definition = new ScheduleDefinition(name, "p", null, 2000L, null, 0L, enabled, "alice", null, 1L, 1L,
                 1L, "alice");
-        fs.writeSchedule(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, name);
         registry.reload(TestGlobals.DB);
         return registry.get(TestGlobals.DB, name);

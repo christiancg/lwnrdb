@@ -42,8 +42,8 @@ public final class TriggerTestSupport {
         final var cache = IocContainer.get(Cache.class);
         final var fs = IocContainer.get(FileSystem.class);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);

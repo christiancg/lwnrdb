@@ -7,12 +7,16 @@ import java.util.List;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.MapOperatorHelper;
+import org.techhouse.ops.filter.FieldPredicateFactory;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -20,6 +24,7 @@ import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.step.MapAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
@@ -175,5 +180,29 @@ public class MapOperatorConjunctionTest {
                 "a nested NOR must contribute its real answer to the enclosing AND");
         assertFalse(conditionApplied(outer, documentWith(true, false, true)),
                 "a nested NOR that rejects must make the enclosing AND reject too");
+    }
+
+    @Test
+    public void test_a_map_step_builds_each_condition_tester_once() throws Exception {
+        final var operands = new JsonArray();
+        for (var i = 0; i < 100; i++) {
+            operands.add(new JsonNumber(i * 2));
+        }
+        final var condition = new FieldOperator(FieldOperatorType.IN, "n", operands);
+        final var step = new MapAggregationStep(List.of(new RemoveFieldMapOperator("n", condition)));
+        final var rows = new ArrayList<JsonObject>();
+        for (var i = 0; i < 1000; i++) {
+            final var row = new JsonObject();
+            row.addProperty("n", i);
+            rows.add(row);
+        }
+        try (var factory = Mockito.mockStatic(FieldPredicateFactory.class, Mockito.CALLS_REAL_METHODS)) {
+            final var mapped = AggregationOperationHelper.processStepsOnStream(List.of(step), rows.stream());
+
+            assertEquals(1000, mapped.size());
+            assertEquals(900, mapped.stream().filter(row -> row.has("n")).count());
+            factory.verify(() -> FieldPredicateFactory.getTester(ArgumentMatchers.any(), ArgumentMatchers.any()),
+                    Mockito.times(1));
+        }
     }
 }

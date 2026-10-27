@@ -48,7 +48,7 @@ public class TriggerUnreadableDefinitionTest {
 
     @BeforeEach
     void clear() throws Exception {
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
     }
 
@@ -62,7 +62,7 @@ public class TriggerUnreadableDefinitionTest {
         final var array = new org.techhouse.ejson.elements.JsonArray();
         array.add(definition.toJsonObject());
         wrapper.add("triggers", array);
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(wrapper));
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(wrapper));
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
     }
 
@@ -105,7 +105,7 @@ public class TriggerUnreadableDefinitionTest {
         writeTriggers(definition());
         final var runId = recordRun();
         org.junit.jupiter.api.Assumptions.assumeTrue(runId != null, "the run log must be enabled for this case");
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
 
         TriggerDispatcher.dispatch(eventFor(runId));
@@ -117,7 +117,7 @@ public class TriggerUnreadableDefinitionTest {
 
     @Test
     public void test_a_genuinely_deleted_trigger_still_consumes_the_run() throws Exception {
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
         final var runId = recordRun();
         org.junit.jupiter.api.Assumptions.assumeTrue(runId != null, "the run log must be enabled for this case");

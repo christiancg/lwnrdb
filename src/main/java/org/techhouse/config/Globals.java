@@ -113,5 +113,8 @@ public final class Globals {
     public static final long PAGE_ROWS_WRITE_BACK_MS = 1000L;
     public static final long BACKGROUND_STEAL_AFTER_MS = 50L;
     public static final long TRANSACTION_OP_RECORD_BYTES = 4L * 1024 * 1024;
+    public static final int WAL_CHECKPOINT_PARALLELISM = 8;
+    public static final int WAL_IDLE_CHECKPOINT_MAX_LOGS = 16;
+    public static final long WAL_IDLE_CHECKPOINT_SCAN_MS = 1000L;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
 }

@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_status, section
@@ -11,6 +12,12 @@ MAX_DATABASES = 6
 MAX_INDEXES = 2
 FUNC_DB = "metalimit_func"
 CAP_DB = "metalimit_caps"
+OUTGROW_DB = "metalimit_outgrow"
+OUTGROW_COLL = "big"
+OUTGROW_DOCS = 30_000
+OUTGROW_BATCH = 2_000
+RUNTIME_OUTGROW_LOG = f"The primary-key index of {OUTGROW_DB}|{OUTGROW_COLL} needs about"
+STARTUP_OUTGROW_LOG = f"The primary-key index of {OUTGROW_DB}|{OUTGROW_COLL} needs at least"
 
 bu.configure(host=HOST, port=PORT)
 
@@ -96,6 +103,49 @@ def test_database_count_is_capped(conn: Conn):
     check_code("one more database refused", create_database(conn, f"extra_db_{index}"), "ERROR", "400-41")
 
 
+def wait_for_log(log_path: str, needle: str, timeout_s: float = 10.0) -> bool:
+    return bool(bu.wait_until(lambda: needle in bu.read_log(log_path), timeout_s))
+
+
+def test_a_collection_outgrowing_maxmemory_is_logged():
+    section(f"A primary-key index larger than maxMemory is logged at runtime and at startup")
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-metalimits-outgrow-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, maxMemory="1mb")
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path, port=PORT)
+        conn = Conn.authenticated()
+        check_status("outgrow db created", create_database(conn, OUTGROW_DB), "OK")
+        check_status("outgrow collection created", create_collection(conn, OUTGROW_DB, OUTGROW_COLL), "OK")
+        for start in range(0, OUTGROW_DOCS, OUTGROW_BATCH):
+            objects = [{"_id": f"d{i:06d}", "n": i} for i in range(start, start + OUTGROW_BATCH)]
+            if not check_status(f"bulk {start}", conn.send({"type": "BULK_SAVE", "databaseName": OUTGROW_DB,
+                                                             "collectionName": OUTGROW_COLL, "objects": objects},
+                                                            timeout=120), "OK"):
+                return
+        found = conn.send({"type": "FIND_BY_ID", "databaseName": OUTGROW_DB, "collectionName": OUTGROW_COLL,
+                           "_id": "d012345"})
+        check("a keyed read still answers from pk.idx", found.get("status") == "OK"
+              and (found.get("object") or {}).get("n") == 12345, f"resp={found}")
+        absent = conn.send({"type": "FIND_BY_ID", "databaseName": OUTGROW_DB, "collectionName": OUTGROW_COLL,
+                            "_id": "missing"})
+        check_code("an absent id is still not found", absent, "NOT_FOUND", "404-2")
+        check("the runtime warning names the collection", wait_for_log(log_path, RUNTIME_OUTGROW_LOG),
+              "no 'needs about ... more than maxMemory' line in the log")
+        check("it is logged once", bu.read_log(log_path).count(RUNTIME_OUTGROW_LOG) == 1,
+              f"logged {bu.read_log(log_path).count(RUNTIME_OUTGROW_LOG)} times")
+        conn.close()
+        bu.stop_server(proc, port=PORT)
+        proc = bu.start_server(work_dir, log_path, port=PORT)
+        check("the startup warning names the collection", wait_for_log(log_path, STARTUP_OUTGROW_LOG),
+              "no 'needs at least' line after the restart")
+    finally:
+        bu.stop_server(proc, port=PORT, wait_for_port=False)
+        if bu.failure_count():
+            bu.dump_log(log_path)
+
+
 def main():
     bu.banner("Metadata limits test suite", HOST, PORT)
     bu.require_jar()
@@ -115,7 +165,8 @@ def main():
         test_database_count_is_capped(conn)
         conn.close()
     finally:
-        bu.stop_server(proc, port=PORT, wait_for_port=False)
+        bu.stop_server(proc, port=PORT)
+    test_a_collection_outgrowing_maxmemory_is_logged()
     bu.summary(on_failure=lambda: bu.dump_log(log_path))
 
 

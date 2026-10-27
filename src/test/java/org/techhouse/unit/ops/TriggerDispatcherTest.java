@@ -245,7 +245,7 @@ public class TriggerDispatcherTest {
         storeAuditProcedure();
         installTrigger(OWNER, true, false);
         cache.removeProceduresForDatabase(TestGlobals.DB);
-        fs.deleteProcedure(TestGlobals.DB, "audit");
+        fs.metadataFiles().deleteProcedure(TestGlobals.DB, "audit");
         TriggerDispatcher.dispatch(event("no-procedure", OWNER, 0));
         assertNull(auditRow("no-procedure"));
     }

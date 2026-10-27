@@ -38,7 +38,6 @@ public class ListenHoldBackTest {
     private final ListenManager manager = new ListenManager();
     private final List<String> applyingKeys = List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL));
     private UUID clientId;
-    private UUID listenId;
     private ListenRegistration registration;
     private String initialHash;
 
@@ -53,11 +52,11 @@ public class ListenHoldBackTest {
         request.setAggregationSteps(List.of());
         request.setDirtyRead(true);
         initialHash = ResultHasher.hash(List.of(), false);
-        listenId = manager.register(clientId, request, initialHash);
+        final var listenId = manager.register(clientId, request, initialHash);
         registration = manager.getRegistration(listenId);
         manager.markDelivered(listenId);
         dirtyQueue().clear();
-        manager.dequeued(listenId);
+        manager.dequeued(registration.groupId());
     }
 
     @AfterEach
@@ -83,7 +82,7 @@ public class ListenHoldBackTest {
 
     private void runWorkerOnce() throws InterruptedException {
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
+        queue.offer(registration.groupId());
         final var worker = new Thread(new ListenProcessorThread(queue, manager));
         worker.setDaemon(true);
         worker.start();
@@ -100,11 +99,11 @@ public class ListenHoldBackTest {
         runWorkerOnce();
 
         assertEquals(initialHash, registration.lastHash().get(), "no frame is computed from a half-applied state");
-        assertFalse(dirtyQueue().contains(listenId));
+        assertFalse(dirtyQueue().contains(registration.groupId()));
 
         batch.close();
 
-        assertTrue(dirtyQueue().contains(listenId), "the root's close re-queues the listen it held back");
+        assertTrue(dirtyQueue().contains(registration.groupId()), "the root's close re-queues the listen it held back");
         runWorkerOnce();
         assertNotEquals(initialHash, registration.lastHash().get());
     }
@@ -128,9 +127,10 @@ public class ListenHoldBackTest {
 
     @Test
     public void test_a_hold_back_after_the_apply_ended_requeues_itself() throws Exception {
-        manager.holdBack(listenId, registration.collectionKeys());
+        manager.holdBack(registration.groupId(), registration.collectionKeys());
 
-        assertTrue(dirtyQueue().contains(listenId), "nothing is applying, so nothing else would re-queue it");
+        assertTrue(dirtyQueue().contains(registration.groupId()),
+                "nothing is applying, so nothing else would re-queue it");
     }
 
     @Test
@@ -148,16 +148,17 @@ public class ListenHoldBackTest {
     public void aHeldBackListenIsReleasedOnRootClose() throws Exception {
         final var root = manager.openBatch(applyingKeys);
         final var nested = root.nest(applyingKeys);
-        manager.holdBack(listenId, registration.collectionKeys());
-        assertFalse(dirtyQueue().contains(listenId), "an apply is active, so the listen must wait for it");
+        manager.holdBack(registration.groupId(), registration.collectionKeys());
+        assertFalse(dirtyQueue().contains(registration.groupId()),
+                "an apply is active, so the listen must wait for it");
 
         nested.close();
 
-        assertFalse(dirtyQueue().contains(listenId), "only the root's close ends the apply");
+        assertFalse(dirtyQueue().contains(registration.groupId()), "only the root's close ends the apply");
 
         root.close();
 
-        assertTrue(dirtyQueue().contains(listenId));
+        assertTrue(dirtyQueue().contains(registration.groupId()));
         assertNotNull(manager.applySnapshot(registration.collectionKeys()), "the root's close ended the apply");
     }
 

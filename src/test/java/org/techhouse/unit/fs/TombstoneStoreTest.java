@@ -174,4 +174,134 @@ public class TombstoneStoreTest extends FileSystemTestBase {
 
         assertEquals(2, java.nio.file.Files.readAllLines(tombstoneFile().toPath()).size());
     }
+
+    private <T> T unreadable(java.util.concurrent.Callable<T> read) throws Exception {
+        final var file = tombstoneFile();
+        assertTrue(file.setReadable(false), "the test needs a readable-toggle filesystem");
+        try {
+            return read.call();
+        } finally {
+            assertTrue(file.setReadable(true));
+        }
+    }
+
+    @Test
+    public void test_versionOf_reads_the_file_once() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "b", 7L);
+        assertEquals(5L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a"));
+
+        final long b = unreadable(() -> fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "b"));
+        final long none = unreadable(() -> fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "c"));
+
+        assertEquals(7L, b, "an unchanged file is answered from memory");
+        assertEquals(0L, none);
+    }
+
+    @Test
+    public void test_an_external_append_is_seen() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
+        assertEquals(0L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "z"));
+
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), "z" + Globals.ID_SEPARATOR + "11\n",
+                java.nio.file.StandardOpenOption.APPEND);
+
+        assertEquals(11L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "z"));
+        assertEquals(5L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a"));
+    }
+
+    @Test
+    public void test_a_failed_append_leaves_the_resident_map_unchanged() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "existing", 1L);
+        final var view = fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL);
+        final var file = tombstoneFile();
+        assertTrue(file.setWritable(false));
+        try {
+            assertThrows(java.io.IOException.class,
+                    () -> fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "blocked", 2L));
+        } finally {
+            assertTrue(file.setWritable(true));
+        }
+
+        assertEquals(0L, view.versionOf("blocked"));
+        assertEquals(0L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "blocked"));
+        assertEquals(1L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "existing"));
+    }
+
+    @Test
+    public void test_an_append_is_published_to_a_loaded_view() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
+        final var view = fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL);
+
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "b", 9L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 3L);
+
+        assertEquals(9L, view.versionOf("b"));
+        assertEquals(5L, view.versionOf("a"), "a lower version never replaces a higher one");
+        final var after = fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(2, after.size());
+        assertEquals(9L, after.highest());
+        assertEquals(3L, after.oldest());
+    }
+
+    @Test
+    public void test_retract_restores_the_next_highest_version() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 9L);
+        assertEquals(9L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a"));
+
+        fs.tombstones().retract(TestGlobals.DB, TestGlobals.COLL, "a", 9L);
+
+        assertEquals(5L, (long) unreadable(() -> fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a")),
+                "the retract publishes the lines it kept");
+    }
+
+    @Test
+    public void test_compact_publishes_the_kept_entries() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "old", 1L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "new", 100L);
+        fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL);
+
+        fs.tombstones().compact(TestGlobals.DB, TestGlobals.COLL, 50L);
+
+        final var view = unreadable(() -> fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(1, view.size());
+        assertEquals(0L, view.versionOf("old"));
+        assertEquals(100L, view.versionOf("new"));
+    }
+
+    @Test
+    public void test_forgetUnder_drops_a_quarantined_collection() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "x", 5L);
+        final var stamp = java.nio.file.Files.getLastModifiedTime(tombstoneFile().toPath());
+        assertEquals(5L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "x"));
+
+        assertTrue(fs.folderQuarantine().moveCollectionAside(TestGlobals.DB, TestGlobals.COLL, 1L));
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), "y" + Globals.ID_SEPARATOR + "5\n");
+        java.nio.file.Files.setLastModifiedTime(tombstoneFile().toPath(), stamp);
+
+        assertEquals(0L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "x"),
+                "a file of the same length and time in a re-created folder is not the quarantined one");
+        assertEquals(5L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "y"));
+    }
+
+    @Test
+    public void test_a_read_failure_is_not_cached_as_empty() throws Exception {
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), "a" + Globals.ID_SEPARATOR + "4\n");
+
+        assertThrows(java.io.IOException.class,
+                () -> unreadable(() -> fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL)));
+
+        assertEquals(4L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a"));
+    }
+
+    @Test
+    public void test_highestVersion_parses_without_loading() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "b", 12L);
+
+        assertEquals(12L, fs.tombstones().highestVersion(TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(0L, fs.tombstones().highestVersion(TestGlobals.DB, "noSuchColl"));
+    }
 }

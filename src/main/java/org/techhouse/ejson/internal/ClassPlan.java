@@ -7,6 +7,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.HashMap;
 import java.util.Map;
+import org.techhouse.ejson.NullsOmitted;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
@@ -26,11 +27,13 @@ public final class ClassPlan {
     private final Map<String, FieldBinding> byName;
     private final Instantiator instantiator;
     private final boolean record;
+    private final boolean nullsOmitted;
 
-    private ClassPlan(FieldBinding[] bindings, Instantiator instantiator, boolean record) {
+    private ClassPlan(FieldBinding[] bindings, Instantiator instantiator, boolean record, boolean nullsOmitted) {
         this.bindings = bindings;
         this.instantiator = instantiator;
         this.record = record;
+        this.nullsOmitted = nullsOmitted;
         this.byName = new HashMap<>();
         for (final var binding : bindings) {
             byName.putIfAbsent(binding.name(), binding);
@@ -53,6 +56,10 @@ public final class ClassPlan {
         return record;
     }
 
+    public boolean omitsNulls() {
+        return nullsOmitted;
+    }
+
     public Object newInstance(JsonObject parsed) throws Exception {
         return instantiator.newInstance(parsed);
     }
@@ -64,7 +71,8 @@ public final class ClassPlan {
             for (var i = 0; i < fields.length; i++) {
                 bindings[i] = bind(fields[i]);
             }
-            return new ClassPlan(bindings, Instantiators.forClass(type), type.isRecord());
+            return new ClassPlan(bindings, Instantiators.forClass(type), type.isRecord(),
+                    type.isAnnotationPresent(NullsOmitted.class));
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Could not plan " + type.getName(), e);
         }

@@ -1,14 +1,12 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.MembershipView;
@@ -20,7 +18,6 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
-import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -409,36 +406,6 @@ public final class TransactionOperationHelper {
             return new OperationResponse(OperationType.DELETE, ErrorCode.TRANSACTION_HALF_APPLIED);
         }
         return TransactionBuffer.bufferDelete(request, transaction, () -> abortInPlace(transaction.getClientId()));
-    }
-
-    public static Stream<JsonObject> applyOverlayToStream(Transaction transaction, String collId,
-            Stream<JsonObject> committed) {
-        final var overlay = transaction.overlayFor(collId);
-        if (overlay == null || overlay.isEmpty()) {
-            return committed;
-        }
-        final var seen = new HashSet<String>();
-        final var result = new ArrayList<JsonObject>();
-        try (var documents = committed) {
-            documents.forEach(doc -> {
-                final var id = doc.has(Globals.PK_FIELD) ? doc.get(Globals.PK_FIELD).asJsonString().getValue() : null;
-                if (id != null && overlay.containsKey(id)) {
-                    seen.add(id);
-                    final var buffered = overlay.get(id);
-                    if (!Transaction.isTombstone(buffered)) {
-                        result.add(buffered);
-                    }
-                } else {
-                    result.add(doc);
-                }
-            });
-        }
-        for (final var overlayEntry : overlay.entrySet()) {
-            if (!Transaction.isTombstone(overlayEntry.getValue()) && !seen.contains(overlayEntry.getKey())) {
-                result.add(overlayEntry.getValue());
-            }
-        }
-        return result.stream();
     }
 
     static boolean ownershipMoved(Transaction transaction) {

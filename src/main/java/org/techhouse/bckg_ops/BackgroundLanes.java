@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongArray;
 import org.techhouse.bckg_ops.events.CollectionScopedEvent;
 import org.techhouse.bckg_ops.events.Event;
@@ -15,6 +16,9 @@ import org.techhouse.config.Globals;
 public final class BackgroundLanes {
     private final List<LinkedBlockingQueue<Event>> queues;
     private final AtomicLongArray lastServed;
+    private final LinkedBlockingQueue<Event> maintenance = new LinkedBlockingQueue<>();
+    private final AtomicInteger maintenanceOpen = new AtomicInteger();
+    private final AtomicInteger historyQueued = new AtomicInteger();
 
     public BackgroundLanes(int count) {
         final var lanes = Math.max(1, count);
@@ -45,7 +49,38 @@ public final class BackgroundLanes {
     }
 
     public void add(Event event) {
+        if (event instanceof ScriptRunHistoryEvent) {
+            historyQueued.incrementAndGet();
+        }
         queues.get(laneOf(event)).add(event);
+    }
+
+    private Event leaving(Event event) {
+        if (event instanceof ScriptRunHistoryEvent) {
+            historyQueued.decrementAndGet();
+        }
+        return event;
+    }
+
+    public int historyQueued() {
+        return historyQueued.get();
+    }
+
+    public void addMaintenance(Event event) {
+        maintenanceOpen.incrementAndGet();
+        maintenance.add(event);
+    }
+
+    Event pollMaintenance() {
+        return maintenance.poll();
+    }
+
+    void maintenanceDone() {
+        maintenanceOpen.decrementAndGet();
+    }
+
+    public int maintenanceOpen() {
+        return maintenanceOpen.get();
     }
 
     public void addAll(Collection<Event> events) {
@@ -55,6 +90,9 @@ public final class BackgroundLanes {
     }
 
     public boolean isEmpty() {
+        if (!maintenance.isEmpty()) {
+            return false;
+        }
         for (final var queue : queues) {
             if (!queue.isEmpty()) {
                 return false;
@@ -68,13 +106,19 @@ public final class BackgroundLanes {
         for (final var queue : queues) {
             queue.drainTo(discarded);
         }
+        for (final var event : discarded) {
+            leaving(event);
+        }
+        final var maintenanceDiscarded = new ArrayList<Event>();
+        maintenance.drainTo(maintenanceDiscarded);
+        maintenanceOpen.addAndGet(-maintenanceDiscarded.size());
         return discarded.size();
     }
 
     Event poll(int lane) throws InterruptedException {
         final var event = queues.get(lane).poll(Globals.BACKGROUND_STEAL_AFTER_MS, TimeUnit.MILLISECONDS);
         lastServed.set(lane, System.nanoTime());
-        return event;
+        return event == null ? null : leaving(event);
     }
 
     void fill(int lane, List<Event> batch, int maxBatch) {
@@ -84,7 +128,7 @@ public final class BackgroundLanes {
             if (next == null) {
                 return;
             }
-            batch.add(next);
+            batch.add(leaving(next));
         }
     }
 
@@ -99,7 +143,7 @@ public final class BackgroundLanes {
             final var first = queues.get(lane).poll();
             if (first != null) {
                 lastServed.set(lane, now);
-                batch.add(first);
+                batch.add(leaving(first));
                 fill(lane, batch, maxBatch);
                 return first;
             }

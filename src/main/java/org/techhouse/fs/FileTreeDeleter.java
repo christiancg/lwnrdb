@@ -17,6 +17,7 @@ final class FileTreeDeleter {
                 WriteIntentJournal.forgetUnder(root);
                 WriteAheadLog.forgetUnder(root);
                 PkIndexStore.forgetUnder(root);
+                TombstoneStore.forgetUnder(root);
                 FieldIndexLog.forgetUnder(root);
                 SyncedWrites.entriesOfLanded(root.getAbsoluteFile().getParentFile().toPath(),
                         "Deleting " + root.getName());

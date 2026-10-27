@@ -1,7 +1,6 @@
 package org.techhouse.cache;
 
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.cache.heap.DocumentHeapSizer;
@@ -19,7 +18,6 @@ public final class CacheSizeEstimator {
     private static final String SHORTEST_ID = "x";
     private static final int SHORTEST_LIVE_PK_ROW_BYTES = 11;
     private static final int TYPICAL_INDEXED_ID_BYTES = TYPICAL_ID_LENGTH + 1;
-    private static final Class<?> HASH_MAP_NODE = HeapLayout.jdkClass("java.util.HashMap$Node");
     private static final Class<?> CONCURRENT_HASH_MAP_NODE = HeapLayout
             .jdkClass("java.util.concurrent.ConcurrentHashMap$Node");
 
@@ -76,6 +74,14 @@ public final class CacheSizeEstimator {
             total += pkEntrySize(entry.getValue(), layout);
         }
         return total / entries.size();
+    }
+
+    public static long minimumPkEntryBytes() {
+        return pkEntrySize(SHORTEST_ID, HeapLayout.current());
+    }
+
+    public static long minimumFieldIndexBytes(int entryCount) {
+        return entryCount * fieldEntryOverhead(HeapLayout.current());
     }
 
     private static long pkEntrySize(String id, HeapLayout layout) {
@@ -168,9 +174,7 @@ public final class CacheSizeEstimator {
     }
 
     public static long estimateFieldIndexLookupSize(int ids, HeapLayout layout) {
-        return layout.shallowSize(FieldIndexLookup.class) + layout.shallowSize(HashMap.class)
-                + layout.hashTableSize(ids)
-                + (long) ids * (layout.shallowSize(HASH_MAP_NODE) + layout.shallowSize(FieldIndexLookup.Located.class));
+        return FieldIndexLookup.estimatedBytes(ids, layout);
     }
 
     private static long fieldEntryOverhead(HeapLayout layout) {

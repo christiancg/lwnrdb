@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER_BIG;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonGeo;
@@ -383,6 +384,24 @@ public final class EJsonInterop {
         final var result = new JsArray();
         for (final var element : array) {
             result.push(fromEjson(element));
+        }
+        return result;
+    }
+
+    public static JsValue viewOrValue(JsonBaseElement element) {
+        return element instanceof JsonObject object ? viewOf(object, Set.of()) : fromEjson(element);
+    }
+
+    public static JsObject viewOf(JsonObject object, Set<String> eagerRoots) {
+        final var result = new JsObject();
+        final var table = result.ownProperties();
+        for (final var entry : object.entrySet()) {
+            final var key = entry.getKey();
+            if (eagerRoots.contains(key)) {
+                table.defineValue(key, fromEjson(entry.getValue()));
+            } else {
+                table.defineDeferred(key, entry.getValue());
+            }
         }
         return result;
     }

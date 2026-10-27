@@ -35,6 +35,17 @@ public final class CaseFolding {
         return builder.toString();
     }
 
+    public static int foldHash(String value) {
+        var hash = 0;
+        var i = 0;
+        while (i < value.length()) {
+            final var codePoint = value.codePointAt(i);
+            hash = 31 * hash + fold(codePoint);
+            i += Character.charCount(codePoint);
+        }
+        return hash;
+    }
+
     private static int fold(int codePoint) {
         return Character.toLowerCase(Character.toUpperCase(codePoint));
     }

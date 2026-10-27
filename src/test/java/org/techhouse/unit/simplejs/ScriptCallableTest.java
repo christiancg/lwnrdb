@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -44,15 +45,15 @@ public class ScriptCallableTest {
     @Test
     public void test_calls_exported_default_per_document() {
         try (var callable = open("export default (doc) => doc.price * 2;")) {
-            assertEquals(10d, callable.apply(document(5)).asJsonNumber().getValue().doubleValue());
-            assertEquals(14d, callable.apply(document(7)).asJsonNumber().getValue().doubleValue());
+            assertEquals(10d, callable.apply(document(5), Set.of()).asJsonNumber().getValue().doubleValue());
+            assertEquals(14d, callable.apply(document(7), Set.of()).asJsonNumber().getValue().doubleValue());
         }
     }
 
     @Test
     public void test_calls_top_level_returned_function() {
         try (var callable = open("return (doc) => doc.price + 1;")) {
-            assertEquals(4d, callable.apply(document(3)).asJsonNumber().getValue().doubleValue());
+            assertEquals(4d, callable.apply(document(3), Set.of()).asJsonNumber().getValue().doubleValue());
         }
     }
 
@@ -73,7 +74,8 @@ public class ScriptCallableTest {
                 }
                 export default score;
                 """)) {
-            final var failure = assertThrows(ScriptCallableException.class, () -> callable.apply(document(1)));
+            final var failure = assertThrows(ScriptCallableException.class,
+                    () -> callable.apply(document(1), Set.of()));
             assertNotNull(failure.getErrorStack());
             assertTrue(failure.getErrorStack().getFirst().startsWith("score ("), failure.getErrorStack()::toString);
         }
@@ -112,7 +114,7 @@ public class ScriptCallableTest {
             var succeeded = 0;
             try {
                 for (var i = 0; i < 1000; i++) {
-                    callable.apply(document(i));
+                    callable.apply(document(i), Set.of());
                     succeeded++;
                 }
                 fail("expected the shared instruction budget to abort a later call");
@@ -132,7 +134,7 @@ public class ScriptCallableTest {
                 host(limits))) {
             final var error = assertThrows(ScriptCallableException.class, () -> {
                 for (var i = 0; i < 100000; i++) {
-                    callable.apply(document(i));
+                    callable.apply(document(i), Set.of());
                 }
             });
             assertEquals("ScriptTimeoutError", error.getErrorName());
@@ -144,7 +146,7 @@ public class ScriptCallableTest {
         final var limits = new ResourceLimits(-1, -1, -1, 64L * 1024);
         try (var callable = simpleJs.openCallable("export default (doc) => doc.price;", host(limits))) {
             for (var i = 0; i < 10000; i++) {
-                assertEquals(i, callable.apply(document(i)).asJsonNumber().getValue().doubleValue());
+                assertEquals(i, callable.apply(document(i), Set.of()).asJsonNumber().getValue().doubleValue());
             }
         }
     }
@@ -161,8 +163,8 @@ public class ScriptCallableTest {
     public void test_fetch_is_unavailable() {
         try (var callable = open("let seen = 'pending';"
                 + " export default (doc) => { fetch('http://x').catch(e => { seen = e.name; }); return seen; };")) {
-            callable.apply(document(1));
-            assertEquals("TypeError", callable.apply(document(1)).asJsonString().getValue());
+            callable.apply(document(1), Set.of());
+            assertEquals("TypeError", callable.apply(document(1), Set.of()).asJsonString().getValue());
         }
     }
 
@@ -177,7 +179,7 @@ public class ScriptCallableTest {
         try (var callable = open("import s from 'script';"
                 + " export default (doc) => { try { s.importText('export default 1;'); return 'reached';"
                 + " } catch (e) { return e.name + ': ' + e.message; } };")) {
-            final var value = callable.apply(document(1)).asJsonString().getValue();
+            final var value = callable.apply(document(1), Set.of()).asJsonString().getValue();
             assertNotEquals("reached", value);
         }
     }
@@ -186,7 +188,7 @@ public class ScriptCallableTest {
     public void test_promise_resolved_inside_a_call_is_drained() {
         try (var callable = open(
                 "let seen = 0; Promise.resolve().then(() => { seen = 1; });" + " export default (doc) => seen;")) {
-            assertEquals(1d, callable.apply(document(1)).asJsonNumber().getValue().doubleValue());
+            assertEquals(1d, callable.apply(document(1), Set.of()).asJsonNumber().getValue().doubleValue());
         }
     }
 
@@ -201,13 +203,13 @@ public class ScriptCallableTest {
     public void test_use_after_close_throws() {
         final var callable = open("export default (doc) => doc.price;");
         callable.close();
-        assertThrows(RuntimeException.class, () -> callable.apply(document(1)));
+        assertThrows(RuntimeException.class, () -> callable.apply(document(1), Set.of()));
     }
 
     @Test
     public void test_thrown_error_surfaces_with_its_name() {
         try (var callable = open("export default (doc) => { throw new RangeError('nope'); };")) {
-            final var error = assertThrows(ScriptCallableException.class, () -> callable.apply(document(1)));
+            final var error = assertThrows(ScriptCallableException.class, () -> callable.apply(document(1), Set.of()));
             assertEquals("RangeError", error.getErrorName());
             assertEquals("nope", error.getMessage());
         }
@@ -222,7 +224,7 @@ public class ScriptCallableTest {
     @Test
     public void test_custom_types_cross_the_boundary() {
         try (var callable = open("export default (doc) => Geo.from({ lat: 1, lng: 2 });")) {
-            assertTrue(callable.apply(document(1)).isJsonCustom());
+            assertTrue(callable.apply(document(1), Set.of()).isJsonCustom());
         }
     }
 
@@ -231,7 +233,7 @@ public class ScriptCallableTest {
     @Test
     public void test_undefined_result_is_null_reference() {
         try (var callable = open("export default (doc) => undefined;")) {
-            assertNull(callable.apply(document(1)));
+            assertNull(callable.apply(document(1), Set.of()));
         }
     }
 
@@ -240,7 +242,7 @@ public class ScriptCallableTest {
         try (var callable = open("export default (doc) => JSON.stringify(doc);")) {
             final var document = new JsonObject();
             document.add("name", new JsonString("alice"));
-            assertEquals("{\"name\":\"alice\"}", callable.apply(document).asJsonString().getValue());
+            assertEquals("{\"name\":\"alice\"}", callable.apply(document, Set.of()).asJsonString().getValue());
         }
     }
 
@@ -249,16 +251,16 @@ public class ScriptCallableTest {
         final var compiled = simpleJs.compile("export default (doc) => doc.price;", false);
         try (var first = simpleJs.openCallable(compiled, host());
                 var second = simpleJs.openCallable(compiled, host())) {
-            assertEquals(1d, first.apply(document(1)).asJsonNumber().getValue().doubleValue());
-            assertEquals(2d, second.apply(document(2)).asJsonNumber().getValue().doubleValue());
+            assertEquals(1d, first.apply(document(1), Set.of()).asJsonNumber().getValue().doubleValue());
+            assertEquals(2d, second.apply(document(2), Set.of()).asJsonNumber().getValue().doubleValue());
         }
     }
 
     @Test
     public void test_state_is_kept_between_calls_of_one_callable() {
         try (var callable = open("let seen = 0; export default (doc) => ++seen;")) {
-            assertEquals(1d, callable.apply(document(1)).asJsonNumber().getValue().doubleValue());
-            assertEquals(2d, callable.apply(document(1)).asJsonNumber().getValue().doubleValue());
+            assertEquals(1d, callable.apply(document(1), Set.of()).asJsonNumber().getValue().doubleValue());
+            assertEquals(2d, callable.apply(document(1), Set.of()).asJsonNumber().getValue().doubleValue());
         }
     }
 
@@ -275,7 +277,7 @@ public class ScriptCallableTest {
     @Test
     public void test_native_function_export_is_accepted() {
         try (var callable = open("export default String;")) {
-            assertEquals("[object Object]", callable.apply(new JsonObject()).asJsonString().getValue());
+            assertEquals("[object Object]", callable.apply(new JsonObject(), Set.of()).asJsonString().getValue());
         }
     }
 
@@ -283,7 +285,7 @@ public class ScriptCallableTest {
     public void test_script_cannot_write_through_to_the_host_document() {
         try (var callable = open("export default (doc) => { doc.mutated = true; return doc.mutated; };")) {
             final var document = document(1);
-            assertTrue(callable.apply(document).asJsonBoolean().getValue());
+            assertTrue(callable.apply(document, Set.of()).asJsonBoolean().getValue());
             assertNull(document.get("mutated"), "the script must not write through to the host document");
         }
     }
@@ -291,7 +293,7 @@ public class ScriptCallableTest {
     @Test
     public void test_arguments_list_size_is_respected() {
         try (var callable = open("export default (...args) => args.length;")) {
-            assertEquals(1d, callable.apply(document(1)).asJsonNumber().getValue().doubleValue());
+            assertEquals(1d, callable.apply(document(1), Set.of()).asJsonNumber().getValue().doubleValue());
             assertEquals(2d, callable.apply(new org.techhouse.ejson.elements.JsonNull(), document(1)).asJsonNumber()
                     .getValue().doubleValue());
         }
@@ -301,7 +303,7 @@ public class ScriptCallableTest {
     public void test_open_failure_does_not_leak_a_session() {
         assertEquals("Error", failureOf("throw new Error('boom');").getErrorName());
         try (var callable = open("export default (doc) => 1;")) {
-            assertEquals(1d, callable.apply(new JsonObject()).asJsonNumber().getValue().doubleValue());
+            assertEquals(1d, callable.apply(new JsonObject(), Set.of()).asJsonNumber().getValue().doubleValue());
         }
     }
 
@@ -332,49 +334,50 @@ public class ScriptCallableTest {
     @Test
     public void test_a_predicate_result_of_infinity_is_truthy() {
         try (var callable = open("export default () => Infinity;")) {
-            assertTrue(callable.test(document(1)), "JS truthiness keeps a document whose predicate answered Infinity");
+            assertTrue(callable.test(document(1), Set.of()),
+                    "JS truthiness keeps a document whose predicate answered Infinity");
         }
     }
 
     @Test
     public void test_a_predicate_result_of_negative_infinity_is_truthy() {
         try (var callable = open("export default () => -Infinity;")) {
-            assertTrue(callable.test(document(1)));
+            assertTrue(callable.test(document(1), Set.of()));
         }
     }
 
     @Test
     public void test_a_predicate_result_of_nan_is_falsy() {
         try (var callable = open("export default () => NaN;")) {
-            assertFalse(callable.test(document(1)));
+            assertFalse(callable.test(document(1), Set.of()));
         }
     }
 
     @Test
     public void test_a_predicate_result_of_zero_is_falsy() {
         try (var callable = open("export default () => 0;")) {
-            assertFalse(callable.test(document(1)));
+            assertFalse(callable.test(document(1), Set.of()));
         }
     }
 
     @Test
     public void test_a_predicate_result_of_an_empty_string_is_falsy() {
         try (var callable = open("export default () => '';")) {
-            assertFalse(callable.test(document(1)));
+            assertFalse(callable.test(document(1), Set.of()));
         }
     }
 
     @Test
     public void test_a_predicate_result_of_an_object_is_truthy() {
         try (var callable = open("export default () => ({});")) {
-            assertTrue(callable.test(document(1)));
+            assertTrue(callable.test(document(1), Set.of()));
         }
     }
 
     @Test
     public void test_a_value_result_of_infinity_is_still_nulled() {
         try (var callable = open("export default () => Infinity;")) {
-            assertTrue(callable.apply(document(1)).isJsonNull(),
+            assertTrue(callable.apply(document(1), Set.of()).isJsonNull(),
                     "a value that will be stored must stay inside what the document reader can parse");
         }
     }
@@ -389,7 +392,7 @@ public class ScriptCallableTest {
     @Test
     public void test_a_finite_predicate_result_is_unchanged() {
         try (var callable = open("export default (doc) => doc.price * 2;")) {
-            assertTrue(callable.test(document(2)));
+            assertTrue(callable.test(document(2), Set.of()));
         }
     }
 
@@ -405,7 +408,7 @@ public class ScriptCallableTest {
     @Test
     public void test_map_returning_a_deeply_nested_value_reports_a_script_error() {
         try (var callable = open("export default (doc) => { " + DEEPLY_NESTED_RESULT + " };")) {
-            assertThrows(ScriptCallableException.class, () -> callable.apply(document(1)));
+            assertThrows(ScriptCallableException.class, () -> callable.apply(document(1), Set.of()));
         }
     }
 }

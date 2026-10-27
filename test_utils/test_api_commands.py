@@ -122,6 +122,7 @@ COLL_PERM = "perm_coll"
 COLL_MATH = "map_math"
 COLL_SHARED_LEFT = "shared_left"
 COLL_SHARED_RIGHT = "shared_right"
+COLL_GROUPED = "grouped_removal"
 COLL_DISTINCT = "distinct_rows"
 COLL_BUDGET = "result_budget"
 COLL_DELETES = "many_deletes"
@@ -972,6 +973,18 @@ def test_index_ops(c):
     check("Query is correct after REINDEX",
                ids_of(aggregate(c, "idx_coll", [filter_step("email", "EQUALS", "b@x.io")])) == ["i2"])
 
+    bulk_save(c, "idx_coll", [{"_id": f"m{i}", "email": f"m{i}@x.io", "rank": i % 3, "flag": i % 2 == 0}
+                              for i in range(30)])
+    for field in ("rank", "flag"):
+        check_status(f"CREATE_INDEX {field}", create_index(c, "idx_coll", field), "OK")
+        wait_for_index(c, "idx_coll", field)
+    check_status("REINDEX three fields in one request", reindex(c, "idx_coll", ["email", "rank", "flag"]), "OK")
+    check("each of the three rebuilt fields answers its query",
+          ids_of(aggregate(c, "idx_coll", [filter_step("email", "EQUALS", "m4@x.io")])) == ["m4"]
+          and sorted(ids_of(aggregate(c, "idx_coll", [filter_step("rank", "EQUALS", 2)])))
+          == sorted(f"m{i}" for i in range(30) if i % 3 == 2)
+          and len(ids_of(aggregate(c, "idx_coll", [filter_step("flag", "EQUALS", True)]))) == 15)
+
     check_status("DROP_INDEX email", drop_index(c, "idx_coll", "email"), "OK")
     check_code("CREATE_INDEX on a never-created collection -> 404-11",
                create_index(c, "idx_never_created", "email"), "NOT_FOUND", "404-11")
@@ -1171,6 +1184,37 @@ def test_join_then_map_on_a_shared_group_stays_small(c):
     drop_coll(c, COLL_SHARED_RIGHT)
 
 
+def test_map_remove_of_a_large_group_stays_small(c):
+    section("GROUP_BY then a MAP that removes the group copies no group and leaves the source intact")
+    create_coll(c, COLL_GROUPED)
+    payload = "g" * 1_000
+    for start in range(0, 3000, 500):
+        bulk_save(c, COLL_GROUPED, [{"_id": f"g{i:04d}", "kind": f"k{i % 3}", "payload": payload,
+                                     "nested": {"keep": i, "drop": "x"}} for i in range(start, start + 500)])
+    group = {"type": "GROUP_BY", "fieldName": "kind"}
+    size_then_remove = {"type": "MAP", "operators": [
+        {"fieldName": "size", "operator": {"type": "SIZE", "operand": "group"}}, {"fieldName": "group"}]}
+
+    r = aggregate(c, COLL_GROUPED, [group, size_then_remove, {"type": "SORT", "fieldName": "kind",
+                                                               "ascending": True}])
+    rows = r.get("results") or []
+    check("each group row carries its size and no group",
+          [(row.get("kind"), row.get("size"), "group" in row) for row in rows]
+          == [("k0", 1000, False), ("k1", 1000, False), ("k2", 1000, False)], detail=f"rows={rows}")
+
+    removed = aggregate(c, COLL_GROUPED, [{"type": "MAP", "operators": [{"fieldName": "nested.drop"}]},
+                                          {"type": "LIMIT", "limit": 5}])
+    check("a nested REMOVE drops only that leaf",
+          all(row.get("nested") == {"keep": row["nested"]["keep"]} for row in removed.get("results") or []),
+          detail=f"{(removed.get('results') or [])[:1]}")
+    again = aggregate(c, COLL_GROUPED, [group, {"type": "SORT", "fieldName": "kind", "ascending": True}])
+    check("the grouped documents are untouched afterwards",
+          [len(row.get("group") or []) for row in again.get("results") or []] == [1000, 1000, 1000]
+          and all(member.get("nested", {}).get("drop") == "x" and member.get("payload") == payload
+                  for row in again.get("results") or [] for member in row.get("group") or []))
+    drop_coll(c, COLL_GROUPED)
+
+
 def test_aggregate_output_over_budget_is_400_36(c):
     section("An AGGREGATE that builds more than aggregateMaxResultBytes is refused with 400-36")
     create_coll(c, COLL_BUDGET)
@@ -1221,6 +1265,40 @@ def test_deletes_keep_a_large_collection_consistent(c):
     check("an _id IN served by the pk index sees only the survivors",
           ids_of(in_range) == ["m00001", "m00002"], detail=f"got {ids_of(in_range)}")
     drop_coll(c, COLL_DELETES)
+
+
+def test_a_request_pipelined_after_a_large_one_is_not_lost(c):
+    section("A request pipelined behind a multi-megabyte line survives the reader dropping its grown buffer")
+    check_status("a document to look up is saved", save(c, COLL_CRUD, {"_id": "pipelined", "v": 7}), "OK")
+    large = json.dumps({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_CRUD,
+                        "aggregationSteps": [filter_step("name", "EQUALS", "x" * (3 << 20))]}).encode()
+    lookup = json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_CRUD,
+                         "_id": "pipelined"}).encode()
+    half = len(lookup) // 2
+    c.s.sendall(large + b"\n" + lookup[:half])
+    first = c.recv(timeout=30) or {}
+    time.sleep(0.5)
+    c.s.sendall(lookup[half:] + b"\n")
+    second = c.recv(timeout=30) or {}
+    check_code("the large aggregate is answered with no results", first, "NOT_FOUND", "404-3")
+    check_field("the pipelined lookup is answered whole", second, "object.v", 7)
+    check_field("the connection still answers afterwards", find_by_id(c, COLL_CRUD, "pipelined"), "object.v", 7)
+
+
+def test_a_large_document_round_trips(c):
+    section("A 300 KB document is saved, updated and read back byte for byte")
+    rows = [{"i": i, "name": f"row-{i}", "tags": ["a", "é", "日本"], "score": i * 0.5} for i in range(3000)]
+    document = {"_id": "large_doc", "rows": rows, "blob": "z" * 60_000}
+    check("the document is about 300 KB", 250_000 < len(json.dumps(document)) < 400_000,
+          str(len(json.dumps(document))))
+    check_status("the large document is saved", save(c, COLL_CRUD, document), "OK")
+    check("the large document reads back unchanged",
+          find_by_id(c, COLL_CRUD, "large_doc").get("object") == document)
+    document["blob"] = "y" * 60_000
+    check_status("the large document is updated in place", save(c, COLL_CRUD, document), "OK")
+    check("the updated large document reads back unchanged",
+          find_by_id(c, COLL_CRUD, "large_doc").get("object") == document)
+    check_status("the large document is deleted", delete(c, COLL_CRUD, "large_doc"), "OK")
 
 
 def canonical(row):
@@ -1291,8 +1369,11 @@ def main():
         test_aggregation_steps,
         test_aggregation_steps_write_dotted_fields_nested,
         test_join_then_map_on_a_shared_group_stays_small,
+        test_map_remove_of_a_large_group_stays_small,
         test_aggregate_output_over_budget_is_400_36,
         test_deletes_keep_a_large_collection_consistent,
+        test_a_request_pipelined_after_a_large_one_is_not_lost,
+        test_a_large_document_round_trips,
         test_distinct_without_field_unchanged,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,

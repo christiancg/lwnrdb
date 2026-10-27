@@ -133,6 +133,8 @@ public class ForwardedRequestGateTest {
                 + TestGlobals.DB + "\",\"collectionName\":\"script_runs\"}"), null));
         assertNull(ForwardedRequestGate.check(parse("{\"type\":\"DELETE\",\"databaseName\":\"" + TestGlobals.DB
                 + "\",\"collectionName\":\"script_runs\",\"_id\":\"r1\"}"), READER));
+        assertNull(ForwardedRequestGate.check(parse("{\"type\":\"BULK_SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"script_runs\",\"objects\":[{\"_id\":\"r1\"}]}"), null));
     }
 
     @Test
@@ -143,9 +145,8 @@ public class ForwardedRequestGateTest {
 
     @Test
     public void aNonHistoryWriteToScriptRunsIsRefusedLikeAClient() {
-        assertRefused(ErrorCode.VALIDATION_ERROR,
-                ForwardedRequestGate.check(parse("{\"type\":\"BULK_SAVE\",\"databaseName\":\"" + TestGlobals.DB
-                        + "\",\"collectionName\":\"script_runs\",\"objects\":[{\"_id\":\"r1\"}]}"), ADMIN));
+        assertRefused(ErrorCode.VALIDATION_ERROR, ForwardedRequestGate.check(parse("{\"type\":\"DROP_COLLECTION\","
+                + "\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\"script_runs\"}"), ADMIN));
         assertRefused(ErrorCode.VALIDATION_ERROR,
                 ForwardedRequestGate.check(save(TestGlobals.DB, "Script_Runs"), null));
     }

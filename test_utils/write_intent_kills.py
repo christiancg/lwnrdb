@@ -2,6 +2,7 @@ import json
 import os
 import random
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -22,6 +23,8 @@ CONCURRENT_COLL = "group_writers"
 CONCURRENT_SAVES = 40
 DELETE_VACUUM_DOCS = 24
 DELETE_CHECKPOINT_DOCS = 300
+AUDIT_SOURCE = ("import db from 'db'; import args from 'args';"
+                " db.save(db.name, '{audit}', {{ doc: args.id, event: args.event }}); return 1;")
 
 
 def doc(i: int, value: str, pad: str = PAD) -> dict:
@@ -40,6 +43,7 @@ class KillCase:
     intents_while_paused: int = 0
     logged_while_paused: bool = True
     writers: int = 1
+    triggered: bool = False
     observed: dict = field(default_factory=dict)
     acknowledged: list = field(default_factory=list)
 
@@ -177,6 +181,10 @@ def cases() -> list:
                   indexed=True, writers=GROUP_WRITERS),
          KillCase("wal_group_forced", "WAL_GROUP_FORCED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
                   indexed=True, writers=GROUP_WRITERS)],
+        [KillCase("wal_group_forced_triggered", "WAL_GROUP_FORCED", GROUP_WRITERS, update_own_doc,
+                  acknowledged_or_grouped, indexed=True, writers=GROUP_WRITERS, triggered=True),
+         KillCase("group_runs_staged", "GROUP_RUNS_STAGED", GROUP_WRITERS, update_own_doc, acknowledged_or_grouped,
+                  indexed=True, writers=GROUP_WRITERS, triggered=True)],
     ]
 
 
@@ -226,6 +234,23 @@ def seed(conn, rounds: list):
                                                                "collectionName": case.coll, "fieldName": "v"}), "OK")
         for i in range(case.seed_docs):
             check_status(f"save k{i} into {case.coll}", save(conn, case.coll, doc(i, "acknowledged")), "OK")
+        if case.triggered:
+            install_audit_trigger(conn, case.coll)
+
+
+def audit_coll(coll: str) -> str:
+    return f"{coll}_audit"
+
+
+def install_audit_trigger(conn, coll: str):
+    check_status(f"create {audit_coll(coll)}", conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                                                          "collectionName": audit_coll(coll)}), "OK")
+    check_status(f"install the audit procedure of {coll}",
+                 conn.send({"type": "SAVE_PROCEDURE", "databaseName": DB, "name": f"{coll}_auditor",
+                            "script": AUDIT_SOURCE.format(audit=audit_coll(coll))}), "OK")
+    check_status(f"install the after trigger on {coll}",
+                 conn.send({"type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": coll, "name": "audit",
+                            "events": ["CREATED", "UPDATED"], "procedureName": f"{coll}_auditor"}), "OK")
 
 
 def run_writer(conn_factory, case: KillCase):
@@ -322,10 +347,32 @@ def test_a_killed_group_recovers_whole_documents(conn, case: KillCase):
           index_agrees(conn, case.coll, found, allowed))
 
 
+def audited_docs(conn, coll: str) -> list:
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": audit_coll(coll),
+                          "aggregationSteps": FULL_SCAN})
+    return sorted((row.get("doc") for row in response.get("results") or []), key=str)
+
+
+def test_a_killed_triggered_group_audits_each_landed_write_once(conn, case: KillCase):
+    section(f"A triggered group in {case.coll} killed at {case.point} fires exactly one trigger per landed write")
+    found = values_by_id(conn, case.coll, sorted(case.expected(case)))
+    landed = sorted(doc_id for doc_id, value in found.items() if value.startswith("grouped-"))
+    bu.wait_until(lambda: audited_docs(conn, case.coll) == landed, timeout_s=30, interval_s=0.25)
+    time.sleep(1.0)
+    check("every landed write has exactly one audit row and no other write has one",
+          audited_docs(conn, case.coll) == landed, f"landed {landed} audited {audited_docs(conn, case.coll)}")
+    bu.wait_until(lambda: not [run for run in conn.send({"type": "LIST_TRIGGER_RUNS"}).get("runs") or []
+                               if case.coll in json.dumps(run)], timeout_s=30, interval_s=0.25)
+    left = [run for run in conn.send({"type": "LIST_TRIGGER_RUNS"}).get("runs") or [] if case.coll in json.dumps(run)]
+    check("no staged run of the group is left behind", not left, f"left {left}")
+
+
 def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list):
     for case in (case for kill_round in rounds for case in kill_round):
         if case.writers > 1:
             test_a_killed_group_recovers_whole_documents(conn, case)
+            if case.triggered:
+                test_a_killed_triggered_group_audits_each_landed_write_once(conn, case)
             continue
         section(f"A write killed at {case.point} in {case.coll} recovers to what its write-ahead log committed")
         expected = case.expected(case)

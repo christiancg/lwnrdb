@@ -28,11 +28,34 @@ public final class WholeLoads {
 
     private final Supplier<FileSystem> fileSystem;
     private final Semaphore transientPermits;
+    private final int maxPins;
     private final Map<String, CompletableFuture<Object>> inFlight = new ConcurrentHashMap<>();
+    private int pins;
 
     public WholeLoads(Supplier<FileSystem> fileSystem, int transientLoadPermits) {
         this.fileSystem = fileSystem;
-        this.transientPermits = new Semaphore(Math.max(1, transientLoadPermits), true);
+        final var permits = Math.max(1, transientLoadPermits);
+        this.transientPermits = new Semaphore(permits, true);
+        this.maxPins = permits - 1;
+    }
+
+    public synchronized boolean tryPin() {
+        if (pins >= maxPins || !transientPermits.tryAcquire()) {
+            return false;
+        }
+        pins++;
+        return true;
+    }
+
+    public synchronized void unpin() {
+        if (pins > 0) {
+            pins--;
+            transientPermits.release();
+        }
+    }
+
+    public synchronized int pinned() {
+        return pins;
     }
 
     public List<PkIndexEntry> pkIndex(String dbName, String collName, boolean lockHeld, Admission admission)

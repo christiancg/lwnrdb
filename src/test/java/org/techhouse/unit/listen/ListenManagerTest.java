@@ -295,7 +295,7 @@ public class ListenManagerTest {
     }
 
     @Test
-    public void test_each_registration_is_queued_once() throws Exception {
+    public void test_identical_registrations_share_one_queued_run() throws Exception {
         registerDbColl();
         registerDbColl();
 
@@ -303,7 +303,7 @@ public class ListenManagerTest {
             manager.markDirty("db", "coll");
         }
 
-        assertEquals(2, queue().size());
+        assertEquals(1, queue().size());
     }
 
     @Test
@@ -313,7 +313,7 @@ public class ListenManagerTest {
         assertEquals(1, queue().size());
 
         final var taken = queue().take();
-        assertEquals(listenId, taken);
+        assertEquals(manager.getRegistration(listenId).groupId(), taken);
         final var dequeued = ListenManager.class.getDeclaredMethod("dequeued", UUID.class);
         dequeued.setAccessible(true);
         dequeued.invoke(manager, taken);

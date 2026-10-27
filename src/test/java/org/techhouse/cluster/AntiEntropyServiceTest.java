@@ -184,6 +184,44 @@ public class AntiEntropyServiceTest extends AntiEntropyTestBase {
         assertEquals(tombstoneVersion, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("a"));
     }
 
+    private void injectTombstoneDigest(List<String> ids, long version) throws Exception {
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.DIGEST_ACK);
+            final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
+            payload.setDigest(ids.stream().map(id -> new DigestEntry(id, version, true)).toList());
+            response.setAntiEntropy(payload);
+            return response;
+        });
+        injectPeer(pool);
+    }
+
+    @Test
+    public void test_a_delete_whose_tombstone_was_lost_regains_it_from_a_peer() throws Exception {
+        final var version = HybridClock.pack(System.currentTimeMillis(), 0);
+        injectTombstoneDigest(List.of("lost"), version);
+
+        service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(version, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "lost"),
+                "a node that kept the delete but lost its unforced tombstone takes it back from the peer");
+    }
+
+    @Test
+    public void test_deletes_beyond_one_batch_are_all_applied() throws Exception {
+        final var version = HybridClock.pack(System.currentTimeMillis(), 0);
+        final var ids = new java.util.ArrayList<String>();
+        for (var i = 0; i < AntiEntropyService.PULL_BATCH_SIZE * 2 + 1; i++) {
+            ids.add("gone" + i);
+        }
+        injectTombstoneDigest(ids, version);
+
+        service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(ids.size(), fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL).size());
+    }
+
     @Test
     public void test_on_membership_change_when_enabled_runs_reconcile() throws Exception {
         final var config = Configuration.getInstance();
@@ -374,7 +412,8 @@ public class AntiEntropyServiceTest extends AntiEntropyTestBase {
             final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
             if (message.getType() == ClusterMessageType.DIGEST) {
                 response.setType(ClusterMessageType.DIGEST_ACK);
-                payload.setDigest(List.of(new DigestEntry("a", version, false, peerNodeId)));
+                payload.setNodeId(peerNodeId);
+                payload.setDigest(List.of(new DigestEntry("a", version, false)));
             } else {
                 response.setType(ClusterMessageType.PULL_ACK);
                 payload.setDocuments(List.of(peerDocument));

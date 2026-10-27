@@ -1,18 +1,16 @@
 package org.techhouse.listen;
 
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.EnumSet;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
-import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ioc.IocContainer;
+import org.techhouse.ejson.internal.JsonElementWriter;
+import org.techhouse.ejson.internal.JsonSizeEstimator;
+import org.techhouse.ejson.internal.Utf8JsonOut;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
@@ -23,7 +21,8 @@ import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 
 public final class ResultHasher {
-    private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final int MIN_PRESIZE = 16;
+    private static final int MAX_PRESIZE = 1 << 26;
     private static final Set<AggregationStepType> ORDER_PRESERVING = EnumSet.of(AggregationStepType.FILTER,
             AggregationStepType.MAP, AggregationStepType.JOIN, AggregationStepType.LIMIT, AggregationStepType.SKIP);
 
@@ -35,15 +34,42 @@ public final class ResultHasher {
     }
 
     public static String hash(List<JsonObject> results, boolean ordered) {
-        if (ordered) {
-            return digestOf(eJson.toJson(new ResultWrapper(results)));
+        try (var encoded = encode(results, ordered)) {
+            return encoded.hash();
         }
-        final var perDocument = new ArrayList<String>(results.size());
-        for (final var result : results) {
-            perDocument.add(digestOf(eJson.toJson(result)));
+    }
+
+    public static EncodedResults encode(List<JsonObject> results, boolean ordered) {
+        final var out = Utf8JsonOut.acquire(Math.clamp(JsonSizeEstimator.estimate(results), MIN_PRESIZE, MAX_PRESIZE));
+        try {
+            final var digest = sha256();
+            final var perDocument = ordered ? null : new byte[results.size()][];
+            out.append('[');
+            for (var i = 0; i < results.size(); i++) {
+                if (i > 0) {
+                    out.append(',');
+                }
+                final var start = out.size();
+                JsonElementWriter.write(results.get(i), out);
+                if (perDocument != null) {
+                    out.digestInto(digest, start, out.size());
+                    perDocument[i] = digest.digest();
+                }
+            }
+            out.append(']');
+            if (perDocument == null) {
+                out.digestInto(digest, 0, out.size());
+            } else {
+                Arrays.sort(perDocument, Arrays::compareUnsigned);
+                for (final var documentDigest : perDocument) {
+                    digest.update(documentDigest);
+                }
+            }
+            return new EncodedResults(out, digest.digest());
+        } catch (RuntimeException | Error e) {
+            out.release();
+            throw e;
         }
-        Collections.sort(perDocument);
-        return digestOf(String.join("", perDocument));
     }
 
     public static boolean ordersResults(List<BaseAggregationStep> steps) {
@@ -107,20 +133,11 @@ public final class ResultHasher {
         return false;
     }
 
-    private static String digestOf(String text) {
+    private static MessageDigest sha256() {
         try {
-            final var digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));
+            return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
-    }
-
-    private static final class ResultWrapper {
-        public final List<JsonObject> results;
-
-        private ResultWrapper(List<JsonObject> results) {
-            this.results = results;
+            throw new IllegalStateException("SHA-256 not available", e);
         }
     }
 }

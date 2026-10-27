@@ -11,7 +11,6 @@ import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -47,7 +46,7 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
         message.setTxSessionId(sessionId);
         message.setTxId(id);
         message.setTxContinuation(continuation);
-        message.setForwardBody(ForwardBody.encode(body));
+        message.setForwardBody(body);
         return message;
     }
 
@@ -68,7 +67,7 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
     private OperationResponse send(String id, String body, boolean continuation) throws Exception {
         final var reply = pool.request(cluster.serverAddress(), forwarded(id, body, continuation), ACK_TIMEOUT_MS);
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, reply.getType(), reply.getErrorMessage());
-        return eJson.fromJson(ForwardBody.decode(reply.getForwardBody()), OperationResponse.class);
+        return eJson.fromJson(reply.getForwardBody(), OperationResponse.class);
     }
 
     private ClusterMessage prepare() throws Exception {

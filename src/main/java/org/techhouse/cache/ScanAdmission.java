@@ -20,7 +20,7 @@ final class ScanAdmission implements Spliterator<DbEntry> {
     }
 
     interface Completion {
-        void admit(ConcurrentHashMap<String, DbEntry> collected);
+        void admit(ConcurrentHashMap<String, DbEntry> collected, long measuredBytes);
     }
 
     private final Iterator<AdminPageEntry> pages;
@@ -108,9 +108,10 @@ final class ScanAdmission implements Spliterator<DbEntry> {
     private void finish() {
         final var admitted = completion;
         final var documents = collected;
+        final var bytes = collectedBytes;
         abandon();
         if (admitted != null && !documents.isEmpty()) {
-            admitted.admit(documents);
+            admitted.admit(documents, bytes);
         }
     }
 

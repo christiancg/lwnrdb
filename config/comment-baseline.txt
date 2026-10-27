@@ -3,9 +3,7 @@ src/main/java/org/techhouse/ShutdownCoordinator.java 2
 src/main/java/org/techhouse/bckg_ops/PendingIndexWrites.java 1
 src/main/java/org/techhouse/cache/AdminCache.java 8
 src/main/java/org/techhouse/cache/AdminPageCache.java 1
-src/main/java/org/techhouse/cache/Cache.java 2
 src/main/java/org/techhouse/cache/DefinitionCache.java 3
-src/main/java/org/techhouse/cache/UserCache.java 4
 src/main/java/org/techhouse/cluster/ClusterConnectionHandler.java 8
 src/main/java/org/techhouse/cluster/ClusterCoordinator.java 6
 src/main/java/org/techhouse/cluster/ClusterRouter.java 4
@@ -19,7 +17,6 @@ src/main/java/org/techhouse/cluster/ScriptPlacement.java 2
 src/main/java/org/techhouse/cluster/Tx2pcCoordinator.java 1
 src/main/java/org/techhouse/cluster/Tx2pcRecovery.java 7
 src/main/java/org/techhouse/cluster/membership/MembershipService.java 2
-src/main/java/org/techhouse/cluster/msg/ForwardBody.java 1
 src/main/java/org/techhouse/cluster/msg/ReplicationPayload.java 1
 src/main/java/org/techhouse/cluster/msg/TxReplicationPayload.java 1
 src/main/java/org/techhouse/concurrency/ResourceLocking.java 7
@@ -58,7 +55,7 @@ src/main/java/org/techhouse/ops/EntrySizeGuard.java 1
 src/main/java/org/techhouse/ops/FilterOperatorHelper.java 10
 src/main/java/org/techhouse/ops/GeoSpatialIndexHelper.java 4
 src/main/java/org/techhouse/ops/OperationProcessor.java 2
-src/main/java/org/techhouse/ops/ReplicatedApplyHelper.java 3
+src/main/java/org/techhouse/ops/ReplicatedApplyHelper.java 1
 src/main/java/org/techhouse/ops/SaveOperationHelper.java 7
 src/main/java/org/techhouse/ops/SchemaOperationHelper.java 1
 src/main/java/org/techhouse/ops/SchemaValidationHelper.java 2

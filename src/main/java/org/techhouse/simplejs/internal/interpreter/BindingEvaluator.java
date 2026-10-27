@@ -30,6 +30,7 @@ import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
@@ -207,10 +208,33 @@ public final class BindingEvaluator {
         return interp.evalBlock(handler.getBody(), catchEnv);
     }
 
-    public void bindParams(List<JsNode> params, List<JsValue> args, Environment activation) {
+    public void bindParams(JsFunction function, List<JsValue> args, Environment activation) {
+        final var shape = function.shape();
+        if (shape == null) {
+            bindParams(function.getParams(), args, activation);
+            return;
+        }
+        final var names = shape.paramNames();
+        if (shape.simpleParams()) {
+            for (var i = 0; i < names.size(); i++) {
+                activation.declareParamValue(names.get(i), i < args.size() ? args.get(i) : JsUndefined.getInstance());
+            }
+            return;
+        }
+        for (final var name : names) {
+            activation.declareParam(name);
+        }
+        bindParamValues(function.getParams(), args, activation);
+    }
+
+    private void bindParams(List<JsNode> params, List<JsValue> args, Environment activation) {
         for (final var param : params) {
             declareParamNames(param, activation);
         }
+        bindParamValues(params, args, activation);
+    }
+
+    private void bindParamValues(List<JsNode> params, List<JsValue> args, Environment activation) {
         for (var i = 0; i < params.size(); i++) {
             final var param = params.get(i);
             if (param instanceof RestElement rest) {

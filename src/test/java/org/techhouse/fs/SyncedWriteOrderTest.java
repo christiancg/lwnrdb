@@ -218,6 +218,26 @@ public class SyncedWriteOrderTest {
     }
 
     @Test
+    public void test_a_deferred_tombstone_batch_is_forced_once_before_await_returns() throws Exception {
+        final var pending = new TombstoneStore(rf.fx.paths).appendAllDeferred(DB, COLL, List.of("x", "y", "z"),
+                List.of(5L, 6L, 7L));
+        pending.await();
+
+        assertEquals(1,
+                recorder.forcedNames().stream().filter(name -> name.contains(Globals.TOMBSTONE_FILE_NAME)).count(),
+                recorder.forcedNames().toString());
+        assertEquals(3, Files.readAllLines(rf.fx.paths.tombstoneFile(DB, COLL).toPath()).size());
+    }
+
+    @Test
+    public void test_an_empty_deferred_tombstone_batch_writes_and_forces_nothing() throws Exception {
+        new TombstoneStore(rf.fx.paths).appendAllDeferred(DB, COLL, List.of(), List.of()).await();
+
+        assertTrue(recorder.forcedNames().isEmpty(), recorder.forcedNames().toString());
+        assertFalse(rf.fx.paths.tombstoneFile(DB, COLL).exists());
+    }
+
+    @Test
     public void test_index_log_append_is_forced_before_the_marker_clear() throws Exception {
         final var markers = new IndexMarkers(rf.fx.paths);
         markers.markDirty(DB, COLL);

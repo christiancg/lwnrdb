@@ -11,7 +11,6 @@ import java.util.Set;
 import java.util.function.BiPredicate;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.filter.FieldPredicateFactory;
@@ -37,17 +36,18 @@ final class ConjunctionCandidates {
 
     static Set<String> of(ConjunctionOperator operator, String dbName, String collName, PipelineContext context)
             throws IOException {
-        if (holdsRanking(operator)) {
+        if (OperatorPredicate.holdsRanking(operator)) {
             return null;
         }
         final LegResolver filterLeg = leg -> switch (leg.getType()) {
             case FIELD -> FilterOperatorHelper.indexMatchingIds((FieldOperator) leg, dbName, collName, context);
             case CONJUNCTION -> of((ConjunctionOperator) leg, dbName, collName, context);
-            case CUSTOM, SCRIPT -> null;
+            case CUSTOM -> GeoSpatialIndexHelper.candidateIds((CustomOperator) leg, dbName, collName, context);
+            case SCRIPT -> null;
         };
         return switch (operator.getConjunctionType()) {
-            case AND -> intersection(legSets(operator, dbName, collName, context, filterLeg, false));
-            case OR, XOR -> unionOfEvery(legSets(operator, dbName, collName, context, filterLeg, true));
+            case AND -> intersection(legSets(operator, dbName, collName, context, filterLeg, false), context);
+            case OR, XOR -> unionOfEvery(legSets(operator, dbName, collName, context, filterLeg, true), context);
             case NOR, NAND -> null;
         };
     }
@@ -56,7 +56,7 @@ final class ConjunctionCandidates {
             PipelineContext context) throws IOException {
         final LegResolver exactLeg = leg -> FilterOperatorHelper.resolveIdsViaIndex(leg, dbName, collName, context);
         final var sets = legSets(operator, dbName, collName, context, exactLeg, true);
-        return sets.contains(null) ? null : intersection(sets);
+        return sets.contains(null) ? null : intersection(sets, context);
     }
 
     static List<FieldOperator> singleRangeLeaves(BaseOperator operator) {
@@ -128,24 +128,29 @@ final class ConjunctionCandidates {
         return RangeBounds.isNumericRange(leaf) && !JsonUtils.isPrimaryKeyPath(leaf.getField());
     }
 
-    private static Set<String> intersection(List<Set<String>> sets) {
+    private static Set<String> intersection(List<Set<String>> sets, PipelineContext context) {
         if (sets.isEmpty()) {
             return null;
         }
         final var smallestFirst = sets.stream().sorted(Comparator.comparingInt(Set::size)).toList();
+        context.tick(smallestFirst.getFirst().size());
         final var survivors = new HashSet<>(smallestFirst.getFirst());
         for (var i = 1; i < smallestFirst.size() && !survivors.isEmpty(); i++) {
+            context.tick(survivors.size());
             survivors.retainAll(smallestFirst.get(i));
         }
         return survivors;
     }
 
-    private static Set<String> unionOfEvery(List<Set<String>> sets) {
+    private static Set<String> unionOfEvery(List<Set<String>> sets, PipelineContext context) {
         if (sets.contains(null)) {
             return null;
         }
         final var union = new HashSet<String>();
-        sets.forEach(union::addAll);
+        for (final var set : sets) {
+            context.tick(set.size());
+            union.addAll(set);
+        }
         return union;
     }
 
@@ -153,14 +158,5 @@ final class ConjunctionCandidates {
         final var testers = leaves.stream()
                 .map(leaf -> FieldPredicateFactory.getTester(leaf, leaf.getFieldOperatorType())).toList();
         return (document, fieldName) -> testers.stream().allMatch(tester -> tester.test(document, fieldName));
-    }
-
-    private static boolean holdsRanking(BaseOperator operator) {
-        return switch (operator) {
-            case CustomOperator custom -> CustomTypeFactory.isRankingOperator(custom.getCustomOperatorName());
-            case ConjunctionOperator conjunction ->
-                conjunction.getOperators().stream().anyMatch(ConjunctionCandidates::holdsRanking);
-            default -> false;
-        };
     }
 }

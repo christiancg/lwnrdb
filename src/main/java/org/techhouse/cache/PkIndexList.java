@@ -9,6 +9,10 @@ import org.techhouse.data.PkIndexEntry;
 public final class PkIndexList extends ChunkedList<PkIndexEntry> implements IdSearchable {
     private static final Comparator<PkIndexEntry> BY_ID = Comparator.comparing(PkIndexEntry::getValue);
 
+    private volatile SizeCell charge;
+    private volatile long bytesPerEntry;
+    private volatile int published;
+
     private PkIndexList() {
     }
 
@@ -61,5 +65,38 @@ public final class PkIndexList extends ChunkedList<PkIndexEntry> implements IdSe
 
     public void insertSorted(List<PkIndexEntry> sorted) {
         insertSorted(sorted, BY_ID);
+    }
+
+    @Override
+    protected void resized() {
+        final var now = size();
+        final var cell = charge;
+        if (cell != null) {
+            cell.add((long) (now - published) * bytesPerEntry);
+        }
+        published = now;
+    }
+
+    void chargeTo(SizeCell cell, long entryBytes) {
+        bytesPerEntry = entryBytes;
+        published = size();
+        cell.set((long) published * entryBytes);
+        charge = cell;
+    }
+
+    void retireCharge() {
+        final var cell = charge;
+        if (cell != null) {
+            cell.retire();
+        }
+    }
+
+    long chargedBytes() {
+        final var cell = charge;
+        return cell == null ? -1L : cell.bytes();
+    }
+
+    public int publishedSize() {
+        return published;
     }
 }

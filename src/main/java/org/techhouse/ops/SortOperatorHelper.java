@@ -43,7 +43,7 @@ public final class SortOperatorHelper {
             String dbName, String collName, long bound, PipelineContext context) throws IOException {
         final var fieldName = sortStep.getFieldName();
         final var ascending = sortStep.getAscending();
-        if (resultStream == null) {
+        if (resultStream == null && (bound > 0 || !ScanPreference.indexFetchNotWorthIt(dbName, collName))) {
             final var orderedIds = IndexHelper.getSortedIdsForField(dbName, collName, fieldName, entryOrder(ascending),
                     bound > 0 ? bound : Long.MAX_VALUE, context);
             if (orderedIds != null) {
@@ -186,7 +186,7 @@ public final class SortOperatorHelper {
     private static Stream<JsonObject> fetchChunk(List<String> chunk, String dbName, String collName,
             PipelineContext context) {
         try {
-            final var documents = cache.getEntriesByIds(dbName, collName, Set.copyOf(chunk));
+            final var documents = cache.getEntriesByIds(dbName, collName, Set.copyOf(chunk), context::pinnedPkIndex);
             context.scanned(documents.size());
             if (documents.size() == 1) {
                 return Stream.of(documents.getFirst().getData());

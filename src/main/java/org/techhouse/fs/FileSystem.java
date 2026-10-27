@@ -5,8 +5,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongFunction;
@@ -26,6 +28,7 @@ public class FileSystem {
     private final FilePaths paths = new FilePaths();
     private final IndexMarkers indexMarkers = new IndexMarkers(paths);
     private final TombstoneStore tombstones = new TombstoneStore(paths);
+    private final MetadataFiles metadataFiles = new MetadataFiles(paths);
     private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
@@ -39,6 +42,7 @@ public class FileSystem {
             writeIntentJournal);
     private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
     private final WriteAheadLog writeAheadLog = new WriteAheadLog(paths);
+    private final WalCheckpoints walCheckpoints = new WalCheckpoints(paths, writeAheadLog);
 
     public void onVacuum(Consumer<VacuumedPage> listener) {
         pageVacuum.onVacuum(listener);
@@ -151,66 +155,8 @@ public class FileSystem {
         return !Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS);
     }
 
-    public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {
-        MetadataFileStore.write(paths.schemaFile(dbName, collName), schemaJson);
-    }
-
-    public String readCollectionSchema(String dbName, String collName) throws IOException {
-        return MetadataFileStore.read(paths.schemaFile(dbName, collName));
-    }
-
-    public boolean deleteCollectionSchema(String dbName, String collName) throws IOException {
-        return MetadataFileStore.delete(paths.schemaFile(dbName, collName));
-    }
-
-    public void writeProcedure(String dbName, String name, String json) throws IOException {
-        MetadataFileStore.ensureFolder(paths.proceduresFolder(dbName), "procedures", dbName);
-        MetadataFileStore.write(paths.procedureFile(dbName, name), json);
-    }
-
-    public String readProcedure(String dbName, String name) throws IOException {
-        final var file = paths.procedureFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
-    }
-
-    public boolean deleteProcedure(String dbName, String name) throws IOException {
-        final var file = paths.procedureFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
-    }
-
-    public List<String> listProcedureNames(String dbName) throws IOException {
-        return MetadataFileStore.listNames(paths.proceduresFolder(dbName), Globals.PROCEDURE_FILE_EXTENSION);
-    }
-
-    public void writeSchedule(String dbName, String name, String json) throws IOException {
-        MetadataFileStore.ensureFolder(paths.schedulesFolder(dbName), "schedules", dbName);
-        MetadataFileStore.write(paths.scheduleFile(dbName, name), json);
-    }
-
-    public String readSchedule(String dbName, String name) throws IOException {
-        final var file = paths.scheduleFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
-    }
-
-    public boolean deleteSchedule(String dbName, String name) throws IOException {
-        final var file = paths.scheduleFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
-    }
-
-    public List<String> listScheduleNames(String dbName) throws IOException {
-        return MetadataFileStore.listNames(paths.schedulesFolder(dbName), Globals.SCHEDULE_FILE_EXTENSION);
-    }
-
-    public void writeTriggers(String dbName, String collName, String json) throws IOException {
-        MetadataFileStore.write(paths.triggersFile(dbName, collName), json);
-    }
-
-    public String readTriggers(String dbName, String collName) throws IOException {
-        return MetadataFileStore.read(paths.triggersFile(dbName, collName));
-    }
-
-    public boolean deleteTriggers(String dbName, String collName) throws IOException {
-        return MetadataFileStore.delete(paths.triggersFile(dbName, collName));
+    public MetadataFiles metadataFiles() {
+        return metadataFiles;
     }
 
     public IndexMarkers indexMarkers() {
@@ -239,6 +185,15 @@ public class FileSystem {
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
         return pkIndexStore.readWholePkIndexFile(dbName, collectionName);
+    }
+
+    public Map<String, PkIndexEntry> pkRowsFor(String dbName, String collName, Collection<String> ids)
+            throws IOException {
+        return pkIndexStore.rowsFor(dbName, collName, ids);
+    }
+
+    public OptionalLong trustedLiveRows(String dbName, String collName) {
+        return pkIndexStore.trustedLiveRows(dbName, collName);
     }
 
     public long pkIndexFileBytes(String dbName, String collectionName) {
@@ -297,6 +252,11 @@ public class FileSystem {
         recordReplacer.delete(pkIndexEntry, residentRows, occupancy);
     }
 
+    public void vacuumPagesAfterDelete(String dbName, String collName, Collection<Long> pages,
+            List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy) {
+        recordReplacer.vacuumAfterDeletes(dbName, collName, pages, residentRows, occupancy);
+    }
+
     public PkIndexEntry relocate(DbEntry entry, PkIndexEntry oldRow, long targetPage, byte[] encodedLine,
             List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy) throws IOException {
         entry.setPage(targetPage);
@@ -334,7 +294,13 @@ public class FileSystem {
 
     public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
             List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines) throws IOException {
-        return recordReplacer.bulkReplace(dbName, collName, entries, residentRows, encodedLines);
+        return bulkUpdateFromCollection(dbName, collName, entries, residentRows, encodedLines, null);
+    }
+
+    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
+            List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
+        return recordReplacer.bulkReplace(dbName, collName, entries, residentRows, encodedLines, occupancy);
     }
 
     public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
@@ -430,11 +396,19 @@ public class FileSystem {
     }
 
     public void checkpointWriteAheadLogs(long deadline) {
-        writeAheadLog.checkpointAll(deadline);
+        walCheckpoints.atShutdown(deadline);
+    }
+
+    public int checkpointIdleWriteAheadLogs(long idleMillis, int maxLogs, CollectionTryLock collectionLocks) {
+        return walCheckpoints.idle(idleMillis, maxLogs, collectionLocks);
     }
 
     public void openWriteGroup(String dbName, String collName) throws IOException {
         writeAheadLog.openGroup(dbName, collName);
+    }
+
+    public boolean forceWriteGroup(String dbName, String collName) throws IOException {
+        return writeAheadLog.forceGroup(dbName, collName);
     }
 
     public boolean settleWriteGroup(String dbName, String collName) throws IOException {

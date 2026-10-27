@@ -165,6 +165,7 @@ abstract class LoopProductions extends ParserContext {
     }
 
     protected Statement parseForRest() {
+        final var closuresBefore = closureNodes;
         expectKeyword("for");
         final var isAwait = isKeyword("await");
         if (isAwait) {
@@ -175,7 +176,7 @@ abstract class LoopProductions extends ParserContext {
             if (isAwait) {
                 throw error();
             }
-            return parseClassicForRest(null);
+            return parseClassicForRest(null, closuresBefore);
         }
         final var asyncHead = !isAwait && isKeyword("async");
         final var init = parseForHeaderLeft();
@@ -188,7 +189,7 @@ abstract class LoopProductions extends ParserContext {
         if (isAwait) {
             throw error();
         }
-        return parseClassicForRest(init);
+        return parseClassicForRest(init, closuresBefore);
     }
 
     protected JsNode parseForHeaderLeft() {
@@ -257,7 +258,7 @@ abstract class LoopProductions extends ParserContext {
         return isOf ? new ForOfStatement(target, right, body, isAwait) : new ForInStatement(target, right, body);
     }
 
-    protected ForStatement parseClassicForRest(JsNode init) {
+    protected ForStatement parseClassicForRest(JsNode init, int closuresBefore) {
         if (init instanceof VariableDeclaration declaration && "const".equals(declaration.getKind())) {
             for (final var declarator : declaration.getDeclarations()) {
                 if (declarator.getInit() == null) {
@@ -277,6 +278,6 @@ abstract class LoopProductions extends ParserContext {
         }
         expectSeparator(')');
         final var body = parseLoopBody();
-        return new ForStatement(init, test, update, body);
+        return new ForStatement(init, test, update, body, closureNodes > closuresBefore);
     }
 }

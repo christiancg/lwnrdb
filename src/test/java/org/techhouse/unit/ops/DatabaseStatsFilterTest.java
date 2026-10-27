@@ -15,12 +15,17 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.DatabaseStatsHelper;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
@@ -28,11 +33,12 @@ import org.techhouse.test.TestUtils;
 
 public class DatabaseStatsFilterTest {
     private static final List<String> NODE_SECTIONS = List.of("memory", "inDoubtTransactions", "triggers", "schedules",
-            "scripts");
+            "scripts", "background");
 
     @BeforeEach
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
+        TestUtils.discardQueuedBackgroundEvents(IocContainer.get(BackgroundTaskManager.class));
         AdminOperationHelper.saveDatabaseEntry(
                 new AdminDbEntry("stats_shop", new ArrayList<>(), new ArrayList<>(List.of("stats_owner"))));
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("stats_crm"));
@@ -98,6 +104,26 @@ public class DatabaseStatsFilterTest {
         assertTrue(stats.get("totals").asJsonObject().has("userCount"));
         assertEquals(Map.of("stats_shop", List.of("items", "orders"), "stats_crm", List.of("leads", "notes")),
                 collectionsByDatabase(stats));
+    }
+
+    private static long field(JsonObject stats, String section, String name) {
+        return stats.get(section).asJsonObject().get(name).asJsonNumber().getValue().longValue();
+    }
+
+    @Test
+    public void test_pending_runs_count_the_resident_trigger_run_rows_without_reading_them() {
+        final var cache = IocContainer.get(Cache.class);
+        for (var i = 0; i < 3; i++) {
+            cache.putPkIndexTriggerRun(new PkIndexEntry(Globals.ADMIN_DB_NAME,
+                    Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, "missing-run|" + i, 0, 10, 0));
+        }
+
+        final var stats = statsFor("stats_admin");
+
+        assertEquals(3L, field(stats, "triggers", "pendingRuns"));
+        assertEquals(0L, field(stats, "background", "maintenance"));
+        assertTrue(field(stats, "background", "pending") >= 0L);
+        assertEquals(0L, field(stats, "scripts", "historyQueued"));
     }
 
     @Test

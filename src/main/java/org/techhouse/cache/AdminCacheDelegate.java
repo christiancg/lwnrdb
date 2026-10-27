@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Set;
 import java.util.function.Predicate;
 import org.techhouse.data.PkIndexEntry;
@@ -255,7 +256,7 @@ interface AdminCacheDelegate {
         adminCache().removePkIndexTriggerRun(recordId);
     }
 
-    default Map<String, PkIndexEntry> getTriggerRunPkIndexes() {
+    default NavigableMap<String, PkIndexEntry> getTriggerRunPkIndexes() {
         return adminCache().getTriggerRunPkIndexes();
     }
 }

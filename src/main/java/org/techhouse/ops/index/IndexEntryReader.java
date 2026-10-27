@@ -23,8 +23,6 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.agg.FieldOperatorType;
-import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.CaseFolding;
 import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SaltedKey;
@@ -126,7 +124,12 @@ public final class IndexEntryReader {
     }
 
     private static boolean doesNotCoverEveryDocument(List<FieldIndexEntry<?>> entries, String dbName, String collName) {
-        return idCount(entries) < cache.pkIndexSize(dbName, collName);
+        return coversFewer(idCount(entries), dbName, collName);
+    }
+
+    private static boolean coversFewer(long covered, String dbName, String collName) {
+        final var documents = cache.pkCountForCoverage(dbName, collName);
+        return documents < 0 || covered < documents;
     }
 
     private static long idCount(List<? extends FieldIndexEntry<?>> entries) {
@@ -181,7 +184,7 @@ public final class IndexEntryReader {
         }
         covered += idCount(hashed);
         hashed.forEach(entry -> values.add(entry.getValue()));
-        if (values.isEmpty() || covered < cache.pkIndexSize(dbName, collName)) {
+        if (values.isEmpty() || coversFewer(covered, dbName, collName)) {
             return null;
         }
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
@@ -344,20 +347,18 @@ public final class IndexEntryReader {
         }
         recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
-        final var matchingIds = new HashSet<String>();
+        final var lookupValues = new ArrayList<>(localValues.size());
         final var foldedStringKeys = new HashSet<String>();
         for (var localValue : localValues) {
             if (localValue instanceof JsonString string && !string.isJsonCustom()
                     && !foldedStringKeys.add(CaseFolding.foldKey(string.getValue()))) {
                 continue;
             }
-            final var lookupValue = IndexValueCodec.elementToLookupValue(localValue);
-            final var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, localValue);
-            final var ids = cache.getIdsFromIndex(dbName, collName, fieldName, operator, lookupValue);
-            if (ids == null) {
-                return null;
-            }
-            matchingIds.addAll(ids);
+            lookupValues.add(IndexValueCodec.elementToLookupValue(localValue));
+        }
+        final var matchingIds = cache.getIdsEqualToAny(dbName, collName, fieldName, lookupValues);
+        if (matchingIds == null) {
+            return null;
         }
         final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (pendingIds.isEmpty()) {

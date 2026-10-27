@@ -128,6 +128,75 @@ def test_a_kill_after_a_buffered_save_leaves_nothing(proc, conn_factory, work_di
     return proc
 
 
+GROUP_SUBJECT = f"{DB}|{COLL}"
+
+
+def live_copies(work_dir: str, doc_id: str) -> int:
+    folder = os.path.join(work_dir, "db", DB, COLL)
+    needle = f'"_id":"{doc_id}"'
+    copies = 0
+    for name in os.listdir(folder):
+        if name.endswith(".dat"):
+            with open(os.path.join(folder, name), "rb") as fp:
+                copies += sum(1 for line in fp.read().decode("utf-8", errors="replace").split("\n") if needle in line)
+    return copies
+
+
+def open_transaction_with_saves(conn_factory, doc_ids: list, value: int):
+    conn = conn_factory()
+    tx_id = send(conn, {"type": "START_TRANSACTION"}).get("transactionId")
+    for doc_id in doc_ids:
+        check_status(f"buffer {doc_id}", send(conn, {"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                                                      "object": {"_id": doc_id, "v": value}}), "OK")
+    return conn, tx_id
+
+
+def test_a_grouped_commit_halted_before_its_force_is_finished_at_startup(proc, conn_factory, work_dir, log_path):
+    section("A commit whose writes share one log force, halted before that force, is finished at the next startup")
+    doc_ids = ["grouped_before_a", "grouped_before_b", "grouped_before_c"]
+    conn, tx_id = open_transaction_with_saves(conn_factory, doc_ids, 1)
+    with conn_factory() as control:
+        check_status("ARM_FAULT halts before the commit's group force",
+                     send(control, {"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "HALT",
+                                    "match": GROUP_SUBJECT}), "OK")
+    commit_in_background(conn)
+    proc = halt_and_restart(proc, work_dir, log_path)
+    conn.close()
+    with conn_factory() as after:
+        for doc_id in doc_ids:
+            check_status(f"{doc_id} is present after the restart", find(after, doc_id), "OK")
+    check("the startup finish left no record of the transaction", records_of(work_dir, tx_id) == [],
+          f"left: {records_of(work_dir, tx_id)}")
+    return proc
+
+
+def test_a_grouped_commit_halted_after_its_force_keeps_one_copy_of_each_document(proc, conn_factory, work_dir,
+                                                                                 log_path):
+    section("A grouped commit halted after its force, before its blanks, keeps one copy of each document")
+    doc_ids = ["grouped_after_a", "grouped_after_b"]
+    with conn_factory() as seed:
+        for doc_id in doc_ids:
+            check_status(f"commit {doc_id} outside a transaction", save(seed, doc_id), "OK")
+    conn, tx_id = open_transaction_with_saves(conn_factory, doc_ids + doc_ids, 2)
+    with conn_factory() as control:
+        check_status("ARM_FAULT halts right after the commit's group force",
+                     send(control, {"type": "ARM_FAULT", "point": "WAL_GROUP_FORCED", "action": "HALT",
+                                    "match": GROUP_SUBJECT}), "OK")
+    commit_in_background(conn)
+    proc = halt_and_restart(proc, work_dir, log_path)
+    conn.close()
+    with conn_factory() as after:
+        for doc_id in doc_ids:
+            found = find(after, doc_id)
+            check(f"{doc_id} holds the committed value", (found.get("object") or {}).get("v") == 2, f"got {found}")
+    for doc_id in doc_ids:
+        check(f"{doc_id} has exactly one live copy on disk", live_copies(work_dir, doc_id) == 1,
+              f"copies={live_copies(work_dir, doc_id)}")
+    check("the startup finish left no record of the transaction", records_of(work_dir, tx_id) == [],
+          f"left: {records_of(work_dir, tx_id)}")
+    return proc
+
+
 def run(conn_factory, write_config: Callable[[str], None]):
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-txkill-")
     log_path = os.path.join(work_dir, "server.log")
@@ -142,6 +211,10 @@ def run(conn_factory, write_config: Callable[[str], None]):
         proc = test_a_commit_halted_at_its_begin_record_is_finished_at_startup(proc, conn_factory, work_dir, log_path)
         proc = test_a_commit_halted_at_its_finish_record_keeps_its_document(proc, conn_factory, work_dir, log_path)
         proc = test_a_kill_after_a_buffered_save_leaves_nothing(proc, conn_factory, work_dir, log_path)
+        proc = test_a_grouped_commit_halted_before_its_force_is_finished_at_startup(proc, conn_factory, work_dir,
+                                                                                    log_path)
+        proc = test_a_grouped_commit_halted_after_its_force_keeps_one_copy_of_each_document(proc, conn_factory,
+                                                                                            work_dir, log_path)
     finally:
         bu.stop_server(proc)
     shutil.rmtree(work_dir, ignore_errors=True)

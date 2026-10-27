@@ -3,7 +3,9 @@ package org.techhouse.unit.ops.index;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -16,6 +18,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -29,6 +32,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.FieldIndexBatch;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.SaltedKey;
 
 final class FieldIndexBatchSupport {
     static final String DB = TestGlobals.DB;
@@ -113,7 +117,7 @@ final class FieldIndexBatchSupport {
     void applyBatch(String fieldName, List<String> ids) throws IOException, InterruptedException {
         locks.lockIndex(DB, COLL, fieldName);
         try {
-            final var batch = FieldIndexBatch.open(DB, COLL, fieldName);
+            final var batch = FieldIndexBatch.open(DB, COLL, fieldName, ids);
             for (final var id : ids) {
                 final var doc = documentOf(id, fieldName);
                 batch.apply(id, doc == null ? null : JsonUtils.getFromPath(doc.getData(), fieldName));
@@ -178,6 +182,49 @@ final class FieldIndexBatchSupport {
             byType.put(type.getKey(), lines);
         }
         return byType;
+    }
+
+    static Map<String, Set<String>> legacyBuildSnapshot(Collection<DbEntry> documents, String fieldName) {
+        final var grouped = new LinkedHashMap<SaltedKey, List<String>>();
+        for (final var document : documents) {
+            if (JsonUtils.hasInPath(document.getData(), fieldName)) {
+                grouped.computeIfAbsent(new SaltedKey(JsonUtils.getFromPath(document.getData(), fieldName)),
+                        _ -> new ArrayList<>()).add(document.get_id());
+            }
+        }
+        final var byType = new TreeMap<String, Map<String, Set<String>>>();
+        for (final var group : grouped.entrySet()) {
+            final var key = group.getKey().element();
+            final String label;
+            final Object value;
+            if (key.isJsonObject() || key.isJsonArray()) {
+                label = key.isJsonObject() ? IndexKind.OBJECT.label() : IndexKind.ARRAY.label();
+                value = JsonUtils.hashElement(key);
+            } else if (!key.isJsonPrimitive()) {
+                continue;
+            } else {
+                value = switch (key.asJsonPrimitive()) {
+                    case JsonNumber number -> number.doubleValue() + 0.0;
+                    case JsonString string when string.isJsonCustom() ->
+                        CustomTypeFactory.getCustomTypeInstance(string);
+                    case JsonString string -> string.getValue();
+                    case JsonBoolean bool -> bool.getValue();
+                    default -> throw new IllegalStateException("Unexpected value: " + key);
+                };
+                label = IndexKind.fileLabel(value.getClass());
+            }
+            byType.computeIfAbsent(label, _ -> new TreeMap<>())
+                    .computeIfAbsent(FieldIndexEntry.fileKeyOf(value), _ -> new TreeSet<>()).addAll(group.getValue());
+        }
+        final var snapshot = new TreeMap<String, Set<String>>();
+        for (final var type : byType.entrySet()) {
+            final var lines = new TreeSet<String>();
+            for (final var line : type.getValue().entrySet()) {
+                lines.add(line.getKey() + " => " + String.join(",", line.getValue()));
+            }
+            snapshot.put(type.getKey(), lines);
+        }
+        return snapshot;
     }
 
     static Map<String, List<? extends FieldIndexEntry<?>>> loadedTypes(String fieldName) throws IOException {

@@ -354,24 +354,25 @@ public class OperationProcessor {
             return guardError;
         }
         return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING,
-                GroupCommit.forSave(saveRequest), () -> {
+                GroupCommit.forSave(saveRequest), effects -> {
                     final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName,
                             collName);
                     if (ownershipError != null) {
-                        return ownershipError;
+                        return GroupCommit.answered(ownershipError);
                     }
                     final var schemaError = SchemaValidationHelper.check(saveRequest);
                     if (schemaError != null) {
-                        return schemaError;
+                        return GroupCommit.answered(schemaError);
                     }
                     final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
                     if (hookError != null) {
-                        return hookError;
+                        return GroupCommit.answered(hookError);
                     }
-                    final var local = TriggerHelper.runStaged(TriggerHelper.stageSave(saveRequest, actingUser), dbName,
-                            collName, actingUser, saveRequest.getTriggerDepth(),
-                            () -> SaveOperationHelper.executeSave(saveRequest));
-                    return ClusterWriteHelper.afterSave(dbName, collName, local);
+                    final var staged = TriggerHelper.stageSave(saveRequest, actingUser, effects);
+                    return () -> ClusterWriteHelper.afterSave(dbName, collName,
+                            TriggerHelper.runStaged(staged, dbName, collName, actingUser, saveRequest.getTriggerDepth(),
+                                    effects, () -> SaveOperationHelper.executeSave(saveRequest)),
+                            effects);
                 });
     }
 
@@ -387,31 +388,33 @@ public class OperationProcessor {
             return guardError;
         }
         return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.DELETE,
-                ErrorCode.ERROR_DELETING, GroupCommit.forDelete(deleteRequest), () -> {
+                ErrorCode.ERROR_DELETING, GroupCommit.forDelete(deleteRequest), effects -> {
                     final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.DELETE, dbName,
                             collName);
                     if (ownershipError != null) {
-                        return ownershipError;
+                        return GroupCommit.answered(ownershipError);
                     }
                     // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
                             deleteRequest.getTriggerDepth());
                     final var hookError = BeforeHookHelper.beforeDelete(deleteRequest, actingUser);
                     if (hookError != null) {
-                        return hookError;
+                        return GroupCommit.answered(hookError);
                     }
-                    final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser);
-                    final var reservation = TriggerHelper.discardingOnFailure(staged,
-                            () -> ClusterWriteHelper.reserveDelete(dbName, collName, deleteRequest.get_id()));
-                    if (reservation.ownerLost()) {
-                        staged.discard();
-                        return new OperationResponse(OperationType.DELETE, ErrorCode.NOT_COLLECTION_OWNER);
-                    }
-                    final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
-                            deleteRequest.getTriggerDepth(),
-                            () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservation.version()));
-                    return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
-                            reservation.version(), local);
+                    final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser, effects);
+                    return () -> {
+                        final var reservation = TriggerHelper.discardingOnFailure(staged, effects,
+                                () -> ClusterWriteHelper.reserveDelete(dbName, collName, deleteRequest.get_id()));
+                        if (reservation.ownerLost()) {
+                            effects.discard(staged);
+                            return new OperationResponse(OperationType.DELETE, ErrorCode.NOT_COLLECTION_OWNER);
+                        }
+                        final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
+                                deleteRequest.getTriggerDepth(), effects,
+                                () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservation.version()));
+                        return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+                                reservation.version(), local, effects);
+                    };
                 });
     }
 

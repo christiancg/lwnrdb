@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import static org.techhouse.simplejs.host.ScriptErrorNames.CANCELLED;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
@@ -307,8 +308,13 @@ public final class TriggerDispatcher {
             throw e;
         }
         try {
-            database.bufferTriggerRunConsume(runId);
-            database.commitTransaction();
+            if (database.transactionBufferedNoWrites()) {
+                database.rollbackTransaction();
+                consumeOrThrow(runId);
+            } else {
+                database.bufferTriggerRunConsume(runId);
+                database.commitTransaction();
+            }
             committed.set(true);
         } catch (Throwable e) {
             logger.error("Failed to commit the effects of trigger '" + triggerName + "': " + e.getMessage(), e);
@@ -323,6 +329,21 @@ public final class TriggerDispatcher {
             }
         } catch (RuntimeException e) {
             logger.warning("Failed to roll back trigger '" + triggerName + "': " + e.getMessage());
+        }
+    }
+
+    private static void consumeOrThrow(String runId) {
+        final var recordIds = TriggerRunLog.recordIdsFor(runId);
+        if (recordIds.isEmpty()) {
+            return;
+        }
+        try {
+            AdminOperationHelper.deleteTriggerRuns(recordIds);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while consuming the pending trigger run " + runId, e);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 

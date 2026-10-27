@@ -193,6 +193,50 @@ public class OutboundQueueTest {
         }
     }
 
+    private static EncodedJson segment(String text) {
+        return EncodedJson.of(bytes(text));
+    }
+
+    @Test
+    public void aSegmentedFrameIsWrittenAsOneLine() throws Exception {
+        assertTrue(queue.offer(segment("{\"head\":"), segment("[1,2]"), segment(",\"tail\":true}")));
+        assertTrue(queue.offer(segment("{\"a\":"), segment(""), segment("1}")));
+        received.resume();
+
+        assertTrue(queue.awaitDrained(5000));
+        assertEquals("{\"head\":[1,2],\"tail\":true}", received.next());
+        assertEquals("{\"a\":1}", received.next());
+    }
+
+    @Test
+    public void aSegmentedFrameCountsEverySegmentAgainstTheCap() throws Exception {
+        stallOnALineInFlight();
+        final var terminator = System.lineSeparator().length();
+
+        assertTrue(queue.offer(segment(line('h', 10)), segment(line('b', 30 - terminator)), segment(line('t', 10))));
+        assertFalse(queue.offer(segment(line('h', 10)), segment(line('b', 31)), segment(line('t', 10))),
+                "the head and tail count as well as the body");
+        assertEquals(1, overflows.get());
+    }
+
+    @Test
+    public void aSharedBodyIsWrittenIntactToTwoQueues() throws Exception {
+        final var other = new ResponseLines();
+        final var second = new OutboundQueue(other, () -> {
+        }, CAP * 10, OutboundQueue.VIRTUAL_DRAINER, overflows::incrementAndGet);
+        final var body = new EncodedJson(bytes("[\"shared\"]......"), 10);
+
+        assertTrue(queue.offer(segment("{\"id\":1,\"r\":"), body, segment("}")));
+        assertTrue(second.offer(segment("{\"id\":2,\"r\":"), body, segment("}")));
+        received.resume();
+
+        assertTrue(queue.awaitDrained(5000));
+        assertTrue(second.awaitDrained(5000));
+        assertEquals("{\"id\":1,\"r\":[\"shared\"]}", received.next());
+        assertEquals("{\"id\":2,\"r\":[\"shared\"]}", other.next());
+        assertEquals("[\"shared\"]......", new String(body.bytes(), StandardCharsets.UTF_8));
+    }
+
     private static byte[] legacyDirectSend(String frame) throws IOException {
         final var sink = new ByteArrayOutputStream();
         final var writer = new BufferedWriter(new OutputStreamWriter(sink, StandardCharsets.UTF_8));

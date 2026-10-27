@@ -23,7 +23,7 @@ public class OutboundQueue {
     private static final byte[] LINE_END = System.lineSeparator().getBytes(StandardCharsets.US_ASCII);
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition idle = lock.newCondition();
-    private final ArrayDeque<EncodedJson> pending = new ArrayDeque<>();
+    private final ArrayDeque<Frame> pending = new ArrayDeque<>();
     private final OutputStream out;
     private final Closeable connection;
     private final long maxQueuedBytes;
@@ -32,6 +32,16 @@ public class OutboundQueue {
     private long queuedBytes;
     private boolean draining;
     private boolean closed;
+
+    private record Frame(EncodedJson head, EncodedJson body, EncodedJson tail) {
+        long queuedLength() {
+            return lengthOf(head) + lengthOf(body) + lengthOf(tail) + LINE_END.length;
+        }
+
+        private static long lengthOf(EncodedJson segment) {
+            return segment == null ? 0 : segment.length();
+        }
+    }
 
     public OutboundQueue(OutputStream out, Closeable connection, long maxQueuedBytes, Executor drainer,
             Runnable onOverflow) {
@@ -51,17 +61,21 @@ public class OutboundQueue {
     }
 
     public static void sendDirectly(OutputStream out, ErrorCode code) throws IOException {
-        writeFrame(out, closeFrame(code));
+        writeFrame(out, new Frame(closeFrame(code), null, null));
         out.flush();
     }
 
-    private static void writeFrame(OutputStream out, EncodedJson frame) throws IOException {
-        out.write(frame.bytes(), 0, frame.length());
+    private static void writeFrame(OutputStream out, Frame frame) throws IOException {
+        writeSegment(out, frame.head());
+        writeSegment(out, frame.body());
+        writeSegment(out, frame.tail());
         out.write(LINE_END);
     }
 
-    private static long queuedLengthOf(EncodedJson frame) {
-        return (long) frame.length() + LINE_END.length;
+    private static void writeSegment(OutputStream out, EncodedJson segment) throws IOException {
+        if (segment != null && segment.length() > 0) {
+            out.write(segment.bytes(), 0, segment.length());
+        }
     }
 
     public boolean offer(byte[] frame) {
@@ -69,6 +83,14 @@ public class OutboundQueue {
     }
 
     public boolean offer(EncodedJson frame) {
+        return offer(new Frame(frame, null, null));
+    }
+
+    public boolean offer(EncodedJson head, EncodedJson body, EncodedJson tail) {
+        return offer(new Frame(head, body, tail));
+    }
+
+    private boolean offer(Frame frame) {
         final boolean overflowed;
         final boolean startDrain;
         lock.lock();
@@ -76,15 +98,15 @@ public class OutboundQueue {
             if (closed) {
                 return false;
             }
-            overflowed = queuedBytes > 0 && queuedLengthOf(frame) > maxQueuedBytes - queuedBytes;
+            overflowed = queuedBytes > 0 && frame.queuedLength() > maxQueuedBytes - queuedBytes;
             if (overflowed) {
                 pending.clear();
                 queuedBytes = 0;
                 closed = true;
-                pending.add(closeFrame(ErrorCode.OUTBOUND_BACKLOG));
+                pending.add(new Frame(closeFrame(ErrorCode.OUTBOUND_BACKLOG), null, null));
             } else {
                 pending.add(frame);
-                queuedBytes += queuedLengthOf(frame);
+                queuedBytes += frame.queuedLength();
             }
             startDrain = !draining;
             draining = true;
@@ -146,14 +168,14 @@ public class OutboundQueue {
         }
     }
 
-    private EncodedJson nextFrame() {
-        final EncodedJson frame;
+    private Frame nextFrame() {
+        final Frame frame;
         lock.lock();
         try {
             frame = pending.poll();
             if (frame != null) {
                 if (!closed) {
-                    queuedBytes -= queuedLengthOf(frame);
+                    queuedBytes -= frame.queuedLength();
                 }
                 return frame;
             }

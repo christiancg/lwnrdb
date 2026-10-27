@@ -40,6 +40,7 @@ public class BackgroundProcessorThread implements Runnable {
     private void workLoop() {
         final var batch = new ArrayList<Event>(MAX_BATCH);
         while (!Thread.currentThread().isInterrupted()) {
+            runMaintenance();
             batch.clear();
             if (lanes.stealFor(ownLane, batch, MAX_BATCH) == null) {
                 final Event first;
@@ -54,6 +55,7 @@ public class BackgroundProcessorThread implements Runnable {
                 }
                 if (first == null) {
                     flushPageRows();
+                    checkpointIdleLogs();
                     continue;
                 }
                 batch.add(first);
@@ -73,6 +75,31 @@ public class BackgroundProcessorThread implements Runnable {
                 idleSignal.signal();
             }
             flushPageRows();
+        }
+    }
+
+    private void runMaintenance() {
+        final var event = lanes.pollMaintenance();
+        if (event == null) {
+            return;
+        }
+        try {
+            EventProcessorHelper.processMaintenance(event);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception | Error e) {
+            logger.error("Error while processing a maintenance task: ", e);
+        } finally {
+            lanes.maintenanceDone();
+            idleSignal.signal();
+        }
+    }
+
+    private void checkpointIdleLogs() {
+        try {
+            IdleLogCheckpoint.runDue(System.currentTimeMillis());
+        } catch (Exception | Error e) {
+            logger.error("Error while checkpointing idle write-ahead logs: ", e);
         }
     }
 

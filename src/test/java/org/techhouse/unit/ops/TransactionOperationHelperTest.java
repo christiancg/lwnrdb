@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,7 +26,6 @@ import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
@@ -259,16 +257,6 @@ public class TransactionOperationHelperTest {
         assertTrue(cache.getTransactionPkIndexes().isEmpty());
     }
 
-    @Test
-    public void test_apply_overlay_to_stream_without_overlay_returns_committed() {
-        final var transaction = new Transaction(UUID.randomUUID(), UUID.randomUUID());
-        final var doc = new JsonObject();
-        doc.add("_id", new JsonString("x"));
-        final var result = TransactionOperationHelper
-                .applyOverlayToStream(transaction, "myDb|myCollection", Stream.of(doc)).toList();
-        assertEquals(1, result.size());
-    }
-
     private void deleteAllBufferedOps() throws Exception {
         final var cache = IocContainer.get(Cache.class);
         AdminOperationHelper.deleteTransactionOps(new ArrayList<>(cache.getTransactionPkIndexes().keySet()));
@@ -325,7 +313,7 @@ public class TransactionOperationHelperTest {
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
         try (var mocked = mockStatic(TransactionWrites.class, CALLS_REAL_METHODS)) {
-            mocked.when(() -> TransactionWrites.checkEntrySize(any(), any(), any(), any()))
+            mocked.when(() -> TransactionWrites.isVisible(any(), any(), any(), any()))
                     .thenThrow(new RuntimeException("boom"));
             final var response = processor.processMessage(saveRequest("txn-buf-err"), clientId);
             assertEquals("500-24", response.getErrorCode());
@@ -345,7 +333,7 @@ public class TransactionOperationHelperTest {
         objects.add(obj);
         bulk.setObjects(objects);
         try (var mocked = mockStatic(TransactionWrites.class, CALLS_REAL_METHODS)) {
-            mocked.when(() -> TransactionWrites.checkEntrySize(any(), any(), any(), any()))
+            mocked.when(() -> TransactionWrites.isVisible(any(), any(), any(), any()))
                     .thenThrow(new RuntimeException("boom"));
             final var response = processor.processMessage(bulk, clientId);
             assertEquals("500-24", response.getErrorCode());

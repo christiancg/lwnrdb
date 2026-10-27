@@ -78,6 +78,18 @@ public class UsageTracker {
         return drained;
     }
 
+    public boolean hasDirtyCounters() {
+        return !unflushed.isEmpty();
+    }
+
+    public void requeue(List<UsageCounter> dirty) {
+        for (final var counter : dirty) {
+            if (counter.markUnflushed()) {
+                unflushed.add(counter);
+            }
+        }
+    }
+
     public UsageCounter getCounter(AccessKind kind, String dbName, String collName, String indexKey) {
         return counters.get(buildKey(kind, dbName, collName, indexKey));
     }

@@ -1,48 +1,24 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.BindingTable.Binding;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class Environment {
+public final class Environment implements GlobalSink {
     public record DisposalEntry(JsValue resource, JsValue method, boolean async) {
-    }
-
-    private static final class Binding {
-        private JsValue value;
-        private final String kind;
-        private boolean initialized;
-        private final boolean enumerable;
-        private final boolean writable;
-        private final boolean configurable;
-
-        private Binding(JsValue value, String kind, boolean initialized, boolean enumerable) {
-            this(value, kind, initialized, enumerable, true, false);
-        }
-
-        private Binding(JsValue value, String kind, boolean initialized, boolean enumerable, boolean writable,
-                boolean configurable) {
-            this.value = value;
-            this.kind = kind;
-            this.initialized = initialized;
-            this.enumerable = enumerable;
-            this.writable = writable;
-            this.configurable = configurable;
-        }
     }
 
     private final Environment parent;
     private final boolean functionScope;
-    private Map<String, Binding> bindings;
-    private Map<String, Binding> globalLexicalBindings;
+    private BindingTable bindings;
+    private BindingTable globalLexicalBindings;
     private JsValue thisValue;
     private boolean hasThis;
     private boolean thisInitialized = true;
@@ -54,17 +30,13 @@ public final class Environment {
     private Coroutine coroutine;
     private List<DisposalEntry> disposables;
 
-    private Map<String, Binding> bindings() {
+    private BindingTable bindings() {
         var existing = bindings;
         if (existing == null) {
-            existing = new LinkedHashMap<>();
+            existing = new BindingTable(parent == null);
             bindings = existing;
         }
         return existing;
-    }
-
-    private Map<String, Binding> bindingsView() {
-        return bindings == null ? Map.of() : bindings;
     }
 
     private Environment(Environment parent, boolean functionScope) {
@@ -199,15 +171,20 @@ public final class Environment {
     }
 
     public void declareFunction(String name, JsValue value) {
-        bindings().put(name, new Binding(value, "var", true, true));
+        bindings().put(name, Binding.var(value, true, true, false));
     }
 
+    @Override
     public void declareBuiltin(String name, JsValue value) {
-        bindings().put(name, new Binding(value, "var", true, false, true, true));
+        bindings().put(name, Binding.var(value, false, true, true));
+    }
+
+    public void declareLazyBuiltin(String name, LazyBuiltin holder) {
+        bindings().put(name, Binding.lazyVar(holder));
     }
 
     public void declareNonWritableBuiltin(String name, JsValue value) {
-        bindings().put(name, new Binding(value, "var", true, false, false, false));
+        bindings().put(name, Binding.var(value, false, false, false));
     }
 
     public boolean hasLocal(String name) {
@@ -216,18 +193,23 @@ public final class Environment {
 
     public void declareVar(String name) {
         final var target = functionScope();
-        target.bindings().computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", true, true));
+        target.bindings().putIfAbsent(name, Binding.var(JsUndefined.getInstance(), true, true, false));
     }
 
     public void declareParam(String name) {
         final var target = functionScope();
-        target.bindings().computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", false, true));
+        target.bindings().putIfAbsent(name,
+                new Binding(JsUndefined.getInstance(), true, false, false, true, true, false));
+    }
+
+    public void declareParamValue(String name, JsValue value) {
+        functionScope().bindings().put(name, new Binding(value, true, false, true, true, true, false));
     }
 
     public void declareLexical(String name, String kind) {
         if (parent == null) {
             if (globalLexicalBindings == null) {
-                globalLexicalBindings = new LinkedHashMap<>();
+                globalLexicalBindings = new BindingTable(true);
             }
             globalLexicalBindings.put(name, new Binding(JsUndefined.getInstance(), kind, false, false));
             return;
@@ -237,7 +219,7 @@ public final class Environment {
 
     public void initialize(String name, JsValue value) {
         final var binding = Objects.requireNonNull(ownBinding(name), () -> "no binding declared for " + name);
-        binding.value = value;
+        binding.assign(value);
         binding.initialized = true;
     }
 
@@ -259,7 +241,7 @@ public final class Environment {
         if (!binding.initialized) {
             throw new ReferenceErrorException("Cannot access '" + name + "' before initialization");
         }
-        return binding.value;
+        return binding.value();
     }
 
     public void assign(String name, JsValue value) {
@@ -267,27 +249,27 @@ public final class Environment {
         if (binding == null) {
             throw new ReferenceErrorException(name + " is not defined");
         }
-        if (!binding.initialized && !"var".equals(binding.kind)) {
+        if (!binding.initialized && !binding.isVar) {
             throw new ReferenceErrorException("Cannot access '" + name + "' before initialization");
         }
-        if ("const".equals(binding.kind)) {
+        if (binding.isConst) {
             throw new TypeErrorException("Assignment to constant variable.");
         }
         if (!binding.writable) {
             throw new TypeErrorException("Cannot assign to read only property '" + name + "' of object");
         }
-        binding.value = value;
+        binding.assign(value);
         binding.initialized = true;
     }
 
     public JsValue tryGet(String name) {
         final var binding = resolve(name);
-        return binding == null || !binding.initialized ? null : binding.value;
+        return binding == null || !binding.initialized ? null : binding.value();
     }
 
     public JsValue tryGetGlobalProperty(String name) {
         final var binding = bindings == null ? null : bindings.get(name);
-        return binding == null || !binding.initialized ? null : binding.value;
+        return binding == null || !binding.initialized ? null : binding.value();
     }
 
     public boolean isDeclared(String name) {
@@ -296,36 +278,37 @@ public final class Environment {
 
     public List<String> enumerableGlobalNames() {
         final var names = new ArrayList<String>();
-        for (final var entry : bindingsView().entrySet()) {
-            final var binding = entry.getValue();
-            if (binding.initialized && binding.enumerable) {
-                names.add(entry.getKey());
-            }
+        if (bindings != null) {
+            bindings.forEach((name, binding) -> {
+                if (binding.initialized && binding.enumerable) {
+                    names.add(name);
+                }
+            });
         }
         return names;
     }
 
     public List<String> allGlobalNames() {
         final var names = new ArrayList<String>();
-        for (final var entry : bindingsView().entrySet()) {
-            final var binding = entry.getValue();
-            if (binding.initialized && "var".equals(binding.kind)) {
-                names.add(entry.getKey());
-            }
+        if (bindings != null) {
+            bindings.forEach((name, binding) -> {
+                if (binding.initialized && binding.isVar) {
+                    names.add(name);
+                }
+            });
         }
         return names;
     }
 
     public void setGlobal(String name, JsValue value) {
         if (resolve(name) == null) {
-            bindings().put(name, new Binding(JsUndefined.getInstance(), "var", true, true, true, true));
+            bindings().put(name, Binding.var(JsUndefined.getInstance(), true, true, true));
         }
         assign(name, value);
     }
 
     public void defineGlobal(String name, JsValue value, JsObject.PropertyFlags flags) {
-        bindings().put(name,
-                new Binding(value, "var", true, flags.enumerable(), flags.writable(), flags.configurable()));
+        bindings().put(name, Binding.var(value, flags.enumerable(), flags.writable(), flags.configurable()));
     }
 
     public void setGlobalFlags(String name, JsObject.PropertyFlags flags, JsValue value) {
@@ -333,8 +316,7 @@ public final class Environment {
         if (binding == null) {
             return;
         }
-        bindings().put(name, new Binding(value == null ? binding.value : value, binding.kind, true, flags.enumerable(),
-                flags.writable(), flags.configurable()));
+        bindings().put(name, binding.withFlags(value, flags.enumerable(), flags.writable(), flags.configurable()));
     }
 
     public boolean hasGlobalProperty(String name) {
@@ -356,9 +338,7 @@ public final class Environment {
         if (!binding.configurable) {
             return false;
         }
-        if (bindings != null) {
-            bindings.remove(name);
-        }
+        bindings.remove(name);
         return true;
     }
 

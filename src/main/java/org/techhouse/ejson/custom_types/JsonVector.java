@@ -12,7 +12,9 @@ public class JsonVector extends JsonCustom<double[]> {
     public static final String OPERATOR_NEAREST = "nearest";
     public static final int SIMHASH_BITS = 16;
 
-    private String signature;
+    private static final int NO_SIGNATURE = -1;
+
+    private int signature = NO_SIGNATURE;
 
     public JsonVector(double[] customValue) {
         super(buildWireValue(customValue));
@@ -69,14 +71,14 @@ public class JsonVector extends JsonCustom<double[]> {
     // SimHash signature first (clusters the index), then component/length tie-break so 0 iff equal.
     @Override
     public Integer compare(double[] another) {
-        final var bySignature = simHash().compareTo(VectorUtils.simHash(another, SIMHASH_BITS));
+        final var bySignature = Integer.compareUnsigned(signature(), VectorUtils.simHashBits(another, SIMHASH_BITS));
         return bySignature != 0 ? bySignature : compareByComponents(another);
     }
 
     @Override
     public Integer compareToCustom(JsonCustom<double[]> another) {
         if (another instanceof JsonVector otherVector) {
-            final var bySignature = simHash().compareTo(otherVector.simHash());
+            final var bySignature = Integer.compareUnsigned(signature(), otherVector.signature());
             return bySignature != 0 ? bySignature : compareByComponents(otherVector.customValue);
         }
         return compare(another.getCustomValue());
@@ -97,17 +99,17 @@ public class JsonVector extends JsonCustom<double[]> {
         return customValue;
     }
 
-    public String cachedSimHash() {
-        return signature;
-    }
-
-    public String simHash() {
+    public int signature() {
         var cached = signature;
-        if (cached == null) {
-            cached = VectorUtils.simHash(customValue, SIMHASH_BITS);
+        if (cached == NO_SIGNATURE) {
+            cached = VectorUtils.simHashBits(customValue, SIMHASH_BITS);
             signature = cached;
         }
         return cached;
+    }
+
+    public String simHash() {
+        return VectorUtils.simHash(customValue, SIMHASH_BITS);
     }
 
     @Override

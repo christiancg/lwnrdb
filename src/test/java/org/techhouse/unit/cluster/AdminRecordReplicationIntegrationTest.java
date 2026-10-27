@@ -27,7 +27,6 @@ import org.techhouse.cluster.admin.AdminRecord;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -175,8 +174,7 @@ public class AdminRecordReplicationIntegrationTest {
     public void test_a_reindex_broadcast_rebuilds_on_a_peer() throws Exception {
         cluster.configureRemoteCoordinator();
         final var message = new ClusterMessage(null, ClusterMessageType.REINDEX_BROADCAST, SECRET, null, null);
-        message.setForwardBody(
-                ForwardBody.encode(eJson.toJson(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null))));
+        message.setForwardBody(eJson.toJson(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null)));
         final var ack = pool.request(cluster.serverAddress(), message, 3000);
         assertEquals(ClusterMessageType.REINDEX_BROADCAST_ACK, ack.getType());
     }
@@ -189,8 +187,7 @@ public class AdminRecordReplicationIntegrationTest {
                 TestGlobals.COLL + "-pk.idx");
         Files.writeString(pkFile.toPath(), "garbage\n", StandardCharsets.UTF_8);
         final var message = new ClusterMessage(null, ClusterMessageType.REINDEX_BROADCAST, SECRET, null, null);
-        message.setForwardBody(
-                ForwardBody.encode(eJson.toJson(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null, true))));
+        message.setForwardBody(eJson.toJson(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null, true)));
 
         final var ack = pool.request(cluster.serverAddress(), message, 3000);
 

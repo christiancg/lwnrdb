@@ -17,6 +17,8 @@ ORDERS = "orders"
 ITEMS = "items"
 FIRED = "fired"
 LEADS = "leads"
+NOTES = "notes"
+NOTE_COUNT = 2400
 ORDER_COUNT = 2500
 CLIENT_TIMEOUT_S = 300
 
@@ -133,6 +135,13 @@ def seed_source():
         check_status("save items", c.send({"type": "BULK_SAVE", "databaseName": SHOP, "collectionName": ITEMS,
                                            "objects": [{"_id": f"i{i}", "name": f"item {i}"} for i in range(5)]}),
                      "OK")
+        check_status("create crm.notes", c.send({"type": "CREATE_COLLECTION", "databaseName": CRM,
+                                                 "collectionName": NOTES}), "OK")
+        for start in range(0, NOTE_COUNT, 400):
+            check_status(f"save notes {start}..", c.send({
+                "type": "BULK_SAVE", "databaseName": CRM, "collectionName": NOTES,
+                "objects": [{"_id": f"n{i:05d}", "body": f"{i}:" + "n" * 2000} for i in range(start, start + 400)]}),
+                "OK")
         check_status("save leads", c.send({"type": "BULK_SAVE", "databaseName": CRM, "collectionName": LEADS,
                                            "objects": [{"_id": f"l{i}", "score": i} for i in range(7)]}), "OK")
         check_status("index orders.customer", c.send({"type": "CREATE_INDEX", "databaseName": SHOP,
@@ -150,6 +159,11 @@ def seed_source():
                      "OK")
         check("script_runs exists on the source", bu.wait_until(lambda: "script_runs" in (c.send({
             "type": "LIST_COLLECTIONS", "databaseName": SHOP}).get("collections") or []), 15.0))
+
+
+def page_files(work_dir: str, db: str, coll: str) -> int:
+    folder = os.path.join(work_dir, "db", db, coll)
+    return sum(1 for name in os.listdir(folder) if name.endswith(".dat")) if os.path.isdir(folder) else 0
 
 
 def test_exec(cwd: str):
@@ -190,6 +204,8 @@ def test_round_trip(cwd: str, source_state: dict) -> bytes:
     check("--dump exits 0", plain.returncode == 0, plain.stderr.decode())
     check("progress goes to stderr", f"{SHOP}.{ORDERS}: {ORDER_COUNT} documents" in plain.stderr.decode(),
           plain.stderr.decode())
+    check("a collection spanning several page files dumps whole",
+          f"{CRM}.{NOTES}: {NOTE_COUNT} documents" in plain.stderr.decode(), plain.stderr.decode())
     compressed = client(cwd, "--dump", "--compress")
     check("--dump --compress exits 0", compressed.returncode == 0, compressed.stderr.decode())
     check("the compressed dump starts with the gzip magic", compressed.stdout[:2] == b"\x1f\x8b")
@@ -440,6 +456,8 @@ def main():
         source = bu.start_server(source_dir, source_log, port=SOURCE_PORT)
         target = bu.start_server(target_dir, target_log, port=TARGET_PORT)
         seed_source()
+        check(f"{CRM}.{NOTES} spans several page files", page_files(source_dir, CRM, NOTES) >= 2,
+              detail=f"{page_files(source_dir, CRM, NOTES)} page files")
         source_state = snapshot(SOURCE_PORT)
         test_exec(client_dir)
         test_shell(client_dir)

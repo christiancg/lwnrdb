@@ -1,6 +1,5 @@
 package org.techhouse.simplejs.values;
 
-import java.util.ArrayList;
 import java.util.List;
 
 public interface JsCallableProperties {
@@ -35,11 +34,10 @@ public interface JsCallableProperties {
     }
 
     default List<String> propertyKeys() {
-        return new ArrayList<>(callableMetadata().table().keys());
+        return callableMetadata().propertyKeys();
     }
 
     default List<String> enumerablePropertyKeys() {
-        final var table = callableMetadata().table();
-        return table.keys().stream().filter(table::isEnumerable).toList();
+        return callableMetadata().enumerablePropertyKeys();
     }
 }

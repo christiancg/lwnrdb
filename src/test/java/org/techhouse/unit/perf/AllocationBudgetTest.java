@@ -13,7 +13,10 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.OutboundQueue;
+import org.techhouse.data.DbEntry;
+import org.techhouse.data.Transaction;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -21,15 +24,20 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.CountOperatorHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.SaveOperationHelper;
+import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.admin.AdminPageHelper;
 import org.techhouse.ops.admin.CollectionIncarnation;
+import org.techhouse.ops.admin.ReadPathHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -37,6 +45,7 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.resp.AggregateResponse;
+import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -54,9 +63,16 @@ public class AllocationBudgetTest {
     private static final long EQUALS_INDEX_COUNT_BUDGET = 2_735;
     private static final long SAVE_REQUEST_PARSE_BUDGET = 3_120;
     private static final long LOCKED_COLD_SCAN_BUDGET_PER_DOC = 4_035;
-    private static final long INDEXED_FILTER_LIMIT_BUDGET = 24_630;
+    private static final long INDEXED_FILTER_LIMIT_BUDGET = 3_690;
     private static final long WRITE_PATH_PAGE_BOOKING_BUDGET = 915;
+    private static final long BUFFERED_SAVE_BUDGET = 5_385;
+    private static final long INDEXED_FILTER_LIMIT_IN_TRANSACTION_BUDGET = 23_125;
+    private static final long DIRTY_FIND_BY_ID_BUDGET = 645;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
+    private static final double FIRST_ENCODE_BUDGET_RATIO = 2.4;
+    private static final double RE_ENCODE_BUDGET_RATIO = 1.1;
+    private static final double LISTEN_HASH_BUDGET_RATIO = 1.4;
+    private static final long UNORDERED_HASH_BUDGET_PER_DOC = 96;
     private static final String COLD_SCAN = """
             {"type":"AGGREGATE","databaseName":"%s","collectionName":"%s","aggregationSteps":[
             {"type":"FILTER","operator":{"fieldOperatorType":"SMALLER_THAN","field":"qty","value":1}},
@@ -255,6 +271,20 @@ public class AllocationBudgetTest {
     }
 
     @Test
+    void dirtyFindByIdAllocatesUnderBudget() throws Exception {
+        holdingTheCollectionRead(() -> cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL));
+        final int[] next = {0};
+        final var measured = cheapestOf(() -> {
+            final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.set_id("d" + next[0]++ * 41 % DOCS);
+            request.setDirtyRead(true);
+            assertInstanceOf(FindByIdResponse.class, ReadPathHelper.processFindByIdOperation(request, null));
+        });
+        assertTrue(measured <= DIRTY_FIND_BY_ID_BUDGET,
+                report("a dirty FIND_BY_ID", measured, DIRTY_FIND_BY_ID_BUDGET));
+    }
+
+    @Test
     void backgroundBatchOfOneAllocatesUnderBudget() throws Exception {
         assertTrue(locks.tryLockRead(TestGlobals.DB, TestGlobals.COLL, 5_000));
         try {
@@ -334,12 +364,108 @@ public class AllocationBudgetTest {
     }
 
     @Test
+    void encodingALargeDocumentStaysCloseToItsSize() throws Exception {
+        final var rows = new JsonArray();
+        for (var i = 0; i < 2600; i++) {
+            rows.add(document(i, i % 97));
+        }
+        final var data = new JsonObject();
+        data.add("rows", rows);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("large");
+        final var size = entry.encodeLine().length;
+        assertTrue(size > 1_000_000, String.valueOf(size));
+        final var firstEncode = cheapestOf(() -> {
+            entry.setData(data);
+            entry.encodeLine();
+        });
+        final var firstBudget = (long) (size * FIRST_ENCODE_BUDGET_RATIO);
+        assertTrue(firstEncode <= firstBudget,
+                report("the first encode of a " + size + "-byte document", firstEncode, firstBudget));
+        final var reEncode = cheapestOf(entry::encodeLine);
+        final var reBudget = (long) (size * RE_ENCODE_BUDGET_RATIO);
+        assertTrue(reEncode <= reBudget, report("re-encoding a " + size + "-byte document", reEncode, reBudget));
+    }
+
+    @Test
+    void listenHashAllocatesCloseToTheResultSize() throws Exception {
+        final var rows = new ArrayList<JsonObject>();
+        for (var i = 0; i < 2000; i++) {
+            rows.add(document(i, i % 97));
+        }
+        final long body;
+        try (var encoded = ResultHasher.encode(rows, true)) {
+            body = encoded.body().length();
+        }
+        final var ordered = cheapestOf(() -> ResultHasher.encode(rows, true).close());
+        final var orderedBudget = (long) (body * LISTEN_HASH_BUDGET_RATIO);
+        assertTrue(ordered <= orderedBudget, report("an ordered hash of " + body + " bytes", ordered, orderedBudget));
+        final var unordered = cheapestOf(() -> ResultHasher.encode(rows, false).close());
+        final var unorderedBudget = orderedBudget + UNORDERED_HASH_BUDGET_PER_DOC * rows.size();
+        assertTrue(unordered <= unorderedBudget,
+                report("an unordered hash of " + body + " bytes", unordered, unorderedBudget));
+    }
+
+    @Test
     void parsingASaveRequestStaysSmall() throws Exception {
         final var line = "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"object\":" + new EJson().toJson(document(1, 1)) + "}";
         final var measured = cheapestOf(() -> RequestParser.parseRequest(line));
         assertTrue(measured <= SAVE_REQUEST_PARSE_BUDGET,
                 report("parsing a " + line.length() + "-char SAVE request", measured, SAVE_REQUEST_PARSE_BUDGET));
+    }
+
+    @Test
+    void bufferedSaveAllocatesUnderBudget() throws Exception {
+        inTransaction(transaction -> {
+            final int[] next = {0};
+            final var measured = cheapestOf(() -> {
+                final var i = next[0]++ * 41 % DOCS;
+                final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+                request.set_id("d" + i);
+                request.setObject(document(i, 7));
+                assertEquals(OperationStatus.OK,
+                        TransactionOperationHelper.bufferSave(request, transaction).getStatus());
+            });
+            assertTrue(measured <= BUFFERED_SAVE_BUDGET, report("one buffered SAVE", measured, BUFFERED_SAVE_BUDGET));
+        });
+    }
+
+    @Test
+    void indexedFilterLimitInTransactionAllocatesUnderBudget() throws Exception {
+        inTransaction(transaction -> {
+            final var buffered = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            buffered.set_id("d3");
+            buffered.setObject(document(3, 9));
+            assertEquals(OperationStatus.OK, TransactionOperationHelper.bufferSave(buffered, transaction).getStatus());
+            final var request = (AggregateRequest) RequestParser
+                    .parseRequest(INDEXED_FILTER_LIMIT.formatted(TestGlobals.DB, TestGlobals.COLL));
+            IocContainer.get(PendingIndexWrites.class).clearCollection(TestGlobals.DB, TestGlobals.COLL);
+            ReadPathHelper.processAggregateOperation(request, transaction);
+            final var measured = cheapestOf(() -> assertEquals(OperationStatus.OK,
+                    ReadPathHelper.processAggregateOperation(request, transaction).getStatus()));
+            assertTrue(measured <= INDEXED_FILTER_LIMIT_IN_TRANSACTION_BUDGET,
+                    report("an indexed FILTER + LIMIT 5 inside a transaction", measured,
+                            INDEXED_FILTER_LIMIT_IN_TRANSACTION_BUDGET));
+        });
+    }
+
+    private static void inTransaction(TransactionAction action) throws Exception {
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var clientId = clientTracker.registerForwardedClient("budget");
+        TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
+        TransactionOperationHelper.start(clientId);
+        try {
+            action.run(clientTracker.getActiveTransaction(clientId));
+        } finally {
+            TransactionOperationHelper.rollback(clientId);
+            clientTracker.removeById(clientId);
+        }
+    }
+
+    @FunctionalInterface
+    private interface TransactionAction {
+        void run(Transaction transaction) throws Exception;
     }
 
     @FunctionalInterface

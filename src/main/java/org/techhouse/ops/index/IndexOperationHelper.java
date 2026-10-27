@@ -175,8 +175,12 @@ public final class IndexOperationHelper {
             Set<String> registeredIndexes) throws IOException, InterruptedException {
         for (var fieldName : targets) {
             fs.indexMarkers().mark(dbName, collName, fieldName);
+        }
+        for (var fieldName : targets) {
             IndexHelper.dropIndex(dbName, collName, fieldName);
-            IndexHelper.createIndex(dbName, collName, fieldName);
+        }
+        IndexBuild.buildAll(dbName, collName, targets);
+        for (var fieldName : targets) {
             fs.indexMarkers().clear(dbName, collName, fieldName);
         }
         clearDirtyMarkerIfFullyRebuilt(dbName, collName, targets, registeredIndexes);

@@ -86,34 +86,38 @@ public final class IteratorPrototypes {
     public static JsObject helperPrototype(JsObject iteratorProto, JsObject objectProto) {
         final var proto = new JsObject();
         proto.setProto(iteratorProto);
-        final var next = new JsNativeFunction("next", (thisArg, _) -> {
-            final var state = requireHelper(thisArg);
-            return state.run(() -> stepOf(state.closed ? null : state.nextValue.get(), state, objectProto));
-        });
-        next.setLength(0);
-        Intrinsics.defineHidden(proto, "next", next);
-        final var close = new JsNativeFunction("return", (thisArg, _) -> {
-            final var state = requireHelper(thisArg);
-            return state.run(() -> {
-                if (!state.closed) {
-                    state.closed = true;
-                    state.onClose.run();
-                }
-                return step(null, objectProto);
+        proto.deferSetup(target -> {
+            final var next = new JsNativeFunction("next", (thisArg, _) -> {
+                final var state = requireHelper(thisArg);
+                return state.run(() -> stepOf(state.closed ? null : state.nextValue.get(), state, objectProto));
             });
+            next.setLength(0);
+            Intrinsics.defineHidden(target, "next", next);
+            final var close = new JsNativeFunction("return", (thisArg, _) -> {
+                final var state = requireHelper(thisArg);
+                return state.run(() -> {
+                    if (!state.closed) {
+                        state.closed = true;
+                        state.onClose.run();
+                    }
+                    return step(null, objectProto);
+                });
+            });
+            close.setLength(0);
+            Intrinsics.defineHidden(target, "return", close);
+            target.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("Iterator Helper"));
+            target.setSymbolFlags(JsSymbol.TO_STRING_TAG, TAG);
         });
-        close.setLength(0);
-        Intrinsics.defineHidden(proto, "return", close);
-        proto.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("Iterator Helper"));
-        proto.setSymbolFlags(JsSymbol.TO_STRING_TAG, TAG);
         return proto;
     }
 
     public static JsObject wrapPrototype(InterpreterOps ops, JsObject iteratorProto, JsObject objectProto) {
         final var proto = new JsObject();
         proto.setProto(iteratorProto);
-        Intrinsics.defineHidden(proto, "next", wrapNext(ops));
-        Intrinsics.defineHidden(proto, "return", wrapReturn(ops, objectProto));
+        proto.deferSetup(target -> {
+            Intrinsics.defineHidden(target, "next", wrapNext(ops));
+            Intrinsics.defineHidden(target, "return", wrapReturn(ops, objectProto));
+        });
         return proto;
     }
 

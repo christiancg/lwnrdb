@@ -46,6 +46,15 @@ public final class ClusterWriteHelper {
         return response;
     }
 
+    static OperationResponse afterSave(String dbName, String collName, OperationResponse response,
+            WriteEffects effects) {
+        if (response instanceof SaveResponse saveResponse && effects.defersReplication()) {
+            effects.replicateUpsertLater(saveResponse.get_id());
+            return response;
+        }
+        return afterSave(dbName, collName, response);
+    }
+
     public static OperationResponse afterBulkSave(String dbName, String collName, OperationResponse response) {
         if (response instanceof BulkSaveResponse bulkSaveResponse) {
             final var ids = new ArrayList<>(bulkSaveResponse.getInserted());
@@ -85,6 +94,23 @@ public final class ClusterWriteHelper {
         if (response instanceof DeleteResponse) {
             return withReplication(response, OperationType.DELETE,
                     coordinator.replicateDelete(dbName, collName, List.of(id), reservedVersion));
+        }
+        return response;
+    }
+
+    static OperationResponse afterDelete(String dbName, String collName, String id, Long reservedVersion,
+            OperationResponse response, WriteEffects effects) {
+        if (response instanceof DeleteResponse && effects.defersReplication()) {
+            effects.replicateDeleteLater(id, reservedVersion,
+                    () -> coordinator.retractDelete(dbName, collName, List.of(id), reservedVersion));
+            return response;
+        }
+        return afterDelete(dbName, collName, id, reservedVersion, response);
+    }
+
+    static OperationResponse afterGroupReplication(OperationResponse response, ReplicationOutcome outcome) {
+        if (response instanceof SaveResponse || response instanceof DeleteResponse) {
+            return withReplication(response, response.getType(), outcome);
         }
         return response;
     }

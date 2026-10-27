@@ -4,6 +4,8 @@ import java.net.InetAddress;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -19,6 +21,7 @@ import org.techhouse.simplejs.host.PublicAddressPolicy;
 public final class StartupWarnings {
     private static final Configuration config = Configuration.getInstance();
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    private static final Cache cache = IocContainer.get(Cache.class);
     private static final Logger logger = Logger.logFor(StartupWarnings.class);
     private static final List<ConfigKey> LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_CONNECTIONS,
             ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS, ConfigKey.MAX_UNAUTHENTICATED_INVALID_REQUESTS,
@@ -186,6 +189,36 @@ public final class StartupWarnings {
                     + ") but JVM -Xmx is only " + xmx
                     + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
         }
+    }
+
+    public static void warnIfCollectionsOutgrowMaxMemory() {
+        if (config.isCachingDisabled() || config.isCacheUnlimited()) {
+            return;
+        }
+        final var maxBytes = config.getMaxMemoryBytes();
+        final var rowBytes = CacheSizeEstimator.minimumPkEntryBytes();
+        for (final var dbName : cache.getUserDatabaseNames()) {
+            for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
+                final var pkBytes = documentCount(dbName, collName) * rowBytes;
+                if (pkBytes > maxBytes) {
+                    logger.warning("The primary-key index of " + dbName + "|" + collName + " needs at least " + pkBytes
+                            + " bytes of cache, more than maxMemory (" + maxBytes + "), so it is never"
+                            + " cached: keyed reads scan pk.idx and writes re-read it. Raise maxMemory above " + pkBytes
+                            + ".");
+                }
+            }
+        }
+    }
+
+    private static long documentCount(String dbName, String collName) {
+        final var pages = cache.getAdminPageEntries(dbName, collName);
+        var documents = 0L;
+        if (pages != null) {
+            for (final var page : pages) {
+                documents += page.getEntryCount();
+            }
+        }
+        return documents;
     }
 
     private static long scriptBudgetBytes() {

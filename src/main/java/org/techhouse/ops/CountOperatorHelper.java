@@ -131,7 +131,7 @@ public final class CountOperatorHelper {
         return null;
     }
 
-    private static Object scalarOperand(JsonBaseElement operand) {
+    static Object scalarOperand(JsonBaseElement operand) {
         return switch (operand) {
             case JsonBoolean bool -> bool.getValue();
             case JsonNumber number -> number.getValue();
@@ -185,10 +185,6 @@ public final class CountOperatorHelper {
 
     // The PK index is maintained synchronously on save/delete, so its size is the exact document count.
     private static int wholeCollectionCount(String dbName, String collName) {
-        try {
-            return cache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        return cache.pkIndexSize(dbName, collName);
     }
 }

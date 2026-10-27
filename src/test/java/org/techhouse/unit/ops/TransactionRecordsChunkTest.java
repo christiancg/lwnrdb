@@ -38,9 +38,14 @@ public class TransactionRecordsChunkTest {
 
     @AfterEach
     public void tearDown() throws Exception {
-        TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", cache);
+        useCache(cache);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
+    }
+
+    private static void useCache(Cache target) throws Exception {
+        TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", target);
+        TestUtils.setPrivateStaticField(Class.forName("org.techhouse.ops.admin.AdminBatchWrite"), "cache", target);
     }
 
     private static List<AdminTransactionEntry> largeOps(String txId) {
@@ -64,11 +69,11 @@ public class TransactionRecordsChunkTest {
             return invocation.callRealMethod();
         }).when(spy).selectPagesForInsert(ArgumentMatchers.eq(Globals.ADMIN_DB_NAME),
                 ArgumentMatchers.eq(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME), ArgumentMatchers.any());
-        TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", spy);
+        useCache(spy);
         try {
             write.run();
         } finally {
-            TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", cache);
+            useCache(cache);
         }
         return records;
     }
@@ -113,12 +118,12 @@ public class TransactionRecordsChunkTest {
             return invocation.callRealMethod();
         }).when(spy).selectPagesForInsert(ArgumentMatchers.eq(Globals.ADMIN_DB_NAME),
                 ArgumentMatchers.eq(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME), ArgumentMatchers.any());
-        TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", spy);
+        useCache(spy);
         try {
             assertThrows(IllegalStateException.class,
                     () -> AdminOperationHelper.writeTransactionRecords(inserts, List.of()));
         } finally {
-            TestUtils.setPrivateStaticField(TransactionRecords.class, "cache", cache);
+            useCache(cache);
         }
 
         assertFalse(TxCommitLog.isLocallyCommitted(txId));

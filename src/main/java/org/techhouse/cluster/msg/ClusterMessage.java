@@ -2,7 +2,9 @@ package org.techhouse.cluster.msg;
 
 import java.util.List;
 import org.techhouse.cluster.NodeInfo;
+import org.techhouse.ejson.NullsOmitted;
 
+@NullsOmitted
 public class ClusterMessage {
     private String correlationId;
     private ClusterMessageType type;

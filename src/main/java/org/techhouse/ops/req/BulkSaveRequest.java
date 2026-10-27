@@ -6,6 +6,7 @@ import org.techhouse.ops.OperationType;
 
 public class BulkSaveRequest extends OperationRequest {
     public List<JsonObject> objects;
+    private transient boolean backgroundFollowOn;
 
     public BulkSaveRequest(String databaseName, String collectionName) {
         super(OperationType.BULK_SAVE, databaseName, collectionName);
@@ -17,5 +18,13 @@ public class BulkSaveRequest extends OperationRequest {
 
     public void setObjects(List<JsonObject> objects) {
         this.objects = objects;
+    }
+
+    public boolean isBackgroundFollowOn() {
+        return backgroundFollowOn;
+    }
+
+    public void setBackgroundFollowOn(boolean backgroundFollowOn) {
+        this.backgroundFollowOn = backgroundFollowOn;
     }
 }

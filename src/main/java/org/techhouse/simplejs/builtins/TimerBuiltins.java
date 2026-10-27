@@ -2,8 +2,8 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
-import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.EventLoop;
+import org.techhouse.simplejs.internal.GlobalSink;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -15,7 +15,9 @@ public final class TimerBuiltins {
     private TimerBuiltins() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, Invoker invoker) {
+    public static final List<String> NAMES = List.of("setTimeout", "setInterval", "clearTimeout", "clearInterval");
+
+    public static void install(GlobalSink global, EventLoop eventLoop, Invoker invoker) {
         define(global, "setTimeout", schedule("setTimeout", eventLoop, invoker, false));
         define(global, "setInterval", schedule("setInterval", eventLoop, invoker, true));
         define(global, "clearTimeout", clear("clearTimeout", eventLoop));
@@ -45,7 +47,7 @@ public final class TimerBuiltins {
         });
     }
 
-    private static void define(Environment global, String name, JsValue value) {
+    private static void define(GlobalSink global, String name, JsValue value) {
         global.declareBuiltin(name, value);
     }
 }

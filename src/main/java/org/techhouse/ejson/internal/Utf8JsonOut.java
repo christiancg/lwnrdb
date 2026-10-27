@@ -1,5 +1,6 @@
 package org.techhouse.ejson.internal;
 
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.concurrent.ArrayBlockingQueue;
 
@@ -10,7 +11,7 @@ public final class Utf8JsonOut implements JsonOut {
     private static final int HANDOVER_DENOMINATOR = 4;
     private static final int MAX_ARRAY_LENGTH = Integer.MAX_VALUE - 8;
     private static final int MAX_BYTES_PER_CHAR = 3;
-    private static final int MAX_LONG_DIGITS = 20;
+    private static final int SUPPLEMENTARY_BYTES = 4;
     private static final byte REPLACEMENT = (byte) '?';
     private static final ArrayBlockingQueue<byte[]> POOL = new ArrayBlockingQueue<>(
             2 * Runtime.getRuntime().availableProcessors());
@@ -40,6 +41,19 @@ public final class Utf8JsonOut implements JsonOut {
         return Arrays.copyOf(buffer, size);
     }
 
+    public byte[] takeExact() {
+        if (size != buffer.length) {
+            return toByteArray();
+        }
+        final var taken = buffer;
+        buffer = null;
+        return taken;
+    }
+
+    public void digestInto(MessageDigest digest, int from, int to) {
+        digest.update(buffer, from, to - from);
+    }
+
     public EncodedJson handOver() {
         if ((long) size * HANDOVER_DENOMINATOR < (long) buffer.length * HANDOVER_NUMERATOR) {
             return EncodedJson.of(toByteArray());
@@ -55,12 +69,14 @@ public final class Utf8JsonOut implements JsonOut {
 
     @Override
     public JsonOut append(char c) {
-        ensure(MAX_BYTES_PER_CHAR);
         if (c < 0x80) {
+            ensure(1);
             buffer[size++] = (byte) c;
         } else if (Character.isSurrogate(c)) {
+            ensure(1);
             buffer[size++] = REPLACEMENT;
         } else {
+            ensure(bmpWidth(c));
             encodeBmp(c);
         }
         return this;
@@ -80,13 +96,15 @@ public final class Utf8JsonOut implements JsonOut {
                 i++;
                 continue;
             }
-            ensure((long) (end - i) * MAX_BYTES_PER_CHAR);
             if (!Character.isSurrogate(c)) {
+                ensure(bmpWidth(c));
                 encodeBmp(c);
             } else if (Character.isHighSurrogate(c) && i + 1 < end && Character.isLowSurrogate(text.charAt(i + 1))) {
+                ensure(SUPPLEMENTARY_BYTES);
                 encodeSupplementary(Character.toCodePoint(c, text.charAt(i + 1)));
                 i++;
             } else {
+                ensure(1);
                 buffer[size++] = REPLACEMENT;
             }
             i++;
@@ -119,24 +137,26 @@ public final class Utf8JsonOut implements JsonOut {
             JsonStrings.appendEscape(this, c);
             return index + 1;
         }
-        ensure((long) (text.length() - index) * MAX_BYTES_PER_CHAR);
         if (Character.isHighSurrogate(c)) {
+            ensure(SUPPLEMENTARY_BYTES);
             encodeSupplementary(Character.toCodePoint(c, text.charAt(index + 1)));
             return index + 2;
         }
+        ensure(bmpWidth(c));
         encodeBmp(c);
         return index + 1;
     }
 
     @Override
     public void appendLong(long value) {
-        ensure(MAX_LONG_DIGITS);
         var remaining = value;
         if (remaining < 0) {
+            ensure(1);
             buffer[size++] = '-';
         } else {
             remaining = -remaining;
         }
+        ensure(digitsOf(remaining));
         final var start = size;
         do {
             buffer[size++] = (byte) ('0' - remaining % 10);
@@ -157,6 +177,18 @@ public final class Utf8JsonOut implements JsonOut {
     @Override
     public void reset(int mark) {
         size = mark;
+    }
+
+    private static int digitsOf(long negative) {
+        var digits = 1;
+        for (var rest = negative / 10; rest != 0; rest /= 10) {
+            digits++;
+        }
+        return digits;
+    }
+
+    private static int bmpWidth(char c) {
+        return c < 0x800 ? 2 : MAX_BYTES_PER_CHAR;
     }
 
     private void encodeBmp(char c) {

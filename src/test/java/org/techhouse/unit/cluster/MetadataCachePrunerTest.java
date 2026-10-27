@@ -53,7 +53,7 @@ public class MetadataCachePrunerTest {
         final var definition = new TriggerDefinition("t", java.util.Set.of(EventType.CREATED), "proc",
                 TriggerDefinition.MODE_DOCUMENT, false, true, "alice", 1L, 1L, 1L, "alice");
         fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL,
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL,
                 eJson.toJson(TriggerDefinition.toFileJson(List.of(definition))));
     }
 

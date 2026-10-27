@@ -5,7 +5,6 @@ import java.util.Set;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -199,7 +198,7 @@ public class ClusterRouter {
     private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser, UUID clientId,
             boolean continuation) {
         final var message = PeerRequest.message(ClusterMessageType.FORWARD_TX_REQUEST);
-        message.setForwardBody(ForwardBody.encode(rawJson));
+        message.setForwardBody(rawJson);
         message.setTxContinuation(continuation);
         message.setActingUser(actingUser);
         message.setTxSessionId(clientId.toString());
@@ -211,7 +210,7 @@ public class ClusterRouter {
             final var response = pool.request(NodeAddress.parse(ownerAddress), message,
                     clusterConfig.replicationAckTimeoutMs());
             if (response.getType() == ClusterMessageType.FORWARD_RESPONSE) {
-                return ForwardBody.decode(response.getForwardBody());
+                return response.getForwardBody();
             }
             logger.warning(
                     "Owner " + ownerAddress + " rejected a forwarded transaction op: " + response.getErrorMessage());
@@ -245,7 +244,7 @@ public class ClusterRouter {
             return null;
         }
         final var message = PeerRequest.message(ClusterMessageType.FORWARD_REQUEST);
-        message.setForwardBody(ForwardBody.encode(rawJson));
+        message.setForwardBody(rawJson);
         message.setActingUser(actingUser);
         // The whole script budget, not replicationAckTimeoutMs: that is sized for a single write ack and
         // would report the target unreachable while it is still running the script.
@@ -254,7 +253,7 @@ public class ClusterRouter {
             final var response = pool.request(target.address(), message, timeout);
             if (response.getType() == ClusterMessageType.FORWARD_RESPONSE) {
                 scriptPlacement.recordForward();
-                return ForwardBody.decode(response.getForwardBody());
+                return response.getForwardBody();
             }
             return outcomeUnknown(type, target, "answered " + response.getErrorMessage());
         } catch (PeerUnreachableException e) {
@@ -283,13 +282,13 @@ public class ClusterRouter {
 
     private String forwardToOwner(OperationType type, String rawJson, String ownerAddress, String actingUser) {
         final var message = PeerRequest.message(ClusterMessageType.FORWARD_REQUEST);
-        message.setForwardBody(ForwardBody.encode(rawJson));
+        message.setForwardBody(rawJson);
         message.setActingUser(actingUser);
         try {
             final var response = pool.request(NodeAddress.parse(ownerAddress), message,
                     clusterConfig.replicationAckTimeoutMs());
             if (response.getType() == ClusterMessageType.FORWARD_RESPONSE) {
-                return ForwardBody.decode(response.getForwardBody());
+                return response.getForwardBody();
             }
             logger.warning("Owner " + ownerAddress + " rejected a forwarded request: " + response.getErrorMessage());
             return eJson.toJson(new OperationResponse(type, outcomeUnknownFor(type)));

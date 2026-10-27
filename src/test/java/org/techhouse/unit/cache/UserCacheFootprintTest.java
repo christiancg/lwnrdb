@@ -9,7 +9,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -20,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.cache.Measure;
@@ -39,7 +39,6 @@ import org.techhouse.ops.index.FieldIndexBatch;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.ReflectionUtils;
 
 public class UserCacheFootprintTest {
     private static final String DB = "footprintDb";
@@ -192,17 +191,15 @@ public class UserCacheFootprintTest {
         }
     }
 
-    private static IterationCountingList publishFieldIndex(UserCache cache) throws Exception {
+    private static IterationCountingList publishFieldIndex(UserCache cache) {
         FIELD_INDEX_ITERATIONS.set(0);
         final var published = new IterationCountingList();
         for (var i = 0; i < 3; i++) {
             published.add(new FieldIndexEntry<>(DB, COLL, "value-" + i, Set.of("id" + i, "other" + i)));
         }
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
-        };
-        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
-        indexes.put(Cache.getIndexIdentifier(FIELD, String.class), published);
-        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(Cache.getCollectionIdentifier(DB, COLL), indexes);
+        CacheResidents.residentUnmeasuredFieldIndex(cache, Cache.getCollectionIdentifier(DB, COLL),
+                Cache.getIndexIdentifier(FIELD, String.class), published);
+        FIELD_INDEX_ITERATIONS.set(0);
         return published;
     }
 
@@ -241,7 +238,7 @@ public class UserCacheFootprintTest {
     }
 
     @Test
-    public void test_a_field_index_is_measured_in_full_when_its_lock_is_free() throws Exception {
+    public void test_a_field_index_is_measured_in_full_when_its_lock_is_free() {
         final var cache = new UserCache();
         final var published = publishFieldIndex(cache);
 
@@ -454,9 +451,13 @@ public class UserCacheFootprintTest {
 
         locks.lockIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
         try {
-            final var batch = FieldIndexBatch.open(TestGlobals.DB, TestGlobals.COLL, FIELD);
+            final var ids = new ArrayList<String>();
             for (var i = 0; i < 50; i++) {
-                batch.apply("a-rather-long-document-identifier-" + i, new JsonString("v"));
+                ids.add("a-rather-long-document-identifier-" + i);
+            }
+            final var batch = FieldIndexBatch.open(TestGlobals.DB, TestGlobals.COLL, FIELD, ids);
+            for (final var id : ids) {
+                batch.apply(id, new JsonString("v"));
             }
             batch.flush();
         } finally {

@@ -43,10 +43,10 @@ public class TriggerOperationHelperBeforeTimingTest {
     @BeforeEach
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "recalc", "return 1;"), ACTOR);

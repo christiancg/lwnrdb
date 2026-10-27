@@ -37,6 +37,10 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess, Sor
         }
         size = rows.size();
         restart();
+        resized();
+    }
+
+    protected void resized() {
     }
 
     @Override
@@ -87,6 +91,7 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess, Sor
         } else {
             shiftStartsAfter(chunk, 1);
         }
+        resized();
     }
 
     @Override
@@ -110,6 +115,7 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess, Sor
             modCount++;
             restart();
             size = rowCount();
+            resized();
         }
     }
 
@@ -185,6 +191,7 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess, Sor
         } else {
             shiftStartsAfter(chunk, -1);
         }
+        resized();
         return removed;
     }
 
@@ -194,6 +201,7 @@ public class ChunkedList<E> extends AbstractList<E> implements RandomAccess, Sor
         size = 0;
         modCount++;
         restart();
+        resized();
     }
 
     @Override

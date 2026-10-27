@@ -84,6 +84,24 @@ public class CompiledProcedureCacheTest {
     }
 
     @Test
+    public void test_an_equal_source_in_a_new_string_still_hits() {
+        final var cache = new CompiledProcedureCache();
+        final var first = cache.get("db", "p", 3L, "return 7;");
+        final var copy = String.valueOf("return 7;".toCharArray());
+
+        assertSame(first, cache.get("db", "p", 3L, copy));
+        assertEquals(1, cache.size());
+    }
+
+    @Test
+    public void test_a_source_differing_only_at_the_end_recompiles() {
+        final var cache = new CompiledProcedureCache();
+        final var first = cache.get("db", "p", 4L, "return 70;");
+
+        assertNotSame(first, cache.get("db", "p", 4L, "return 71;"));
+    }
+
+    @Test
     public void test_the_recompiled_entry_replaces_the_stale_one() {
         final var cache = new CompiledProcedureCache();
         cache.get("db", "p", 2L, "return 1;");

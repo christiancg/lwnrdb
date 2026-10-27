@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -41,6 +42,7 @@ final class WriteAheadLog {
         private boolean unapplied;
         private boolean groupBaseLogged;
         private WalWriteGroup group;
+        private volatile long lastWriteMillis;
 
         private LogState(String dbName, String collName) {
             this.dbName = dbName;
@@ -134,6 +136,20 @@ final class WriteAheadLog {
         }
     }
 
+    boolean forceGroup(String dbName, String collName) throws IOException {
+        final var log = paths.writeAheadLog(dbName, collName);
+        final var walLock = FileLocks.lockWrite(log);
+        try {
+            final var group = stateOf(log, dbName, collName).group;
+            if (group == null || group.forced() || !group.failed() && group.idle()) {
+                return true;
+            }
+            return !group.failed() && forceOpenGroup(dbName, collName, log, group);
+        } finally {
+            walLock.unlock();
+        }
+    }
+
     WalWriteGroup openGroupOf(String dbName, String collName) {
         final var state = states.get(paths.writeAheadLog(dbName, collName).getAbsolutePath());
         return state == null ? null : state.group;
@@ -145,24 +161,32 @@ final class WriteAheadLog {
             takeBack(dbName, collName, log, state);
             return false;
         }
-        if (!group.holdsWork()) {
+        if (group.idle()) {
             return true;
         }
+        if (!group.forced() && !forceOpenGroup(dbName, collName, log, group)) {
+            takeBack(dbName, collName, log, state);
+            return false;
+        }
+        if (!group.applyBlanks()) {
+            state.unapplied = true;
+        }
+        group.restartFrom(state.knownLength);
+        return true;
+    }
+
+    private boolean forceOpenGroup(String dbName, String collName, File log, WalWriteGroup group) {
         faultInjector.at(FaultPoint.WAL_GROUP_APPENDED, subject(dbName, collName));
         try {
             forceLog(log);
         } catch (IOException e) {
             logger.error("Could not force the write-ahead log of " + subject(dbName, collName) + " for a group of "
-                    + group.records() + " write(s); they are taken back and every one of them fails", e);
+                    + group.records() + " write(s); the group is taken back and every one of them fails", e);
             group.fail();
-            takeBack(dbName, collName, log, state);
             return false;
         }
         faultInjector.at(FaultPoint.WAL_GROUP_FORCED, subject(dbName, collName));
-        if (!group.applyBlanks()) {
-            state.unapplied = true;
-        }
-        group.restartFrom(state.knownLength);
+        group.markForced();
         return true;
     }
 
@@ -208,6 +232,7 @@ final class WriteAheadLog {
             }
         }
         state.knownLength += header.length + payloadLength;
+        state.lastWriteMillis = System.currentTimeMillis();
     }
 
     void markUnapplied(String dbName, String collName) {
@@ -383,32 +408,44 @@ final class WriteAheadLog {
         return joined;
     }
 
-    void checkpointAll(long deadline) {
-        final var root = new File(paths.dbPath()).getAbsolutePath() + File.separator;
-        final var logs = states.entrySet().stream().filter(entry -> entry.getKey().startsWith(root))
-                .map(Map.Entry::getValue).toList();
-        for (var i = 0; i < logs.size(); i++) {
-            if (System.currentTimeMillis() >= deadline) {
-                logger.warning("The shutdown budget ran out with " + (logs.size() - i) + " write-ahead log(s) not"
-                        + " checkpointed; the next startup replays them");
-                return;
-            }
-            checkpointAtShutdown(logs.get(i));
-        }
+    record WalLogStatus(String dbName, String collName, boolean dirty, boolean grouped, long lastWriteMillis) {
     }
 
-    private void checkpointAtShutdown(LogState state) {
-        if (guard.holdsIndexWork(state.dbName, state.collName)) {
-            logger.info("Leaving the write-ahead log of " + subject(state.dbName, state.collName) + " as it is:"
-                    + " its field-index work is still pending, so the next startup replays it and finishes that"
-                    + " work");
-            return;
+    List<WalLogStatus> statusesUnder(String root) {
+        final var statuses = new ArrayList<WalLogStatus>();
+        for (final var entry : states.entrySet()) {
+            if (entry.getKey().startsWith(root)) {
+                final var state = entry.getValue();
+                statuses.add(new WalLogStatus(state.dbName, state.collName, isDirty(state), state.group != null,
+                        state.lastWriteMillis));
+            }
         }
+        return statuses;
+    }
+
+    private static boolean isDirty(LogState state) {
+        return state.recordsSinceCheckpoint > 0 || state.groupBaseLogged || state.knownLength == 0L;
+    }
+
+    static boolean holdsIndexWork(String dbName, String collName) {
+        return guard.holdsIndexWork(dbName, collName);
+    }
+
+    boolean checkpointIfIdle(String dbName, String collName, long idleMillis) throws IOException {
+        final var log = paths.writeAheadLog(dbName, collName);
+        final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
+        final var walLock = FileLocks.lockWrite(log);
         try {
-            checkpoint(state.dbName, state.collName);
-        } catch (IOException e) {
-            logger.error("Could not checkpoint the write-ahead log of " + subject(state.dbName, state.collName)
-                    + "; the next startup replays it", e);
+            final var state = states.get(log.getAbsolutePath());
+            if (state == null || state.group != null || !isDirty(state)
+                    || System.currentTimeMillis() - state.lastWriteMillis < idleMillis) {
+                return false;
+            }
+            checkpoint(dbName, collName);
+            return true;
+        } finally {
+            walLock.unlock();
+            pkLock.unlock();
         }
     }
 

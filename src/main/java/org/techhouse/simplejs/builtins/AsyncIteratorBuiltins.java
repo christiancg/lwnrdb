@@ -35,14 +35,16 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class AsyncIteratorBuiltins {
-    private static final Set<String> HELPERS = Set.of("map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
+    private static final List<String> HELPERS = List.of("map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
             "forEach", "some", "every", "find");
+
+    private static final Set<String> HELPER_NAMES = Set.copyOf(HELPERS);
 
     private AsyncIteratorBuiltins() {
     }
 
     public static boolean isHelperName(String name) {
-        return HELPERS.contains(name);
+        return HELPER_NAMES.contains(name);
     }
 
     public static JsNativeFunction create(InterpreterOps ops, EventLoop loop) {
@@ -50,20 +52,22 @@ public final class AsyncIteratorBuiltins {
             throw new TypeErrorException("Abstract class AsyncIterator not directly constructable");
         });
         final var prototype = new JsObject();
-        for (final var name : HELPERS) {
-            Intrinsics.defineHidden(prototype, name, helper(ops, loop, name));
-        }
-        prototype.setSymbol(JsSymbol.ASYNC_ITERATOR,
-                new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
-        prototype.setSymbolFlags(JsSymbol.ASYNC_ITERATOR, JsObject.PropertyFlags.HIDDEN);
-        Intrinsics.installTag(prototype, "AsyncIterator");
-        final var asyncDispose = new JsNativeFunction("[Symbol.asyncDispose]",
-                (thisArg, _) -> asyncDispose(ops, loop, thisArg));
-        asyncDispose.setLength(0);
-        prototype.setSymbol(JsSymbol.ASYNC_DISPOSE, asyncDispose);
-        prototype.setSymbolFlags(JsSymbol.ASYNC_DISPOSE, JsObject.PropertyFlags.HIDDEN);
-        prototype.defineValue("constructor", ctor);
-        prototype.setFlags("constructor", JsObject.PropertyFlags.HIDDEN);
+        prototype.deferSetup(target -> {
+            for (final var name : HELPERS) {
+                Intrinsics.defineHidden(target, name, helper(ops, loop, name));
+            }
+            target.setSymbol(JsSymbol.ASYNC_ITERATOR,
+                    new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
+            target.setSymbolFlags(JsSymbol.ASYNC_ITERATOR, JsObject.PropertyFlags.HIDDEN);
+            Intrinsics.installTag(target, "AsyncIterator");
+            final var asyncDispose = new JsNativeFunction("[Symbol.asyncDispose]",
+                    (thisArg, _) -> asyncDispose(ops, loop, thisArg));
+            asyncDispose.setLength(0);
+            target.setSymbol(JsSymbol.ASYNC_DISPOSE, asyncDispose);
+            target.setSymbolFlags(JsSymbol.ASYNC_DISPOSE, JsObject.PropertyFlags.HIDDEN);
+            target.defineValue("constructor", ctor);
+            target.setFlags("constructor", JsObject.PropertyFlags.HIDDEN);
+        });
         ctor.setProperty("prototype", prototype);
         ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> getAsyncIterator(ops, loop, arg0(args))));
         ctor.setPrototype(prototype);

@@ -58,6 +58,9 @@ LEFTOVER_ROWS_COLL = "leftover_row_docs"
 LEFTOVER_ROWS_COPY = "leftover_rows_copy"
 BULK_GROWTH_COLL = "bulk_growth_docs"
 BULK_GROWTH_DOCS = 10
+BULK_VACUUM_COLL = "bulk_vacuum_docs"
+BULK_VACUUM_DOCS = 12
+BULK_VACUUM_PADS = (150, 260, 120, 300, 180, 340, 140, 320)
 DANGLING_COLL = "dangling_pk_docs"
 OLD_GRAMMAR_COLL = "old_grammar_pk_docs"
 OLD_GRAMMAR_PK = "first|0|20|0|0\nsecond|20|20|0|0\n"
@@ -143,7 +146,8 @@ admin_conn = Conn.authenticated
 def write_config(work_dir: str, max_memory: str = "256mb", faults: bool = False):
     bu.write_config(work_dir, PORT, maxMemory=max_memory, maxPageSize=MAX_PAGE_SIZE,
                     maxEntrySize=MAX_ENTRY_SIZE, scriptsEnabled=True, faultInjectionEnabled=faults, syncWrites=True,
-                    walCheckpointBytes=WAL_CHECKPOINT_BYTES)
+                    walCheckpointBytes=WAL_CHECKPOINT_BYTES, walIdleCheckpointMs=0 if faults else 60000,
+                    triggersEnabled=faults)
 
 
 DURABILITY_WARNING = "DURABILITY WARNING: syncWrites=false"
@@ -547,6 +551,36 @@ def test_a_bulk_save_does_not_place_inserts_against_a_stale_page_size(conn: Conn
 
     bu.wait_until(settled, timeout_s=15, interval_s=0.2)
     check("the recorded page occupancy matches the pages on disk", not drifted, f"drifted pages: {drifted}")
+
+
+def test_repeated_growing_bulk_updates_vacuum_without_losing_documents(conn: Conn, work_dir: str):
+    section("Repeated bulk updates that grow and shrink every document vacuum their pages and lose nothing")
+    check_status("create the collection", conn.create_coll(BULK_VACUUM_COLL), "OK")
+    ids = [f"bv{i:02d}" for i in range(BULK_VACUUM_DOCS)]
+    check_status("seed the documents in one BULK_SAVE",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BULK_VACUUM_COLL,
+                            "objects": [{"_id": doc_id, "pad": "s" * 100} for doc_id in ids]}), "OK")
+    refused = []
+    for round_index, size in enumerate(BULK_VACUUM_PADS):
+        objects = [{"_id": doc_id, "pad": chr(ord("a") + round_index) * size, "round": round_index}
+                   for doc_id in ids]
+        response = conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BULK_VACUUM_COLL,
+                              "objects": objects})
+        if response.get("status") != "OK":
+            refused.append(response)
+    check("every bulk update is acknowledged", not refused, f"first refusal: {refused[:1]}")
+    last = len(BULK_VACUUM_PADS) - 1
+    expected_pad = chr(ord("a") + last) * BULK_VACUUM_PADS[last]
+    stale = [doc_id for doc_id in ids
+             if (conn.find(doc_id, coll=BULK_VACUUM_COLL).get("object") or {}).get("pad") != expected_pad]
+    check("FIND_BY_ID reads the last round of every document", not stale, f"stale: {stale}")
+    scanned = conn.ids(BULK_VACUUM_COLL, [bu.filter_step("round", "EQUALS", last)])
+    check("a scan finds every document at the last round exactly once", sorted(scanned) == ids, f"got {scanned}")
+    oversized = oversized_pages(work_dir, BULK_VACUUM_COLL, MAX_PAGE_BYTES * 2)
+    check("the bulk updates vacuumed rather than growing pages far past maxPageSize", not oversized,
+          f"oversized: {oversized}")
+    drifted = settled_drift(work_dir, DB, BULK_VACUUM_COLL)
+    check("the recorded page occupancy matches the pages on disk", not drifted, "; ".join(drifted))
 
 
 def seed_a_collection_whose_page_rows_will_be_lost(conn: Conn, work_dir: str):
@@ -2185,6 +2219,66 @@ def values_by_scan(conn: Conn, coll: str) -> dict:
     return {d.get("_id"): d.get("v") for d in conn.aggregate(coll, FULL_SCAN).get("results") or []}
 
 
+GROUP_FORCE_COLL = "group_force_window"
+
+
+def test_a_paused_group_force_lets_point_reads_through_and_holds_scans(conn: Conn):
+    section("While a write group's log force is paused, FIND_BY_ID answers the grouped value and a scan waits")
+    check_status("create the grouped collection", conn.create_coll(GROUP_FORCE_COLL), "OK")
+    for i in range(4):
+        check_status(f"seed g{i}", conn.save({"_id": f"g{i}", "v": "old"}, coll=GROUP_FORCE_COLL), "OK")
+    subject = f"{DB}|{GROUP_FORCE_COLL}"
+    check_status("park the first writer under the collection lock",
+                 conn.send({"type": "ARM_FAULT", "point": "WRITE_OWNER_PROBED", "action": "PAUSE",
+                            "match": subject}), "OK")
+    answers = {}
+
+    def write(doc_id: str):
+        with admin_conn() as own:
+            answers[doc_id] = own.save({"_id": doc_id, "v": "new"}, coll=GROUP_FORCE_COLL).get("status")
+
+    writers = [threading.Thread(target=write, args=("g0",))]
+    writers[0].start()
+    check_status("the first writer is parked", conn.send({"type": "AWAIT_FAULT", "point": "WRITE_OWNER_PROBED",
+                                                          "timeoutMs": 30000}), "OK")
+    for doc_id in ("g1", "g2", "g3"):
+        writers.append(threading.Thread(target=write, args=(doc_id,)))
+        writers[-1].start()
+    time.sleep(0.5)
+    check_status("park the next group at its log force",
+                 conn.send({"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "PAUSE",
+                            "match": subject}), "OK")
+    check_status("release the first writer", conn.send({"type": "RELEASE_FAULT", "point": "WRITE_OWNER_PROBED"}),
+                 "OK")
+    check_status("the queued writers formed a group and reached its force",
+                 conn.send({"type": "AWAIT_FAULT", "point": "WAL_GROUP_APPENDED", "timeoutMs": 30000}), "OK")
+    with admin_conn() as reader:
+        started = time.monotonic()
+        found = reader.find("g2", coll=GROUP_FORCE_COLL)
+        check("FIND_BY_ID answers the grouped value while the force is paused",
+              (found.get("object") or {}).get("v") == "new", f"got {found}")
+        check("and does not wait for the force", time.monotonic() - started < 5.0)
+    scanned = {}
+
+    def scan():
+        with admin_conn() as own:
+            scanned["ids"] = own.ids(GROUP_FORCE_COLL, [{"type": "SKIP", "skip": 0}])
+
+    scanner = threading.Thread(target=scan)
+    scanner.start()
+    scanner.join(0.7)
+    check("a scan waits while the blanks are deferred", scanner.is_alive())
+    check_status("release the group", conn.send({"type": "RELEASE_FAULT", "point": "WAL_GROUP_APPENDED"}), "OK")
+    scanner.join(30)
+    for writer in writers:
+        writer.join(30)
+    check("every grouped write was acknowledged", answers == {f"g{i}": "OK" for i in range(4)}, f"got {answers}")
+    check("the scan then lists every document once", scanned.get("ids") == [f"g{i}" for i in range(4)],
+          f"got {scanned}")
+    check("each document holds its grouped value",
+          all((conn.find(f"g{i}", coll=GROUP_FORCE_COLL).get("object") or {}).get("v") == "new" for i in range(4)))
+
+
 def test_updates_on_a_large_collection_stay_fast(conn: Conn):
     section(f"{LARGE_UPDATES} SAVE updates on a {LARGE_DOCS}-document collection stay fast and consistent")
     check_status(f"create {LARGE_COLL}", conn.create_coll(LARGE_COLL), "OK")
@@ -2572,6 +2666,141 @@ def run_bounded_shutdown_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+REINDEX_KILL_COLL = "reindex_killed"
+REINDEX_KILL_FIELDS = ("first", "second")
+REINDEX_KILL_DOCS = 300
+
+
+def reindex_kill_probes(conn: Conn) -> list:
+    mismatched = []
+    for field in REINDEX_KILL_FIELDS:
+        for value in (0, 3, 6):
+            steps = [bu.filter_step(field, "EQUALS", value)]
+            by_index = sorted(conn.ids(REINDEX_KILL_COLL, steps))
+            by_scan = sorted(conn.ids(REINDEX_KILL_COLL, FULL_SCAN + steps))
+            if by_index != by_scan or not by_scan:
+                mismatched.append((field, value, len(by_index), len(by_scan)))
+    return mismatched
+
+
+def index_markers(work_dir: str) -> list:
+    folder = os.path.join(work_dir, "db", DB, REINDEX_KILL_COLL)
+    return sorted(name for name in os.listdir(folder) if name.endswith(".building"))
+
+
+def test_a_reindex_killed_between_fields_scans_until_rebuilt(conn: Conn, work_dir: str, proc):
+    section("A REINDEX killed after its first field landed answers both fields by a scan until rebuilt")
+    check_status("create the database", conn.send({"type": "CREATE_DATABASE", "databaseName": DB}), "OK")
+    check_status("create the collection", conn.create_coll(REINDEX_KILL_COLL), "OK")
+    check_status("write its documents",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": REINDEX_KILL_COLL,
+                            "objects": [{"_id": f"r{i:04d}", "first": i % 7, "second": i % 9}
+                                        for i in range(REINDEX_KILL_DOCS)]}), "OK")
+    for field in REINDEX_KILL_FIELDS:
+        check_status(f"index {field}", conn.create_index(field, coll=REINDEX_KILL_COLL), "OK")
+    check("both indexes answer like a scan before the REINDEX", not reindex_kill_probes(conn))
+    check_status("halt the server once the REINDEX wrote its first field",
+                 conn.send({"type": "ARM_FAULT", "point": "INDEX_BUILD_FIELD_WRITTEN", "action": "HALT",
+                            "match": f"{DB}|{REINDEX_KILL_COLL}"}), "OK")
+    conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": REINDEX_KILL_COLL,
+               "fieldNames": list(REINDEX_KILL_FIELDS)}, timeout=30)
+    check("the server halted inside the REINDEX", proc.wait(timeout=30) is not None)
+    check("both fields are still marked unfinished", len(index_markers(work_dir)) == len(REINDEX_KILL_FIELDS),
+          str(index_markers(work_dir)))
+
+
+def test_the_killed_reindex_is_repaired_by_the_next_one(conn: Conn, work_dir: str):
+    mismatched = reindex_kill_probes(conn)
+    check("after the restart both unfinished fields answer exactly like a scan", not mismatched, str(mismatched))
+    check_status("REINDEX both fields",
+                 conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": REINDEX_KILL_COLL,
+                            "fieldNames": list(REINDEX_KILL_FIELDS)}), "OK")
+    check("the REINDEX clears both markers", not index_markers(work_dir), str(index_markers(work_dir)))
+    mismatched = reindex_kill_probes(conn)
+    check("the rebuilt indexes answer exactly like a scan", not mismatched, str(mismatched))
+    analyzed = conn.aggregate(REINDEX_KILL_COLL, [bu.filter_step("second", "EQUALS", 3)], analyze=True)
+    check("the rebuilt index serves the filter again",
+          "second" in (analyzed.get("analyzeResult") or {}).get("indexesUsed", []), str(analyzed))
+
+
+def run_reindex_kill_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-reindex-kill-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, faultInjectionEnabled=True)
+    print(f"\n  Starting server on {HOST}:{PORT} for a REINDEX killed between fields ...")
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            test_a_reindex_killed_between_fields_scans_until_rebuilt(conn, work_dir, proc)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_the_killed_reindex_is_repaired_by_the_next_one(conn, work_dir)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+CHECKPOINT_DB = "checkpoint_db"
+IDLE_CHECKPOINT_MS = 1000
+
+
+def logs_with_records(work_dir: str, db: str) -> list:
+    root = os.path.join(work_dir, "db", db)
+    if not os.path.isdir(root):
+        return []
+    return [coll for coll in sorted(os.listdir(root)) if bu.logged_writes(os.path.join(root, coll)) > 0]
+
+
+def test_shutdown_checkpoints_every_log_of_many_collections(conn: Conn, proc, work_dir: str, log_path: str):
+    section(f"a graceful stop checkpoints the logs of {SHUTDOWN_COLLECTIONS} collections")
+    check_status("the checkpoint database is created",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": CHECKPOINT_DB}), "OK")
+    failed = []
+    for index in range(SHUTDOWN_COLLECTIONS):
+        coll = shutdown_coll(index)
+        responses = (conn.create_coll(coll, db=CHECKPOINT_DB),
+                     conn.save({"_id": "only", "k": f"v{index}"}, db=CHECKPOINT_DB, coll=coll))
+        if any(response.get("status") != "OK" for response in responses):
+            failed.append(coll)
+    check(f"one SAVE lands in each of {SHUTDOWN_COLLECTIONS} collections", not failed, f"failed: {failed[:5]}")
+    offset = len(bu.read_log(log_path))
+    bu.stop_server(proc)
+    left = logs_with_records(work_dir, CHECKPOINT_DB)
+    check("every write-ahead log holds only its checkpoint", not left, f"logs with records: {left[:5]}")
+    check("no log is reported as left for replay", SHUTDOWN_LEFT_FOR_REPLAY not in bu.read_log(log_path)[offset:])
+
+
+def test_an_idle_log_is_checkpointed_in_the_background(conn: Conn, work_dir: str):
+    section(f"an idle log is checkpointed in the background (walIdleCheckpointMs={IDLE_CHECKPOINT_MS})")
+    check_status("an idle collection is written",
+                 conn.save({"_id": "idle", "k": "v"}, db=CHECKPOINT_DB, coll=shutdown_coll(0)), "OK")
+    deadline = time.monotonic() + 15
+    left = logs_with_records(work_dir, CHECKPOINT_DB)
+    while left and time.monotonic() < deadline:
+        time.sleep(0.25)
+        left = logs_with_records(work_dir, CHECKPOINT_DB)
+    check("the idle log is checkpointed without a stop", not left, f"logs with records: {left[:5]}")
+    check_status("the document still answers", conn.find("idle", db=CHECKPOINT_DB, coll=shutdown_coll(0)), "OK")
+
+
+def run_checkpoint_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-checkpoint-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, walIdleCheckpointMs=0)
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            test_shutdown_checkpoints_every_log_of_many_collections(conn, proc, work_dir, log_path)
+        proc = None
+        bu.write_config(work_dir, PORT, syncWrites=True, walIdleCheckpointMs=IDLE_CHECKPOINT_MS)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_an_idle_log_is_checkpointed_in_the_background(conn, work_dir)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -2609,6 +2838,7 @@ def main():
             test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn, work_dir)
             test_a_transaction_of_in_place_growths_respects_max_page_size(conn, work_dir)
             test_a_bulk_save_does_not_place_inserts_against_a_stale_page_size(conn, work_dir)
+            test_repeated_growing_bulk_updates_vacuum_without_losing_documents(conn, work_dir)
             test_an_index_with_no_entries_left_is_removed(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
@@ -2632,6 +2862,7 @@ def main():
             test_bulk_insert_with_two_indexes_converges_quickly(conn, work_dir)
             test_concurrent_writes_to_many_collections_converge(conn)
             test_updates_on_a_large_collection_stay_fast(conn)
+            test_a_paused_group_force_lets_point_reads_through_and_holds_scans(conn)
             churned_flags = test_a_low_cardinality_index_stays_exact_under_churn(conn)
             memory_pk_written = rewrite_a_pk_index_from_memory(conn)
             pk_order_written = churn_relocations_deletes_and_inserts(conn)
@@ -2762,6 +2993,8 @@ def main():
         transaction_kills.run(admin_conn, lambda kill_dir: write_config(kill_dir, faults=True))
         run_backlog_phase()
         run_bounded_shutdown_phase()
+        run_reindex_kill_phase()
+        run_checkpoint_phase()
     finally:
         bu.stop_server(proc)
 

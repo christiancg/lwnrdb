@@ -126,11 +126,11 @@ public class ScriptCancellationIntegrationTest {
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
         TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         cache.removeProceduresForDatabase(TestGlobals.DB);
@@ -442,7 +442,7 @@ public class ScriptCancellationIntegrationTest {
     private ScheduleRegistry.Entry registerSchedule() throws Exception {
         final var definition = new ScheduleDefinition("s", "slow", null, 60_000L, null, 0L, true, ADMIN, null, 1L, 1L,
                 1L, ADMIN);
-        fs.writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, "s");
         schedules.reload(TestGlobals.DB);
         return schedules.get(TestGlobals.DB, "s");

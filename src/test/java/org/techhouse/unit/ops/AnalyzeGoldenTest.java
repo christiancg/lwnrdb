@@ -161,7 +161,7 @@ public class AnalyzeGoldenTest {
 
     @Test
     public void anIndexFilterWithALimit() {
-        assertEquals("scanned=8 indexes=[n] locks=[myDb|analyzeGolden, myDb|analyzeGolden|n]",
+        assertEquals("scanned=1 indexes=[n] locks=[myDb|analyzeGolden, myDb|analyzeGolden|n]",
                 analyzed(field(FieldOperatorType.EQUALS, "n", new JsonNumber(1)), new LimitAggregationStep(1)));
     }
 

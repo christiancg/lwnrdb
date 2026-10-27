@@ -38,6 +38,7 @@ public class ListenManager implements DirtySink {
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
     private final ApplyTracker applyTracker = new ApplyTracker();
     private final Set<UUID> heldBack = ConcurrentHashMap.newKeySet();
+    private final ListenGroups groups = new ListenGroups();
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public boolean hasCapacityFor(UUID clientId) {
@@ -78,9 +79,11 @@ public class ListenManager implements DirtySink {
     public UUID register(UUID clientId, String username, AggregateRequest dirtyRequest, String initialHash,
             long retainedBytes) {
         final var listenId = UUID.randomUUID();
-        final var keys = collectKeys(dirtyRequest);
-        final var registration = new ListenRegistration(listenId, clientId, dirtyRequest, keys,
-                new AtomicReference<>(initialHash), new AtomicBoolean(false), username, retainedBytes);
+        final var group = groups.join(ListenGroups.keyOf(username, dirtyRequest), dirtyRequest,
+                collectKeys(dirtyRequest), listenId);
+        final var keys = group.collectionKeys();
+        final var registration = new ListenRegistration(listenId, clientId, group.request(), keys,
+                new AtomicReference<>(initialHash), new AtomicBoolean(false), username, retainedBytes, group.id());
         registrations.put(listenId, registration);
         for (var key : keys) {
             collectionToListens.computeIfAbsent(key, _ -> ConcurrentHashMap.newKeySet()).add(listenId);
@@ -115,6 +118,7 @@ public class ListenManager implements DirtySink {
             return false;
         }
         detachKeys(registration);
+        groups.leave(registration.groupId(), listenId);
         releaseRetention(registration);
         return true;
     }
@@ -131,7 +135,8 @@ public class ListenManager implements DirtySink {
             return false;
         }
         detachKeys(registration);
-        enqueue(listenId);
+        groups.leave(registration.groupId(), listenId);
+        enqueueWork(listenId);
         return true;
     }
 
@@ -228,17 +233,17 @@ public class ListenManager implements DirtySink {
         return applyTracker.unchangedSince(snapshot);
     }
 
-    void holdBack(UUID listenId, Set<String> collectionKeys) {
-        heldBack.add(listenId);
-        if (!applyTracker.anyActive(collectionKeys) && heldBack.remove(listenId)) {
-            enqueue(listenId);
+    void holdBack(UUID workId, Set<String> collectionKeys) {
+        heldBack.add(workId);
+        if (!applyTracker.anyActive(collectionKeys) && heldBack.remove(workId)) {
+            enqueueWork(workId);
         }
     }
 
     void releaseHeldBack() {
-        for (final var listenId : List.copyOf(heldBack)) {
-            if (heldBack.remove(listenId)) {
-                enqueue(listenId);
+        for (final var workId : List.copyOf(heldBack)) {
+            if (heldBack.remove(workId)) {
+                enqueueWork(workId);
             }
         }
     }
@@ -263,22 +268,38 @@ public class ListenManager implements DirtySink {
     }
 
     private void enqueue(UUID listenId) {
-        if (queued.add(listenId)) {
-            dirtyQueue.offer(listenId);
+        final var registration = registrations.get(listenId);
+        enqueueWork(registration != null ? registration.groupId() : listenId);
+    }
+
+    void enqueueWork(UUID workId) {
+        if (queued.add(workId)) {
+            dirtyQueue.offer(workId);
         }
     }
 
-    void dequeued(UUID listenId) {
-        queued.remove(listenId);
+    void dequeued(UUID workId) {
+        queued.remove(workId);
     }
 
     public ListenRegistration getRegistration(UUID listenId) {
         return registrations.get(listenId);
     }
 
+    ListenGroup group(UUID groupId) {
+        return groups.byId(groupId);
+    }
+
+    int groupCount() {
+        return groups.size();
+    }
+
     public synchronized void startWorkers() {
-        pool.execute(new ListenProcessorThread(dirtyQueue, this));
-        logger.info("Started listen processor worker");
+        final var workers = configuration.intValue(ConfigKey.LISTEN_THREADS);
+        for (var i = 0; i < workers; i++) {
+            pool.execute(new ListenProcessorThread(dirtyQueue, this));
+        }
+        logger.info("Started " + workers + " listen processor workers");
     }
 
     public synchronized void stopWorkers() {
@@ -294,7 +315,8 @@ public class ListenManager implements DirtySink {
             removeEnded(entry.getKey(), entry.getValue());
         }
         collectionToListens.clear();
-        logger.info("Stopped listen processor worker");
+        groups.clear();
+        logger.info("Stopped listen processor workers");
     }
 
     private static Set<String> collectKeys(AggregateRequest request) {

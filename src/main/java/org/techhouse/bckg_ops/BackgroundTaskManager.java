@@ -32,6 +32,15 @@ public class BackgroundTaskManager {
         lanes.add(op);
     }
 
+    public boolean submitMaintenance(Event op) {
+        if (draining) {
+            logger.warning("Rejecting a maintenance task during shutdown: " + op);
+            return false;
+        }
+        lanes.addMaintenance(op);
+        return true;
+    }
+
     public synchronized void startBackgroundWorkers() {
         draining = false;
         final var threadCount = configuration.getBackgroundProcessingThreads();
@@ -63,16 +72,29 @@ public class BackgroundTaskManager {
     }
 
     private boolean isIdle() {
-        return lanes.isEmpty() && inFlight.get() == 0 && parked.get() >= workerCount.get();
+        return lanes.isEmpty() && lanes.maintenanceOpen() == 0 && inFlight.get() == 0
+                && parked.get() >= workerCount.get();
     }
 
     public int pending() {
         return inFlight.get();
     }
 
+    public int gatedPending() {
+        return inFlight.get() - lanes.historyQueued();
+    }
+
+    public int queuedHistory() {
+        return lanes.historyQueued();
+    }
+
+    public int maintenancePending() {
+        return lanes.maintenanceOpen();
+    }
+
     public boolean awaitCapacity(long waitMs) throws InterruptedException {
         final var maxEvents = configuration.intValue(ConfigKey.BACKGROUND_QUEUE_MAX_EVENTS);
-        return pending() < maxEvents || idleSignal.awaitIdle(() -> pending() < maxEvents, waitMs);
+        return gatedPending() < maxEvents || idleSignal.awaitIdle(() -> gatedPending() < maxEvents, waitMs);
     }
 
     public synchronized void stopBackgroundWorkers() {

@@ -5,20 +5,20 @@ import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
 
 import java.io.IOException;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BiPredicate;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.simplejs.ScriptCallable;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
@@ -26,21 +26,24 @@ import org.techhouse.simplejs.host.PipelineHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
 public final class PipelineContext implements ReadObserver, AutoCloseable {
-    private static final int CHECK_MASK = 0xFF;
+    private static final long CHECK_EVERY = 256L;
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final CompiledScriptCache compiledScriptCache = IocContainer.get(CompiledScriptCache.class);
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     private final Map<String, ScriptCallable> callables = new HashMap<>();
-    private final Map<CustomOperator, BiPredicate<JsonObject, String>> customTesters = new IdentityHashMap<>();
+    private final Map<String, List<PkIndexEntry>> pinnedPk = new HashMap<>();
+    private int transientPins;
     private final long scriptDeadline = System.currentTimeMillis() + configuration.getAggregationScriptTimeoutMs();
     private final boolean scriptsAllowed;
     private final boolean timed;
     private final long deadlineNanos;
     private final long maxResultBytes;
     private final AnalyzeContext analyze;
-    private int checks;
+    private long work;
+    private long nextCheck = CHECK_EVERY;
     private long resultBytes;
 
     private PipelineContext(long timeoutMs, long maxResultBytes, AnalyzeContext analyze, boolean scriptsAllowed) {
@@ -71,11 +74,19 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         if (!timed || stream == null) {
             return stream;
         }
-        return stream.peek(_ -> checkDeadline());
+        return stream.peek(_ -> tick(1));
     }
 
-    private void checkDeadline() {
-        if ((++checks & CHECK_MASK) == 0 && System.nanoTime() > deadlineNanos) {
+    public void tick(long units) {
+        if (!timed) {
+            return;
+        }
+        work += units;
+        if (work < nextCheck) {
+            return;
+        }
+        nextCheck = work + CHECK_EVERY;
+        if (System.nanoTime() > deadlineNanos) {
             throw new AggregateLimitException(ErrorCode.AGGREGATE_TIMEOUT);
         }
     }
@@ -124,8 +135,23 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         }
     }
 
-    public BiPredicate<JsonObject, String> customTesterFor(CustomOperator operator) {
-        return customTesters.computeIfAbsent(operator, FilterOperatorHelper::getCustomTester);
+    public List<PkIndexEntry> pinnedPkIndex(String dbName, String collName) throws IOException {
+        if (!locks.holdsCollectionLock(dbName, collName)) {
+            return null;
+        }
+        final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        final var pinned = pinnedPk.get(collectionIdentifier);
+        if (pinned != null) {
+            return pinned;
+        }
+        final var rows = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        if (cache.userCache().isResidentPkIndex(dbName, collName, rows)) {
+            pinnedPk.put(collectionIdentifier, rows);
+        } else if (cache.userCache().tryPinTransientPkIndex()) {
+            transientPins++;
+            pinnedPk.put(collectionIdentifier, rows);
+        }
+        return rows;
     }
 
     public ScriptCallable callableFor(String source) {
@@ -165,6 +191,10 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
             callable.close();
         }
         callables.clear();
-        customTesters.clear();
+        pinnedPk.clear();
+        while (transientPins > 0) {
+            transientPins--;
+            cache.userCache().unpinTransientPkIndex();
+        }
     }
 }

@@ -94,7 +94,7 @@ public class ProcedureReferenceRaceTest {
 
         assertEquals(ErrorCode.PROCEDURE_NOT_FOUND.getCode(), result.get().getErrorCode());
         assertNull(cache.getSchedule(TestGlobals.DB, "nightly"));
-        assertTrue(fs.listScheduleNames(TestGlobals.DB).isEmpty());
+        assertTrue(fs.metadataFiles().listScheduleNames(TestGlobals.DB).isEmpty());
     }
 
     @Test
@@ -117,7 +117,8 @@ public class ProcedureReferenceRaceTest {
 
         ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "Recalc"), ACTOR);
 
-        assertNotNull(fs.readProcedure(TestGlobals.DB, PROCEDURE), "the referenced procedure's file is kept");
+        assertNotNull(fs.metadataFiles().readProcedure(TestGlobals.DB, PROCEDURE),
+                "the referenced procedure's file is kept");
         assertNotNull(cache.getProcedure(TestGlobals.DB, PROCEDURE));
     }
 

@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cluster.PeerNames;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.DigestEntry;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class AntiEntropyPayloadTest {
@@ -68,5 +70,19 @@ public class AntiEntropyPayloadTest {
 
         payload.setIncarnation("42");
         assertEquals(42L, payload.incarnationValue());
+    }
+
+    @Test
+    public void test_requested_buckets_survive_the_wire_as_integers() {
+        final var payload = new AntiEntropyPayload("db_name", "coll_name");
+        payload.setBucketCount(16);
+        payload.setBuckets(List.of(1, 5, 15));
+        final var eJson = new EJson();
+
+        final var received = eJson.fromJson(eJson.toJson(payload), AntiEntropyPayload.class);
+
+        assertEquals(List.of(1, 5, 15), received.getBuckets());
+        assertInstanceOf(Integer.class, received.getBuckets().getFirst());
+        assertTrue(PeerNames.antiEntropy(received));
     }
 }

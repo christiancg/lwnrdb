@@ -1,8 +1,10 @@
 package org.techhouse.cluster.msg;
 
 import java.util.List;
+import org.techhouse.ejson.NullsOmitted;
 import org.techhouse.ejson.elements.JsonObject;
 
+@NullsOmitted
 public class ReplicationPayload {
     private String dbName;
     private String collName;

@@ -51,7 +51,7 @@ public class DefinitionCacheTest {
     }
 
     private void writeSchema() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, new EJson().toJson(schema()));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, new EJson().toJson(schema()));
     }
 
     private BoundedLruCache<String> valuesPausingAtPublish() {
@@ -97,7 +97,7 @@ public class DefinitionCacheTest {
         assertNotNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
 
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
-        fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
 
         assertNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL),
                 "a delete that answered OK must not keep validating writes against the schema it removed");

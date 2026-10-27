@@ -292,4 +292,23 @@ public class TriggerRunLogTest {
         assertEquals(1, pending.size());
         assertEquals(recent, pending.getFirst().getRunId());
     }
+
+    @Test
+    public void test_a_run_owns_exactly_its_own_key_range() {
+        final var cache = org.techhouse.ioc.IocContainer.get(org.techhouse.cache.Cache.class);
+        for (final var id : List.of("abc|0", "abc|1", "abc|10", "abc|x|0", "abcd|0", "ab|0", "abc")) {
+            cache.putPkIndexTriggerRun(new org.techhouse.data.PkIndexEntry(Globals.ADMIN_DB_NAME,
+                    Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, id, 0, 10, 0));
+        }
+        try {
+            assertEquals(List.of("abc|0", "abc|1", "abc|10"), TriggerRunLog.recordIdsFor("abc"));
+            assertEquals(List.of("abc|x|0"), TriggerRunLog.recordIdsFor("abc|x"));
+            assertEquals(List.of(), TriggerRunLog.recordIdsFor(null));
+            assertEquals(7, TriggerRunLog.pendingRecordCount());
+        } finally {
+            for (final var id : List.of("abc|0", "abc|1", "abc|10", "abc|x|0", "abcd|0", "ab|0", "abc")) {
+                cache.removePkIndexTriggerRun(id);
+            }
+        }
+    }
 }

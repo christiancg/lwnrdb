@@ -36,6 +36,13 @@ public final class TriggerRunLog {
             EventType eventType, boolean batchMode, String actingUser, int depth, long firedAt, List<DbEntry> entries) {
     }
 
+    @FunctionalInterface
+    public interface EntrySink {
+        void save(AdminTriggerRunEntry entry) throws Exception;
+    }
+
+    private static final EntrySink IMMEDIATE = AdminOperationHelper::saveTriggerRun;
+
     private TriggerRunLog() {
     }
 
@@ -44,11 +51,16 @@ public final class TriggerRunLog {
     }
 
     public static String record(TriggerRunDescriptor descriptor) {
-        return write(descriptor, UUID.randomUUID().toString(), null, null);
+        return write(descriptor, UUID.randomUUID().toString(), null, null, IMMEDIATE);
     }
 
     public static String recordStaged(TriggerRunDescriptor descriptor, Map<String, Long> priorVersions) {
-        return write(descriptor, UUID.randomUUID().toString(), priorVersions, null);
+        return recordStaged(descriptor, priorVersions, IMMEDIATE);
+    }
+
+    public static String recordStaged(TriggerRunDescriptor descriptor, Map<String, Long> priorVersions,
+            EntrySink sink) {
+        return write(descriptor, UUID.randomUUID().toString(), priorVersions, null, sink);
     }
 
     public static String recordDeterministic(TriggerRunDescriptor descriptor, String txId, String runId) {
@@ -56,7 +68,7 @@ public final class TriggerRunLog {
             return null;
         }
         discard(runId);
-        return write(descriptor, runId, null, txId);
+        return write(descriptor, runId, null, txId, IMMEDIATE);
     }
 
     public static String deterministicRunId(String txId, String dbName, String collName, String triggerName,
@@ -103,7 +115,7 @@ public final class TriggerRunLog {
     }
 
     private static String write(TriggerRunDescriptor descriptor, String runId, Map<String, Long> priorVersions,
-            String txId) {
+            String txId, EntrySink sink) {
         if (!isEnabled()) {
             return null;
         }
@@ -130,7 +142,7 @@ public final class TriggerRunLog {
                     if (txId != null) {
                         entry.setTxId(txId);
                     }
-                    AdminOperationHelper.saveTriggerRun(entry);
+                    sink.save(entry);
                     written++;
                 }
             } catch (Exception e) {
@@ -162,13 +174,22 @@ public final class TriggerRunLog {
     }
 
     public static List<String> recordIdsFor(String runId) {
+        if (runId == null) {
+            return List.of();
+        }
+        final var first = runId + Globals.COLL_IDENTIFIER_SEPARATOR;
+        final var past = runId + (char) (Globals.COLL_IDENTIFIER_SEPARATOR + 1);
         final var result = new ArrayList<String>();
-        for (final var key : cache.getTriggerRunPkIndexes().keySet()) {
-            if (AdminTriggerRunEntry.runIdOf(key).equals(runId)) {
+        for (final var key : cache.getTriggerRunPkIndexes().subMap(first, true, past, false).keySet()) {
+            if (key.indexOf(Globals.COLL_IDENTIFIER_SEPARATOR, first.length()) < 0) {
                 result.add(key);
             }
         }
         return result;
+    }
+
+    public static int pendingRecordCount() {
+        return cache.getTriggerRunPkIndexes().size();
     }
 
     public static Set<String> pendingRunIds() {

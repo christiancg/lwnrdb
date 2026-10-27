@@ -331,7 +331,7 @@ abstract class StatementProductions extends LoopProductions {
         declareBoundNames(name, !scope.isFunctionBoundary());
         final var parts = parseFunctionParts(generator, async);
         final var declaration = new FunctionDeclaration(name, parts.params(), parts.body(), async, generator);
-        declaration.setSourceText(spanFrom(start));
+        declaration.setSourceText(closureSource(start));
         return declaration;
     }
 
