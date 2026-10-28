@@ -439,7 +439,7 @@ class Node:
     def start(self):
         log = open(self.log_path, "ab")
         self.proc = subprocess.Popen(
-            ["java", "-Xmx1g", "-jar", bu.JAR_PATH],
+            bu.server_argv("1g"),
             stdout=log, stderr=log, cwd=self.work_dir)
         deadline = time.time() + 60.0
         while time.time() < deadline:

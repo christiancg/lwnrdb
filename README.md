@@ -50,7 +50,7 @@ JSON socket protocol — optionally [TLS](#tls--secure-connections). On top of t
 | Integrity | [per-collection JSON Schema](#schema-validation), [transactions](#transactions), [users and permissions](#users--permissions) |
 | Scripting | a built-in JS engine — [ad-hoc scripts](#run_script), [stored procedures](#save_procedure), [triggers](#save_trigger) (after and before the write), [scheduled procedures](#save_schedule), [pipeline operators](#script-operators-simplejs-in-the-pipeline), and shared code via `import … from "procedures/<name>"`. See [docs/simplejs.md](docs/simplejs.md) |
 | Clustering | fully-replicated nodes, no master, per-collection ownership, quorum writes, anti-entropy, cross-node transactions and script placement. See [docs/clustering.md](docs/clustering.md) |
-| Operations | [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
+| Operations | [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown, shipped as a GraalVM native executable |
 
 **Known non-goals.** No compound indexes (a pipeline uses as many single-field indexes as
 apply), no sharding (every node holds a complete copy), no compression, and no attempt to
@@ -1472,7 +1472,7 @@ docker run -d --name lwnrdb -p 8989:8989 \
   ghcr.io/christiancg/lwnrdb:latest
 ```
 
-If you prefer to skip Docker, download the jar from the latest release and run it with Java 27 or newer. Here the password goes in a `lwnrdb.cfg` next to the jar:
+If you prefer to skip Docker, download the jar from the latest release and run it with Java 25 or newer. Here the password goes in a `lwnrdb.cfg` next to the jar:
 
 ```bash
 echo "defaultAdminPassword=<choose-a-strong-password>" > lwnrdb.cfg
@@ -1490,7 +1490,7 @@ java -jar lwnrdb.jar \
   --exec '{"type":"AGGREGATE","databaseName":"my_db","collectionName":"people","aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"GREATER_THAN","field":"age","value":30}}]}'
 ```
 
-With Docker the client is already inside the container, so run the same thing through `docker exec -e LWNRDB_PASSWORD=<the-password-you-chose> lwnrdb java -jar app.jar` instead of `java -jar lwnrdb.jar`. Each request goes in its own `--exec`. Every reply is printed on its own line and the client stops at the first one that is not `OK`. If you would rather talk to the server directly, any TCP client works, since each request is one line of JSON. The full list of operations starts in the [Wire Protocol](#wire-protocol--message-reference) section.
+With Docker the client is already inside the container, so run the same thing through `docker exec -e LWNRDB_PASSWORD=<the-password-you-chose> lwnrdb /app/lwnrdb` instead of `java -jar lwnrdb.jar`. Each request goes in its own `--exec`. Every reply is printed on its own line and the client stops at the first one that is not `OK`. If you would rather talk to the server directly, any TCP client works, since each request is one line of JSON. The full list of operations starts in the [Wire Protocol](#wire-protocol--message-reference) section.
 
 ### Running the server
 
@@ -1521,7 +1521,7 @@ docker build -t lwnrdb .
 docker run -p 8989:8989 -v ./db:/app/db -v ./lwnrdb.cfg:/app/lwnrdb.cfg:ro lwnrdb
 ```
 
-The image runs as the unprivileged `lwnrdb` user, not root. A host directory mounted over `/app/db`, `/app/logs` or
+The image runs as the unprivileged `nonroot` user, not root. A host directory mounted over `/app/db`, `/app/logs` or
 `/app/certs` must be writable by that user's uid (`docker run --rm --entrypoint id lwnrdb` prints it).
 
 The integration suites in `test_utils/` authenticate with `base_utils.PASSWORD` (`Tst-Admin-9xQ2mV`): a server the
@@ -1619,8 +1619,8 @@ From Docker, override the command (the image's working directory holds its own `
 ignores); add `-i` to feed a restore:
 
 ```bash
-docker run --rm lwnrdb java -jar app.jar --dump --compress --host db.internal --password … > backup.ldump.gz
-docker run --rm -i lwnrdb java -jar app.jar --restore --host db.internal --password … < backup.ldump.gz
+docker run --rm lwnrdb /app/lwnrdb --dump --compress --host db.internal --password … > backup.ldump.gz
+docker run --rm -i lwnrdb /app/lwnrdb --restore --host db.internal --password … < backup.ldump.gz
 ```
 
 ### Bootstrap
@@ -2130,13 +2130,16 @@ To auto-format your changes before committing:
 mvn spotless:apply
 ```
 
-> **Build JDK: JDK 27 or newer is required** (matching the project's compiler
-> target and CI); `mvn verify` fails on anything older. The floor is not
+> **Build JDK: JDK 25, and only 25** (matching the project's compiler target and
+> CI); `mvn verify` fails on anything else, newer included. The pin is not
 > arbitrary: the SimpleJS regex engine resolves `\p{...}` property escapes
-> against the JDK's own Unicode data, so an older JDK ships an older UCD and the
-> same script answers differently — including between two nodes of one cluster.
-> The Eclipse JDT formatter is used instead of Google/Palantir formatters
-> specifically because the latter rely on `javac` internals that are
+> against the JDK's own Unicode data, so a different JDK ships a different UCD
+> and the same script answers differently — including between two nodes of one
+> cluster. It is 25 rather than the newest JDK because the shipped artifact is
+> the GraalVM native executable and GraalVM has no JDK 26 or 27 release; the eight
+> `language/identifiers/*-unicode-17.0.0*` test262 cases are excluded for that
+> reason. The Eclipse JDT formatter is used instead of Google/Palantir
+> formatters specifically because the latter rely on `javac` internals that are
 > incompatible with recent JDKs.
 
 The linter rulesets are deliberately curated rather than using defaults: they

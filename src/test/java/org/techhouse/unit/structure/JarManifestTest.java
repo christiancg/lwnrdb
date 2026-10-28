@@ -1,8 +1,6 @@
 package org.techhouse.unit.structure;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,8 +12,6 @@ import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
 
 public class JarManifestTest {
-    private static final String FLAG = "--enable-final-field-mutation=ALL-UNNAMED";
-
     private static Document pom() throws Exception {
         final var factory = DocumentBuilderFactory.newInstance();
         factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
@@ -37,15 +33,6 @@ public class JarManifestTest {
                 "//plugin[artifactId='maven-jar-plugin']/configuration/archive/manifestEntries/Enable-Final-Field-Mutation");
 
         assertEquals("ALL-UNNAMED", value);
-    }
-
-    @Test
-    public void test_surefire_passes_the_final_field_mutation_flag() throws Exception {
-        final var argLine = text(pom(), "//plugin[artifactId='maven-surefire-plugin']/configuration/argLine");
-
-        assertNotNull(argLine);
-        assertTrue(argLine.contains(FLAG), argLine);
-        assertTrue(argLine.contains("@{argLine}"), argLine);
     }
 
     @Test

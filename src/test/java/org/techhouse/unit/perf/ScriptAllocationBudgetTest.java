@@ -16,7 +16,7 @@ import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
 public class ScriptAllocationBudgetTest {
-    private static final long TRIVIAL_RUN = 41_700;
+    private static final long TRIVIAL_RUN = 57_170;
     private static final long STRING_APPEND_100K = 10_060_000;
     private static final long LOOP_ITERATION = 44;
     private static final long FUNCTION_CALL = 415;

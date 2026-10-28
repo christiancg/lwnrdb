@@ -19,8 +19,8 @@
         <revision>1.0-SNAPSHOT</revision>
         <forkCount>4</forkCount>
         <argLine/>
-        <maven.compiler.source>27</maven.compiler.source>
-        <maven.compiler.target>27</maven.compiler.target>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <minimumCoverage>0.95</minimumCoverage>
         <spotless.version>3.10.4</spotless.version>
@@ -31,6 +31,7 @@
         <spotbugs.plugin.version>4.10.5.0</spotbugs.plugin.version>
         <spotbugs.version>4.10.5</spotbugs.version>
         <enforcer.plugin.version>3.6.3</enforcer.plugin.version>
+        <native.maven.plugin.version>1.1.2</native.maven.plugin.version>
     </properties>
 
     <dependencies>
@@ -56,6 +57,14 @@
     <build>
         <finalName>lwnrdb</finalName>
         <plugins>
+            <!-- The regex engine resolves \p{...} against the JDK's own Unicode data, so the build JDK
+                 decides what those escapes match, and every node of a cluster has to agree. The rule pins
+                 exactly one version rather than a "26 or newer" floor because the shipped artifact is
+                 the GraalVM native image and GraalVM has no JDK 26 or 27 release: its newest build is still
+                 JDK 25 (Unicode 16.0). The cost is measured - the eight
+                 language/identifiers/*-unicode-17.0.0* test262 cases are excluded in
+                 config/test262-exclusions.txt for exactly this reason. Raise both this rule and the
+                 compiler release when GraalVM ships a newer JDK build. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
@@ -69,8 +78,9 @@
                         <configuration>
                             <rules>
                                 <requireJavaVersion>
-                                    <version>[27,)</version>
-                                    <message>LWNRDB requires JDK 27 or newer.</message>
+                                    <version>[25,26)</version>
+                                    <message>LWNRDB builds on JDK 25 (the newest GraalVM release, whose
+                                        Unicode data the regex engine resolves against).</message>
                                 </requireJavaVersion>
                             </rules>
                         </configuration>
@@ -101,7 +111,7 @@
                 <version>3.6.0</version>
                 <configuration>
                     <reuseForks>true</reuseForks>
-                    <argLine>@{argLine} --enable-final-field-mutation=ALL-UNNAMED</argLine>
+                    <argLine>@{argLine} -XX:-UseJVMCICompiler</argLine>
                     <systemPropertyVariables>
                         <lwnrdb.test.path>target/test-data-${surefire.forkNumber}</lwnrdb.test.path>
                         <lwnrdb.test.logPath>target/test-logs-${surefire.forkNumber}</lwnrdb.test.logPath>
@@ -138,7 +148,7 @@
                         </goals>
                         <configuration>
                             <forkCount>1</forkCount>
-                            <argLine>@{argLine} --enable-final-field-mutation=ALL-UNNAMED -Xbatch</argLine>
+                            <argLine>@{argLine} -Xbatch</argLine>
                             <includes>
                                 <include>**/perf/*AllocationBudgetTest.java</include>
                             </includes>
@@ -323,4 +333,40 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>${native.maven.plugin.version}</version>
+                        <extensions>true</extensions>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <mainClass>org.techhouse.Main</mainClass>
+                            <buildArgs>
+                                <!-- native-image bundles only the builder's default locale, so every
+                                     other BCP-47 tag silently falls back to it: localeCompare('sv') would
+                                     stop sorting in Swedish and (1234.5).toLocaleString('de-DE') would
+                                     print 1,234.5. A script may name any tag, so there is no subset to
+                                     enumerate with -H:IncludeLocales instead. -->
+                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                                <buildArg>-H:+IncludeAllLocales</buildArg>
+                            </buildArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

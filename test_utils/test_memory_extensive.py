@@ -60,7 +60,7 @@ def find_server_pid():
         return int(os.environ["MEM_TEST_SERVER_PID"])
     try:
         out = subprocess.check_output(
-            ["pgrep", "-f", "lwnrdb.jar"], text=True).strip()
+            ["pgrep", "-f", bu.SERVER_PROC_PATTERN], text=True).strip()
         return int(out.splitlines()[0])
     except Exception:
         return None

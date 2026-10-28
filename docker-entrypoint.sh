@@ -11,7 +11,7 @@ if [ -n "$LWNRDB_ADMIN_PASSWORD" ]; then
 fi
 
 case "$*" in
-    "java "*" -jar app.jar")
+    "/app/lwnrdb")
         if [ ! -d /app/db/admin ] && ! grep -Eq '^defaultAdminPassword=.+' /app/lwnrdb.cfg; then
             echo "No admin password set. Pass -e LWNRDB_ADMIN_PASSWORD=<password> to docker run, or mount a lwnrdb.cfg with defaultAdminPassword." >&2
         fi

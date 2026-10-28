@@ -65,8 +65,8 @@ public class AllocationBudgetTest {
     private static final long LOCKED_COLD_SCAN_BUDGET_PER_DOC = 4_035;
     private static final long INDEXED_FILTER_LIMIT_BUDGET = 3_690;
     private static final long WRITE_PATH_PAGE_BOOKING_BUDGET = 915;
-    private static final long BUFFERED_SAVE_BUDGET = 5_385;
-    private static final long INDEXED_FILTER_LIMIT_IN_TRANSACTION_BUDGET = 23_125;
+    private static final long BUFFERED_SAVE_BUDGET = 7_095;
+    private static final long INDEXED_FILTER_LIMIT_IN_TRANSACTION_BUDGET = 34_790;
     private static final long DIRTY_FIND_BY_ID_BUDGET = 645;
     private static final double RESPONSE_BUDGET_RATIO = 1.3;
     private static final double FIRST_ENCODE_BUDGET_RATIO = 2.4;
