@@ -3,6 +3,7 @@ package org.techhouse.ejson.internal;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.invoke.VarHandle;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.HashMap;
@@ -104,7 +105,11 @@ public final class ClassPlan {
 
     private static MethodHandle setterFor(MethodHandles.Lookup lookup, Field field) {
         try {
-            return lookup.unreflectSetter(field).asType(SETTER_TYPE);
+            final var setter = field.getType() == boolean.class && !Modifier.isFinal(field.getModifiers())
+                    ? MethodHandles.privateLookupIn(field.getDeclaringClass(), lookup).unreflectVarHandle(field)
+                            .toMethodHandle(VarHandle.AccessMode.SET)
+                    : lookup.unreflectSetter(field);
+            return setter.asType(SETTER_TYPE);
         } catch (IllegalAccessException e) {
             return null;
         }
