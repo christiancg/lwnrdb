@@ -33,15 +33,21 @@ public record IntrinsicsPrototypes(Intrinsics intrinsics) {
         ctor.markConstructor();
         ctor.setPrototype(proto);
         intrinsics.functionKindCtors.put(name, ctor);
-        Intrinsics.define(proto, "constructor", ctor);
-        proto.setFlags("constructor", PropertyFlags.TAG);
+        proto.deferSetup(target -> {
+            Intrinsics.define(target, "constructor", ctor);
+            target.setFlags("constructor", PropertyFlags.TAG);
+            if (instancePrototype != null) {
+                Intrinsics.define(target, "prototype", instancePrototype);
+                target.setFlags("prototype", PropertyFlags.TAG);
+            }
+        });
         if (instancePrototype != null) {
-            Intrinsics.define(proto, "prototype", instancePrototype);
-            proto.setFlags("prototype", PropertyFlags.TAG);
-            Intrinsics.define(instancePrototype, "constructor", proto);
-            instancePrototype.setFlags("constructor", PropertyFlags.TAG);
+            instancePrototype.deferSetup(target -> {
+                Intrinsics.define(target, "constructor", proto);
+                target.setFlags("constructor", PropertyFlags.TAG);
+            });
         }
-        IntrinsicsInstallers.defineToStringTag(proto, name);
+        proto.deferSetup(target -> IntrinsicsInstallers.defineToStringTag(target, name));
         return proto;
     }
 
@@ -82,11 +88,13 @@ public record IntrinsicsPrototypes(Intrinsics intrinsics) {
     public JsObject regexpStringIteratorPrototype() {
         final var proto = new JsObject();
         proto.setProto(intrinsics.objectProto);
-        final var next = new JsNativeFunction("next",
-                (thisArg, _) -> RegexSymbolMethods.stringIteratorNext(thisArg, intrinsics.ops));
-        next.setLength(0);
-        Intrinsics.define(proto, "next", next);
-        IntrinsicsInstallers.defineToStringTag(proto, "RegExp String Iterator");
+        proto.deferSetup(target -> {
+            final var next = new JsNativeFunction("next",
+                    (thisArg, _) -> RegexSymbolMethods.stringIteratorNext(thisArg, intrinsics.ops));
+            next.setLength(0);
+            Intrinsics.define(target, "next", next);
+            IntrinsicsInstallers.defineToStringTag(target, "RegExp String Iterator");
+        });
         return proto;
     }
 
@@ -108,11 +116,11 @@ public record IntrinsicsPrototypes(Intrinsics intrinsics) {
     }
 
     public void installObjectPrototype() {
-        for (final var name : ObjectProtoBuiltins.NAMES) {
-            Intrinsics.define(intrinsics.objectProto, name, intrinsics.wrapper(name, "Object.prototype",
-                    (receiver, key) -> ObjectProtoBuiltins.getMethod(receiver, key, intrinsics.ops, intrinsics)));
-        }
-        ObjectProtoBuiltins.installProtoAccessor(intrinsics.objectProto, intrinsics.ops, intrinsics);
+        intrinsics.objectProto.deferSetup(proto -> {
+            intrinsics.coercion.installMethods(proto, ObjectProtoBuiltins.NAMES, "Object.prototype",
+                    (receiver, key) -> ObjectProtoBuiltins.getMethod(receiver, key, intrinsics.ops, intrinsics));
+            ObjectProtoBuiltins.installProtoAccessor(proto, intrinsics.ops, intrinsics);
+        });
         intrinsics.errorProto.setProto(intrinsics.objectProto);
     }
 
@@ -166,25 +174,31 @@ public record IntrinsicsPrototypes(Intrinsics intrinsics) {
 
     public JsObject booleanPrototype() {
         final var proto = new JsObject();
-        Intrinsics.define(proto, "toString", new JsNativeFunction("toString",
-                (thisArg, _) -> new JsString(JsCoercion.toStrDataOnly(requireBoolean(thisArg, "toString")))));
-        Intrinsics.define(proto, "valueOf",
-                new JsNativeFunction("valueOf", (thisArg, _) -> requireBoolean(thisArg, "valueOf")));
         proto.setProto(intrinsics.objectProto);
+        proto.deferSetup(target -> {
+            Intrinsics.define(target, "toString", new JsNativeFunction("toString",
+                    (thisArg, _) -> new JsString(JsCoercion.toStrDataOnly(requireBoolean(thisArg, "toString")))));
+            Intrinsics.define(target, "valueOf",
+                    new JsNativeFunction("valueOf", (thisArg, _) -> requireBoolean(thisArg, "valueOf")));
+        });
         return proto;
     }
 
     public JsObject arrayPrototype() {
         final var proto = new JsObject();
-        for (final var name : ArrayBuiltins.NAMES) {
-            final var method = new JsNativeFunction(name,
-                    (thisArg, args) -> intrinsics.callArrayMethod(thisArg, name, args));
-            method.setLength(BuiltinLengths.lengthOf("Array.prototype", name));
-            Intrinsics.define(proto, name, method);
-        }
-        proto.defineValue("length", new JsNumber(0));
-        proto.setFlags("length", new PropertyFlags(true, false, false));
         proto.setProto(intrinsics.objectProto);
+        proto.deferSetup(target -> {
+            final var lengths = BuiltinLengths.lengthsFor("Array.prototype");
+            for (final var name : ArrayBuiltins.NAMES) {
+                final var method = new JsNativeFunction(name,
+                        (thisArg, args) -> intrinsics.callArrayMethod(thisArg, name, args));
+                method.setLength(BuiltinLengths.lengthIn(lengths, name));
+                Intrinsics.define(target, name, method);
+            }
+            target.defineValue("length", new JsNumber(0));
+            target.setFlags("length", new PropertyFlags(true, false, false));
+            intrinsics.rememberArrayToString(target.get("toString"));
+        });
         return proto;
     }
 

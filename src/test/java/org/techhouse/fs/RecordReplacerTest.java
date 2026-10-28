@@ -20,6 +20,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.config.Configuration;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
@@ -74,7 +75,7 @@ public class RecordReplacerTest {
         assertEquals(updated.toFileEntry(), rf.fx.indexed("b").toFileEntry());
         final var hole = " ".repeat((int) old.getLength() - 1) + "\n";
         assertEquals(hole, rf.fx.readAt(old));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -98,7 +99,7 @@ public class RecordReplacerTest {
         assertTrue(rf.fx.readAt(old).isBlank());
         assertEquals(PkIndexEntry.toDeleteRow("b"),
                 Files.readAllLines(rf.fx.paths.pkIndexFile(DB, COLL).toPath()).getLast());
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -127,7 +128,7 @@ public class RecordReplacerTest {
         }
 
         assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length, "a write that failed before its commit ends its own intent");
+        assertEquals(0, rf.intents(), "a write that failed before its commit ends its own intent");
     }
 
     @Test
@@ -137,11 +138,11 @@ public class RecordReplacerTest {
         final var dangling = new PkIndexEntry(DB, COLL, "b", page.length - 2, b.getLength(), 0, b.getVersion());
 
         assertThrows(IOException.class, () -> rf.replacer.replace(rf.entry("b", "x", 0), ReplacerFixture.line("b", "x"),
-                dangling, 0, PagePlacement.APPEND, null));
+                dangling, 0, PagePlacement.APPEND));
         assertThrows(IOException.class, () -> rf.replacer.delete(dangling));
 
         assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -196,21 +197,27 @@ public class RecordReplacerTest {
         }
     }
 
+    private int loggedRecords() throws IOException {
+        return WalCodec.decodeAll(Files.readAllBytes(rf.fx.paths.writeAheadLog(DB, COLL).toPath())).records().size();
+    }
+
     @Test
-    public void pageCopyAppendedFiresAfterTheAppendAndBeforeTheCommit() throws Exception {
+    public void pageCopyAppendedFiresAfterTheLogAndBeforeTheApply() throws Exception {
         final var lengthBefore = rf.fx.page(0).length();
         final var oldRow = rf.fx.indexed("b").toFileEntry();
+        final var recordsBefore = loggedRecords();
         final var observed = haltRecording(FaultPoint.PAGE_COPY_APPENDED,
-                () -> "grown=" + (rf.fx.page(0).length() > lengthBefore) + " committed="
+                () -> "logged=" + (loggedRecords() == recordsBefore + 1) + " grown="
+                        + (rf.fx.page(0).length() > lengthBefore) + " committed="
                         + !rf.fx.indexed("b").toFileEntry().equals(oldRow));
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
-        assertEquals(List.of("grown=true committed=false"), observed);
+        assertEquals(List.of("logged=true grown=false committed=false"), observed);
     }
 
     @Test
-    public void pkRowCommittedFiresAfterTheCommitAndBeforeTheBlank() throws Exception {
+    public void pkRowCommittedFiresOnceTheWholeRecordIsApplied() throws Exception {
         final var old = rf.fx.indexed("b");
         final var observed = haltRecording(FaultPoint.PK_ROW_COMMITTED,
                 () -> "committed=" + (rf.fx.indexed("b").getVersion() == StorageFixture.NEW_VERSION) + " blanked="
@@ -218,18 +225,18 @@ public class RecordReplacerTest {
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
-        assertEquals(List.of("committed=true blanked=false"), observed);
+        assertEquals(List.of("committed=true blanked=true"), observed);
     }
 
     @Test
-    public void pkRowCommittedFiresForADeleteBeforeItsBlank() throws Exception {
+    public void pkRowCommittedFiresForADeleteOnceItsBlankIsApplied() throws Exception {
         final var old = rf.fx.indexed("b");
         final var observed = haltRecording(FaultPoint.PK_ROW_COMMITTED,
                 () -> "deleted=" + (rf.fx.indexed("b") == null) + " blanked=" + rf.fx.readAt(old).isBlank());
 
         rf.replacer.delete(old);
 
-        assertEquals(List.of("deleted=true blanked=false"), observed);
+        assertEquals(List.of("deleted=true blanked=true"), observed);
     }
 
     @Test
@@ -246,5 +253,104 @@ public class RecordReplacerTest {
         assertEquals(List.of("compacted=true rowsMoved=false"), observed);
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
         assertFalse(rf.fx.paths.vacuumFile(DB, COLL, 0).exists());
+    }
+
+    @Test
+    public void walRewriteBegunFiresAfterTheBeginAndBeforeTheRename() throws Exception {
+        rf.replacer.delete(rf.fx.indexed("a"));
+        final var lengthBefore = rf.fx.page(0).length();
+        final var observed = haltRecording(FaultPoint.WAL_REWRITE_BEGUN,
+                () -> "begun="
+                        + WalCodec.decodeAll(Files.readAllBytes(rf.fx.paths.writeAheadLog(DB, COLL).toPath()))
+                                .rewrites().containsKey(0L)
+                        + " compacted=" + (rf.fx.page(0).length() < lengthBefore) + " intents=" + rf.intents());
+
+        rf.vacuum.vacuum(DB, COLL, 0, PageRows.of(rf.fx.store, null, DB, COLL, 0));
+
+        assertEquals(List.of("begun=true compacted=false intents=0"), observed);
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+    }
+
+    private void withMaxPageSize(long maxPageSize, ThrowingRunnable body) throws Exception {
+        final var configuration = Configuration.getInstance();
+        final var shipped = configuration.getMaxPageSize();
+        TestUtils.setPrivateField(configuration, "maxPageSize", maxPageSize);
+        try {
+            body.run();
+        } finally {
+            TestUtils.setPrivateField(configuration, "maxPageSize", shipped);
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    private void deleteTracked(String id) throws IOException {
+        final var rows = rf.fx.indexedRows();
+        rf.replacer.delete(rf.fx.indexed(id), rows, page -> {
+            final List<PkIndexEntry> onPage = rows.stream().filter(row -> row.getPage() == page).toList();
+            return new PageOccupancy(PageRows.liveBytes(onPage), onPage.size());
+        });
+    }
+
+    @Test
+    public void aDeleteThatLeavesAQuarterPageDeadVacuumsThePage() throws Exception {
+        withMaxPageSize(rf.fx.page(0).length() + 3, () -> {
+            deleteTracked("a");
+
+            assertEquals(StorageFixture.record("b", "old-b") + StorageFixture.record("c", "old-c"),
+                    rf.fx.firstPageText());
+            assertEquals(1, rf.vacuumed.size());
+            assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+            assertNull(rf.fx.indexed("a"));
+            assertEquals(0, rf.intents());
+        });
+    }
+
+    @Test
+    public void aDeleteOfTheLastLiveRecordEmptiesThePageFile() throws Exception {
+        withMaxPageSize(10_000, () -> {
+            deleteTracked("a");
+            deleteTracked("b");
+            assertTrue(rf.fx.page(0).length() > 0, "two thirds of a big page is not worth a vacuum");
+
+            deleteTracked("c");
+
+            assertTrue(rf.fx.page(0).exists(), "the emptied page is kept");
+            assertEquals(0L, rf.fx.page(0).length());
+            assertTrue(rf.fx.indexedRows().isEmpty());
+            assertEquals(0, rf.intents());
+            assertFalse(rf.fx.paths.vacuumFile(DB, COLL, 0).exists());
+        });
+    }
+
+    @Test
+    public void aDeleteBelowTheThresholdLeavesThePageAlone() throws Exception {
+        withMaxPageSize(10_000, () -> {
+            final var lengthBefore = rf.fx.page(0).length();
+
+            deleteTracked("b");
+
+            assertEquals(lengthBefore, rf.fx.page(0).length());
+            assertTrue(rf.vacuumed.isEmpty());
+        });
+    }
+
+    @Test
+    public void aVacuumFailureAfterADurableDeleteIsLoggedAndTheDeleteStands() throws Exception {
+        withMaxPageSize(rf.fx.page(0).length() + 3, () -> {
+            final var old = rf.fx.indexed("a");
+            assertTrue(rf.fx.paths.vacuumFile(DB, COLL, 0).mkdirs(), "a folder where the temp file goes");
+
+            deleteTracked("a");
+
+            assertNull(rf.fx.indexed("a"), "the delete stands");
+            assertTrue(rf.fx.readAt(old).isBlank());
+            assertTrue(rf.vacuumed.isEmpty());
+            assertEquals(0, rf.intents());
+            assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+        });
     }
 }

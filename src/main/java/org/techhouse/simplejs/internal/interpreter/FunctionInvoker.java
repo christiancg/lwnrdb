@@ -99,7 +99,7 @@ public record FunctionInvoker(Interpreter interp) {
             if (function.isAsync() && !function.isGenerator()) {
                 return runAsync(function, activation, args);
             }
-            interp.binding.bindParams(function.getParams(), args, activation);
+            interp.binding.bindParams(function, args, activation);
             if (function.isAsync()) {
                 return makeAsyncGenerator(function, activation);
             }
@@ -199,7 +199,7 @@ public record FunctionInvoker(Interpreter interp) {
         activation.defineCoroutine(coroutine);
         coroutine.startAsync(() -> {
             try {
-                interp.binding.bindParams(function.getParams(), args, activation);
+                interp.binding.bindParams(function, args, activation);
                 promise.resolve(runFunctionBody(function, activation));
             } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
                     | SyntaxErrorException error) {

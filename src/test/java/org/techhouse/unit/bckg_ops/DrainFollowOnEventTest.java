@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -13,6 +14,7 @@ import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
@@ -22,6 +24,7 @@ import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRecord;
+import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -52,6 +55,8 @@ public class DrainFollowOnEventTest {
         backgroundTaskManager.stopBackgroundWorkers();
         TestUtils.setPrivateField(configuration, "backgroundProcessingThreads", origThreads);
         TestUtils.setPrivateField(configuration, "scriptRunHistoryEnabled", false);
+        TestUtils.setPrivateField(configuration, "scriptRunHistoryKinds",
+                ConfigKey.SCRIPT_RUN_HISTORY_KINDS.defaultValue());
         ScriptRunHistory.reset();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
@@ -120,6 +125,37 @@ public class DrainFollowOnEventTest {
             TestUtils.setPrivateField(backgroundTaskManager, "draining", false);
         }
         return backgroundTaskManager.pending();
+    }
+
+    private int pendingAfterABulkSaveWhileDraining(boolean followOn) throws Exception {
+        TestUtils.setPrivateField(backgroundTaskManager, "draining", true);
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var first = new JsonObject();
+        first.addProperty("name", "first");
+        final var second = new JsonObject();
+        second.addProperty("name", "second");
+        request.setObjects(List.of(first, second));
+        request.setBackgroundFollowOn(followOn);
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            assertEquals(OperationStatus.OK, SaveOperationHelper.executeBulkSave(request).getStatus());
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+            TestUtils.setPrivateField(backgroundTaskManager, "draining", false);
+        }
+        return backgroundTaskManager.pending();
+    }
+
+    @Test
+    public void aFollowOnBulkSaveIsQueuedWhileDraining() throws Exception {
+        final var before = backgroundTaskManager.pending();
+        assertEquals(before + 1, pendingAfterABulkSaveWhileDraining(true));
+    }
+
+    @Test
+    public void aClientBulkSaveIsRefusedWhileDraining() throws Exception {
+        final var before = backgroundTaskManager.pending();
+        assertEquals(before, pendingAfterABulkSaveWhileDraining(false));
     }
 
     @Test

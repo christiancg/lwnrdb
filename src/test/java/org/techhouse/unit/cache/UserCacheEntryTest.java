@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -131,7 +132,7 @@ public class UserCacheEntryTest {
     }
 
     @Test
-    public void test_add_entry_to_empty_cache() throws NoSuchFieldException, IllegalAccessException {
+    public void test_add_entry_to_empty_cache() {
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -141,9 +142,7 @@ public class UserCacheEntryTest {
 
         cache.addEntryToCache(dbName, collName, entry);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertTrue(collectionMap.containsKey(collId));
@@ -151,7 +150,7 @@ public class UserCacheEntryTest {
     }
 
     @Test
-    public void test_add_entry_with_null_id() throws NoSuchFieldException, IllegalAccessException {
+    public void test_add_entry_with_null_id() {
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -161,9 +160,7 @@ public class UserCacheEntryTest {
 
         cache.addEntryToCache(dbName, collName, entry);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertTrue(collectionMap.containsKey(collId));
@@ -172,7 +169,7 @@ public class UserCacheEntryTest {
     }
 
     @Test
-    public void test_adding_entries_to_empty_cache() throws NoSuchFieldException, IllegalAccessException {
+    public void test_adding_entries_to_empty_cache() {
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -185,9 +182,7 @@ public class UserCacheEntryTest {
 
         cache.addEntriesToCache(dbName, collName, entries);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertEquals(2, collectionMap.get(collId).size());
@@ -196,7 +191,7 @@ public class UserCacheEntryTest {
     }
 
     @Test
-    public void test_adding_entries_with_duplicate_ids() throws NoSuchFieldException, IllegalAccessException {
+    public void test_adding_entries_with_duplicate_ids() {
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -211,9 +206,7 @@ public class UserCacheEntryTest {
 
         cache.addEntriesToCache(dbName, collName, entries);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertEquals(1, collectionMap.get(collId).size());
@@ -233,9 +226,7 @@ public class UserCacheEntryTest {
 
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         collectionMap.putIfAbsent(collectionIdentifier, new ConcurrentHashMap<>());
         collectionMap.get(collectionIdentifier).put("testValue", expectedEntry);
 
@@ -252,11 +243,8 @@ public class UserCacheEntryTest {
         pkIndexMap.put(collId, new ArrayList<>(entries));
     }
 
-    private static void injectCachedEntry(UserCache cache, String collId, DbEntry entry)
-            throws NoSuchFieldException, IllegalAccessException {
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+    private static void injectCachedEntry(UserCache cache, String collId, DbEntry entry) {
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         final var inner = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         inner.put(entry.get_id(), entry);
     }
@@ -324,9 +312,7 @@ public class UserCacheEntryTest {
         assertEquals(1, requested.size());
         assertEquals("id2", requested.getFirst().getValue());
 
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         assertTrue(collectionMap.get(collId).containsKey("id2"));
     }
 
@@ -345,9 +331,7 @@ public class UserCacheEntryTest {
         final var result = cache.getById("userDb", "c1", idxEntry);
 
         assertNotNull(result);
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         final var inner = collectionMap.get(collId);
         assertTrue(inner == null || !inner.containsKey("id1"),
                 "a reader holding no collection lock must not publish into the shared map: a writer can commit a"
@@ -374,9 +358,7 @@ public class UserCacheEntryTest {
             locks.releaseRead("userDb", "c1");
         }
 
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         assertTrue(collectionMap.get(collId).containsKey("id1"));
     }
 
@@ -395,10 +377,45 @@ public class UserCacheEntryTest {
         final var result = cache.getEntriesByIds("userDb", "c1", new HashSet<>(Set.of("id2")));
 
         assertEquals(1, result.size());
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         final var inner = collectionMap.get(collId);
         assertTrue(inner == null || !inner.containsKey("id2"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void test_getEntriesByIds_with_more_ids_than_the_initial_capacity_mixes_cached_hits_and_misses()
+            throws Exception {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var known = new ArrayList<PkIndexEntry>();
+        final var requested = new HashSet<String>();
+        for (var i = 0; i < 500; i++) {
+            final var id = "id%03d".formatted(i);
+            requested.add(id);
+            if (i < 350) {
+                known.add(new PkIndexEntry("userDb", "c1", id, i * 50L, 50, 0));
+            }
+            if (i < 250) {
+                final var object = new JsonObject();
+                object.addProperty(Globals.PK_FIELD, id);
+                injectCachedEntry(cache, collId, DbEntry.fromJsonObject("userDb", "c1", object));
+            }
+        }
+        injectPkIndex(cache, collId, known);
+        when(fsMock.getByIndexEntries(anyList()))
+                .thenAnswer(invocation -> ((List<PkIndexEntry>) invocation.getArgument(0)).stream().map(pk -> {
+                    final var object = new JsonObject();
+                    object.addProperty(Globals.PK_FIELD, pk.getValue());
+                    return DbEntry.fromJsonObject("userDb", "c1", object);
+                }).toList());
+
+        final var result = cache.getEntriesByIds("userDb", "c1", requested);
+
+        assertEquals(350, result.size());
+        assertEquals(350, result.stream().map(DbEntry::get_id).distinct().count());
+        verify(fsMock).getByIndexEntries(argThat(read -> read.size() == 100));
     }
 }

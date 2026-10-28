@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.Main;
+import org.techhouse.ServerMain;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
@@ -183,10 +183,10 @@ public class DurableReplayIncompleteTest {
             session.submit(() -> TransactionOperationHelper.start(session.clientId())).get(10, TimeUnit.SECONDS);
             final var transaction = clientTracker.getActiveTransaction(session.clientId());
             final var dtxId = transaction.getTransactionId().toString();
-            final var unappliable = unappliableOp(dtxId);
-            AdminOperationHelper.saveTransactionOp(unappliable);
-            transaction.getBufferedOpIds().add(unappliable.get_id());
-            Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS), List.of(collectionId()));
+            transaction.addPendingOp(unappliableOp(dtxId));
+            Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS), List.of(collectionId()),
+                    transaction.getPendingOps());
+            transaction.markOpsDurable();
 
             final var thrown = assertThrows(DurableReplayIncompleteException.class,
                     () -> TwoPhaseParticipant.resolveFromDurable(dtxId, true, 5000L));
@@ -206,7 +206,7 @@ public class DurableReplayIncompleteTest {
         final var unappliable = unappliableOp(txId);
         AdminOperationHelper.saveTransactionOp(unappliable);
         TxCommitLog.recordLocalCommit(txId, List.of(unappliable.get_id()), List.of(collectionId()));
-        final var cleanup = Main.class.getDeclaredMethod("cleanupOrphanedTransactions");
+        final var cleanup = ServerMain.class.getDeclaredMethod("cleanupOrphanedTransactions");
         cleanup.setAccessible(true);
         cleanup.invoke(null);
         assertTrue(TxCommitLog.isLocallyCommitted(txId), "the startup finish could not apply the slice");

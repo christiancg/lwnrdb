@@ -1,7 +1,6 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.LOGICAL_ASSIGN;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.baseOperator;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.numericOld;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.shouldNotApplyLogical;
 
@@ -31,7 +30,7 @@ final class AssignmentEvaluator {
     }
 
     JsValue evalUpdate(UpdateExpression update, Environment env) {
-        final var increment = "++".equals(update.getOperator());
+        final var increment = update.isIncrement();
         final var argument = update.getArgument();
         if (argument instanceof Identifier id) {
             final var oldValue = env.get(id.getName());
@@ -104,8 +103,8 @@ final class AssignmentEvaluator {
             env.assign(name, value);
             return value;
         }
-        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
-                interp.ops());
+        final var value = JsOperators.binary(assignment.compoundKind(), current,
+                interp.eval(assignment.getValue(), env), interp.ops());
         env.assign(name, value);
         return value;
     }
@@ -135,8 +134,8 @@ final class AssignmentEvaluator {
             assignMember(target, key, value);
             return value;
         }
-        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
-                interp.ops());
+        final var value = JsOperators.binary(assignment.compoundKind(), current,
+                interp.eval(assignment.getValue(), env), interp.ops());
         assignMember(target, key, value);
         return value;
     }
@@ -155,8 +154,8 @@ final class AssignmentEvaluator {
             classes.evalSuperMemberWrite(member, value, env);
             return value;
         }
-        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
-                interp.ops());
+        final var value = JsOperators.binary(assignment.compoundKind(), current,
+                interp.eval(assignment.getValue(), env), interp.ops());
         classes.evalSuperMemberWrite(member, value, env);
         return value;
     }

@@ -13,7 +13,6 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
@@ -207,7 +206,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
             final var message = envelope(ClusterMessageType.FORWARD_TX_REQUEST);
             message.setTxSessionId(sessionId);
             message.setTxId(UUID.randomUUID().toString());
-            message.setForwardBody(ForwardBody.encode(rawSaveRequest()));
+            message.setForwardBody(rawSaveRequest());
 
             final var started = System.currentTimeMillis();
             final var response = pool.request(cluster.serverAddress(), message, SHORT_ACK_TIMEOUT_MS + 5000L);
@@ -284,7 +283,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
             final var message = envelope(ClusterMessageType.FORWARD_TX_REQUEST);
             message.setTxSessionId(sessionId);
             message.setTxId(UUID.randomUUID().toString());
-            message.setForwardBody(ForwardBody.encode(rawSaveRequest()));
+            message.setForwardBody(rawSaveRequest());
 
             blocked = Thread.ofVirtual().start(() -> {
                 try {
@@ -324,7 +323,7 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
             final var message = envelope(ClusterMessageType.FORWARD_TX_REQUEST);
             message.setTxSessionId(sessionId);
             message.setTxId(UUID.randomUUID().toString());
-            message.setForwardBody(ForwardBody.encode(rawSaveRequest()));
+            message.setForwardBody(rawSaveRequest());
 
             blocked = Thread.ofVirtual().start(() -> {
                 try {

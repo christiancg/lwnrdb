@@ -31,12 +31,12 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - Only alphanumeric characters allowed and the following symbols are allowed: "_" and "-"
 - Indexes are updated in the background and admin collections also. This is to make the DB a little bit more agile.
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
-- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages/<db>_<collection>`, and the pagination of that admin collection is itself tracked in memory only and rebuilt at startup (no `pages_pages_*` files on disk). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
+- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages/<db>_<collection>`, and the pagination of that admin collection is itself tracked in memory only and rebuilt at startup (no `pages_pages_*` files on disk). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated. A delete gives its page's space back too: once a quarter of the page is dead it vacuums the page, and the delete of its last live document truncates the page file to 0 bytes (the file and its page row stay, so the next insert lands there).
 
 ## Status
 
 LWNRDB is feature-complete for what it set out to be, and experimental in the sense the
-Q&A below means: a learning exercise, not something to put production data in.
+Q&A below means: a learning exercise, not something to put production data in. To try it, jump to the [Quickstart](#quickstart).
 
 **What it does.** Documents are stored as newline-delimited JSON across paged files, queried
 through an [aggregation pipeline](#aggregate) (the one exception is [`FIND_BY_ID`](#find_by_id))
@@ -50,7 +50,7 @@ JSON socket protocol — optionally [TLS](#tls--secure-connections). On top of t
 | Integrity | [per-collection JSON Schema](#schema-validation), [transactions](#transactions), [users and permissions](#users--permissions) |
 | Scripting | a built-in JS engine — [ad-hoc scripts](#run_script), [stored procedures](#save_procedure), [triggers](#save_trigger) (after and before the write), [scheduled procedures](#save_schedule), [pipeline operators](#script-operators-simplejs-in-the-pipeline), and shared code via `import … from "procedures/<name>"`. See [docs/simplejs.md](docs/simplejs.md) |
 | Clustering | fully-replicated nodes, no master, per-collection ownership, quorum writes, anti-entropy, cross-node transactions and script placement. See [docs/clustering.md](docs/clustering.md) |
-| Operations | [`GET_DATABASE_STATS`](#get_database_stats-admin-only), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown, shipped as a GraalVM native executable |
+| Operations | [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown, shipped as a GraalVM native executable |
 
 **Known non-goals.** No compound indexes (a pipeline uses as many single-field indexes as
 apply), no sharding (every node holds a complete copy), no compression, and no attempt to
@@ -401,11 +401,11 @@ Returns `404-6` if a named field has no registered index.
 `"primaryKey": true` also rebuilds the collection's primary-key index (`pk.idx`) from its page files, which are
 authoritative, and then its page-occupancy metadata. It is the repair for a `pk.idx` that cannot be read (every
 read and write of the collection answers an error until then), that points at the wrong bytes, or that lost or
-kept a record the pages say otherwise about. When the old `pk.idx` cannot be read, a write intent (`.intent`) that startup left for that reason is settled on
-the page side first: an update whose old copy is still on its page has its new copies blanked, a delete
-is blanked, and a vacuum's temporary file is removed. When it can be read, any intent still on disk was left by a
-write this process could not clean up after, so the rebuild refuses with `409-15` and names it; a restart
-recovers it. The page scan skips holes, the blank lines an update or delete leaves behind.
+kept a record the pages say otherwise about. The rebuild first checkpoints the collection's write-ahead log, so every
+logged write is on the pages it scans. When the old `pk.idx` cannot be read, a vacuum intent (`.intents`) that startup
+left for that reason is settled first by removing the vacuum's temporary file. When it can be read, any intent still
+on disk was left by a vacuum this process could not clean up after, so the rebuild refuses with `409-15` and names
+it; a restart recovers it. The page scan skips holes, the blank lines an update or delete leaves behind.
 ```json
 {"type":"REINDEX","databaseName":"my_db","collectionName":"my_coll","primaryKey":true}
 ```
@@ -460,11 +460,22 @@ Removes the collection's schema, so writes are no longer validated. Idempotent �
 {"type":"DELETE_SCHEMA","databaseName":"my_db","collectionName":"my_coll"}
 ```
 
+#### `GET_SCHEMA`
+Returns the collection's schema exactly as it was saved. Requires `READ` on the collection.
+```json
+{"type":"GET_SCHEMA","databaseName":"my_db","collectionName":"my_coll"}
+```
+```json
+{"type":"GET_SCHEMA","status":"OK","message":"Ok","schema":{"type":"object","required":["_id"]}}
+```
+Answers `404-12` when the collection has no schema, `404-11` when the collection does not exist, and `503-11` when
+the stored schema cannot be read (an unreadable schema is reported, never mistaken for no schema).
+
 #### `LISTEN`
 
 Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
 
-Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection. A connection may hold at most `maxListensPerConnection` (default `64`) registrations and the server at most `maxListens` (default `10000`); past either, `LISTEN` answers `400-25` without running the query. One user may hold at most `maxListensPerUser` (default `256`, `0` = unlimited) across all of their connections; past it, `400-38`. A registration keeps its request for as long as it lives, so a `LISTEN` line longer than `listenMaxRequestBytes` (default `1Mb`) is refused with `400-37` before it runs, and the requests every registration keeps (counted as each serialized request's length) may total at most `listenMaxRetainedBytes` (default `64Mb`) on the server; past it, `LISTEN` answers `503-15` until registrations end. The bytes and the per-user count are given back when a registration stops, ends, or its connection closes. Each background re-run is bounded by `listenRerunTimeoutMs` (default `10000`) rather than `aggregateTimeoutMs`; a re-run past it is logged and pushes nothing, and the next change to a collection it reads re-runs it again.
+Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection. A connection may hold at most `maxListensPerConnection` (default `64`) registrations and the server at most `maxListens` (default `10000`); past either, `LISTEN` answers `400-25` without running the query. One user may hold at most `maxListensPerUser` (default `256`, `0` = unlimited) across all of their connections; past it, `400-38`. A registration keeps its request for as long as it lives, so a `LISTEN` line longer than `listenMaxRequestBytes` (default `1Mb`) is refused with `400-37` before it runs, and the requests every registration keeps (counted as each serialized request's length) may total at most `listenMaxRetainedBytes` (default `64Mb`) on the server; past it, `LISTEN` answers `503-15` until registrations end. The bytes and the per-user count are given back when a registration stops, ends, or its connection closes. Each background re-run is bounded by `listenRerunTimeoutMs` (default `10000`) rather than `aggregateTimeoutMs`; a re-run past it is logged and pushes nothing, and the next change to a collection it reads re-runs it again. Identical registrations (the same user listening with the same query, on one connection or many) share one re-run: the query runs once per change and every registration whose last pushed hash differs gets its own frame, carrying its own `listenId`. Re-runs of distinct queries spread over `listenThreads` workers (default `2`).
 
 ```json
 {
@@ -658,7 +669,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - **Importing shared code**: a script may import any stored procedure of its own database with `import … from "procedures/<name>"` — a library is just a procedure that `export`s instead of returning. `SAVE_PROCEDURE` refuses an import that does not resolve (`400-18`), so libraries must be installed before their users. A caller without script `MANAGE` (or ownership, or admin) on the database runs imported code but cannot read it: `toString()` of an imported function or class answers the `function name() { [native code] }` stub. Only `export`ed bindings are visible, so a procedure written in the `CALL_PROCEDURE` style (a top-level `return`) imports as `undefined`.
 - **Outbound HTTP** is available: `scriptFetchEnabled` is on and `scriptFetchAllowlist` is `*`, which means any **public** host. Every address a host resolves to is checked and the connection goes to that checked address, so loopback, private (10/8, 172.16/12, 192.168/16), link-local (the 169.254.169.254 metadata endpoint), CGNAT, multicast, reserved and unique-local addresses are refused with `fetch: host not allowed` — even through a DNS name or a later DNS answer — unless the **exact** host is listed (`10.0.0.5`, `localhost`); a `*.example.com` wildcard never re-opens them, and listing an internal host logs a SECURITY WARNING at startup. Only `http`/`https` URLs are fetched, redirects are never followed, the body is read as a stream and abandoned past `scriptFetchMaxResponseBytes`, a run may have at most `scriptFetchMaxConcurrent` (default 8) fetches in flight (one more rejects with `fetch: too many concurrent requests`), and any other network failure rejects with the bare `fetch failed` — the cause goes to the server log, not to the script. `*` still lets any script make the server call any public host, and the server warns at every startup — **narrow it**. `fetch` stays unavailable to pipeline scripts and before-write hooks, which hold collection locks.
 - **Native work is budgeted too**: a builtin's own loop (`indexOf`, `includes`, `splice`, typed-array scans…) is charged about one instruction per element, so a scan over a sparse `new Array(2 ** 32 - 1)` ends with `400-11` and honours `CANCEL_SCRIPT` and the timeout; native recursion over script data (`JSON.parse`/`JSON.stringify`, `structuredClone`, `flat`, `String()` of nested arrays, and converting a returned or stored value to the host document form) stops at 256 levels with a catchable `RangeError: Maximum nesting depth exceeded`; a BigInt result over 2^24 bits (2 MiB) is a catchable `RangeError: Maximum BigInt size exceeded` and a large one (from any operator, or converted to text) is charged to `scriptMaxMemoryBytes`; `JSON.parse` is charged per value it builds, and a builtin that writes past an array's dense end is charged for the holes it pads; a locale argument (`toLocaleString`, `localeCompare`) resolves to the closest locale the JDK ships, dropping extensions and private-use subtags (`'en-x-foo'` formats as `en`, an unknown language as `scriptLocale`, an ill-formed tag is a `RangeError`); and a JVM stack or heap exhaustion inside an async function or generator ends the run with `400-12` instead of hanging it. `import … from "procedures/<name>"` resolves only a name the wire would accept (3-64 letters, digits, `_` or `-`); anything else is `Cannot find module`.
-- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes.
+- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes. Rows are written in batches (one per database), at most `scriptRunHistoryMaxQueued` wait to be written, and the sweep (every `scriptRunHistorySweepMs`) applies the retention and the optional `scriptRunHistoryMaxRows` cap.
 - **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`, the name and message each clipped to `scriptMaxLogLineChars` like every stack frame; an engine failure with no script-level meaning reads `InternalError: Internal script error`, the detail going only to the server log), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-30` an array-like past `scriptMaxArrayLength`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `503-7` the run was placed on another node that never reported an outcome — it is deliberately **not** re-run here, because it may already have run there, so retrying is only safe if the script is idempotent, `409-6` sent with a transaction open.
 - Under clustering the run is **placed** on a live node chosen by script load and ownership share (`scriptRoutingEnabled`, on by default); each operation it issues is then routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
@@ -822,7 +833,7 @@ Runs a stored procedure around a write to a collection — **after** it commits 
 ```
 
 - `timing` is `after` (the default) or `before`. The two differ in almost every respect, so they are described separately below. An omitted `timing` reads as `after`, so every trigger written before this existed keeps its meaning.
-- **An `after` trigger fires once the write has committed**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a `before` trigger or a [collection schema](#schema-validation) for that — and its failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
+- **An `after` trigger fires once the write has committed**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a `before` trigger or a [collection schema](#schema-validation) for that — and its failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats).
 - **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. The definer's authority is re-checked every time the trigger fires (and when a pending run is replayed): if the definer is deleted, or no longer holds script `RUN` on the database and `READ` on the collection, the run is skipped and the trigger is **disabled** — `LIST_TRIGGERS` shows `enabled:false` with a `disabledReason` — and stays disabled until its owner re-saves it, even if the grant comes back. It never falls back to the writer or to an admin.
 - **A collection holds at most `triggerMaxPerCollection` triggers** (`400-32` past it). A trigger run takes its definer's `maxConcurrentScriptsPerUser` and its database's `maxConcurrentScriptsPerDatabase` slice; refused, it is retried after a backoff without consuming an attempt, and dead-lettered only once `triggerRunRetentionMs` has passed since it fired.
 - **Dropping a collection or database discards its pending and dead-lettered trigger runs**, so a later collection of the same name never receives the dropped one's documents.
@@ -961,7 +972,9 @@ Idempotent — succeeds whether or not the schedule existed. A schedule installe
   ]
 }
 ```
-`args` is omitted from a listing. `nextRunAt` and `owner` are computed by the answering node — the schedule registry is in-memory and per-node, so both describe that node's view rather than a cluster-wide fact (`owner` is absent when clustering is off). Requires `READ` on the database.
+`args` is omitted from a listing unless the request sets `"includeArgs":true`, which returns each schedule's full
+definition including `args`. Like `LIST_PROCEDURES`' `includeSource`, `includeArgs` also requires script `MANAGE` on
+the database (or ownership, or admin); a caller with only `READ`/`RUN` is refused with `403-6`. `nextRunAt` and `owner` are computed by the answering node — the schedule registry is in-memory and per-node, so both describe that node's view rather than a cluster-wide fact (`owner` is absent when clustering is off). Requires `READ` on the database.
 
 #### `CLOSE_CONNECTION`
 ```json
@@ -1073,7 +1086,7 @@ Replaces the full owners list for a database. All usernames must already exist. 
 {"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["Alice","bob"]}
 ```
 
-#### `GET_DATABASE_STATS` (admin only)
+#### `GET_DATABASE_STATS`
 Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxMemory`. `memory.userCacheBytes` is the modelled heap of the user cache (the total `maxMemory` is enforced against); the `heap*` fields are the JVM's measured heap.
 
 ```json
@@ -1150,6 +1163,23 @@ Response shape:
 }
 ```
 
+Any authenticated user may send it, and the answer is filtered by what that user can see. An admin gets the full report
+above. Anyone else gets only:
+- the databases [`LIST_DATABASES`](#list_databases) would show them;
+- inside each, the collections they own or hold `READ` on (an owner sees every collection; a user with only a script
+  grant sees the database with no collections);
+- `totals` summed over that view, without `userCount`.
+
+The node-wide sections — `memory`, `inDoubtTransactions`, `triggers`, `schedules`, `scripts` — are admin-only, since
+they describe the whole node and every tenant on it.
+
+```json
+{"type":"GET_DATABASE_STATS","status":"OK","message":"Ok","stats":{
+  "totals":{"databaseCount":1,"collectionCount":1,"indexCount":1,"pageCount":2,"entryCount":2495,"sizeBytes":800000},
+  "databases":[{"name":"shop","collectionCount":1,"indexCount":1,"pageCount":2,"entryCount":2495,"sizeBytes":800000,
+    "collections":[{"name":"orders","indexCount":1,"indexes":["customer"],"pageCount":2,"entryCount":2495,"sizeBytes":800000}]}]}}
+```
+
 #### `LIST_USERS` (admin only)
 Returns all users with their permissions. `passwordHash` is never included in the response. `aggregationSteps` is optional; when omitted all users are returned.
 
@@ -1222,8 +1252,9 @@ Being allowed to start a script is separate from what it may do: every operation
 
 > **Upgrade note.** Roll every node to this version before granting `MANAGE` or otherwise rewriting a user record in a cluster. User records replicate by shipping the record itself, and a node without `scriptPermissions` levels cannot parse the string form — it would skip the whole user record, not just the grant. Note that any write to a user record converts it (a password change will do), so the ordering matters even if you never touch a script grant.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`. An `AGGREGATE` whose pipeline carries a [script operator](#script-operators-simplejs-in-the-pipeline) additionally requires `RUN`, since running code is wider than reading.  
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `GET_SCHEMA`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`. An `AGGREGATE` whose pipeline carries a [script operator](#script-operators-simplejs-in-the-pipeline) additionally requires `RUN`, since running code is wider than reading.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
+`LIST_DATABASES` and [`GET_DATABASE_STATS`](#get_database_stats) need no grant either: any authenticated user may send them, and each answers only what that user can see.  
 `START_TRANSACTION`, `COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` need no grant: any authenticated user may use a transaction, and every operation inside it is authorized on its own request, so a `READ` user can open one but cannot buffer a write.
 
 ### Authentication errors
@@ -1245,13 +1276,22 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | Point | Where it fires | Subject (`match`) |
 |---|---|---|
 | `WRITE_OWNERSHIP_RECHECKED` | A clustered write re-checked, under its collection lock, that this node owns the collection, and has not applied yet | `<db>\|<collection>` |
+| `WRITE_OWNER_PROBED` | Right after `WRITE_OWNERSHIP_RECHECKED`, at the same statement; a separate point so a test can find a collection's owner without releasing a write parked on `WRITE_OWNERSHIP_RECHECKED` | `<db>\|<collection>` |
 | `DELETE_TOMBSTONE_RESERVED` | A clustered delete wrote its tombstone and has not deleted the document yet | `<db>\|<collection>` |
 | `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
+| `REPLICATED_APPLY_LOCKED` | A replica took the collection write lock for a peer's replicated write and has not applied it yet | `<db>\|<collection>` |
+| `REPLICATED_TOMBSTONES_APPENDED` | A replica appended a replicated delete batch's missing tombstones, unforced, and has not deleted the documents yet | `<db>\|<collection>` |
 | `PK_INDEX_REPLACED` | A `REINDEX` with `"primaryKey": true` wrote the rebuilt `pk.idx` and has not rebuilt the page rows or field indexes yet | `<db>\|<collection>` |
 | `INDEX_BATCH_FLUSHED` | A background field-index batch appended to the first of the type logs it changed and has not appended to the others yet | `<db>\|<collection>` |
-| `PAGE_COPY_APPENDED` | An update, relocation or bulk update appended its new copies to their page and has not committed them in `pk.idx` yet | `<db>\|<collection>` |
-| `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete committed its rows in `pk.idx` and has not blanked the copies they supersede yet | `<db>\|<collection>` |
+| `PAGE_COPY_APPENDED` | An update, relocation or bulk update logged its record in the write-ahead log and has not written its copies, `pk.idx` rows or blanks yet | `<db>\|<collection>` |
+| `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete wrote everything its logged record describes: the new copies, the `pk.idx` rows and the blanks of the copies they supersede | `<db>\|<collection>` |
+| `WAL_REWRITE_BEGUN` | A page vacuum logged its forced `REWRITE_BEGIN` frame and has not written its intent, rewritten or truncated the page yet | `<db>\|<collection>` |
 | `PAGE_VACUUM_RENAMED` | A page vacuum moved its rewritten page into place and has not appended the moved records' rows to `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log (and forced it with `syncWrites`) and has not written the pages or `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_CHECKPOINT_FORCED` | A checkpoint forced the pages and `pk.idx` the log touched and has not rewritten the log as a single checkpoint yet | `<db>\|<collection>` |
+| `WAL_GROUP_APPENDED` | A write group appended its records to the log, unforced, and has not forced it yet | `<db>\|<collection>` |
+| `WAL_GROUP_FORCED` | A write group forced its records and has not applied the blanks they wait for yet | `<db>\|<collection>` |
+| `GROUP_RUNS_STAGED` | A write group recorded the after-trigger runs of all its writes in one forced record and has not appended any write yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
 
 | Action | Effect |
@@ -1337,7 +1377,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `403-3` | `FORBIDDEN` | Fault injection is disabled on this server — a [fault injection](#fault-injection-testing-and-debugging-only) operation on a server without `faultInjectionEnabled=true` |
 | `403-4` | `FORBIDDEN` | Procedure is bound by a trigger or schedule that runs as another user — a [`SAVE_PROCEDURE`](#save_procedure) or [`DELETE_PROCEDURE`](#delete_procedure) by someone other than the binding's definer, a database owner or an admin |
 | `403-5` | `FORBIDDEN` | The trigger or schedule belongs to another user — a `SAVE_TRIGGER`, `DELETE_TRIGGER`, `SAVE_SCHEDULE` or `DELETE_SCHEDULE` replacing or removing a definition by someone other than its definer, a database owner or an admin |
-| `403-6` | `FORBIDDEN` | Procedure source requires script MANAGE — a [`LIST_PROCEDURES`](#list_procedures) with `includeSource: true` by a caller with `READ` but not script `MANAGE`, ownership or admin |
+| `403-6` | `FORBIDDEN` | Procedure source requires script MANAGE — a [`LIST_PROCEDURES`](#list_procedures) with `includeSource: true`, or a [`LIST_SCHEDULES`](#list_schedules) with `includeArgs: true`, by a caller with `READ` but not script `MANAGE`, ownership or admin |
 | `404-1` | `NOT_FOUND` | User not found |
 | `404-2` | `NOT_FOUND` | Entry not found |
 | `404-3` | `NOT_FOUND` | No results |
@@ -1348,6 +1388,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-8` | `NOT_FOUND` | Procedure not found |
 | `404-9` | `NOT_FOUND` | Trigger not found |
 | `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
+| `404-12` | `NOT_FOUND` | The collection has no schema — a [`GET_SCHEMA`](#get_schema) on a collection without one |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
 | `408-3` | `ERROR` | The armed fault point was not reached in time (`AWAIT_FAULT`, testing only) |
@@ -1420,6 +1461,37 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-15` | `ERROR` | The server's listen registrations already keep `listenMaxRetainedBytes` of requests; retry once some end |
 | `503-16` | `ERROR` | The background index queue is full and nothing was written; retry shortly *(a `SAVE`, `BULK_SAVE`, `DELETE` or `COMMIT_TRANSACTION` that found `backgroundQueueMaxEvents` events queued and no room within `backgroundBacklogWaitMs`; a write forwarded to a full owner gets it at once. Writes inside a transaction are buffered and enqueue nothing, so only their commit is held back, and the transaction stays open)* |
 
+### Quickstart
+
+Docker is the easiest way to try it. The server refuses to start without a password for the admin user (more on that in [Bootstrap](#bootstrap)), so pass one when you run the container:
+
+```bash
+docker run -d --name lwnrdb -p 8989:8989 \
+  -e LWNRDB_ADMIN_PASSWORD=<choose-a-strong-password> \
+  -v lwnrdb-data:/app/db \
+  ghcr.io/christiancg/lwnrdb:latest
+```
+
+If you prefer to skip Docker, download the jar from the latest release and run it with Java 25 or newer. Here the password goes in a `lwnrdb.cfg` next to the jar:
+
+```bash
+echo "defaultAdminPassword=<choose-a-strong-password>" > lwnrdb.cfg
+java -XX:+UseG1GC -jar lwnrdb.jar
+```
+
+The jar is also its own client, so from another terminal you can create a database and a collection, save a document and read it back without installing anything else. The user is `admin` unless you changed `defaultAdminUsername`:
+
+```bash
+export LWNRDB_PASSWORD=<the-password-you-chose>
+java -jar lwnrdb.jar \
+  --exec '{"type":"CREATE_DATABASE","databaseName":"my_db"}' \
+  --exec '{"type":"CREATE_COLLECTION","databaseName":"my_db","collectionName":"people"}' \
+  --exec '{"type":"SAVE","databaseName":"my_db","collectionName":"people","object":{"_id":"user-1","name":"Alice","age":31}}' \
+  --exec '{"type":"AGGREGATE","databaseName":"my_db","collectionName":"people","aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"GREATER_THAN","field":"age","value":30}}]}'
+```
+
+With Docker the client is already inside the container, so run the same thing through `docker exec -e LWNRDB_PASSWORD=<the-password-you-chose> lwnrdb /app/lwnrdb` instead of `java -jar lwnrdb.jar`. Each request goes in its own `--exec`. Every reply is printed on its own line and the client stops at the first one that is not `OK`. If you would rather talk to the server directly, any TCP client works, since each request is one line of JSON. The full list of operations starts in the [Wire Protocol](#wire-protocol--message-reference) section.
+
 ### Running the server
 
 The server ships **without** an admin password: neither the bundled defaults nor the tracked `lwnrdb.cfg` set
@@ -1429,24 +1501,127 @@ in the `lwnrdb.cfg` of the working directory before the first start:
 ```bash
 mvn clean package -DskipTests
 echo "defaultAdminPassword=<choose-a-strong-password>" >> lwnrdb.cfg
-java -XX:+UseZGC -jar target/lwnrdb-1.0-SNAPSHOT.jar
+java -XX:+UseG1GC -jar target/lwnrdb.jar
 ```
 
-With Docker, the image copies the credential-free `lwnrdb.cfg`, so a container started without a mounted
-configuration stops at startup with the `FATAL` message instead of coming up with a known password. Mount your own
-`lwnrdb.cfg` over it; that is also how the TLS and cluster secrets are supplied:
+The jar's manifest enables final-field mutation (`Enable-Final-Field-Mutation: ALL-UNNAMED`, JEP 500): the EJson layer
+writes the `final` fields of its request and response classes reflectively, and the JDK blocks that by default in a
+future release. Launching from compiled classes instead of the jar needs `--enable-final-field-mutation=ALL-UNNAMED`.
+
+With Docker, the image copies the credential-free `lwnrdb.cfg`, so a container started without a password stops at
+startup with the `FATAL` message instead of coming up with a known password. Set `LWNRDB_ADMIN_PASSWORD` and the
+entrypoint writes it into the container's `lwnrdb.cfg` as `defaultAdminPassword` before starting the server. There is
+deliberately no build argument for it, because a password given to `docker build` ends up in the image layers and
+shows in `docker history`. For anything beyond the password, mount your own `lwnrdb.cfg` over the image's; that is
+also how the TLS and cluster secrets are supplied (the variable cannot be combined with a read-only mounted config,
+put the password in that file instead):
 
 ```bash
 docker build -t lwnrdb .
 docker run -p 8989:8989 -v ./db:/app/db -v ./lwnrdb.cfg:/app/lwnrdb.cfg:ro lwnrdb
 ```
 
-The image runs as the unprivileged `lwnrdb` user, not root. A host directory mounted over `/app/db`, `/app/logs` or
+The image runs as the unprivileged `nonroot` user, not root. A host directory mounted over `/app/db`, `/app/logs` or
 `/app/certs` must be writable by that user's uid (`docker run --rm --entrypoint id lwnrdb` prints it).
 
 The integration suites in `test_utils/` authenticate with `base_utils.PASSWORD` (`Tst-Admin-9xQ2mV`): a server the
 suites do not start themselves must have `defaultAdminPassword=Tst-Admin-9xQ2mV` in its `lwnrdb.cfg`, which is what
 CI appends before starting it. The suites that start their own servers write that value into their own config.
+
+### Client (shell, exec, dump/restore)
+
+The server jar is also its own client. When the first argument starts with `--`, it connects to a running server,
+local or remote, instead of starting one:
+
+```bash
+java -jar lwnrdb.jar --shell   [connection]
+java -jar lwnrdb.jar --exec '<json>' [--exec '<json>' ...] [connection]
+java -jar lwnrdb.jar --exec [connection] < commands.jsonl
+java -jar lwnrdb.jar --dump [--databases a,b | --collections db.coll,...] [--compress] [connection] > backup.ldump
+java -jar lwnrdb.jar --restore [connection] < backup.ldump
+```
+
+| Connection flag | Default | |
+|---|---|---|
+| `--host <host>` | `127.0.0.1` | |
+| `--port <port>` | `8989` | |
+| `--user <user>` | `admin` | |
+| `--password <password>` | | or the `LWNRDB_PASSWORD` environment variable; `--shell` on a terminal prompts for it |
+| `--tls` | off | TLS, verified against the JVM trust store with hostname verification |
+| `--insecure` | off | with `--tls`, trust any certificate, e.g. the server's dev-only self-signed one |
+
+- **`--shell`** prints a `lwnrdb> ` prompt, sends each line (one JSON request) as it is and pretty-prints the reply.
+  `exit`, `quit` or end of input ends the session. There is no line editing, history or multi-line input.
+- **`--exec`** sends each `--exec` value, or each line of standard input when no value is given, and prints every
+  reply on its own line. It stops at the first reply that is not `OK`.
+- **`--dump`** writes a backup to standard output and progress (`shop.orders: 12000 documents`) to standard error.
+  `--compress` gzips the stream.
+- **`--restore`** reads a backup from standard input, plain or gzipped (detected by its first two bytes), and prints
+  `restored N requests` to standard error every 1000 requests and at the end.
+
+Exit codes: `0` success; `1` a command answered non-OK, or the dump or restore stopped (the restore names the line);
+`2` usage error; `3` the server cannot be reached, TLS failed, or authentication was refused. The client never reads
+`lwnrdb.cfg` and never creates `db/` or `logs/` in its working directory.
+
+**The dump format is the restore script.** Every line is one ordinary request: `CREATE_DATABASE`,
+`CREATE_COLLECTION`, `BULK_SAVE` (at most 4 MB of documents per line), `SAVE_SCHEMA`, `CREATE_INDEX`,
+`SAVE_PROCEDURE`, `SAVE_TRIGGER` and `SAVE_SCHEDULE`, in that order, so a restore writes documents before the schema,
+before hooks and indexes that would re-check or slow them, saves a procedure before what imports or binds it, and
+installs after triggers last so they do not fire on a fresh target. Restore sends each line and stops at the first
+error; the lines before it stay applied.
+
+Every request runs as `--user`, so what a dump or restore can do follows that user's permissions:
+
+| User | Dump | Restore into an existing database |
+|---|---|---|
+| Admin | everything | everything |
+| Owner of the database | `--databases db` or `--collections db.x`, definitions included | yes, definitions included |
+| `READ` on the database, no script `MANAGE` | data, schemas and indexes; definitions are skipped with a note | no, writes need `READ_WRITE` |
+| `READ_WRITE` and script `MANAGE` | everything in the database | data yes; a procedure, trigger or schedule another user defined or bound stops it (`403-4`/`403-5`) |
+| A grant on single collections only | no, listing a database's collections needs database `READ` | no |
+
+A dump skips a kind of definition it may not list (`403-2` when scripts are disabled, `403-6` without script
+`MANAGE`) and says so on standard error; when the procedures are skipped, the triggers bound to them are skipped too.
+A dump without `--databases` skips, with a note, a database the user can see but not read; a database named in
+`--databases` that the user cannot read stops the dump. Restoring a database that does not exist yet needs the
+global `CREATE_DATABASE` permission, and the user who creates it becomes its owner.
+
+A dump covers the whole server, the databases named by `--databases`, or the collections named by `--collections`
+(each `db.coll`). A collection dump carries `CREATE_DATABASE`, `CREATE_COLLECTION`, the collection's documents,
+schema and indexes, its triggers, and the procedures those triggers call together with everything they import; it
+carries no schedules, which belong to the database.
+
+| Not in a dump | Why |
+|---|---|
+| Users, permissions, database owners | Password hashes never leave the server, and `CREATE_USER` takes only plaintext |
+| `script_runs` | Reserved: client writes to it are refused |
+| `admin` and cluster metadata | Not user data |
+| Trigger runs, in-doubt transactions | Node-local runtime state |
+| Definers, versions, timestamps, `disabledReason` | Restored definitions are stamped by the restoring user, who becomes their definer and whose permissions they then run with, and start at version 1; a disabled one comes back with `enabled:false` |
+
+**A dump is not a point-in-time snapshot.** Collections are read page by page while writes may continue; for an exact
+copy, stop the writers while dumping.
+
+**Restore merges** into whatever the target already holds: an existing database or collection is reused (restore
+lists the databases first and skips the `CREATE_DATABASE` of one that exists, reporting `restored N requests, skipped
+M existing databases`; a `409-2` answer is still accepted), documents with the same `_id` and definitions with the same name are
+overwritten, and nothing the dump lacks is deleted. Restoring the same dump twice leaves the same data. On a merge,
+the target's own schema, before hooks and after triggers apply to the restored documents: a schema the dumped
+documents violate stops the restore with `400-7`, a before hook can veto or rewrite them, and enabled after triggers
+fire. Restore into a collection without them, or disable them first. To replace rather than merge, drop first:
+
+```bash
+java -jar lwnrdb.jar --exec '{"type":"DROP_COLLECTION","databaseName":"shop","collectionName":"orders"}' --password …
+java -jar lwnrdb.jar --restore --password … < orders.ldump
+```
+
+From Docker, override the command (the image's working directory holds its own `lwnrdb.cfg`, which the client
+ignores); add `-i` to feed a restore:
+
+```bash
+docker run --rm lwnrdb /app/lwnrdb --dump --compress --host db.internal --password … > backup.ldump.gz
+docker run --rm -i lwnrdb /app/lwnrdb --restore --host db.internal --password … < backup.ldump.gz
+```
 
 ### Bootstrap
 
@@ -1482,6 +1657,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `listenMaxRequestBytes` | Human-readable size (default `1Mb`). Largest `LISTEN` request line; a longer one is answered `400-37` before it runs |
 | `listenMaxRetainedBytes` | Human-readable size (default `64Mb`). Total serialized length of the requests every `LISTEN` registration on the server keeps; past it, `503-15` |
 | `listenRerunTimeoutMs` | Valid number ≥ 1 (default `10000`). Wall-clock budget of one background `LISTEN` re-run; past it the re-run is dropped with a warning and nothing is pushed |
+| `listenThreads` | Valid number ≥ 1 (default `2`). Workers that re-run `LISTEN` queries after a write. Identical registrations (same user, same query) share one re-run; distinct queries re-run on these workers in parallel, each holding its own result while it runs |
 | `transactionIdleTimeoutMs` | Valid number ≥ 1 (default `30000`). Milliseconds a connection with an open transaction may stay silent before the transaction is rolled back and its locks released; the next request answers `409-16` once |
 | `filePath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing; see [File permissions](#file-permissions) |
 | `logPath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing. Log cleanup deletes only expired files named `yyyy-MM-dd.log` here, so pointing it at a populated folder (even `.`) deletes nothing else |
@@ -1491,6 +1667,9 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxLogFiles` | Valid number ≥ 1 |
 | `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
+| `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory (Windows, for one) logs that warning and falls back to `false` instead of refusing to start |
+| `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, the pages and `pk.idx` its records touched are synced together and the log is rewritten as a single checkpoint. Larger means fewer checkpoints and a longer replay after a crash |
+| `walIdleCheckpointMs` | Long (default `60000`). A background worker checkpoints a collection's log once it has sat this long with records past its checkpoint, no open write group and no pending field-index work, so an idle collection is not replayed after a crash. `0` turns it off |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
 | `schemaMaxPatterns` | Valid number > 0 (default `256`). Most regular expressions (`pattern` values plus `patternProperties` keys, counted through `$ref`s) one schema may hold; `SAVE_SCHEMA` refuses more with `400-39` before compiling any. A stored or replicated schema with more still loads, with a warning. Keep it equal on every node of a cluster |
@@ -1499,6 +1678,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminPassword` | Required (at least 8 characters, not `administrator`) when no admin user exists; may be blank once one does. `administrator`, a commonly used password and the admin username itself (all ignoring case) are always refused at startup, and a non-blank value shorter than 8 characters is a validation error |
 | `maxMemory` | Human-readable size; `0` (unlimited, named in the startup `SECURITY WARNING`) and `-1` (caching disabled) are also valid |
 | `transientLoadPermits` | Valid number ≥ 1 (default `4`). Whole `pk.idx` or field-index loads that may not be cached, allowed to run at once: one whose upper-bound estimate from the file lengths (`pk.idx`, or an `.idx` plus its `.idxlog`) does not fit in `maxMemory`, every load while caching is disabled, and every load by a lock-free reader. Further ones wait; nothing is refused |
+| `indexScanFallbackPercent` | Valid number, 1–100 (default `25`). Share of a collection of at least 4096 documents an index match may cover before a `FILTER` reads the collection instead of fetching the matches by id; a `GROUP_BY` and an unbounded `SORT` at the start of a pipeline also read the collection while it is not wholly cached. Index and scan answer identically, so this only changes speed; analyze still lists an index it consulted. `100` always uses the index |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
 | `deadEvictionMs` | Valid number ≥ 1, and greater than `deadTimeoutMs`. Milliseconds a node must stay DEAD before it is dropped from the membership view. Until then it still counts towards the quorum denominator, so this must comfortably exceed any outage a node is expected to return from |
 | `deadProbeIntervalMs` | Valid number ≥ 1 (default `10000`), and not smaller than `gossipIntervalMs`. How often a peer this node sees as `SUSPECT` or `DEAD` is probed with a gossip message. This is how two sides of a partition that each marked the other `DEAD` find each other again once it heals |
@@ -1596,6 +1776,9 @@ maxConcurrentPasswordChecks=0
 filePath=db
 logPath=logs
 maxPageSize=2Mb
+syncWrites=true
+walCheckpointBytes=8Mb
+walIdleCheckpointMs=60000
 maxEntrySize=1Mb
 # schema evaluation steps one write request may spend before it is refused (400-23)
 schemaValidationBudget=5000000
@@ -1624,19 +1807,22 @@ transactionMaxOps=100000
 transactionMaxBytes=256Mb
 transactionMaxAgeMs=600000
 # LISTEN registrations per connection and per server (400-25), per user (400-38), request line (400-37),
-# request bytes kept server-wide (503-15) and the re-run wall clock
+# request bytes kept server-wide (503-15), the re-run wall clock and the re-run workers
 maxListensPerConnection=64
 maxListens=10000
 maxListensPerUser=256
 listenMaxRequestBytes=1Mb
 listenMaxRetainedBytes=64Mb
 listenRerunTimeoutMs=10000
+listenThreads=2
 # IN/NOT_IN operands and within-polygon vertices (400-27), #vector components, AGGREGATE wall clock (408-6)
 # and the bytes one AGGREGATE may build (400-36)
 maxFilterOperands=10000
 maxVectorDimensions=16384
 aggregateTimeoutMs=300000
 aggregateMaxResultBytes=256Mb
+# share of a large collection an index match may cover before the query reads the collection instead
+indexScanFallbackPercent=25
 # TLS: when enabled, plaintext clients are rejected at the handshake
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
@@ -1677,6 +1863,9 @@ scriptRunHistoryKinds=CALL_PROCEDURE,TRIGGER,SCHEDULE
 scriptRunHistoryRetentionMs=604800000
 scriptRunHistoryIncludeLogs=false
 scriptRunHistoryMaxErrorChars=2000
+scriptRunHistoryMaxQueued=10000
+scriptRunHistoryMaxRows=0
+scriptRunHistorySweepMs=3600000
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
 procedureCacheMaxBytes=16Mb
@@ -1808,24 +1997,24 @@ acting user on the node that runs it (see [docs/clustering.md](docs/clustering.m
 
 ### Memory management
 
-`maxMemory` bounds the **user cache**: a background sweep (every 5s) sums the **modelled heap size** of the cached user collections and indexes and, while that total exceeds the budget, evicts the least-frequently-used of them. Each document and index entry is sized from the JVM's object layout — object headers (compact or not), reference width (4 bytes, or 8 under ZGC or a heap of 32 GB and more), alignment, `String` backing arrays, map entries and hash tables — so the total tracks the heap the cache really holds rather than the documents' on-disk size, which is several times smaller (a small document costs about 3 KB of heap against under 200 bytes on disk). It is still the cache's own accounting, not measured JVM heap — nothing reads real heap to decide an eviction (`GET_DATABASE_STATS` reads it only to report). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+`maxMemory` bounds the **user cache**: a background sweep (every 5s) sums the **modelled heap size** of the cached user collections and indexes and, while that total exceeds the budget, evicts the least-frequently-used of them. Each document and index entry is sized from the JVM's object layout — object headers (compact or not), reference width (4 bytes under G1, the collector the image and the run commands use, or 8 under ZGC, without compressed references, or with a heap of 32 GB and more), alignment, `String` backing arrays, map entries and hash tables — so the total tracks the heap the cache really holds rather than the documents' on-disk size, which is several times smaller (a small document costs about 3 KB of heap against under 200 bytes on disk). It is still the cache's own accounting, not measured JVM heap — nothing reads real heap to decide an eviction (`GET_DATABASE_STATS` reads it only to report). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
 - `0` — unlimited; caching is on but eviction never triggers (suitable when `-Xmx` is already the only ceiling you want).
 - `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
 
 Eviction order is LFU. Access counts are recorded asynchronously and persisted in the `admin/collection_usage` collection; records older than 24h are pruned hourly. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
 
-**Sizing `-Xmx` against the cap.** `maxMemory` bounds the cache's real heap, so the rest of `-Xmx` is what the collector, the page a scan is reading, in-flight requests and scripts get. Size `-Xmx` to roughly twice `maxMemory`, plus the metadata cache and script budgets; startup logs a warning when `-Xmx > maxMemory × 2`, suggesting `maxMemory` around half of `-Xmx`. `maxMemory` cannot reclaim metaspace, JIT code or committed-but-unused heap, so the OS-visible process size stays above it.
+**Sizing `-Xmx` against the cap.** `maxMemory` bounds the cache's real heap, so the rest of `-Xmx` is what the collector, the page a scan is reading, in-flight requests and scripts get. Size `-Xmx` to roughly twice `maxMemory`, plus the metadata cache and script budgets; startup logs a warning when `-Xmx > maxMemory × 2`, suggesting `maxMemory` around half of `-Xmx`. `maxMemory` cannot reclaim metaspace, JIT code or committed-but-unused heap, so the OS-visible process size stays above it. The image and the run commands use G1 (`-XX:+UseG1GC`): ZGC runs without compressed references, which cost 21% more live heap for the same load (183.1 MB against 151.8 MB under G1) and about 2.5x the peak process size on the Docker bench (1,161 MB against 468 MB at 0.3 scale). The flag is explicit because the JVM picks SerialGC by itself in a container under 2 CPUs or 1792 MB. Under ZGC the container's peak memory followed the heap ceiling, not the data: on the Docker bench (100k documents of about 512 B, about 190 MB of live heap after a full GC) the same run peaked at 1.2 GiB under a 1 GiB ceiling, 1.6 GiB under 1.4 GiB and 2.7 GiB under 2.8 GiB, with no extra CPU per operation and no allocation stalls under the smaller ceilings, so keep the ceiling near the rule above rather than at most of the container. If you run ZGC anyway, `-XX:SoftMaxHeapSize` keeps it near a smaller heap and lets it exceed it only under pressure (1.3 GiB peak under a 2.8 GiB ceiling). The Docker image sets no heap flag, so its JVM sizes the heap at a quarter of the container's memory; change it with `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=50` (or `-Xmx` through the same variable), and keep the heap at least as large as `maxMemory` plus the metadata and script budgets, or the JVM can run out of memory before the cache budget evicts anything.
 
 Earlier versions charged each document its on-disk size and each index entry a flat 64–96 bytes, which undercounted the real heap 3–8×. The same data now takes a larger share of `maxMemory`, so a deployment tuned to the old numbers evicts sooner and may want a larger cap.
 
-**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, each page's modelled heap (a sample of its documents scaled to the page) drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
+**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). A conjunction that starts the pipeline first combines its legs' id sets from the indexes (`AND` intersects the indexed legs and tests the others on what survives; `OR`/`XOR` take the union when every leg is indexed) and then fetches only the surviving documents once, so `price >= 20 AND price < 50` reads the documents in that range rather than each bound's half of the collection. Two or more numeric bounds on the same indexed field inside an `AND` are one walk of the sorted index. `NOR`/`NAND`, and a conjunction holding a vector `nearest`, keep reading every leg as before. When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, each page's modelled heap (a sample of its documents scaled to the page) drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
 
 `SORT`, `GROUP_BY`, `JOIN`, and `DISTINCT` also use a single-field index when one exists on the step's field **and** the step is the pipeline source (no earlier step has already produced a stream). The field index maps each value to its matching ids, so the step works from that grouping instead of scanning the whole collection: `DISTINCT` reads no documents at all (the index keys are the distinct values), `GROUP_BY`/`SORT` fetch only the grouped/ordered documents via positioned reads, and `JOIN` fetches only the remote documents whose value matches a local value. Because indexes model scalar/custom/null values only, documents whose indexed field holds a JSON object or array are outside index scope and do not appear in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results; run the step on a non-indexed field if you need those included. When no index applies, these steps still materialize their working set in memory as before.
 
 > **Note — an index buys `GROUP_BY` little (often nothing).** Unlike `DISTINCT`/`FILTER`/index-only `COUNT`, an index-backed `GROUP_BY` cannot avoid reading documents: its output places every grouped document into a `group` array, so every matched document is still fetched. The index only supplies the value→ids buckets, which replaces a cheap in-memory `groupingBy` — a negligible saving. On a field present in (nearly) every document this yields **effectively no speed-up** over a plain scan, and is in fact slightly *worse*: the index path fetches via random positioned reads and materializes the whole working set (the id set, a `docById` map and the grouped list) in memory, whereas the scan path streams page-by-page with the between-pages headroom check. The fast-path helps **only when the grouped field is sparse** (few documents carry it) — there, like `FILTER`, it reads just the matching documents instead of every page. The index fast-path is kept for that sparse case, but `GROUP_BY` should not be expected to benefit from an index the way the other steps do.
 Object- and array-valued fields are covered only by the **element-match hash indexes** used at the `FILTER` step (`EQUALS`/`NOT_EQUALS`/`IN`/`NOT_IN`), stored in separate `…-Object.idx` / `…-Array.idx` files; those hashes cannot be reconstructed or ordered, so `GROUP_BY`/`SORT`/`DISTINCT` still skip object/array values.
 
-A `COUNT` (with the collection as the pipeline source) is answered from the indexes alone — without reading any documents — whenever every step before it either filters via an index or leaves the document count unchanged. `FILTER` steps are resolved to id-sets through their indexes; sequential filters compose as `AND`, so the count is the size of the **intersection** of their id-sets. A single indexed field operator resolves through its field index; a conjunction resolves when every leaf is index-resolvable, combining the per-leaf id-sets with set algebra (`AND` = intersection, `OR` = union, `XOR` = exactly-one, and `NOR`/`NAND` = the complement against the full id universe taken from the PK index). Count-preserving steps between the filters and the `COUNT` — `MAP`, `JOIN`, `SORT` — are skipped entirely (they emit one row per input row, and `COUNT` discards their transformed output; `JOIN` permissions are still checked before execution). A `FILTER` is only index-resolvable while it still sees the stored documents, so once a `MAP`/`JOIN` has modified them no later `FILTER` can use its index. If a step changes the count in a data-dependent way (`GROUP_BY`, `DISTINCT`, `LIMIT`, `SKIP`), or any leaf lacks a usable index, the count falls back to counting the filtered stream as before.
+A `COUNT` (with the collection as the pipeline source) is answered from the indexes alone — without reading any documents — whenever every step before it either filters via an index or leaves the document count unchanged. `FILTER` steps are resolved to id-sets through their indexes; sequential filters compose as `AND`, so the count is the size of the **intersection** of their id-sets. A single indexed field operator resolves through its field index; a conjunction resolves when every leaf is index-resolvable, combining the per-leaf id-sets with set algebra (`AND` = intersection, `OR` = union, `XOR` = exactly-one, and `NOR`/`NAND` = the complement against the full id universe taken from the PK index). Count-preserving steps between the filters and the `COUNT` — `MAP`, `JOIN`, `SORT` — are skipped entirely (they emit one row per input row, and `COUNT` discards their transformed output; `JOIN` permissions are still checked before execution). A `FILTER` is only index-resolvable while it still sees the stored documents, so once a `MAP`/`JOIN` has modified them no later `FILTER` can use its index. A single numeric range, or an `AND` of numeric bounds on one indexed field, is counted straight from the index slice without building an id set, unless writes to the collection are still being indexed. If a step changes the count in a data-dependent way (`GROUP_BY`, `DISTINCT`, `LIMIT`, `SKIP`), or any leaf lacks a usable index, the count falls back to counting the filtered stream as before.
 
 ### Concurrency & locking
 
@@ -1846,18 +2035,68 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Guaranteed**
 
 - **An acknowledged write survives a process crash.** Writes go to the files before the response is sent, so a `kill -9` or a JVM crash loses nothing that was acknowledged.
-- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, commits it with one appended `pk.idx` row, then blanks the old copy into a hole, all under a `.intent` file written first. An interrupted one is kept or undone at startup according to whether its `pk.idx` row landed, and an interrupted page vacuum re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
+- **An acknowledged write survives a power loss** while `syncWrites` is on (the default). Every write is first appended to its collection's write-ahead log as the exact bytes it puts at each offset of each page and of `pk.idx`, and that record is synced to the device before the pages and `pk.idx` are touched; a created, renamed or deleted file has its folder synced too. Startup replays the log over whatever the files hold, so a power loss leaves every acknowledged write and no unacknowledged one. On a platform that cannot sync a directory the server logs a DURABILITY WARNING at startup and runs with `syncWrites=false`. See [Durability](#durability) for what it costs.
+- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index log or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the live bytes `pk.idx` names. An update or delete never moves another record: it appends the new copy, appends its `pk.idx` row, then blanks the old copy into a hole, and the whole write is one record in the collection's write-ahead log (`.wal`), logged before any of it. Startup replays every logged record and cuts the bytes past a logged end, so an interrupted write is either whole or absent. An interrupted page vacuum, which rewrites a page outside the log, brackets the rewrite with two log frames (`REWRITE_BEGIN` before it, `REWRITE_END` once the new page is in place), so replay never writes an older record's bytes into the rewritten page, keeps an intent in the collection's `.intents` log and re-derives the rows of the page it rewrote. That step needs a readable `pk.idx`; when it is not, startup logs the intent and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` settles it and rebuilds the `pk.idx` from the pages.
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.
 
 **Not guaranteed, by design**
 
-- **Device durability.** Writes are not synced to the device. A power loss or an operating-system crash can lose recently acknowledged writes, whatever the engine does afterwards. If that matters, run on storage with power-loss protection, or run a [cluster](#clustering-multi-node) so a second node holds the write.
-- **Field indexes after a crash with index work pending.** The index can miss entries written just before the crash, so an index-backed query can omit those documents until a full [`REINDEX`](#reindex). Startup logs a warning naming each collection in that state, and the `-indexes.unclean` marker behind it stays until a `REINDEX` rebuilds every registered index of the collection.
+- **Device durability with `syncWrites=false`.** A write is then acknowledged once the operating system has it, so a power loss or an operating-system crash can lose recently acknowledged writes; the server says so in a startup warning. Turn it off only on storage with power-loss protection, or in a [cluster](#clustering-multi-node) where a second node holds the write.
+- **Field indexes after a crash with index work pending.** Work for writes still in the collection's write-ahead log is re-queued at startup and needs nothing from you. Work the log no longer covers (a checkpoint dropped the records while it was pending, or it came from a startup heal or a `REINDEX` with `"primaryKey": true`) can miss entries, so an index-backed query can omit those documents until a full [`REINDEX`](#reindex). Startup logs a warning naming each collection in that state, and the `-indexes.unclean` marker behind it stays until a `REINDEX` rebuilds every registered index of the collection.
 - **Exact vector search by default.** `nearest` is an approximate (ANN) search unless `"exact":true` is passed (see [custom operators](#custom-operators-type-specific)).
 - **Catching up on schedules.** A scheduled procedure fires at most once per due instant, and runs missed while the node was down are skipped (see [`SAVE_SCHEDULE`](#save_schedule)).
 - **Isolation for dirty reads.** A read with `"dirtyRead":true` can observe a write half-way through (see [Concurrency & locking](#concurrency--locking)).
+
+### Durability
+
+With `syncWrites=true` a write is acknowledged once its record in the collection's write-ahead log
+(`{collection}.wal`) is on the device: one sequential append and one force, whatever the write is. An insert, an
+update, a delete, a relocation and a whole bulk write each log one record holding the exact bytes they put on each
+page and in `pk.idx`, then write those files without forcing them. A checkpoint forces every page and `pk.idx` the log
+touched since the last one, in parallel, then rewrites the log as a single checkpoint record; it runs once the log
+passes `walCheckpointBytes`, before a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`, once the log
+has been idle for `walIdleCheckpointMs`, and at shutdown, where up to eight logs are checkpointed in parallel within
+`shutdownTimeoutMs`. A page vacuum does not checkpoint: it forces only the page it rewrites, logs a forced `REWRITE_BEGIN`, moves
+the rewritten page into place and syncs its folder, then logs `REWRITE_END` with the page's new length together with
+the record of the rows it moved. Replay skips every older change to that page and cuts it back to that new length (or,
+without the `REWRITE_END`, never below its length at `REWRITE_BEGIN`). After a power loss startup replays the log over whatever the files hold and cuts each file back to
+its last logged end, so an acknowledged write is redone and an unacknowledged one leaves nothing. With
+`syncWrites=false` there is no cut, since the bytes past a logged end may then be an acknowledged write whose record
+did not reach the disk. A write whose
+record is logged but whose files cannot be written is taken back and marked aborted in the log; when even that fails,
+it is applied before the next write to the collection, or by the next startup. A write does not write the
+collection's index-dirty marker either: its log record is what tells startup that its field-index work may be
+unfinished, so startup re-queues that work for every id the replayed log wrote. A checkpoint that drops records whose
+index work is still pending writes those ids into the new log, so startup re-queues them too, and shutdown leaves a
+collection with pending work's log in place for the next startup to replay. Clearing an index marker is not forced, because a power loss that undoes it leaves a
+journal behind that startup already settles. A field index's `.idxlog` appends are not forced either: the log record
+of the write still covers that work, so a checkpoint forces the `.idxlog` files it touched together with the pages and
+`pk.idx` before it drops records, and clearing an index marker forces them before the marker goes. The page-occupancy
+rows of a user collection are kept in memory and written back within a second (and at shutdown); startup rebuilds them
+from the page files anyway, so a crash costs nothing there.
+
+Concurrent single-document `SAVE`s and `DELETE`s on one collection share one force (group commit): each writer queues
+its write and waits for its turn; the one whose turn it is takes the collection lock, runs every queued write, appends
+their records without forcing, forces the log once, and answers them all, so the others find their answer ready
+without ever queueing on the lock. A write's page appends and `pk.idx` rows are written before that force, but the
+blanks of the copies it supersedes wait for it, because a blank cannot be undone; startup cuts every page and `pk.idx`
+back to their logged ends, so an append whose record never reached the disk leaves nothing. During the force the
+writer downgrades the collection lock to a shared one: a `FIND_BY_ID` proceeds and may see a grouped write before its
+force, while scans and other writers wait until the blanks landed. When the force fails, the writer takes the lock
+back exclusively, takes every write of the group back and answers each with its error. Before hooks run for every
+write of the group before anything is written, and the group's after-trigger runs are staged in one forced record
+before the first write is appended and submitted only after the force; a write whose `_id` a hooked or triggered
+write earlier in the group already names starts the next group. Writes inside a transaction, nested in a trigger, or
+with `syncWrites=false` take the one-force-per-write path. With clustering on, the owner forces a group under the
+exclusive lock, then replicates it as one `REPLICATE` (or one single-collection `REPLICATE_TX` when it mixes saves and
+deletes) while point reads proceed and scans wait. A dirty read (`"dirtyRead":true`) can see a grouped write before
+its force. A force costs what the disk makes it cost, and one collection's writes wait for it, so it bounds the write
+rate of one collection: with 8 clients the Docker bench measured 4-5k synced inserts
+and updates and 7-8k deletes per second. Measured for one force: about 0.25 ms on a Docker named volume (Linux, Docker
+Desktop VM) and about 4 ms on an Apple SSD under macOS, a cost consistent with a full device flush (not yet confirmed
+there; the Docker image on Linux is the production target). Different collections write in parallel. Logs and the generated TLS keystore are not forced.
 
 ## Q&A
 
@@ -1911,7 +2150,10 @@ lookups). Exclusions are documented inline in each config file.
 
 ## Contributing
 
-Pull requests are welcome! For major changes, please open an issue first
-to discuss what you would like to change.
+Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
+The details (how to build, what the build checks, and how a release is cut) are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Security problems go through [SECURITY.md](SECURITY.md) instead of a public issue.
 
-Please make sure to update tests as appropriate and add new ones if a new feature is developed or a big bug solved.
+## License
+
+MIT. Use it, change it, do whatever you want with it, just keep my name on it. See [LICENSE](LICENSE).

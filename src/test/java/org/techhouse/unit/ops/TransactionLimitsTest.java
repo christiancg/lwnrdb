@@ -166,9 +166,9 @@ public class TransactionLimitsTest {
             assertEquals(ErrorCode.TRANSACTION_TOO_LARGE.getCode(), send(DELETE_OK1).getErrorCode());
         } finally {
             TestUtils.setPrivateField(configuration, "triggersEnabled", ConfigKey.TRIGGERS_ENABLED.defaultValue());
-            fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+            fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
             cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-            fs.deleteProcedure(TestGlobals.DB, "on_delete");
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, "on_delete");
             cache.removeProceduresForDatabase(TestGlobals.DB);
         }
     }

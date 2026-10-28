@@ -20,6 +20,7 @@ import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.DurableReplayIncompleteException;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -29,9 +30,11 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.tx.TransactionRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 
 public class TransactionCrashAtomicityTest {
     private final Cache cache = IocContainer.get(Cache.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -58,7 +61,13 @@ public class TransactionCrashAtomicityTest {
 
     // Buffers a slice without committing it, exactly as a client transaction would have on disk when the
     // process died: the ops are durable and the marker says the commit had been decided.
-    private Transaction bufferSlice(String... ids) {
+    private Transaction bufferSlice(String... ids) throws Exception {
+        final var transaction = bufferInMemory(ids);
+        TransactionRecordCalls.persistBufferedOps(transaction);
+        return transaction;
+    }
+
+    private static Transaction bufferInMemory(String... ids) {
         final var transaction = new Transaction(UUID.randomUUID(), UUID.randomUUID());
         for (final var id : ids) {
             final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -67,6 +76,21 @@ public class TransactionCrashAtomicityTest {
             TransactionOperationHelper.bufferSave(request, transaction);
         }
         return transaction;
+    }
+
+    @Test
+    public void test_buffered_ops_are_not_on_disk_before_commit() throws Exception {
+        final var transaction = bufferInMemory("in-memory-a", "in-memory-b");
+        final var txId = transaction.getTransactionId().toString();
+
+        assertEquals(2, transaction.getPendingOps().size());
+        assertTrue(transaction.getBufferedOpIds().stream().noneMatch(cache.getTransactionPkIndexes()::containsKey),
+                "a buffered op reaches admin/transactions only with the record that decides or prepares it");
+        assertTrue(fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME).stream()
+                .noneMatch(row -> row.getValue().startsWith(txId)));
+        TestUtils.releaseAllLocks();
+        TransactionOperationHelper.cleanupOrphansAtStartup();
+        assertFalse(documentExists("in-memory-a"), "a crash before the commit leaves nothing to replay");
     }
 
     private boolean documentExists(String id) throws Exception {
@@ -88,8 +112,7 @@ public class TransactionCrashAtomicityTest {
                 transaction.getTransactionId().toString(), "client", 99,
                 org.techhouse.data.admin.AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL,
                 new JsonObject());
-        AdminOperationHelper.saveTransactionOp(corrupt);
-        transaction.getBufferedOpIds().add(corrupt.get_id());
+        transaction.addPendingOp(corrupt);
 
         final var response = TransactionOperationHelper.commit(clientId);
 

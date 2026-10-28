@@ -115,6 +115,40 @@ public class ClusterCoordinator {
                 stamped(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids, versions)));
     }
 
+    public ReplicationOutcome replicateGroup(String dbName, String collName, List<String> upsertIds,
+            Map<String, Long> deleteVersions) {
+        final var applicability = documentReplicationOutcome(dbName, collName);
+        if (applicability != null) {
+            return applicability;
+        }
+        try {
+            final var entries = new ArrayList<ReplicationPayload>(2);
+            if (!deleteVersions.isEmpty()) {
+                final var versions = new ArrayList<String>(deleteVersions.size());
+                for (final var version : deleteVersions.values()) {
+                    versions.add(Long.toString(version != null ? version : hybridClock.next()));
+                }
+                entries.add(stamped(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null,
+                        List.copyOf(deleteVersions.keySet()), versions)));
+            }
+            final var documents = new ArrayList<JsonObject>();
+            final var versions = new ArrayList<String>();
+            readDocuments(dbName, collName, upsertIds, documents, versions);
+            if (!documents.isEmpty()) {
+                entries.add(stamped(
+                        new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions)));
+            }
+            return switch (entries.size()) {
+                case 0 -> ReplicationOutcome.QUORUM_MET;
+                case 1 -> replicator.broadcast(entries.getFirst());
+                default -> replicator.broadcastTx(new TxReplicationPayload(entries));
+            };
+        } catch (Exception e) {
+            logger.warning("Failed to replicate a write group to " + dbName + "|" + collName + ": " + e.getMessage());
+            return ReplicationOutcome.TIMEOUT;
+        }
+    }
+
     // A clustered transaction must not commit without a write quorum (split-brain protection). Always true
     // when clustering is off, so the standalone commit path is unchanged.
     public boolean hasNotTransactionQuorum() {

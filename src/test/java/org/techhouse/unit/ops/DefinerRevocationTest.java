@@ -69,8 +69,8 @@ public class DefinerRevocationTest {
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "schedulesEnabled", true);
         TriggerTestSupport.clearTriggersAndProcedures();
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         registry.clear();
@@ -115,7 +115,7 @@ public class DefinerRevocationTest {
     private void installSchedule(String name, String definer) throws Exception {
         final var definition = new ScheduleDefinition(name, "job", null, 60_000L, null, 0L, true, definer, null, 1L, 1L,
                 1L, definer);
-        fs.writeSchedule(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, name);
     }
 
@@ -135,7 +135,7 @@ public class DefinerRevocationTest {
         final var stored = storedTrigger("audit");
         assertFalse(stored.isEnabled());
         assertTrue(stored.getDisabledReason().contains("script RUN on database"), stored.getDisabledReason());
-        assertTrue(fs.readTriggers(TestGlobals.DB, TestGlobals.COLL).contains("disabledReason"));
+        assertTrue(fs.metadataFiles().readTriggers(TestGlobals.DB, TestGlobals.COLL).contains("disabledReason"));
         assertEquals(List.of(AdminRecordKey.triggers(TestGlobals.DB, TestGlobals.COLL)), restamped.keys());
     }
 

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.NodeAddress;
 import org.techhouse.cluster.PeerConnectionPool;
+import org.techhouse.cluster.Tx2pcDirectory;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
@@ -39,8 +41,10 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.tx.TransactionRecovery;
 import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -215,6 +219,48 @@ public class Tx2pcRecoveryTest {
         assertEquals(sessionId, captor.getValue().getTxSessionId(),
                 "recovery must re-drive to the session the participant registered under, not the transaction id");
         assertFalse(Tx2pcLog.isCommitted(dtxId));
+    }
+
+    @Test
+    public void test_a_commit_its_coordinator_is_still_driving_is_not_redriven() throws Exception {
+        final var dtxId = "15151515-1515-1515-1515-151515151515";
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of("127.0.0.1:2"));
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.COMMIT_TX_ACK);
+            return response;
+        });
+        TestUtils.setPrivateField(recovery, "pool", pool);
+
+        recovery.commitDriving(dtxId);
+        try {
+            recovery.recover();
+        } finally {
+            recovery.commitDriven(dtxId);
+        }
+
+        verify(pool, never()).request(any(), any(), anyLong());
+        assertTrue(Tx2pcLog.isCommitted(dtxId), "the live commit owns its marker until it returns");
+        recovery.recover();
+        assertFalse(Tx2pcLog.isCommitted(dtxId), "once the live commit returned, recovery re-drives what it left");
+    }
+
+    @Test
+    public void test_a_slice_halted_between_its_decided_and_prepared_markers_is_not_left_in_doubt() throws Exception {
+        final var dtxId = "16161616-1616-1616-1616-161616161616";
+        seedPreparedSlice(dtxId, "rec-both-markers", "127.0.0.1:1", List.of("127.0.0.1:1", SELF_ADDRESS));
+        TxCommitLog.recordLocalCommit(dtxId, Tx2pcLog.sliceOpIds(dtxId), List.of(collectionId()));
+
+        assertTrue(TransactionRecovery.finishLocalCommit(dtxId));
+
+        assertEquals(OperationStatus.OK, findStatus("rec-both-markers"));
+        assertFalse(TxCommitLog.isLocallyCommitted(dtxId));
+        assertFalse(Tx2pcLog.isPrepared(dtxId),
+                "a finished slice that keeps its prepared marker is listed in doubt forever, and once its outcome is"
+                        + " garbage collected recovery aborts a transaction that committed");
+        assertTrue(IocContainer.get(Tx2pcDirectory.class).localInDoubt().stream()
+                .noneMatch(tx -> tx.getDtxId().equals(dtxId)));
     }
 
     @Test

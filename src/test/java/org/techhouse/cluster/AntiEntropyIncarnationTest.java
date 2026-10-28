@@ -75,7 +75,8 @@ public class AntiEntropyIncarnationTest extends AntiEntropyTestBase {
 
     private static AntiEntropyPayload digestNaming(String id) {
         final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
-        payload.setDigest(List.of(new DigestEntry(id, PEER_VERSION, false, "peer", 24L)));
+        payload.setNodeId("peer");
+        payload.setDigest(List.of(new DigestEntry(id, PEER_VERSION, false, 24L)));
         return payload;
     }
 

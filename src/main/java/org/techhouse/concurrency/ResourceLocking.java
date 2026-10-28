@@ -19,6 +19,7 @@ import org.techhouse.ex.CollectionBusyException;
  */
 public class ResourceLocking {
     private static final Map<String, ReentrantReadWriteLock> locks = new ConcurrentHashMap<>();
+    private static final SettleGates gates = new SettleGates();
     private static final long NO_DEADLINE = Long.MAX_VALUE;
 
     private ReentrantReadWriteLock lockFor(String lockName) {
@@ -26,11 +27,23 @@ public class ResourceLocking {
     }
 
     private enum Mode {
-        READ, WRITE
+        READ, WRITE, POINT
     }
 
     private static Lock side(ReentrantReadWriteLock lock, Mode mode) {
-        return mode == Mode.READ ? lock.readLock() : lock.writeLock();
+        return mode == Mode.WRITE ? lock.writeLock() : lock.readLock();
+    }
+
+    private static SettleGates.Gate gateFor(String lockName, Mode mode) {
+        return gates.blocking(lockName, mode == Mode.POINT);
+    }
+
+    private static boolean passesGate(String lockName, ReentrantReadWriteLock lock, Mode mode) {
+        if (gateFor(lockName, mode) == null) {
+            return true;
+        }
+        side(lock, mode).unlock();
+        return false;
     }
 
     private boolean isStillMapped(String lockName, ReentrantReadWriteLock lock, Mode mode) {
@@ -43,18 +56,28 @@ public class ResourceLocking {
 
     private boolean tryAcquireNow(String lockName, Mode mode) {
         while (true) {
+            if (gateFor(lockName, mode) != null) {
+                return false;
+            }
             final var lock = lockFor(lockName);
             if (!side(lock, mode).tryLock()) {
                 return false;
             }
             if (isStillMapped(lockName, lock, mode)) {
-                return true;
+                return passesGate(lockName, lock, mode);
             }
         }
     }
 
     private boolean tryAcquireBy(String lockName, Mode mode, long deadlineMillis) throws InterruptedException {
         while (true) {
+            final var gate = gateFor(lockName, mode);
+            if (gate != null) {
+                if (!SettleGates.await(gate, deadlineMillis, NO_DEADLINE)) {
+                    return false;
+                }
+                continue;
+            }
             final var lock = lockFor(lockName);
             if (deadlineMillis == NO_DEADLINE) {
                 side(lock, mode).lockInterruptibly();
@@ -62,10 +85,45 @@ public class ResourceLocking {
                     TimeUnit.MILLISECONDS)) {
                 return false;
             }
-            if (isStillMapped(lockName, lock, mode)) {
+            if (isStillMapped(lockName, lock, mode) && passesGate(lockName, lock, mode)) {
                 return true;
             }
         }
+    }
+
+    public SettleWindow openSettleWindow(String dbName, String collName) {
+        final var lockName = Cache.getCollectionIdentifier(dbName, collName);
+        final var lock = locks.get(lockName);
+        if (lock == null || !lock.isWriteLockedByCurrentThread() || lock.getWriteHoldCount() != 1) {
+            return SettleWindow.exclusive();
+        }
+        final var gate = gates.open(lockName);
+        lock.readLock().lock();
+        lock.writeLock().unlock();
+        return new SettleWindow(this, lockName, gate, lock);
+    }
+
+    ReentrantReadWriteLock relockExclusive(String lockName) {
+        while (true) {
+            final var lock = lockFor(lockName);
+            lock.writeLock().lock();
+            if (locks.get(lockName) == lock) {
+                return lock;
+            }
+            lock.writeLock().unlock();
+        }
+    }
+
+    void closeGate(String lockName, SettleGates.Gate gate) {
+        gates.close(lockName, gate);
+    }
+
+    public List<String> acquirePointReadLock(boolean dirtyRead, String collectionId, long timeoutMillis)
+            throws InterruptedException {
+        if (dirtyRead) {
+            return List.of();
+        }
+        return tryAcquireBy(collectionId, Mode.POINT, deadlineFor(timeoutMillis)) ? List.of(collectionId) : null;
     }
 
     private static long deadlineFor(long timeoutMillis) {
@@ -227,7 +285,7 @@ public class ResourceLocking {
         if (dirtyRead) {
             return List.of();
         }
-        final var sorted = identifiers.stream().distinct().sorted().toList();
+        final var sorted = identifiers.size() == 1 ? identifiers : identifiers.stream().distinct().sorted().toList();
         final var acquired = new ArrayList<String>();
         final var deadline = deadlineFor(timeoutMillis);
         try {
@@ -273,6 +331,11 @@ public class ResourceLocking {
 
     public void lockIndexRead(String dbName, String collName, String fieldName) throws InterruptedException {
         lockReadByName(getIndexIdentifier(dbName, collName, fieldName));
+    }
+
+    public boolean holdsIndexLock(String dbName, String collName, String fieldName) {
+        final var lock = locks.get(getIndexIdentifier(dbName, collName, fieldName));
+        return lock != null && (lock.getReadHoldCount() > 0 || lock.isWriteLockedByCurrentThread());
     }
 
     public void releaseIndexRead(String dbName, String collName, String fieldName) {

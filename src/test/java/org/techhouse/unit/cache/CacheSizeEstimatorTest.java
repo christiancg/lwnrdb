@@ -3,20 +3,21 @@ package org.techhouse.unit.cache;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.CacheSizeEstimator;
+import org.techhouse.cache.FieldIndexLookup;
 import org.techhouse.cache.heap.DocumentHeapSizer;
 import org.techhouse.cache.heap.HeapLayout;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IdSet;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonParser;
 
 public class CacheSizeEstimatorTest {
     private static final HeapLayout LAYOUT = new HeapLayout(8, 12, 4);
@@ -24,7 +25,6 @@ public class CacheSizeEstimatorTest {
     private static final String COLL = "estimatorColl";
     private static final String TYPICAL_ID = "x".repeat(36);
     private static final long OLD_FLAT_FIELD_ENTRY_BYTES = 64L;
-    private static final Class<?> HASH_MAP_NODE = HeapLayout.jdkClass("java.util.HashMap$Node");
     private static final Class<?> CONCURRENT_HASH_MAP_NODE = HeapLayout
             .jdkClass("java.util.concurrent.ConcurrentHashMap$Node");
 
@@ -139,20 +139,19 @@ public class CacheSizeEstimatorTest {
     }
 
     private static long fieldEntryOverhead() {
-        return LAYOUT.referenceBytes() + LAYOUT.shallowSize(FieldIndexEntry.class) + LAYOUT.shallowSize(HashSet.class)
-                + LAYOUT.shallowSize(HashMap.class);
+        return LAYOUT.referenceBytes() + LAYOUT.shallowSize(FieldIndexEntry.class) + LAYOUT.shallowSize(IdSet.class);
     }
 
     @Test
     public void test_field_index_size_counts_ids_and_values() {
-        final var ids = HashSet.<String>newHashSet(2);
+        final var ids = new IdSet();
         ids.add("a1");
         ids.add("b2");
         final List<FieldIndexEntry<?>> entries = List.of(new FieldIndexEntry<>(DB, COLL, "red", ids),
                 new FieldIndexEntry<>(DB, COLL, 42.0, Set.of("c3")), new FieldIndexEntry<>(DB, COLL, true, null));
-        final var idCost = LAYOUT.shallowSize(HASH_MAP_NODE) + LAYOUT.stringSize("a1");
-        final var red = fieldEntryOverhead() + LAYOUT.stringSize("red") + LAYOUT.presizedHashTableSize(2) + 2 * idCost;
-        final var number = fieldEntryOverhead() + LAYOUT.shallowSize(Double.class) + LAYOUT.presizedHashTableSize(1)
+        final var idCost = LAYOUT.stringSize("a1");
+        final var red = fieldEntryOverhead() + LAYOUT.stringSize("red") + LAYOUT.referenceArraySize(2) + 2 * idCost;
+        final var number = fieldEntryOverhead() + LAYOUT.shallowSize(Double.class) + LAYOUT.referenceArraySize(1)
                 + idCost;
         final var bool = fieldEntryOverhead();
 
@@ -163,11 +162,26 @@ public class CacheSizeEstimatorTest {
 
     @Test
     public void test_field_index_count_fallback_uses_the_model_not_a_flat_constant() {
-        final var singleIdEntry = fieldEntryOverhead() + LAYOUT.presizedHashTableSize(1)
-                + LAYOUT.shallowSize(HASH_MAP_NODE) + LAYOUT.stringSize(TYPICAL_ID) + LAYOUT.shallowSize(Double.class);
+        final var singleIdEntry = fieldEntryOverhead() + LAYOUT.referenceArraySize(1) + LAYOUT.stringSize(TYPICAL_ID)
+                + LAYOUT.shallowSize(Double.class);
         assertEquals(3 * singleIdEntry, CacheSizeEstimator.estimateFieldIndexSizeByCount(3, LAYOUT));
         assertNotEquals(3 * OLD_FLAT_FIELD_ENTRY_BYTES, CacheSizeEstimator.estimateFieldIndexSizeByCount(3));
         assertEquals(0L, CacheSizeEstimator.estimateFieldIndexSizeByCount(0));
+    }
+
+    @Test
+    public void test_a_lookup_is_charged_its_open_table_of_ids_entries_and_type_bytes() {
+        final var tableFor1000 = IdSet.tableLengthFor(1000);
+        final var empty = CacheSizeEstimator.estimateFieldIndexLookupSize(0, LAYOUT);
+
+        assertEquals(2048, tableFor1000);
+        assertEquals(
+                2 * (LAYOUT.referenceArraySize(2048) - LAYOUT.referenceArraySize(16)) + LAYOUT.arraySize(1, 2048)
+                        - LAYOUT.arraySize(1, 16),
+                CacheSizeEstimator.estimateFieldIndexLookupSize(1000, LAYOUT) - empty);
+        assertTrue(empty > 2 * LAYOUT.referenceArraySize(16) + LAYOUT.arraySize(1, 16));
+        assertEquals(FieldIndexLookup.estimatedBytes(1000, LAYOUT),
+                CacheSizeEstimator.estimateFieldIndexLookupSize(1000, LAYOUT));
     }
 
     @Test
@@ -194,5 +208,74 @@ public class CacheSizeEstimatorTest {
                 CacheSizeEstimator.estimatePageHeap(page));
         assertEquals(0L, CacheSizeEstimator.estimatePageHeap(List.of()));
         assertEquals(0L, CacheSizeEstimator.estimatePageHeap(null));
+    }
+
+    @Test
+    public void test_shell_and_id_sizes_add_up_to_the_full_estimate() {
+        for (final var count : List.of(0, 1, 8, 9, 5_000)) {
+            final var ids = new IdSet();
+            for (var i = 0; i < count; i++) {
+                ids.add("id-" + i);
+            }
+            final var entry = new FieldIndexEntry<Object>(DB, COLL, "shared value", ids);
+            var pieces = CacheSizeEstimator.fieldEntryShellSize(entry.getValue(), ids.size());
+            for (final var id : ids) {
+                pieces += CacheSizeEstimator.fieldIndexIdSize(id);
+            }
+
+            assertEquals(CacheSizeEstimator.estimateFieldIndexSize(List.of(entry)), pieces, count + " ids");
+        }
+    }
+
+    @Test
+    public void test_an_id_set_is_charged_its_packed_array_or_its_open_table() {
+        final var current = HeapLayout.current();
+        final var shell = current.referenceBytes() + current.shallowSize(FieldIndexEntry.class)
+                + current.shallowSize(IdSet.class) + current.stringSize("v");
+        assertEquals(shell, CacheSizeEstimator.fieldEntryShellSize("v", 0));
+        assertEquals(shell + current.referenceArraySize(1), CacheSizeEstimator.fieldEntryShellSize("v", 1));
+        assertEquals(shell + current.referenceArraySize(IdSet.PACKED_LIMIT),
+                CacheSizeEstimator.fieldEntryShellSize("v", IdSet.PACKED_LIMIT));
+        assertEquals(shell + current.referenceArraySize(16), CacheSizeEstimator.fieldEntryShellSize("v", 9));
+        assertEquals(shell + current.referenceArraySize(32), CacheSizeEstimator.fieldEntryShellSize("v", 13));
+        assertEquals(current.stringSize("an-id"), CacheSizeEstimator.fieldIndexIdSize("an-id"));
+    }
+
+    private static JsonObject parsed(String json) {
+        return JsonParser.parse(json, 64, Integer.MAX_VALUE).asJsonObject();
+    }
+
+    private static JsonObject ownedCopyOf(JsonObject shaped) {
+        final var owned = new JsonObject(shaped.size());
+        for (var i = 0; i < shaped.size(); i++) {
+            owned.add(shaped.keyAt(i), shaped.valueAt(i));
+        }
+        return owned;
+    }
+
+    @Test
+    public void test_a_mixed_collection_of_shared_and_owned_documents_is_estimated_like_the_sizer() {
+        final var shapedData = parsed("{\"_id\":\"mix1\",\"estimatorMixName\":\"a\",\"estimatorMixCount\":1}");
+        final var siblingData = parsed("{\"_id\":\"mix2\",\"estimatorMixName\":\"b\",\"estimatorMixCount\":2}");
+        assertNotNull(shapedData.shape());
+        assertSame(shapedData.shape(), siblingData.shape());
+        final var shaped = DbEntry.fromJsonObject(DB, COLL, shapedData);
+        final var owned = DbEntry.fromJsonObject(DB, COLL, ownedCopyOf(shapedData));
+        final var entryBytes = LAYOUT.shallowSize(DbEntry.class);
+
+        for (final var dbEntry : List.of(shaped, owned)) {
+            assertEquals(entryBytes + DocumentHeapSizer.sizeOf(dbEntry.getData(), LAYOUT),
+                    CacheSizeEstimator.estimateEntry(dbEntry, LAYOUT));
+        }
+        if (!shapedData.shape().isPinned()) {
+            assertEquals(CacheSizeEstimator.estimateEntry(owned, LAYOUT),
+                    CacheSizeEstimator.estimateEntry(shaped, LAYOUT),
+                    "an unpinned shared shape is charged like an object that owns its keys");
+        }
+
+        shapedData.shape().pin();
+        final var pinned = DbEntry.fromJsonObject(DB, COLL, siblingData);
+        assertTrue(CacheSizeEstimator.estimateEntry(pinned, LAYOUT) < CacheSizeEstimator.estimateEntry(owned, LAYOUT),
+                "a pinned shape is not charged to the document");
     }
 }

@@ -1,5 +1,7 @@
 import os
 import sys
+import tempfile
+import threading
 import time
 import random
 import string
@@ -8,7 +10,7 @@ import base_utils as bu
 from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
-PORT = 8989
+PORT = int(os.environ.get("STREAM_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
@@ -255,6 +257,108 @@ def test_blocking_steps_still_work(c):
                detail=f"statusInfo={joined[0].get('statusInfo') if joined else None}")
 
 
+SKIP_PAGE = 500
+
+
+def best_time(c, steps, rounds=5):
+    best = None
+    for _ in range(rounds):
+        started = time.perf_counter()
+        agg(c, COLL, steps)
+        elapsed = time.perf_counter() - started
+        best = elapsed if best is None else min(best, elapsed)
+    return best
+
+
+def test_skip_pages_tile_the_scan_and_stay_flat(c):
+    section("SKIP + LIMIT pages tile the whole scan across page files, and the last page costs like the first")
+    paged = []
+    for skip in range(0, NUM_DOCS + SKIP_PAGE, SKIP_PAGE):
+        r = agg(c, COLL, [{"type": "SKIP", "skip": skip}, {"type": "LIMIT", "limit": SKIP_PAGE}])
+        paged += [d.get("_id") for d in (r.get("results") or [])]
+    whole = [d.get("_id") for d in (agg(c, COLL, [{"type": "SKIP", "skip": 0}]).get("results") or [])]
+    check(f"the pages concatenate to the whole scan ({len(paged)} of {len(whole)} rows)", paged == whole)
+    check("no document is repeated or missed", len(set(paged)) == NUM_DOCS == len(paged),
+          detail=f"distinct={len(set(paged))} rows={len(paged)}")
+    first = best_time(c, [{"type": "SKIP", "skip": 0}, {"type": "LIMIT", "limit": 100}])
+    last = best_time(c, [{"type": "SKIP", "skip": NUM_DOCS - 100}, {"type": "LIMIT", "limit": 100}])
+    check(f"the last page ({last * 1000:.1f} ms) costs at most 3x the first ({first * 1000:.1f} ms)",
+          last <= max(3 * first, 0.05))
+
+
+TIGHT_PORT = int(os.environ.get("STREAM_TIGHT_TEST_PORT", "9450"))
+TIGHT_DOCS = 5_000
+TIGHT_WRITES = 400
+
+
+def dirty_find(c: Conn, id_: str) -> dict:
+    return c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": id_, "dirtyRead": True})
+
+
+def test_dirty_find_by_id_under_tight_memory():
+    section("Dirty FIND_BY_ID answers present and absent ids while the pk index is not resident")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-stream-tight-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, TIGHT_PORT, maxMemory="64kb")
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path, port=TIGHT_PORT)
+        with Conn(port=TIGHT_PORT) as c:
+            c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+            c.send({"type": "CREATE_DATABASE", "databaseName": DB})
+            c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
+            for start in range(0, TIGHT_DOCS, 1_000):
+                check_status(f"bulk {start}", c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+                                                      "objects": [{"_id": f"t{i:05d}", "v": i}
+                                                                  for i in range(start, start + 1_000)]},
+                                                     timeout=120), "OK")
+        stop = threading.Event()
+        written = []
+
+        def writer():
+            with Conn(port=TIGHT_PORT) as w:
+                w.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+                i = 0
+                while not stop.is_set() and i < TIGHT_WRITES:
+                    j = (i * 7 + 3) % TIGHT_DOCS
+                    w.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                            "object": {"_id": f"t{j:05d}", "v": j}})
+                    w.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                            "object": {"_id": f"new{i:05d}", "v": -i}})
+                    written.append(i)
+                    i += 1
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        wrong = []
+        with Conn(port=TIGHT_PORT) as c:
+            c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+            for i in range(0, TIGHT_DOCS, 7):
+                found = dirty_find(c, f"t{i:05d}")
+                if found.get("status") != "OK" or (found.get("object") or {}).get("v") != i:
+                    wrong.append((i, found.get("status"), found.get("errorCode")))
+                absent = dirty_find(c, f"absent{i}")
+                if absent.get("errorCode") != "404-2":
+                    wrong.append((f"absent{i}", absent.get("status"), absent.get("errorCode")))
+            stop.set()
+            thread.join(60)
+            last = written[-1] if written else None
+            if last is not None:
+                fresh = dirty_find(c, f"new{last:05d}")
+                check("a write acknowledged before the read is visible to it",
+                      fresh.get("status") == "OK", f"resp={fresh}")
+            mem = stats(c).get("stats", {}).get("memory", {})
+        check(f"every dirty point read answered right under concurrent writes ({len(wrong)} wrong)", not wrong,
+              f"first wrong: {wrong[:3]}")
+        check(f"the cache stays within its cap ({mem.get('userCacheBytes')} of {mem.get('maxMemoryBytes')} bytes)",
+              mem.get("userCacheBytes", 0) <= mem.get("maxMemoryBytes", 0) * CACHE_CAP_TOLERANCE)
+    finally:
+        bu.stop_server(proc, port=TIGHT_PORT, wait_for_port=False)
+        if bu.failure_count():
+            bu.dump_log(log_path)
+
+
 def test_server_still_alive(c):
     section("Liveness check after the whole run")
     check_status("AUTHENTICATE still works", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
@@ -285,11 +389,14 @@ def main():
         test_targeted_fetch_does_not_bloat_cache,
         test_large_collection_under_tight_memory,
         test_blocking_steps_still_work,
+        test_skip_pages_tile_the_scan_and_stay_flat,
     ]
     for scenario in scenarios:
         with Conn() as c:
             c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
             scenario(c)
+
+    test_dirty_find_by_id_under_tight_memory()
 
     with Conn() as c:
         test_server_still_alive(c)

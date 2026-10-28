@@ -14,20 +14,22 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregateLimitException;
+import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
-import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.RequestParser;
-import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.validations.AggregationStepValidator;
 import org.techhouse.ops.req.validations.RequestValidator;
+import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -135,20 +137,18 @@ public class AggregateBreadthLimitsTest {
     }
 
     @Test
-    public void test_the_deadline_counts_eager_conjunction_elements() throws Exception {
+    public void test_the_deadline_covers_a_lazy_conjunction_over_an_input() throws Exception {
         final var rows = IntStream.range(0, 5_000).mapToObj(i -> {
             final var row = new JsonObject();
             row.add("n", new JsonNumber(-i));
             return row;
         }).toList();
-        final var operator = ((AggregateRequest) RequestParser
-                .parseRequest(aggregate(filter(conjunction("OR", equalsOperators(2)))))).getAggregationSteps()
-                .getFirst();
-        final var conjunction = ((FilterAggregationStep) operator).getOperator();
+        final var request = (AggregateRequest) RequestParser
+                .parseRequest(aggregate(filter(conjunction("OR", equalsOperators(2)))));
         try (var context = PipelineContext.of(1L, Long.MAX_VALUE, null)) {
             Thread.sleep(5);
-            final var refused = assertThrows(AggregateLimitException.class, () -> FilterOperatorHelper
-                    .processOperator(conjunction, rows.stream(), TestGlobals.DB, TestGlobals.COLL, context).toList());
+            final var refused = assertThrows(AggregateLimitException.class,
+                    () -> AggregationOperationHelper.processAggregation(request, rows.stream(), null, context));
             assertEquals(ErrorCode.AGGREGATE_TIMEOUT, refused.getErrorCode());
         }
     }
@@ -208,5 +208,16 @@ public class AggregateBreadthLimitsTest {
         assertTrue(AggregationStepValidator.canFailWhileRunning(joinSteps));
         assertTrue(AggregationStepValidator.canFailWhileRunning(castSteps));
         assertFalse(AggregationStepValidator.canFailWhileRunning(sumSteps));
+    }
+
+    @Test
+    public void test_a_join_refusal_fires_at_the_exact_serialised_byte_count() throws Exception {
+        final var answered = (AggregateResponse) run(aggregate(join()));
+        final var joined = answered.getResults().getFirst().get("m").asJsonArray();
+        final var bytes = EntrySizeGuard.utf8Length(new EJson().toJson(joined));
+        TestUtils.setPrivateField(configuration, "maxEntrySize", bytes + "b");
+        assertEquals(OperationStatus.OK, run(aggregate(join())).getStatus());
+        TestUtils.setPrivateField(configuration, "maxEntrySize", (bytes - 1) + "b");
+        assertEquals(ErrorCode.MAP_RESULT_TOO_LARGE.getCode(), run(aggregate(join())).getErrorCode());
     }
 }

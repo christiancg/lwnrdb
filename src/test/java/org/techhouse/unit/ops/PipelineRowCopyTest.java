@@ -11,7 +11,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
-import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +37,7 @@ import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.JsonUtils;
 
 public class PipelineRowCopyTest {
     private static final EJson E_JSON = new EJson();
@@ -94,7 +94,7 @@ public class PipelineRowCopyTest {
         source.add("written", written);
         source.add("shared", shared);
 
-        final var copy = source.copyForWrites(Set.of("written"));
+        final var copy = source.copyForWrites(JsonUtils.writeTreeOf(List.of("written.y")));
 
         assertSame(shared, copy.get("shared"));
         assertSame(source.get(Globals.PK_FIELD), copy.get(Globals.PK_FIELD));
@@ -109,7 +109,7 @@ public class PipelineRowCopyTest {
         final var source = new JsonObject();
         source.addProperty("a", 1);
 
-        final var copy = source.copyForWrites(Set.of("missing"));
+        final var copy = source.copyForWrites(JsonUtils.writeTreeOf(List.of("missing")));
 
         assertEquals(source, copy);
         assertEquals(1, copy.size());

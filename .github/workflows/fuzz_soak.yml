@@ -16,7 +16,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
@@ -28,7 +28,7 @@ jobs:
       - name: Build native image
         run: mvn -B --no-transfer-progress -Pnative package -DskipTests
       - name: Upload native binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lwnrdb-native
           path: target/lwnrdb
@@ -46,9 +46,9 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download native binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lwnrdb-native
           path: target
@@ -62,7 +62,7 @@ jobs:
           python3 -u test_utils/test_fuzz.py --seed random --minutes "${MINUTES}" --shrink 600 --report "$GITHUB_STEP_SUMMARY" | tee fuzz-soak.log
       - name: Upload log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-soak-${{ matrix.shard }}
           path: fuzz-soak.log

@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -35,7 +36,7 @@ public class ScriptCallableGetterTest {
         try (var callable = simpleJs.openCallable(
                 "export default (doc) => ({ get total() { return doc.a + doc.b; } });",
                 host(ResourceLimits.unlimited()))) {
-            final var result = callable.apply(document(1, 2)).asJsonObject();
+            final var result = callable.apply(document(1, 2), Set.of()).asJsonObject();
             assertEquals(3d, numberAt(result, "total"));
         }
     }
@@ -69,7 +70,8 @@ public class ScriptCallableGetterTest {
         try (var callable = simpleJs.openCallable(
                 "export default (doc) => ({ get total() { throw new TypeError('no total'); } });",
                 host(ResourceLimits.unlimited()))) {
-            final var failure = assertThrows(ScriptCallableException.class, () -> callable.apply(document(1, 2)));
+            final var failure = assertThrows(ScriptCallableException.class,
+                    () -> callable.apply(document(1, 2), Set.of()));
             assertEquals("TypeError", failure.getErrorName());
         }
     }
@@ -79,7 +81,8 @@ public class ScriptCallableGetterTest {
         try (var callable = simpleJs.openCallable(
                 "export default (doc) => ({ get total() { let n = 0; for (;;) { n++; } } });",
                 host(new ResourceLimits(3000, -1, -1)))) {
-            final var failure = assertThrows(ScriptCallableException.class, () -> callable.apply(document(1, 2)));
+            final var failure = assertThrows(ScriptCallableException.class,
+                    () -> callable.apply(document(1, 2), Set.of()));
             assertEquals("ScriptLimitError", failure.getErrorName());
         }
     }

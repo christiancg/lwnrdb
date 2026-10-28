@@ -22,7 +22,7 @@ jobs:
     name: Build & Verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
@@ -35,14 +35,13 @@ jobs:
         # native build never fails on a missing dependency.
         run: sudo apt-get update && sudo apt-get install -y build-essential libz-dev
       - name: Run Maven Verify
-        # spotless.check.skip: temporary, until the flaky Eclipse P2 formatter download is fixed.
-        run: mvn -B --no-transfer-progress -Dspotless.check.skip=true verify
+        run: mvn -B --no-transfer-progress verify
       - name: Build native image
         # GraalVM is JAVA_HOME (set by setup-graalvm), so the native-maven-plugin
         # finds native-image. Tests already ran in `verify`.
         run: mvn -B --no-transfer-progress -Pnative package -DskipTests
       - name: Upload native binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lwnrdb-native
           path: target/lwnrdb
@@ -92,7 +91,7 @@ jobs:
 
           - name: memory-extensive
             start_server: true
-            max_memory: 512mb
+            max_memory: 4mb
             xmx: 1g
             run: |
               MEM_TEST_COLLECTIONS=4 \
@@ -139,6 +138,11 @@ jobs:
             start_server: false
             run: |
               python3 test_utils/test_connection_limits.py
+
+          - name: client
+            start_server: false
+            run: |
+              python3 test_utils/test_client.py
 
           - name: metadata-limits
             start_server: false
@@ -211,6 +215,11 @@ jobs:
               python3 test_utils/test_fuzz.py --self-test
               python3 test_utils/test_fuzz.py --seeds regression --budget 240 --shrink 120
 
+          - name: bench-tooling
+            start_server: false
+            run: |
+              python3 -m unittest discover -s test_utils/bench -p "test_*.py"
+
           - name: cache-warmup-bench
             start_server: true
             max_memory: 512mb
@@ -220,9 +229,9 @@ jobs:
               BENCH_WARM_RUNS=10 \
               python3 test_utils/test_cache_warmup_bench.py
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download native binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lwnrdb-native
           path: target
@@ -272,7 +281,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
@@ -282,7 +291,7 @@ jobs:
       - name: Compile (main + test classes)
         run: mvn -B --no-transfer-progress -DskipTests test-compile
       - name: Cache test262 corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: test262
           key: test262-${{ hashFiles('config/test262.properties') }}
@@ -312,7 +321,7 @@ jobs:
           wait "$conformance"
       - name: Upload report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test262-report-${{ matrix.shard }}
           path: test_log/test262-report.md

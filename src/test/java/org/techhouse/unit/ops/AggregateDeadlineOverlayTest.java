@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
@@ -21,9 +22,13 @@ import org.techhouse.ops.admin.ReadPathHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
+import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -60,8 +65,7 @@ public class AggregateDeadlineOverlayTest {
         TestUtils.standardTearDown();
     }
 
-    @Test
-    public void aFilterOverATransactionOverlayStopsAtTheDeadline() throws Exception {
+    private Transaction transactionWithOneSave() throws Exception {
         TransactionOperationHelper.start(clientId, UUID.randomUUID(), 0);
         final var buffered = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var document = new JsonObject();
@@ -72,9 +76,43 @@ public class AggregateDeadlineOverlayTest {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         assertEquals(OperationStatus.OK, TransactionOperationHelper.bufferSave(buffered, transaction).getStatus());
         TestUtils.setPrivateField(configuration, "aggregateTimeoutMs", 1);
+        return transaction;
+    }
+
+    private static FieldOperator missingIs(int value) {
+        return new FieldOperator(FieldOperatorType.EQUALS, "missing", new JsonNumber(value));
+    }
+
+    @Test
+    public void aFilterOverATransactionOverlayStopsAtTheDeadline() throws Exception {
+        final var transaction = transactionWithOneSave();
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new FilterAggregationStep(missingIs(1))));
+
+        final var response = ReadPathHelper.processAggregateOperation(request, transaction);
+
+        assertEquals("408-6", response.getErrorCode());
+    }
+
+    @Test
+    public void test_an_unindexed_filter_source_in_a_transaction_obeys_the_deadline() throws Exception {
+        final var transaction = transactionWithOneSave();
         final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of(
-                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "missing", new JsonNumber(1)))));
+                new FilterAggregationStep(
+                        new ConjunctionOperator(ConjunctionOperatorType.OR, List.of(missingIs(1), missingIs(2)))),
+                new LimitAggregationStep(1)));
+
+        final var response = ReadPathHelper.processAggregateOperation(request, transaction);
+
+        assertEquals("408-6", response.getErrorCode());
+    }
+
+    @Test
+    public void test_a_sort_source_over_an_overlay_obeys_the_deadline() throws Exception {
+        final var transaction = transactionWithOneSave();
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new SortAggregationStep("n", false)));
 
         final var response = ReadPathHelper.processAggregateOperation(request, transaction);
 

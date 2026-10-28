@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonGeo;
+import org.techhouse.utils.GeoUtils;
 
 public class JsonGeoOrderingTest {
     private static JsonGeo geo(double lat, double lng) {
@@ -77,5 +78,35 @@ public class JsonGeoOrderingTest {
                         || target.geoHash().charAt(0) != far.geoHash().charAt(0),
                 "a nearby point must share more of the geohash prefix than a distant one");
         assertEquals(target.geoHash().substring(0, 4), near.geoHash().substring(0, 4));
+    }
+
+    @Test
+    public void test_the_order_key_sorts_exactly_like_the_twelve_character_geohash() {
+        final var points = sample();
+        points.add(geo(90.0, 180.0));
+        points.add(geo(-90.0, -180.0));
+        points.add(geo(0.0, 0.0));
+        for (final var a : points) {
+            assertEquals(a.geoHash(), GeoUtils.geoHash(a.point().lat(), a.point().lng(), 12));
+            for (final var b : points) {
+                assertEquals(Integer.signum(a.geoHash().compareTo(b.geoHash())),
+                        Integer.signum(Long.compare(a.orderKey(), b.orderKey())), a + " vs " + b);
+            }
+        }
+    }
+
+    @Test
+    public void test_a_prefix_range_holds_exactly_the_keys_whose_geohash_starts_with_it() {
+        for (final var point : sample()) {
+            final var hash = point.geoHash();
+            for (var length = 1; length <= 9; length++) {
+                final var prefix = hash.substring(0, length);
+                final var from = GeoUtils.prefixBits(prefix, 12);
+                assertTrue(point.orderKey() >= from && point.orderKey() < from + GeoUtils.prefixWidth(prefix, 12));
+            }
+            final var other = hash.charAt(0) == '0' ? "1" : "0";
+            final var from = GeoUtils.prefixBits(other, 12);
+            assertFalse(point.orderKey() >= from && point.orderKey() < from + GeoUtils.prefixWidth(other, 12));
+        }
     }
 }

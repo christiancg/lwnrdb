@@ -6,6 +6,7 @@ import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -29,20 +30,21 @@ final class OrphanedPageRecords {
     record Orphan(DbEntry entry, long position, int length) {
     }
 
-    static List<DbEntry> adoptAll(FilePaths paths, PkIndexStore pkIndexStore, String dbName, String collName,
-            Iterable<Long> pages) throws IOException {
-        final var recognised = pkIndexStore.readRecognisedPkIndex(dbName, collName);
+    static List<DbEntry> adoptAll(FilePaths paths, PkRowsSession session, Iterable<Long> pages) throws IOException {
+        final var dbName = session.dbName();
+        final var collName = session.collName();
+        final var recognised = session.recognised();
         if (recognised.isEmpty()) {
             logger.error("The PK index of " + dbName + "|" + collName + " could not be read, so its pages were not"
                     + " checked for records it does not name");
             return List.of();
         }
         final var entries = recognised.get();
-        final var indexedIds = entries.stream().map(PkIndexEntry::getValue).collect(Collectors.toSet());
+        final var indexedEnds = indexedEndsByPage(entries);
         final var orphansByPage = new HashMap<Long, List<Orphan>>();
         for (final var page : pages) {
             final var orphans = orphansOf(paths.collectionPage(dbName, collName, page), dbName, collName, page,
-                    indexedEndOf(entries, page), indexedIds);
+                    indexedEnds.getOrDefault(page, 0L), entries);
             if (!orphans.isEmpty()) {
                 orphansByPage.put(page, orphans);
             }
@@ -58,7 +60,8 @@ final class OrphanedPageRecords {
             }
         }
         if (!adoptedIndexEntries.isEmpty()) {
-            pkIndexStore.appendRows(dbName, collName, adoptedIndexEntries);
+            session.invalidate();
+            session.store().appendRows(dbName, collName, adoptedIndexEntries);
             logger.warning("Adopted " + adopted.size() + " record(s) of " + dbName + "|" + collName
                     + " that were on a page but missing from its PK index, left by an interrupted write: "
                     + adopted.stream().map(DbEntry::get_id).toList());
@@ -66,9 +69,29 @@ final class OrphanedPageRecords {
         return adopted;
     }
 
-    static List<PkIndexEntry> retireDangling(PkIndexStore pkIndexStore, String dbName, String collName,
-            Map<Long, Long> pageLengths) throws IOException {
+    static void cutUncommittedCopies(FilePaths paths, PkIndexStore pkIndexStore, String dbName, String collName,
+            Iterable<Long> pages) throws IOException {
         final var recognised = pkIndexStore.readRecognisedPkIndex(dbName, collName);
+        if (recognised.isEmpty() || !SyncedWrites.enabled()) {
+            return;
+        }
+        final var entries = recognised.get();
+        final var indexedEnds = indexedEndsByPage(entries);
+        for (final var page : pages) {
+            final var file = paths.collectionPage(dbName, collName, page);
+            final var scan = scanRecords(file, dbName, collName, page, indexedEnds.getOrDefault(page, 0L));
+            final var copies = scan.records();
+            if (scan.readable() && !copies.isEmpty()
+                    && copies.stream().allMatch(copy -> isIndexed(entries, copy.entry().get_id()))) {
+                cutUncommittedCopies(file, copies);
+            }
+        }
+    }
+
+    static List<PkIndexEntry> retireDangling(PkRowsSession session, Map<Long, Long> pageLengths) throws IOException {
+        final var dbName = session.dbName();
+        final var collName = session.collName();
+        final var recognised = session.recognised();
         if (recognised.isEmpty()) {
             return List.of();
         }
@@ -76,7 +99,8 @@ final class OrphanedPageRecords {
         if (dangling.isEmpty()) {
             return List.of();
         }
-        final var rewritten = pkIndexStore.rewriteRows(dbName, collName, rows -> rows.stream()
+        session.invalidate();
+        final var rewritten = session.store().rewriteRows(dbName, collName, rows -> rows.stream()
                 .filter(row -> !isDangling(row, pageLengths)).collect(Collectors.toCollection(ArrayList::new)));
         if (!rewritten) {
             return List.of();
@@ -95,9 +119,12 @@ final class OrphanedPageRecords {
         return entry.getPosition() + entry.getLength() > pageLengths.getOrDefault(entry.getPage(), 0L);
     }
 
-    static long indexedEndOf(List<PkIndexEntry> entries, long page) {
-        return entries.stream().filter(entry -> entry.getPage() == page)
-                .mapToLong(entry -> entry.getPosition() + entry.getLength()).max().orElse(0L);
+    static Map<Long, Long> indexedEndsByPage(List<PkIndexEntry> entries) {
+        final var ends = new HashMap<Long, Long>();
+        for (final var entry : entries) {
+            ends.merge(entry.getPage(), entry.getPosition() + entry.getLength(), Math::max);
+        }
+        return ends;
     }
 
     record PageRecordScan(List<Orphan> records, String unreadable, boolean unterminatedTail) {
@@ -108,16 +135,44 @@ final class OrphanedPageRecords {
         }
     }
 
+    private static boolean isIndexed(List<PkIndexEntry> rowsSortedById, String id) {
+        return Collections.binarySearch(rowsSortedById, id) >= 0;
+    }
+
     static List<Orphan> orphansOf(File page, String dbName, String collName, long pageNumber, long indexedEnd,
-            Set<String> indexedIds) throws IOException {
+            List<PkIndexEntry> rowsSortedById) throws IOException {
         final var scan = scanRecords(page, dbName, collName, pageNumber, indexedEnd);
-        if (!scan.readable()
-                || scan.records().stream().anyMatch(orphan -> indexedIds.contains(orphan.entry().get_id()))) {
-            logger.error("Page " + page.getName() + " holds bytes past its last indexed record that are"
-                    + " not whole records of unindexed ids; leaving the page untouched");
+        final var held = scan.records().stream().filter(orphan -> isIndexed(rowsSortedById, orphan.entry().get_id()))
+                .toList();
+        if (scan.readable() && held.isEmpty()) {
+            return scan.records();
+        }
+        if (scan.readable() && held.size() == scan.records().size() && SyncedWrites.enabled()) {
+            cutUncommittedCopies(page, held);
             return List.of();
         }
-        return scan.records();
+        logger.error("Page " + page.getName() + " holds bytes past its last indexed record that are"
+                + " not whole records of unindexed ids; leaving the page untouched");
+        return List.of();
+    }
+
+    private static void cutUncommittedCopies(File page, List<Orphan> copies) {
+        final boolean cut;
+        final var lock = FileLocks.lockWrite(page);
+        try {
+            cut = FileLocks.truncateTo(page, copies.getFirst().position(),
+                    "Could not cut the uncommitted copies past" + " the last indexed record of " + page.getName()
+                            + "; a scan may answer them until the next" + " startup");
+        } finally {
+            lock.unlock();
+        }
+        if (!cut) {
+            return;
+        }
+        logger.warning("Cut " + copies.size() + " uncommitted cop" + (copies.size() == 1 ? "y" : "ies") + " from "
+                + page.getName() + ": records of ids the PK index already holds elsewhere, appended by a write whose"
+                + " intent a power loss lost, so the indexed versions are kept: "
+                + copies.stream().map(copy -> copy.entry().get_id()).toList());
     }
 
     static PageRecordScan scanRecords(File page, String dbName, String collName, long pageNumber, long fromOffset)

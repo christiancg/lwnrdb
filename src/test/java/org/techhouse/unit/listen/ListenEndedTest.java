@@ -107,7 +107,11 @@ public class ListenEndedTest {
 
     @SuppressWarnings("BusyWait")
     private void runWorkerOver(UUID... listenIds) throws InterruptedException {
-        final var queue = new LinkedBlockingQueue<>(List.of(listenIds));
+        final var queue = new LinkedBlockingQueue<UUID>();
+        for (final var listenId : listenIds) {
+            final var registration = manager.getRegistration(listenId);
+            queue.add(registration != null ? registration.groupId() : listenId);
+        }
         final var worker = new Thread(new ListenProcessorThread(queue, manager));
         worker.setDaemon(true);
         worker.start();
@@ -192,7 +196,8 @@ public class ListenEndedTest {
         final var listenId = delivered(request(TestGlobals.DB, List.of()));
         try {
             saveReader(null);
-            runWorkerOver(listenId, listenId);
+            runWorkerOver(listenId);
+            runWorkerOver(listenId);
         } finally {
             saveReader(PermissionLevel.READ);
         }

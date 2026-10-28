@@ -13,14 +13,15 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
+import org.techhouse.bckg_ops.events.UsageProfileFlushEvent;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -76,6 +77,8 @@ public class EventProcessorHelperTest {
                 .getWholeCollection(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME).get("evt-run-1");
         Assertions.assertNotNull(stored);
         TestUtils.setPrivateField(Configuration.getInstance(), "scriptRunHistoryEnabled", false);
+        TestUtils.setPrivateField(Configuration.getInstance(), "scriptRunHistoryKinds",
+                ConfigKey.SCRIPT_RUN_HISTORY_KINDS.defaultValue());
         ScriptRunHistory.reset();
     }
 
@@ -119,9 +122,7 @@ public class EventProcessorHelperTest {
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
-        final var event = new CollectionUsageEvent(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
-                System.currentTimeMillis());
-        EventProcessorHelper.processEvent(event);
+        EventProcessorHelper.processMaintenance(new UsageProfileFlushEvent());
         final var cache = IocContainer.get(Cache.class);
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
         Assertions.assertNotNull(cache.getPkIndexCollectionUsage(id));
@@ -129,9 +130,9 @@ public class EventProcessorHelperTest {
 
     @Test
     public void processCollectionUsageEventIgnoresAdminDb() throws IOException, InterruptedException {
-        final var event = new CollectionUsageEvent(AccessKind.COLLECTION, org.techhouse.config.Globals.ADMIN_DB_NAME,
-                "databases", null, System.currentTimeMillis());
-        EventProcessorHelper.processEvent(event);
+        AdminOperationHelper.flushCollectionUsage(java.util.List.of(
+                new org.techhouse.cache.UsageCounter(AccessKind.COLLECTION, org.techhouse.config.Globals.ADMIN_DB_NAME,
+                        "databases", null, 1L, System.currentTimeMillis())));
         final var cache = IocContainer.get(Cache.class);
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry
                 .buildId(org.techhouse.config.Globals.ADMIN_DB_NAME, "databases", "");

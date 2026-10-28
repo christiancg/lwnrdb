@@ -12,6 +12,7 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -119,10 +120,8 @@ public class CacheTest extends CacheFixtureSupport {
         wholeCollection.put("1", entry1);
         wholeCollection.put("2", entry2);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
         final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
-        final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", typeCollMap);
+        final var collectionMap = CacheResidents.documentsByCollection(userCache);
         collectionMap.put(collectionIdentifier, wholeCollection);
         final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
         locks.lock(dbName, collName);

@@ -1,7 +1,9 @@
 package org.techhouse.ejson.internal;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 
 /**
  * Do sneaky things to allocate objects without invoking their constructors.
@@ -25,12 +27,14 @@ public abstract class UnsafeAllocator {
             Field f = unsafeClass.getDeclaredField("theUnsafe");
             f.setAccessible(true);
             final Object unsafe = f.get(null);
-            final Method allocateInstance = unsafeClass.getMethod("allocateInstance", Class.class);
+            final MethodHandle allocateInstance = MethodHandles.lookup()
+                    .unreflect(unsafeClass.getMethod("allocateInstance", Class.class)).bindTo(unsafe)
+                    .asType(MethodType.methodType(Object.class, Object.class));
             return new UnsafeAllocator() {
                 @Override
                 @SuppressWarnings("unchecked")
                 public <T> T newInstance(Class<T> c) throws Exception {
-                    return (T) allocateInstance.invoke(unsafe, c);
+                    return (T) HandleInvoker.apply(allocateInstance, c);
                 }
             };
         } catch (Exception ignored) {

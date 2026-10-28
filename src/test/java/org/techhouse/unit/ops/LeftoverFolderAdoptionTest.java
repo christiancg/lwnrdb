@@ -85,7 +85,8 @@ public class LeftoverFolderAdoptionTest {
     @Test
     public void test_a_schema_loaded_just_before_a_leftover_move_does_not_outlive_it() throws Exception {
         leaveAPopulatedUnregisteredCollection();
-        fs.writeCollectionSchema(TestGlobals.DB, COLLECTION, "{\"type\":\"object\",\"required\":[\"legacy\"]}");
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, COLLECTION,
+                "{\"type\":\"object\",\"required\":[\"legacy\"]}");
         final var original = fs.folderQuarantine();
         final var loadingFirst = Mockito.spy(original);
         Mockito.doAnswer(invocation -> {
@@ -155,7 +156,7 @@ public class LeftoverFolderAdoptionTest {
         assertEquals(OperationStatus.OK, DatabaseOperationHelper
                 .processCreateDatabaseOperation(new CreateDatabaseRequest(DATABASE), null).getStatus());
         createCollection(DATABASE);
-        fs.writeProcedure(DATABASE, "oldproc", "{\"name\":\"oldproc\"}");
+        fs.metadataFiles().writeProcedure(DATABASE, "oldproc", "{\"name\":\"oldproc\"}");
         cache.evictDatabase(DATABASE);
         AdminOperationHelper.deleteDatabaseEntry(DATABASE);
 
@@ -163,7 +164,8 @@ public class LeftoverFolderAdoptionTest {
                 null);
 
         assertEquals(OperationStatus.OK, response.getStatus());
-        assertTrue(fs.listProcedureNames(DATABASE).isEmpty(), "a dropped database's procedures must not come back");
+        assertTrue(fs.metadataFiles().listProcedureNames(DATABASE).isEmpty(),
+                "a dropped database's procedures must not come back");
         assertTrue(cache.getCollectionNamesForDatabase(DATABASE).isEmpty());
         assertEquals(1, quarantinedIn(new File(TestGlobals.PATH), DATABASE).length);
     }
@@ -171,7 +173,7 @@ public class LeftoverFolderAdoptionTest {
     @Test
     public void test_create_database_refuses_a_leftover_it_cannot_move() throws Exception {
         assertTrue(fs.createDatabaseFolder(DATABASE));
-        fs.writeProcedure(DATABASE, "oldproc", "{\"name\":\"oldproc\"}");
+        fs.metadataFiles().writeProcedure(DATABASE, "oldproc", "{\"name\":\"oldproc\"}");
         final var root = new File(TestGlobals.PATH);
         assertTrue(root.setWritable(false));
         try {

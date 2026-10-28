@@ -334,4 +334,51 @@ public class SearchUtilsTest {
                 List.of("active", "active", "active"));
         assertEquals(Set.of("id2"), result);
     }
+
+    @Test
+    public void test_equals_result_is_detached_from_the_index_entries() {
+        final var live = new HashSet<>(Set.of("id1", "id2"));
+        List<FieldIndexEntry<String>> entries = List.of(new FieldIndexEntry<>("db", "col", "v", live));
+
+        final var result = SearchUtils.findingByOperator(entries, FieldOperatorType.EQUALS, "v");
+        live.add("late");
+        result.add("mine");
+
+        assertEquals(Set.of("id1", "id2", "mine"), result);
+        assertEquals(Set.of("id1", "id2", "late"), live);
+    }
+
+    @Test
+    public void test_a_range_over_empty_and_oversized_entries_collects_every_id() {
+        final var big = new HashSet<String>();
+        for (var i = 0; i < 100; i++) {
+            big.add("big" + i);
+        }
+        List<FieldIndexEntry<Integer>> entries = List.of(new FieldIndexEntry<>("db", "col", 1, Set.of("a")),
+                new FieldIndexEntry<>("db", "col", 2, Set.of()), new FieldIndexEntry<>("db", "col", 3, big));
+
+        final var result = SearchUtils.findingByOperator(entries, FieldOperatorType.GREATER_THAN, 1);
+
+        assertEquals(big, result);
+        assertEquals(100, result.size());
+    }
+
+    @Test
+    public void test_count_equals_sums_the_ids_of_the_equal_run() {
+        final List<FieldIndexEntry<String>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", "Alpha", Set.of("a")),
+                new FieldIndexEntry<>("db1", "col1", "alpha", Set.of("b", "c")),
+                new FieldIndexEntry<>("db1", "col1", "beta", Set.of("d")),
+                new FieldIndexEntry<>("db1", "col1", "gamma", Set.of("e", "f", "g")));
+
+        assertEquals(3L, SearchUtils.countEquals(entries, "ALPHA"));
+        assertEquals(1L, SearchUtils.countEquals(entries, "beta"));
+        assertEquals(3L, SearchUtils.countEquals(entries, "gamma"));
+        assertEquals(0L, SearchUtils.countEquals(entries, "delta"));
+        assertEquals(0L, SearchUtils.countEquals(List.of(), "alpha"));
+        for (final var value : List.of("alpha", "BETA", "gamma", "zeta")) {
+            assertEquals(SearchUtils.findingByOperator(entries, FieldOperatorType.EQUALS, value).size(),
+                    SearchUtils.countEquals(entries, value), value);
+        }
+    }
 }

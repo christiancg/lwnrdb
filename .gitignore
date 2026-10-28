@@ -51,6 +51,8 @@ db/
 
 ### Test logs ###
 test_log/
+test_utils/bench/results/
+test_utils/bench/generated/
 
 ### test262 corpus (fetched, never committed) ###
 # Anchored: an unanchored `test262/` would also ignore the worker's Java package

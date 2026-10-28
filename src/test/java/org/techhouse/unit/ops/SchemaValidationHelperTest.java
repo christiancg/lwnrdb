@@ -43,7 +43,7 @@ public class SchemaValidationHelperTest {
     @BeforeEach
     void reset() throws Exception {
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
-        fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 
     private void installSchema() {
@@ -138,7 +138,7 @@ public class SchemaValidationHelperTest {
 
     @Test
     public void test_a_failed_schema_read_refuses_the_write() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\": \"obj");
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\": \"obj");
 
         final var response = SchemaValidationHelper.check(save(doc("Alice")));
 
@@ -234,7 +234,8 @@ public class SchemaValidationHelperTest {
 
     @Test
     public void test_stored_over_limit_schema_still_loads_and_cheap_documents_pass() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, DiamondSchemas.behindProperty("deep", 28));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL,
+                DiamondSchemas.behindProperty("deep", 28));
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
 
         assertNotNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));

@@ -16,9 +16,10 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     public static final String OPERATOR_DISTANCE = "distance";
     public static final String OPERATOR_WITHIN = "within";
 
-    private static final int GEO_HASH_ORDER_PRECISION = 12;
+    public static final int GEO_HASH_ORDER_PRECISION = 12;
+    private static final long NO_ORDER_KEY = -1L;
 
-    private String orderHash;
+    private long orderKey = NO_ORDER_KEY;
 
     public JsonGeo(GeoPoint customValue) {
         super(wireValueOf(customValue));
@@ -70,15 +71,15 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     // break ties, keeping compare == 0 iff the points are equal.
     @Override
     public Integer compare(GeoPoint another) {
-        final var byHash = geoHash()
-                .compareTo(GeoUtils.geoHash(another.lat(), another.lng(), GEO_HASH_ORDER_PRECISION));
+        final var byHash = Long.compare(orderKey(),
+                GeoUtils.geoHashBits(another.lat(), another.lng(), GEO_HASH_ORDER_PRECISION));
         return byHash != 0 ? byHash : compareByCoordinates(another);
     }
 
     @Override
     public Integer compareToCustom(JsonCustom<GeoPoint> another) {
         if (another instanceof JsonGeo otherGeo) {
-            final var byHash = geoHash().compareTo(otherGeo.geoHash());
+            final var byHash = Long.compare(orderKey(), otherGeo.orderKey());
             return byHash != 0 ? byHash : compareByCoordinates(otherGeo.customValue);
         }
         return compare(another.getCustomValue());
@@ -127,17 +128,17 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
         }
     }
 
-    public String cachedGeoHash() {
-        return orderHash;
+    public long orderKey() {
+        var cached = orderKey;
+        if (cached == NO_ORDER_KEY) {
+            cached = GeoUtils.geoHashBits(customValue.lat(), customValue.lng(), GEO_HASH_ORDER_PRECISION);
+            orderKey = cached;
+        }
+        return cached;
     }
 
     public String geoHash() {
-        var cached = orderHash;
-        if (cached == null) {
-            cached = GeoUtils.geoHash(customValue.lat(), customValue.lng(), GEO_HASH_ORDER_PRECISION);
-            orderHash = cached;
-        }
-        return cached;
+        return GeoUtils.geoHash(customValue.lat(), customValue.lng(), GEO_HASH_ORDER_PRECISION);
     }
 
     @Override

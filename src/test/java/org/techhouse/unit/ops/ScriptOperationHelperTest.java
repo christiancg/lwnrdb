@@ -8,6 +8,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
@@ -48,6 +49,7 @@ public class ScriptOperationHelperTest {
     @AfterAll
     static void tearDown() throws Exception {
         setConfig("scriptsEnabled", true);
+        setConfig("scriptMaxSourceBytes", ConfigKey.SCRIPT_MAX_SOURCE_BYTES.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

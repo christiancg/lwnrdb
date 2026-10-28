@@ -16,6 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
@@ -52,6 +53,8 @@ public class ScriptOperationHelperAdmissionTest {
     @AfterAll
     static void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
+        TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes",
+                ConfigKey.SCRIPT_MAX_SOURCE_BYTES.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

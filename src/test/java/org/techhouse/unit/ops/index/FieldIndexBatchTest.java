@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atMost;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -312,5 +313,63 @@ public class FieldIndexBatchTest {
 
         assertEquals(List.of(true), observed, "the point sits after the first type's append and before the second");
         assertTrue(stringFile.exists());
+    }
+
+    private boolean knownAbsent(Class<?> type) {
+        return cache.isFieldIndexTypeAbsent(TestGlobals.DB, TestGlobals.COLL, Cache.getIndexIdentifier(FIELD, type));
+    }
+
+    @Test
+    public void test_an_absent_type_is_probed_once() throws Exception {
+        final var spied = spyTheBatchFileSystem();
+        support.put("p1", new JsonString("first"));
+        support.applyBatch(FIELD, List.of("p1"));
+        support.put("p2", new JsonString("second"));
+
+        support.applyBatch(FIELD, List.of("p2"));
+
+        verify(spied, times(1)).indexTypeFileExists(anyString(), anyString(), eq(FIELD), eq("Boolean"));
+        verify(spied, times(1)).readWholeFieldIndexFiles(anyString(), anyString(), eq(FIELD), eq(Boolean.class));
+        assertTrue(knownAbsent(Boolean.class));
+        assertFalse(knownAbsent(String.class));
+    }
+
+    @Test
+    public void test_a_value_of_a_type_known_absent_still_gets_indexed() throws Exception {
+        support.put("a1", new JsonString("text"));
+        support.applyBatch(FIELD, List.of("a1"));
+        assertTrue(knownAbsent(Boolean.class));
+        support.put("a2", JsonBoolean.of(true));
+        support.put("a3", new JsonObject());
+
+        support.applyBatch(FIELD, List.of("a2", "a3"));
+
+        assertTrue(FieldIndexBatchSupport.typeExists(FIELD, "Boolean"));
+        assertTrue(FieldIndexBatchSupport.typeExists(FIELD, IndexKind.OBJECT.label()));
+        assertFalse(knownAbsent(Boolean.class));
+        assertEquals(Set.of("true => a2"), FieldIndexBatchSupport.snapshot(FIELD).get("Boolean"));
+    }
+
+    @Test
+    public void test_create_index_forgets_absent_types() throws Exception {
+        support.put("c1", new JsonString("text"));
+        support.applyBatch(FIELD, List.of("c1"));
+        assertTrue(knownAbsent(Boolean.class));
+
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
+
+        assertFalse(knownAbsent(Boolean.class));
+    }
+
+    @Test
+    public void test_an_unreadable_type_file_is_not_recorded_absent() throws Exception {
+        final var spied = spyTheBatchFileSystem();
+        doReturn(null).when(spied).readWholeFieldIndexFiles(anyString(), anyString(), eq(FIELD), eq(Boolean.class));
+        doReturn(true).when(spied).indexTypeFileExists(anyString(), anyString(), eq(FIELD), eq("Boolean"));
+        support.put("r1", new JsonString("text"));
+
+        assertThrows(IOException.class, () -> support.applyBatch(FIELD, List.of("r1")));
+
+        assertFalse(knownAbsent(Boolean.class), "a type whose file could not be read is never taken as absent");
     }
 }

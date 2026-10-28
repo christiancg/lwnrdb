@@ -55,8 +55,8 @@ public class ScheduleRegistryTest {
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
         for (final var dbName : new String[]{TestGlobals.DB, OTHER_DB}) {
-            for (final var name : fs.listScheduleNames(dbName)) {
-                fs.deleteSchedule(dbName, name);
+            for (final var name : fs.metadataFiles().listScheduleNames(dbName)) {
+                fs.metadataFiles().deleteSchedule(dbName, name);
             }
             cache.removeSchedulesForDatabase(dbName);
         }
@@ -75,12 +75,12 @@ public class ScheduleRegistryTest {
             throws Exception {
         final var definition = new ScheduleDefinition(name, "p", cron, intervalMs, null, 0L, enabled, "alice", null, 1L,
                 1L, 1L, "alice");
-        fs.writeSchedule(dbName, name, eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(dbName, name, eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(dbName, name);
     }
 
     private void writeCorruptSchedule(String name) throws Exception {
-        fs.writeSchedule(TestGlobals.DB, name, "{\"name\": \"" + name);
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, name, "{\"name\": \"" + name);
         cache.removeSchedule(TestGlobals.DB, name);
     }
 
@@ -177,7 +177,7 @@ public class ScheduleRegistryTest {
         writeSchedule(OTHER_DB, "b", null, 2000L);
         registry.loadAll();
 
-        fs.deleteSchedule(TestGlobals.DB, "a");
+        fs.metadataFiles().deleteSchedule(TestGlobals.DB, "a");
         cache.removeSchedule(TestGlobals.DB, "a");
         registry.reload(TestGlobals.DB);
         assertNull(registry.get(TestGlobals.DB, "a"));
@@ -280,7 +280,7 @@ public class ScheduleRegistryTest {
         registry.loadAll();
 
         refreshRacing(TestGlobals.DB, () -> {
-            fs.deleteSchedule(TestGlobals.DB, "deleted");
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, "deleted");
             cache.removeSchedule(TestGlobals.DB, "deleted");
             registry.reload(TestGlobals.DB);
         });

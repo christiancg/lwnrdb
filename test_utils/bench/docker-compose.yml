@@ -1,0 +1,99 @@
+name: lwnrdb-bench
+
+x-engine: &engine
+  cpus: ${BENCH_CPUS:-2}
+  cpuset: ${BENCH_CPUSET:-0-1}
+  mem_limit: ${BENCH_MEMORY:-4096m}
+  memswap_limit: ${BENCH_MEMORY:-4096m}
+  shm_size: 256m
+  ulimits:
+    nofile:
+      soft: 70000
+      hard: 70000
+
+services:
+  lwnrdb:
+    <<: *engine
+    build:
+      context: ../..
+    image: lwnrdb-bench-server
+    command: ["java", "-XX:+UseG1GC", "-Xlog:gc:file=/tmp/gc.log", "-XX:MaxRAMPercentage=${LWNRDB_HEAP_PERCENT:-35}", "-jar", "app.jar"]
+    environment:
+      JDK_JAVA_OPTIONS: ${LWNRDB_JAVA_OPTS:-}
+    volumes:
+      - lwnrdb-data:/app/db
+      - ./generated/lwnrdb.cfg:/app/lwnrdb.cfg:ro
+    profiles: [lwnrdb]
+
+  mysql:
+    <<: *engine
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: bench
+      MYSQL_DATABASE: bench
+    command:
+      - --innodb-buffer-pool-size=${MYSQL_BUFFER_POOL:-2048M}
+      - --innodb-flush-log-at-trx-commit=${MYSQL_FLUSH_AT_COMMIT:-2}
+      - --skip-log-bin
+      - --max-connections=500
+    volumes:
+      - mysql-data:/var/lib/mysql
+    profiles: [mysql]
+
+  postgres:
+    <<: *engine
+    image: postgres:18
+    environment:
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: bench
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-1024MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE:-3072MB}
+      - -c
+      - synchronous_commit=${POSTGRES_SYNCHRONOUS_COMMIT:-off}
+      - -c
+      - max_connections=500
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    profiles: [postgres]
+
+  mongo:
+    <<: *engine
+    image: mongo:8.0
+    command: ["--wiredTigerCacheSizeGB", "${MONGO_CACHE_GB:-1.50}"]
+    volumes:
+      - mongo-data:/data/db
+    profiles: [mongo]
+
+  couchbase:
+    <<: *engine
+    image: couchbase/server:community-8.0.2
+    volumes:
+      - couchbase-data:/opt/couchbase/var
+    networks:
+      default:
+        aliases: [couchbase.bench.local]
+    profiles: [couchbase]
+
+  bench:
+    build: .
+    image: lwnrdb-bench-client
+    cpuset: ${BENCH_CLIENT_CPUSET:-2-9}
+    environment:
+      COUCHBASE_DATA_QUOTA: ${COUCHBASE_DATA_QUOTA:-2048}
+      COUCHBASE_INDEX_QUOTA: ${COUCHBASE_INDEX_QUOTA:-614}
+    volumes:
+      - .:/bench:ro
+      - ./results:/results
+    working_dir: /bench
+    profiles: [client]
+
+volumes:
+  lwnrdb-data:
+  mysql-data:
+  postgres-data:
+  mongo-data:
+  couchbase-data:

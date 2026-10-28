@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.UserCache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -45,9 +46,7 @@ public class UserCacheAdmissionTest {
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
             cache.addEntryToCache("userDb", "c1", DbEntry.fromJsonObject("userDb", "c1", obj));
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
@@ -55,7 +54,7 @@ public class UserCacheAdmissionTest {
     }
 
     @Test
-    public void test_addEntryToCache_never_admits_a_reserved_database() throws Exception {
+    public void test_addEntryToCache_never_admits_a_reserved_database() {
         UserCache cache = IocContainer.get(UserCache.class);
         for (final var reserved : List.of(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_DB_NAME)) {
             final var obj = new JsonObject();
@@ -63,9 +62,7 @@ public class UserCacheAdmissionTest {
             cache.addEntryToCache(reserved, "databases", DbEntry.fromJsonObject(reserved, "databases", obj));
             cache.addEntriesToCache(reserved, "collections",
                     List.of(DbEntry.fromJsonObject(reserved, "collections", obj)));
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(reserved, "databases")));
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(reserved, "collections")));
             assertTrue(cache.isCachingDisabled(reserved));
@@ -82,9 +79,7 @@ public class UserCacheAdmissionTest {
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
             cache.addEntriesToCache("userDb", "c1", List.of(DbEntry.fromJsonObject("userDb", "c1", obj)));
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
@@ -98,9 +93,7 @@ public class UserCacheAdmissionTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             UserCache cache = IocContainer.get(UserCache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             collectionMap.clear();
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
@@ -120,9 +113,7 @@ public class UserCacheAdmissionTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 1024L * 1024L);
         try {
             UserCache cache = IocContainer.get(UserCache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             collectionMap.clear();
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
@@ -141,9 +132,7 @@ public class UserCacheAdmissionTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             UserCache cache = IocContainer.get(UserCache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             collectionMap.clear();
             final var obj1 = new JsonObject();
             obj1.addProperty(Globals.PK_FIELD, "id1");
@@ -178,9 +167,7 @@ public class UserCacheAdmissionTest {
                 when(fsMock.getById(pk)).thenReturn(stub);
                 final var result = cache.getById("userDb", "c1", pk);
                 assertEquals("id1", result.get_id());
-                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-                };
-                final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+                final var collectionMap = CacheResidents.documentsByCollection(cache);
                 assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
             } finally {
                 fsField.set(cache, originalFs);
@@ -203,9 +190,7 @@ public class UserCacheAdmissionTest {
             final var originalFs = fsField.get(cache);
             fsField.set(cache, fsMock);
             try {
-                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-                };
-                final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+                final var collectionMap = CacheResidents.documentsByCollection(cache);
                 collectionMap.clear();
                 final var obj = new JsonObject();
                 obj.addProperty(Globals.PK_FIELD, "id1");
@@ -233,9 +218,7 @@ public class UserCacheAdmissionTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 100L);
         try {
             UserCache cache = IocContainer.get(UserCache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             collectionMap.clear();
             // Seed an existing cached collection that already exceeds the cap (~217B > 100B).
             final var existing = new java.util.concurrent.ConcurrentHashMap<String, DbEntry>();
@@ -287,9 +270,7 @@ public class UserCacheAdmissionTest {
         }
 
         assertEquals(1, result.size());
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = CacheResidents.documentsByCollection(cache);
         assertFalse(collectionMap.containsKey(collId), "rejected admission must not populate the cache");
     }
 
@@ -314,9 +295,7 @@ public class UserCacheAdmissionTest {
 
             assertEquals(1, result.size());
             verify(fsMock).getByIndexEntries(anyList());
-            final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+            final var collectionMap = CacheResidents.documentsByCollection(cache);
             assertFalse(collectionMap.containsKey(collId), "caching disabled must not populate the cache");
         } finally {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
@@ -335,9 +314,7 @@ public class UserCacheAdmissionTest {
         final var cache = IocContainer.get(UserCache.class);
         final var config = Configuration.getInstance();
         final var originalMax = config.getMaxMemoryBytes();
-        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        TestUtils.getPrivateField(cache, "collectionMap", collType).clear();
+        CacheResidents.documentsByCollection(cache).clear();
         try {
             TestUtils.setPrivateField(config, "maxMemoryBytes", 100_000_000L);
             cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, cacheEntry("a", 1));
@@ -357,9 +334,7 @@ public class UserCacheAdmissionTest {
         final var cache = IocContainer.get(UserCache.class);
         final var config = Configuration.getInstance();
         final var originalMax = config.getMaxMemoryBytes();
-        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        TestUtils.getPrivateField(cache, "collectionMap", collType).clear();
+        CacheResidents.documentsByCollection(cache).clear();
         try {
             TestUtils.setPrivateField(config, "maxMemoryBytes", 100_000_000L);
             cache.addEntriesToCache(TestGlobals.DB, TestGlobals.COLL, List.of(cacheEntry("a", 1)));

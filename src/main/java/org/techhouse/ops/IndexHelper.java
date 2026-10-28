@@ -1,38 +1,28 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
-import java.util.ArrayList;
+import java.io.UncheckedIOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
-import org.techhouse.data.IndexKind;
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
-import org.techhouse.ejson.elements.JsonBoolean;
-import org.techhouse.ejson.elements.JsonNumber;
-import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.FieldIndexBatch;
+import org.techhouse.ops.index.IndexBuild;
 import org.techhouse.ops.index.IndexEntryReader;
 import org.techhouse.ops.index.IndexValueCodec;
 import org.techhouse.utils.JsonUtils;
-import org.techhouse.utils.SaltedKey;
 
 public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -48,6 +38,11 @@ public class IndexHelper {
     public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName,
             ReadObserver observer) throws IOException {
         return IndexEntryReader.getIndexEntriesForField(dbName, collName, fieldName, observer);
+    }
+
+    public static List<Object> getDistinctIndexValues(String dbName, String collName, String fieldName,
+            ReadObserver observer) throws IOException {
+        return IndexEntryReader.distinctValuesForField(dbName, collName, fieldName, observer);
     }
 
     public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
@@ -69,88 +64,11 @@ public class IndexHelper {
     }
 
     public static void createIndex(String dbName, String collName, String fieldName) throws InterruptedException {
-        rl.lockIndex(dbName, collName, fieldName);
         try {
-            buildIndex(dbName, collName, fieldName);
-        } catch (RuntimeException e) {
-            fs.dropIndex(dbName, collName, fieldName);
-            throw e;
-        } finally {
-            cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-            rl.releaseIndex(dbName, collName, fieldName);
+            IndexBuild.buildAll(dbName, collName, List.of(fieldName));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
-    }
-
-    private static void buildIndex(String dbName, String collName, String fieldName) {
-        fs.dropIndex(dbName, collName, fieldName);
-        final var coll = cache.getWholeCollection(dbName, collName);
-        final var entriesToBeIndexed = coll.values().stream().map(DbEntry::getData)
-                .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).collect(Collectors
-                        .groupingBy(jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, fieldName))));
-        final Map<Class<?>, List<FieldIndexEntry<?>>> indexes = entriesToBeIndexed.entrySet().stream()
-                .map(jsonElementListEntry -> {
-                    final var key = jsonElementListEntry.getKey().element();
-                    final var ids = jsonElementListEntry.getValue().stream()
-                            .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue())
-                            .collect(Collectors.toSet());
-                    if (key.isJsonPrimitive()) {
-                        final var primitive = key.asJsonPrimitive();
-                        return switch (primitive) {
-                            case JsonNumber jsonNumber ->
-                                new FieldIndexEntry<>(dbName, collName, jsonNumber.doubleValue() + 0.0, ids);
-                            case JsonString jsonString -> {
-                                if (jsonString.isJsonCustom()) {
-                                    final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
-                                    yield new FieldIndexEntry<>(dbName, collName, custom, ids);
-                                } else {
-                                    yield new FieldIndexEntry<>(dbName, collName, jsonString.getValue(), ids);
-                                }
-                            }
-                            case JsonBoolean jsonBoolean ->
-                                new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
-                            default -> throw new IllegalStateException("Unexpected value: " + primitive);
-                        };
-                    } else {
-                        return null;
-                    }
-                }).filter(Objects::nonNull).collect(Collectors.groupingBy(fieldIndexEntry -> {
-                    final var clazz = fieldIndexEntry.getValue().getClass();
-                    if (Number.class.isAssignableFrom(clazz)) {
-                        return Number.class;
-                    }
-                    return clazz;
-                }));
-        fs.writeIndexFile(dbName, collName, fieldName, indexes);
-        writeHashIndexes(dbName, collName, fieldName, entriesToBeIndexed);
-    }
-
-    private static void writeHashIndexes(String dbName, String collName, String fieldName,
-            Map<SaltedKey, List<JsonObject>> grouped) {
-        final var objectIds = new LinkedHashMap<String, Set<String>>();
-        final var arrayIds = new LinkedHashMap<String, Set<String>>();
-        for (var groupedEntry : grouped.entrySet()) {
-            final var key = groupedEntry.getKey().element();
-            if (!key.isJsonObject() && !key.isJsonArray()) {
-                continue;
-            }
-            final var idsByHash = key.isJsonObject() ? objectIds : arrayIds;
-            final var ids = idsByHash.computeIfAbsent(JsonUtils.hashElement(key), ignored -> new HashSet<>());
-            for (var document : groupedEntry.getValue()) {
-                ids.add(document.get(Globals.PK_FIELD).asJsonString().getValue());
-            }
-        }
-        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.OBJECT,
-                hashEntriesOf(dbName, collName, objectIds));
-        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.ARRAY, hashEntriesOf(dbName, collName, arrayIds));
-    }
-
-    private static List<FieldIndexEntry<String>> hashEntriesOf(String dbName, String collName,
-            Map<String, Set<String>> idsByHash) {
-        final var entries = new ArrayList<FieldIndexEntry<String>>();
-        for (var hashIds : idsByHash.entrySet()) {
-            entries.add(new FieldIndexEntry<>(dbName, collName, hashIds.getKey(), hashIds.getValue()));
-        }
-        return entries;
     }
 
     public static boolean dropIndex(String dbName, String collName, String fieldName) throws InterruptedException {
@@ -213,7 +131,7 @@ public class IndexHelper {
         rl.lockIndex(dbName, collName, fieldName);
         var flushed = false;
         try {
-            final var batch = FieldIndexBatch.open(dbName, collName, fieldName);
+            final var batch = FieldIndexBatch.open(dbName, collName, fieldName, ids);
             for (var id : ids) {
                 final var doc = byId.get(id);
                 batch.apply(id, doc == null ? null : JsonUtils.getFromPath(doc.getData(), fieldName));

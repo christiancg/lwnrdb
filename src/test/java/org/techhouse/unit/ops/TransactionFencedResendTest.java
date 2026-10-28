@@ -35,6 +35,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 
 public class TransactionFencedResendTest {
     private final ClusterTestHarness cluster = new ClusterTestHarness();
@@ -81,6 +82,7 @@ public class TransactionFencedResendTest {
     private UUID fencedTransaction(String coll, String id) throws Exception {
         final var clientId = transactionWithOneSave(coll, id);
         final var transaction = clientTracker.getActiveTransaction(clientId);
+        TransactionRecordCalls.persistBufferedOps(transaction);
         TxCommitLog.recordLocalCommit(transaction.getTransactionId().toString(), transaction.getBufferedOpIds(),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, coll)));
         return clientId;
@@ -233,12 +235,12 @@ public class TransactionFencedResendTest {
     }
 
     @Test
-    public void test_unfenced_commit_whose_op_read_fails_still_releases() {
+    public void test_unfenced_commit_whose_begin_record_fails_still_releases() {
         final var clientId = transactionWithOneSave(TestGlobals.COLL, "undecided-io");
 
         try (var admin = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
-            admin.when(() -> AdminOperationHelper.readTransactionOps(ArgumentMatchers.anyList()))
-                    .thenThrow(new IOException("disk full"));
+            admin.when(() -> AdminOperationHelper.writeTransactionRecords(ArgumentMatchers.anyList(),
+                    ArgumentMatchers.anyList())).thenThrow(new IOException("disk full"));
             final var response = TransactionOperationHelper.commit(clientId);
 
             assertEquals("500-24", response.getErrorCode(), "an undecided commit that fails before applying fails");

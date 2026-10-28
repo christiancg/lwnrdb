@@ -2,7 +2,6 @@ package org.techhouse.cache;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -159,7 +158,7 @@ final class AdminPageCache {
         if (existing != null) {
             existing.setPageSize(existing.getPageSize() + bytesDelta);
             existing.setEntryCount(existing.getEntryCount() + addedEntries);
-        } else {
+        } else if (addedEntries >= 0) {
             final var newEntry = new AdminPageEntry(dbName, collName, page);
             newEntry.setPageSize(bytesDelta);
             newEntry.setEntryCount(addedEntries);
@@ -199,14 +198,11 @@ final class AdminPageCache {
     }
 
     long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
-        final var pageEntries = pageList(dbName, collName);
-        final var fileLengthOf = fileLengthsOf(dbName, collName);
-        final var pendingPageBytes = new HashMap<Long, Long>();
+        final var placement = new BatchPagePlacement(pageList(dbName, collName), fileLengthsOf(dbName, collName),
+                configuration.getMaxPageSize(), entryByteSizes);
         final var targets = new long[entryByteSizes.length];
         for (var index = 0; index < entryByteSizes.length; index++) {
-            final var size = entryByteSizes[index];
-            targets[index] = selectPageForInsert(pageEntries, size, pendingPageBytes, fileLengthOf);
-            pendingPageBytes.merge(targets[index], (long) size, Long::sum);
+            targets[index] = placement.place(entryByteSizes[index]);
         }
         return targets;
     }
@@ -236,6 +232,9 @@ final class AdminPageCache {
             }
             final var pending = pendingPageBytes.getOrDefault(page, 0L);
             final var liveBytes = entry.getPageSize() + pending;
+            if (!PagePlacement.liveBytesAdmit(liveBytes, entryByteSize, maxPageBytes)) {
+                continue;
+            }
             if (PagePlacement.acceptsInsert(liveBytes, fileLengthOf.applyAsLong(page) + pending, entryByteSize,
                     maxPageBytes)) {
                 bestFit = page;

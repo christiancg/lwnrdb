@@ -89,7 +89,7 @@ final class LoopEvaluator {
         if (init instanceof VariableDeclaration declaration) {
             interp.hoist(List.of(declaration), loopEnv);
             interp.evalVariableDeclaration(declaration, loopEnv);
-            if (LEXICAL_KINDS.contains(declaration.getKind())) {
+            if (statement.bindingsCapturable() && LEXICAL_KINDS.contains(declaration.getKind())) {
                 perIterationKind = declaration.getKind();
                 for (final var declarator : declaration.getDeclarations()) {
                     collectBoundNames(declarator.getId(), perIterationNames);

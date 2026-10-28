@@ -116,10 +116,21 @@ A document write (`SAVE`/`BULK_SAVE`/`DELETE`) is coordinated by the owner:
    the owner's address. (Request routing normally forwards to the owner rather than
    reaching this rejection — it is the backstop for a direct-to-non-owner write.)
 2. **Local commit.** The owner takes the collection write lock and commits through the
-   normal execute path.
+   normal execute path. Concurrent single-document `SAVE`s and `DELETE`s on one owner share
+   one group commit, exactly as standalone: one log force for the whole group, taken under
+   the exclusive lock. Each writer still re-checks ownership and reserves its own delete
+   tombstone; a group whose force fails is taken back and retracts those tombstones.
 3. **Replicate.** Still holding the lock, the owner re-reads the committed document(s) and
    broadcasts a `REPLICATE` to all ALIVE peers in parallel, waiting for a **majority** to
-   ack within `replicationAckTimeoutMs`. The owner counts as one vote, so it needs
+   ack within `replicationAckTimeoutMs`. A group ships once, after its force: one
+   `REPLICATE` for its final documents (or its deletes), or one single-collection
+   `REPLICATE_TX` with the deletes first and then the upserts when it mixes both, so an id
+   saved and deleted inside the group ships only its delete. During that wait the owner
+   holds the collection lock shared: point reads (`FIND_BY_ID`) proceed and may see the
+   group's writes before the quorum acknowledged them, while scans, LISTEN re-runs and other
+   writers wait until the `REPLICATE` returns. Every write of the group gets the outcome:
+   `503-3` on a timeout, `503-8` when ownership moved meanwhile; a write refused before it
+   applied keeps its own code. The owner counts as one vote, so it needs
    `majority − 1` peer acks, where
    `majority = ⌊max(clusterExpectedSize, knownMembers) / 2⌋ + 1`.
 4. **Ack or timeout.** On a majority the client gets `OK`. On timeout it gets
@@ -157,8 +168,14 @@ and failing on the missing page folder. A clustered node deliberately never answ
 COLLECTION_NOT_FOUND` for this, because it cannot tell a collection that was never created from
 one whose metadata has not reached it yet — only a node with clustering off can make that call.
 
-Forwarded bodies are Base64-wrapped (`cluster/msg/ForwardBody`) because EJson does not
-escape string values, so raw JSON cannot be embedded directly in the outer message.
+A forwarded body travels as raw JSON text in the `forwardBody` string: EJson escapes every
+string value (RFC 8259, quotes, newlines, control characters and lone surrogates included), so the
+body round-trips inside the outer frame unchanged. The owner parses it with
+`RequestParser.parseRequest(String)` (nesting limit kept) and the edge relays the response string
+verbatim. Peer frames (`ClusterMessage` and the payloads inside it) are annotated with `ejson/NullsOmitted`,
+so the reflection serializer leaves their unset fields out instead of writing a `null` for every
+envelope field; a missing key reads back as the field's default. Client responses still emit every
+field.
 
 ### Joins across collections
 
@@ -561,14 +578,26 @@ ACTIVE, and nothing at all is NONE. One table (`ops/tx/SliceStateMachine`) maps 
 | ABORTED | `409-13` | `409-13` | `409-13` | recorded reply | vote no | `ERROR` | ack |
 
 Every commit path — the local commit, the single-owner fast path, a 2PC participant on `COMMIT_TX`, the
-coordinator's own slice, a startup or recovery replay — runs the same procedure (`ops/tx/SliceCommit`): write
-`|localcommit` (deleting `|part`), apply the ops, stage the triggers, record the outcome where a peer may ask for it,
-clear `|localcommit`, discard the ops, replicate. A failed apply leaves the slice COMMITTING with its locks held.
+coordinator's own slice, a startup or recovery replay — runs the same procedure (`ops/tx/SliceCommit`): one begin
+record writes `|localcommit`, deletes `|part` and, for a slice whose ops are still only in memory, carries those ops
+too; then apply the ops, stage the triggers, and one finish record writes the outcome where a peer may ask for it and
+deletes `|part`, `|localcommit` and the ops together; then replicate. A failed apply leaves the slice COMMITTING with
+its locks held, and so does a finish record that did not land. Each record is one write-ahead-log append of
+`admin/transactions` (`AdminOperationHelper.writeTransactionRecords`), so no crash leaves half of it.
+
+Buffered ops stay in the edge's or participant's memory until the first durable marker: the begin record of a local
+commit, or the PREPARED record (`[+ops, +|part]`) of a 2PC participant. A transaction rolled back, refused or
+abandoned before then never touched the disk, and a crash before then leaves nothing to sweep. Ops above 4 MB go out
+as their own records first, the marker riding the last one; a crash between them leaves ops with no marker, which the
+startup orphan sweep removes.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
 2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
-it still owns every collection it buffered, and durably recording a PREPARED marker), then — on a unanimous yes — the coordinator
-**durably records the commit decision** and drives `COMMIT_TX` to all. Any no vote or
+it still owns every collection it buffered, and durably recording its ops and a PREPARED marker in one record), then — on a unanimous yes — the coordinator
+**durably records the commit decision** and drives `COMMIT_TX` to all. A coordinator with a slice of its own records
+the decision in that slice's begin record (`[+|coord, +|localcommit, −|part]`), forced before any `COMMIT_TX` is
+sent; it drives the participants only once the decision is published, so a record that did not land answers
+`500-24` with nothing decided. Any no vote or
 unreachable participant drives `ABORT_TX` to all and returns `409-7 TRANSACTION_ABORTED`.
 Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own replicas.
 If the coordinator's own slice fails to apply, the edge keeps the transaction open and answers `409-10`. The slice is
@@ -587,7 +616,12 @@ participant's `TX_STATUS`, so all of them abort. On restart a prepared
 participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
 commit re-drives `COMMIT_TX`. A participant that received `COMMIT_TX` writes `|localcommit` before applying, so a
 crash mid-apply is finished from that marker at startup, or by the recovery sweep, without asking anyone; `TX_STATUS`
-reports COMMITTING as committed.
+reports COMMITTING as committed. Writing `|localcommit` and deleting `|part` are one record, and finishing the slice
+deletes any `|part` still there too: before they were one record a crash between them left both, one left behind was
+listed in doubt forever, and once the outcome marker was garbage-collected recovery could read it as PREPARED and
+record a committed transaction as aborted. The coordinator step of the
+recovery sweep skips a decision a live commit is still driving, so it never sends a second `COMMIT_TX` whose
+acknowledgement could be taken for the commit's own.
 
 The participant does **not** hold its write locks while in doubt — clients may write those collections meanwhile —
 so every apply is version-checked. Each buffered op is given its write version when it is buffered, after its
@@ -665,7 +699,7 @@ then, drain the node's traffic at the load balancer first if that window matters
 **Testing failures between two statements.** Killing a process can only land *somewhere* in a
 critical section. To stop a node at one exact statement, the engine has a test-only fault seam:
 named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_ENTROPY_SNAPSHOTTED`,
-`PK_INDEX_REPLACED`, `INDEX_BATCH_FLUSHED`, `PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
+`PK_INDEX_REPLACED`, `INDEX_BATCH_FLUSHED`, `WAL_APPENDED`, `WAL_CHECKPOINT_FORCED`, `PEER_REPLY`, among others) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
 inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
 suite turns it on for its throwaway nodes. See the
 [README](../README.md#fault-injection-testing-and-debugging-only) for the operations.
@@ -724,12 +758,20 @@ cannot converge — a lagging replica still holding the document would resurrect
 On any membership change, `cluster/AntiEntropyService` reconciles each of this node's
 collections against the live members:
 
-1. It builds a local **digest** (`id → version` for live documents, plus tombstones) and
-   requests each peer's digest. The request carries a **summary** of that digest — the entry
-   count plus a hash over every `id|version|deleted|length` line — and a peer whose own summary
-   matches answers `summaryMatch` and omits the digest entirely, which is what keeps a converged
-   cluster's sweeps cheap. Both sides must build their entries identically, byte length included,
-   or the two summaries never agree and every sweep ships a full digest instead.
+1. It describes its collection (live documents with their version and byte length, plus tombstones)
+   in one pass under the collection read lock, without sorting or building strings: each entry
+   hashes to a 64-bit `DigestHash.entryHash` (FNV-1a of the id, mixed with the version, the length
+   and the deleted flag), and the **summary** is the entry count plus the wrapping sum of those
+   hashes, so it is independent of order. A tombstone older than the live row of the same id is
+   left out on both sides, so a superseded delete cannot keep two converged nodes apart. Entries
+   also fall into `B` **buckets** by the top bits of the id hash alone (`B` a power of two between
+   16 and 4096, about 64 entries per bucket, chosen by the requester). The first `DIGEST` carries
+   the summary and `B`: a peer whose own summary matches answers `summaryMatch`; a peer holding at
+   most `2B` entries answers them all; any other answers its `B` bucket summaries. The requester
+   then asks only for the entries of the buckets that differ, so one changed document among a
+   million ships one bucket, and a converged round builds no per-entry map at all. The answering
+   node's id travels once per payload. Both sides must hash identically, byte length included, or
+   the summaries never agree and every sweep ships every bucket.
 2. It computes, per id, the **highest version seen anywhere** — a tombstone wins a tie with
    a live document, so a delete beats a concurrent write at the same version. Two live copies at
    exactly equal versions are ordered by node id, and the pull gate and the replicated-apply check
@@ -788,9 +830,12 @@ a node that was down catches up when it rejoins.
 Beyond the membership-triggered pass, a **periodic sweep** runs the same reconciliation
 every `antiEntropyIntervalMs` (default 60s), so a replica left behind by a replication
 timeout is repaired without waiting for a membership change. At the end of each
-collection's reconciliation the tombstone file is **garbage-collected**: duplicates collapse
-to the highest version per id, and any tombstone older than `tombstoneRetentionMs` (default
-24h) is dropped. Retention must comfortably exceed the longest expected node downtime,
+collection's reconciliation the tombstone file is **garbage-collected** when something is due —
+its oldest tombstone is past `tombstoneRetentionMs` (default 24h) or it holds more than twice as
+many lines as ids — and left alone otherwise, so a converged round rewrites nothing: duplicates
+collapse to the highest version per id and expired tombstones are dropped. Each collection's
+tombstones are held in memory once read (`fs/TombstoneStore`), revalidated by the file's size and
+modification time on every access. Retention must comfortably exceed the longest expected node downtime,
 otherwise a delete could be collected before a still-down replica has converged on it and
 would be resurrected on rejoin. Owner cache warm-up on handoff is deliberately lazy.
 
@@ -931,9 +976,16 @@ contain a secret holder; they do not make `actingUser` trustworthy, because whoe
 secret chooses it.
 
 Every peer shares **one** connection, so what a node does with an inbound frame decides what the
-rest of that peer's traffic waits for. `ClusterConnectionHandler` answers replication, admin and 2PC
-messages on a single ordered executor and answers `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` concurrently beside it.
-The last two are there because they wait out a whole `replicationAckTimeoutMs` on a busy collection
+rest of that peer's traffic waits for. `ClusterConnectionHandler` answers a `REPLICATE`, and a `REPLICATE_TX`
+whose entries all name one collection, on that collection's own ordered lane (`ApplyLanes`, keyed `db|coll`): writes
+to one collection apply in the order the peer sent them, while a write parked on one collection's lock no longer holds
+up a peer's writes to every other collection. A lane exists only while it has work and runs on a virtual thread.
+Admin, 2PC and forwarded-transaction messages, a `REPLICATE_TX` spanning several collections and a payload naming an
+invalid collection stay on one ordered control lane. Lanes can reorder across collections, which is safe because every
+apply is version-checked and incarnation-guarded; a coordinator owning a new collection may see its `REPLICATE`
+overtake the `REPLICATE_ADMIN` that created the collection on a replica, which then answers `ERROR` once (the write is
+unregistered there) and anti-entropy repairs it. `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` are answered
+concurrently beside the lanes. The last two are there because they wait out a whole `replicationAckTimeoutMs` on a busy collection
 lock: on the ordered lane that wait was the peer's entire inbound channel, so an ordinary long write
 holding a collection lock made the *requester's* next forwarded transaction op time out and the
 client's write be refused. They mutate nothing, and anti-entropy's two sides already snapshot at
@@ -953,7 +1005,7 @@ cluster listener has its own caps, described above.
 | `JOIN_REQUEST` / `JOIN_RESPONSE` | `sender`, `members` | discovery |
 | `GOSSIP` / `GOSSIP_ACK` | `sender`, `members` (+ heartbeat and telemetry) | membership, failure detection, script load |
 | `REPLICATE` | `replication`: `{dbName, collName, op: UPSERT\|DELETE, documents, ids, versions}` | document write replication |
-| `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (Base64 JSON), `actingUser` | request routing and script placement |
+| `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (raw JSON text), `actingUser` | request routing and script placement |
 | `REPLICATE_ADMIN` | `adminSnapshot`: the `{key, version, body}` admin records an op touched (`body` absent for a tombstone) | admin/DDL replication by record-shipping |
 | `REINDEX_BROADCAST` | `forwardBody` (the `REINDEX` request, `primaryKey` included) | a cluster-wide index rebuild |
 | `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted, length}` digest and its summary, or pulled documents | document anti-entropy |

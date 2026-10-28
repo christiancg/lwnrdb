@@ -14,8 +14,8 @@ import org.techhouse.ops.resp.OperationResponse;
 
 public final class ForwardedRequestGate {
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final Set<OperationType> SYSTEM_HISTORY_WRITES = Set.of(OperationType.SAVE, OperationType.DELETE,
-            OperationType.CREATE_COLLECTION);
+    private static final Set<OperationType> SYSTEM_HISTORY_WRITES = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
+            OperationType.DELETE, OperationType.CREATE_COLLECTION);
 
     private ForwardedRequestGate() {
     }

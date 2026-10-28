@@ -72,6 +72,7 @@ public final class ConfigFixture {
         map.put("procedureCacheSize", "128");
         map.put("triggersEnabled", "false");
         map.put("triggerThreads", "2");
+        map.put("listenThreads", "2");
         map.put("triggerQueueSize", "10000");
         map.put("triggerMaxDepth", "3");
         map.put("triggerTimeoutMs", "1000");

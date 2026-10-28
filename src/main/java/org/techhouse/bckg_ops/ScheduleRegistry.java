@@ -81,7 +81,7 @@ public class ScheduleRegistry {
         final var listingKey = prefix + Globals.SCHEDULES_FOLDER;
         final List<String> names;
         try {
-            names = fs.listScheduleNames(dbName);
+            names = fs.metadataFiles().listScheduleNames(dbName);
         } catch (IOException e) {
             warnOnce(listingKey, "the schedules folder could not be listed, so the registered schedules are kept: "
                     + e.getMessage());

@@ -280,4 +280,27 @@ public class RequestParserTest {
         assertEquals("The command is not valid", refusal.getMessage());
         assertEquals(OperationType.LIST_DATABASES, RequestParser.parseRequest(message, 1_000).getType());
     }
+
+    @Test
+    public void test_a_missing_type_is_an_invalid_command() {
+        assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest("{\"databaseName\":\"d\"}"));
+    }
+
+    @Test
+    public void test_a_non_string_type_is_an_invalid_command() {
+        assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest("{\"type\":5}"));
+    }
+
+    @Test
+    public void test_an_unknown_type_is_an_invalid_command() {
+        assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest("{\"type\":\"NOT_A_TYPE\"}"));
+    }
+
+    @Test
+    public void test_save_still_takes_its_id_from_the_object() {
+        final var request = RequestParser.parseRequest(
+                "{\"type\":\"SAVE\",\"databaseName\":\"testDb\",\"collectionName\":\"c\",\"object\":{\"_id\":\"abc\",\"n\":1}}");
+
+        assertEquals("abc", ((SaveRequest) request).get_id());
+    }
 }

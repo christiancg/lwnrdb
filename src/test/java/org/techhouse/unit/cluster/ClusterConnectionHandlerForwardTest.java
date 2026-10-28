@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.msg.TxReplicationPayload;
@@ -55,10 +54,10 @@ public class ClusterConnectionHandlerForwardTest extends ClusterConnectionHandle
     private OperationResponse forward(String body, String actingUser) throws Exception {
         final var message = envelope(ClusterMessageType.FORWARD_REQUEST);
         message.setActingUser(actingUser);
-        message.setForwardBody(ForwardBody.encode(body));
+        message.setForwardBody(body);
         final var reply = pool.request(cluster.serverAddress(), message, SHORT_ACK_TIMEOUT_MS);
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, reply.getType(), reply.getErrorMessage());
-        return eJson.fromJson(ForwardBody.decode(reply.getForwardBody()), OperationResponse.class);
+        return eJson.fromJson(reply.getForwardBody(), OperationResponse.class);
     }
 
     private ClusterMessage send(ClusterMessage message) throws Exception {
@@ -97,8 +96,8 @@ public class ClusterConnectionHandlerForwardTest extends ClusterConnectionHandle
     @Test
     public void aReindexBroadcastWithABadNameIsRefused() throws Exception {
         final var message = envelope(ClusterMessageType.REINDEX_BROADCAST);
-        message.setForwardBody(ForwardBody.encode(
-                "{\"type\":\"REINDEX\",\"databaseName\":\"../x\",\"collectionName\":\"" + TestGlobals.COLL + "\"}"));
+        message.setForwardBody(
+                "{\"type\":\"REINDEX\",\"databaseName\":\"../x\",\"collectionName\":\"" + TestGlobals.COLL + "\"}");
         final var reply = send(message);
         assertEquals(ClusterMessageType.ERROR, reply.getType());
         assertTrue(reply.getErrorMessage().startsWith("Refused the index rebuild"), reply.getErrorMessage());
@@ -111,10 +110,10 @@ public class ClusterConnectionHandlerForwardTest extends ClusterConnectionHandle
         message.setActingUser(READER);
         message.setTxSessionId(sessionId);
         message.setTxId(UUID.randomUUID().toString());
-        message.setForwardBody(ForwardBody.encode(save(TestGlobals.DB, TestGlobals.COLL, "txdenied")));
+        message.setForwardBody(save(TestGlobals.DB, TestGlobals.COLL, "txdenied"));
         final var reply = send(message);
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, reply.getType());
-        final var response = eJson.fromJson(ForwardBody.decode(reply.getForwardBody()), OperationResponse.class);
+        final var response = eJson.fromJson(reply.getForwardBody(), OperationResponse.class);
         assertEquals(ErrorCode.NO_PERMISSIONS.getCode(), response.getErrorCode());
         assertNull(clientTracker.txSession(sessionId));
     }

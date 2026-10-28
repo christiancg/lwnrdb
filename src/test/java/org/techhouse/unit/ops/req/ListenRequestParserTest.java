@@ -8,6 +8,8 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.StopListenRequest;
+import org.techhouse.ops.req.agg.step.CountAggregationStep;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 
 public class ListenRequestParserTest {
 
@@ -48,5 +50,28 @@ public class ListenRequestParserTest {
         assertInstanceOf(StopListenRequest.class, result);
         assertEquals(OperationType.STOP_LISTEN, result.getType());
         assertEquals(id, ((StopListenRequest) result).getListenId());
+    }
+
+    @Test
+    public void test_a_listen_without_steps_still_parses() {
+        final var json = "{\"type\":\"LISTEN\",\"databaseName\":\"db\",\"collectionName\":\"coll\"}";
+
+        final var result = (ListenRequest) RequestParser.parseRequest(json);
+
+        assertNull(result.getAggregationSteps());
+        assertEquals("coll", result.getCollectionName());
+    }
+
+    @Test
+    public void test_listen_steps_bind_once() {
+        final var json = """
+                {"type":"LISTEN","databaseName":"db","collectionName":"coll",
+                 "aggregationSteps":[{"type":"LIMIT","limit":3},{"type":"COUNT"}]}""";
+
+        final var result = (ListenRequest) RequestParser.parseRequest(json);
+
+        assertEquals(2, result.getAggregationSteps().size());
+        assertInstanceOf(LimitAggregationStep.class, result.getAggregationSteps().get(0));
+        assertInstanceOf(CountAggregationStep.class, result.getAggregationSteps().get(1));
     }
 }

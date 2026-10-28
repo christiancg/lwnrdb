@@ -36,6 +36,15 @@ public final class OperationLocks {
         }
     }
 
+    static OperationResponse withGroupedCollectionLock(String dbName, String collName, OperationType type,
+            ErrorCode errorCode, GroupCommit.Eligibility eligibility, GroupCommit.GroupedAttempt attempt) {
+        if (!GroupCommit.enabled() || !GroupCommit.groupable(eligibility.groupable())) {
+            return withCollectionLock(dbName, collName, type, errorCode,
+                    () -> attempt.prepare(WriteEffects.IMMEDIATE).commit());
+        }
+        return GroupCommit.run(dbName, collName, new GroupCommit.GroupedWrite(type, errorCode, eligibility, attempt));
+    }
+
     private static boolean acquireWriteLock(String dbName, String collName, boolean bounded)
             throws InterruptedException {
         if (!bounded) {
@@ -74,11 +83,26 @@ public final class OperationLocks {
 
     public static OperationResponse withReadLocks(boolean dirtyRead, List<String> collectionIds, OperationType type,
             ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
+        return withAcquiredReadLocks(timeout -> locks.acquireReadLocks(dirtyRead, collectionIds, timeout), type,
+                errorCode, bounded, attempt);
+    }
+
+    public static OperationResponse withPointReadLock(boolean dirtyRead, String collectionId, OperationType type,
+            ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
+        return withAcquiredReadLocks(timeout -> locks.acquirePointReadLock(dirtyRead, collectionId, timeout), type,
+                errorCode, bounded, attempt);
+    }
+
+    private interface ReadLockAcquisition {
+        List<String> acquire(long timeoutMillis) throws InterruptedException;
+    }
+
+    private static OperationResponse withAcquiredReadLocks(ReadLockAcquisition acquisition, OperationType type,
+            ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
         final var readLocks = new ArrayList<String>();
         try {
             return OperationResponse.respondOrError(type, errorCode, () -> {
-                final var acquired = locks.acquireReadLocks(dirtyRead, collectionIds,
-                        bounded ? configuration.getTransactionLockTimeoutMs() : 0L);
+                final var acquired = acquisition.acquire(bounded ? configuration.getTransactionLockTimeoutMs() : 0L);
                 if (acquired == null) {
                     return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
                 }

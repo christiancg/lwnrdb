@@ -4,7 +4,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.PkIndexList;
 import org.techhouse.cluster.ClusterConfig;
+import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.PeerNames;
 import org.techhouse.cluster.msg.ReplicationPayload;
@@ -12,7 +14,10 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.TombstoneView;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.DirtySink;
 import org.techhouse.listen.ListenManager;
@@ -20,7 +25,6 @@ import org.techhouse.listen.NotificationBatch;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.BulkSaveRequest;
-import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
 
 // Never re-replicates: replication fires only from the owner's OperationProcessor write handlers.
@@ -31,6 +35,9 @@ public final class ReplicatedApplyHelper {
     private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final Logger logger = Logger.logFor(ReplicatedApplyHelper.class);
 
     private ReplicatedApplyHelper() {
@@ -51,6 +58,7 @@ public final class ReplicatedApplyHelper {
                         + ": its write lock stayed held for " + timeoutMillis + "ms");
                 return false;
             }
+            faultInjector.at(FaultPoint.REPLICATED_APPLY_LOCKED, Cache.getCollectionIdentifier(dbName, collName));
             return applyLocked(payload);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -104,7 +112,7 @@ public final class ReplicatedApplyHelper {
         final var versions = payload.getVersions();
         final var acceptedDocuments = new ArrayList<JsonObject>();
         final var acceptedVersions = new ArrayList<Long>();
-        final var tombstones = fs.tombstones().read(payload.getDbName(), payload.getCollName());
+        final var tombstones = fs.tombstones().view(payload.getDbName(), payload.getCollName());
         for (var i = 0; i < documents.size(); i++) {
             final var document = documents.get(i);
             final var version = versionAt(versions, i);
@@ -125,7 +133,8 @@ public final class ReplicatedApplyHelper {
         }
         final var request = new BulkSaveRequest(payload.getDbName(), payload.getCollName());
         request.setObjects(acceptedDocuments);
-        return SaveOperationHelper.executeBulkSave(request, acceptedVersions, sink) instanceof BulkSaveResponse;
+        return SaveOperationHelper.executeBulkSave(request, acceptedVersions, sink,
+                servesCollection(payload.getDbName(), payload.getCollName())) instanceof BulkSaveResponse;
     }
 
     public static boolean versionsWithinSkew(ReplicationPayload payload) {
@@ -144,7 +153,7 @@ public final class ReplicatedApplyHelper {
     }
 
     private static boolean isSupersededLocally(String dbName, String collName, JsonObject document, long version,
-            java.util.Map<String, Long> tombstones) throws java.io.IOException {
+            TombstoneView tombstones) throws java.io.IOException {
         final var idElement = document.get(Globals.PK_FIELD);
         if (!(idElement instanceof JsonString jsonString)) {
             return false;
@@ -154,8 +163,8 @@ public final class ReplicatedApplyHelper {
         if (stored != null && stored > version) {
             return true;
         }
-        final var tombstoned = tombstones.get(id);
-        return tombstoned != null && tombstoned >= version;
+        final var tombstoned = tombstones.versionOf(id);
+        return tombstoned != 0L && tombstoned >= version;
     }
 
     private static Long storedVersionOf(String dbName, String collName, String id) throws java.io.IOException {
@@ -173,25 +182,38 @@ public final class ReplicatedApplyHelper {
     }
 
     private static boolean applyDelete(ReplicationPayload payload, DirtySink sink) throws Exception {
+        final var dbName = payload.getDbName();
+        final var collName = payload.getCollName();
         final var ids = payload.getIds();
         final var versions = payload.getVersions();
+        final var tombstones = fs.tombstones().view(dbName, collName);
+        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        final var missingIds = new ArrayList<String>();
+        final var missingVersions = new ArrayList<Long>();
+        final var deletable = new ArrayList<String>(ids.size());
         for (var i = 0; i < ids.size(); i++) {
             final var id = ids.get(i);
             final var version = versionAt(versions, i);
-            // Tombstone with the owner's version even when absent, so anti-entropy cannot resurrect it.
             if (version != null) {
-                fs.tombstones().append(payload.getDbName(), payload.getCollName(), id, version);
                 hybridClock.observe(version);
+                if (tombstones.versionOf(id) < version) {
+                    missingIds.add(id);
+                    missingVersions.add(version);
+                }
             }
-            final var stored = storedVersionOf(payload.getDbName(), payload.getCollName(), id);
-            if (version != null && stored != null && stored > version) {
-                continue;
+            final var stored = PkIndexList.rowOf(primaryKeyIndex, id);
+            if (version == null || stored == null || stored.getVersion() <= version) {
+                deletable.add(id);
             }
-            final var request = new DeleteRequest(payload.getDbName(), payload.getCollName());
-            request.set_id(id);
-            // A missing id (ENTRY_NOT_FOUND) is treated as already-applied: the end state (absent) matches.
-            DeleteOperationHelper.executeDelete(request, sink);
         }
+        final var pending = fs.tombstones().appendAllDeferred(dbName, collName, missingIds, missingVersions);
+        faultInjector.at(FaultPoint.REPLICATED_TOMBSTONES_APPENDED, Cache.getCollectionIdentifier(dbName, collName));
+        DeleteOperationHelper.executeBulkDelete(dbName, collName, deletable, sink, servesCollection(dbName, collName));
+        pending.await();
         return true;
+    }
+
+    private static boolean servesCollection(String dbName, String collName) {
+        return coordinator.stillOwns(dbName, collName);
     }
 }

@@ -19,11 +19,17 @@ import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
+import org.techhouse.cluster.msg.ReplicationOp;
+import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.cluster.msg.TxReplicationPayload;
+import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -31,6 +37,7 @@ import org.techhouse.test.TestUtils;
 public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBase {
     private static final List<String> QUEUED_IDS = List.of("drain1", "drain2");
     private static final long DROPPED_REPLY_WAIT_MS = 500L;
+    private static final String THIRD_COLL = "laneColl";
     private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
 
     @AfterEach
@@ -49,7 +56,7 @@ public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBa
         final var raw = "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"object\":{\"_id\":\"" + id + "\",\"v\":1}}";
         final var message = envelope(ClusterMessageType.FORWARD_REQUEST);
-        message.setForwardBody(ForwardBody.encode(raw));
+        message.setForwardBody(raw);
         return message;
     }
 
@@ -234,5 +241,86 @@ public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBa
 
         final var ack = pool.request(address, envelope(ClusterMessageType.GOSSIP), SHORT_ACK_TIMEOUT_MS);
         assertEquals(ClusterMessageType.GOSSIP_ACK, ack.getType());
+    }
+
+    private ClusterMessage replicatedUpsert(String collName, String id) {
+        final var message = envelope(ClusterMessageType.REPLICATE);
+        message.setReplication(upsertPayload(collName, id));
+        return message;
+    }
+
+    private static ReplicationPayload upsertPayload(String collName, String id) {
+        final var document = new JsonObject();
+        document.addProperty("_id", id);
+        document.addProperty("v", 1);
+        return new ReplicationPayload(TestGlobals.DB, collName, ReplicationOp.UPSERT, List.of(document), null,
+                List.of("7"));
+    }
+
+    private Thread requestInBackground(ClusterMessage message, CountDownLatch done) {
+        return Thread.ofVirtual().start(() -> {
+            try {
+                pool.request(cluster.serverAddress(), message, ACK_TIMEOUT_MS);
+            } catch (Exception e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                done.countDown();
+            }
+        });
+    }
+
+    @Test
+    public void test_a_replicate_parked_on_one_collection_does_not_delay_another() throws Exception {
+        TestUtils.createTestJoinCollection();
+        final var parkedDone = new CountDownLatch(1);
+        final Thread parked;
+
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            parked = requestInBackground(replicatedUpsert(TestGlobals.COLL, "parked"), parkedDone);
+            assertFalse(parkedDone.await(1, TimeUnit.SECONDS), "the replicate should wait on the held lock");
+
+            final var ack = pool.request(cluster.serverAddress(), replicatedUpsert(TestGlobals.JOIN_COLL, "other"),
+                    5000L);
+
+            assertEquals(ClusterMessageType.REPLICATE_ACK, ack.getType());
+            assertEquals(1L, parkedDone.getCount(), "the first replicate must still be parked, or this proved nothing");
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertTrue(parkedDone.await(30, TimeUnit.SECONDS));
+        parked.join();
+        assertEquals(OperationStatus.OK, findById("parked").getStatus());
+    }
+
+    @Test
+    public void test_a_multi_collection_replicate_tx_uses_the_control_lane() throws Exception {
+        TestUtils.createTestJoinCollection();
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, THIRD_COLL));
+        IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, THIRD_COLL);
+        final var txDone = new CountDownLatch(1);
+        final var tx = envelope(ClusterMessageType.REPLICATE_TX);
+        tx.setTxReplication(new TxReplicationPayload(
+                List.of(upsertPayload(TestGlobals.COLL, "txA"), upsertPayload(TestGlobals.JOIN_COLL, "txB"))));
+        final Thread parked;
+
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            parked = requestInBackground(tx, txDone);
+            assertFalse(txDone.await(1, TimeUnit.SECONDS), "the batch should wait on the held lock");
+
+            assertThrows(
+                    Exception.class, () -> pool.request(cluster.serverAddress(),
+                            envelope(ClusterMessageType.ADMIN_SNAPSHOT), DROPPED_REPLY_WAIT_MS),
+                    "a control-lane request queues behind the multi-collection batch");
+            final var ack = pool.request(cluster.serverAddress(), replicatedUpsert(THIRD_COLL, "laned"), 5000L);
+            assertEquals(ClusterMessageType.REPLICATE_ACK, ack.getType(), "a collection lane is not behind it");
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertTrue(txDone.await(30, TimeUnit.SECONDS));
+        parked.join();
     }
 }

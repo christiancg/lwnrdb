@@ -19,7 +19,6 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.ConjunctionTally;
 import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
@@ -46,8 +45,8 @@ public class FilterConjunctionMemoryTest {
         TestUtils.standardTearDown();
     }
 
-    private void cacheCollection(long seed) throws IOException {
-        final var random = new Random(seed);
+    private void cacheCollection() throws IOException {
+        final var random = new Random(11);
         for (var i = 0; i < DOCUMENTS; i++) {
             final var doc = new JsonObject();
             doc.addProperty(Globals.PK_FIELD, "d" + i);
@@ -108,25 +107,12 @@ public class FilterConjunctionMemoryTest {
     }
 
     private static List<String> ids(List<JsonObject> rows) {
-        return rows.stream().map(row -> row.get(Globals.PK_FIELD).asJsonString().getValue()).toList();
-    }
-
-    @Test
-    public void andOfManyChildrenKeepsOneRowPerDocument() throws IOException {
-        cacheCollection(7);
-        final var tally = new ConjunctionTally();
-        for (var child = 0; child < 2000; child++) {
-            wholeCollection().forEach(tally::add);
-        }
-
-        assertEquals(DOCUMENTS, tally.size());
-        assertEquals(DOCUMENTS, tally.rowsCounted(2000).count());
-        assertEquals(0, tally.rowsCounted(1).count());
+        return rows.stream().map(row -> row.get(Globals.PK_FIELD).asJsonString().getValue()).sorted().toList();
     }
 
     @Test
     public void everyConjunctionAnswersLikeTheGroupingImplementation() throws IOException {
-        cacheCollection(11);
+        cacheCollection();
         final var rounds = rounds();
         var nonEmpty = 0;
         for (var round = 0; round < rounds.size(); round++) {
@@ -143,20 +129,5 @@ public class FilterConjunctionMemoryTest {
             }
         }
         assertTrue(nonEmpty > 0);
-    }
-
-    @Test
-    public void rowsWithoutAnIdTallyByTheRowItself() {
-        final var first = new JsonObject();
-        first.addProperty("x", 1);
-        final var equal = new JsonObject();
-        equal.addProperty("x", 1);
-        final var tally = new ConjunctionTally();
-
-        tally.add(first);
-        tally.add(equal);
-
-        assertEquals(1, tally.size());
-        assertEquals(List.of(first), tally.rowsCounted(2).toList());
     }
 }

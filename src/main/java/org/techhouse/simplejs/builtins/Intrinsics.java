@@ -4,27 +4,15 @@ import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requir
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireBuffer;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireCallable;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireDate;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireDbDateTime;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireDbTime;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireGenerator;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireGeo;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireMap;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireNumber;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireRegExp;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireSet;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireStack;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireSymbol;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalDuration;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalInstant;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalPlainDate;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalPlainDateTime;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalPlainMonthDay;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalPlainTime;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalPlainYearMonth;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTemporalZonedDateTime;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireTypedArray;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireUint8;
-import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireVector;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.requireView;
 import static org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands.unwrap;
 import static org.techhouse.simplejs.values.JsObject.PropertyFlags.HIDDEN;
@@ -37,6 +25,7 @@ import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsBrands;
 import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsCoercion;
 import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsInstallers;
+import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsLayout;
 import org.techhouse.simplejs.builtins.intrinsics.IntrinsicsPrototypes;
 import org.techhouse.simplejs.builtins.string.StringRegExpDelegation;
 import org.techhouse.simplejs.builtins.typedarray.ArrayBufferBuiltins;
@@ -144,13 +133,55 @@ public final class Intrinsics {
     private final JsObject asyncGeneratorFunctionProto;
     private final JsObject asyncFunctionProto;
     public final Map<String, JsNativeFunction> functionKindCtors = new LinkedHashMap<>();
-    public JsValue defaultHasInstance;
-    public JsValue defaultArrayIterator;
-    public JsValue defaultStringIterator;
-    public JsValue defaultTypedArrayIterator;
+    private JsValue defaultHasInstance;
+    private JsValue defaultArrayIterator;
+    private JsValue defaultStringIterator;
+    private JsValue defaultTypedArrayIterator;
+    private JsValue originalArrayToString;
     public final Map<String, JsObject> errorProtos = new LinkedHashMap<>();
 
     public final IntrinsicsInstallers installers = new IntrinsicsInstallers(this);
+
+    public JsValue defaultHasInstance() {
+        functionProto.ensureSetUp();
+        return defaultHasInstance;
+    }
+
+    public JsValue defaultArrayIterator() {
+        arrayProto.ensureSetUp();
+        return defaultArrayIterator;
+    }
+
+    public JsValue defaultStringIterator() {
+        stringProto.ensureSetUp();
+        return defaultStringIterator;
+    }
+
+    public JsValue defaultTypedArrayIterator() {
+        typedArrayProto.ensureSetUp();
+        return defaultTypedArrayIterator;
+    }
+
+    private JsValue originalArrayToString() {
+        arrayProto.ensureSetUp();
+        return originalArrayToString;
+    }
+
+    public void rememberDefaultHasInstance(JsValue value) {
+        defaultHasInstance = value;
+    }
+
+    public void rememberDefaultArrayIterator(JsValue value) {
+        defaultArrayIterator = value;
+    }
+
+    public void rememberDefaultStringIterator(JsValue value) {
+        defaultStringIterator = value;
+    }
+
+    public void rememberArrayToString(JsValue value) {
+        originalArrayToString = value;
+    }
 
     public boolean isDefaultHasInstance(JsValue candidate) {
         return installers.isDefaultHasInstance(candidate);
@@ -180,139 +211,117 @@ public final class Intrinsics {
                 (receiver, name) -> installers.asyncGeneratorMethod(receiver, name, driver, eventLoop));
         functionProto = coercion.prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype", (receiver,
                 name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker, ops));
-        installers.installFunctionHasInstance(functionProto);
-        functionProto.defineValue("length", new JsNumber(0));
-        functionProto.setFlags("length", PropertyFlags.TAG);
-        functionProto.defineValue("name", new JsString(""));
-        functionProto.setFlags("name", PropertyFlags.TAG);
-        IntrinsicsInstallers.defineToStringTag(functionProto, "Function");
+        functionProto.deferSetup(proto -> {
+            installers.installFunctionHasInstance(proto);
+            proto.defineValue("length", new JsNumber(0));
+            proto.setFlags("length", PropertyFlags.TAG);
+            proto.defineValue("name", new JsString(""));
+            proto.setFlags("name", PropertyFlags.TAG);
+            IntrinsicsInstallers.defineToStringTag(proto, "Function");
+        });
         arrayProto = prototypes.arrayPrototype();
         stringProto = coercion.prototypeOf(StringBuiltins.NAMES, "String.prototype",
                 (receiver, name) -> StringRegExpDelegation.isGeneric(name)
                         ? StringRegExpDelegation.genericMethod(name, ops, invoker)
                         : StringBuiltins.getMethod(requireStringValue(receiver, name), name, invoker, ops));
-        prototypes.installStringPrimitiveMethods(stringProto);
+        stringProto.deferSetup(prototypes::installStringPrimitiveMethods);
         numberProto = coercion.prototypeOf(NumberBuiltins.NAMES, "Number.prototype",
                 (receiver, name) -> NumberBuiltins.getMethod(requireNumber(receiver, name), name, ops));
         booleanProto = prototypes.booleanPrototype();
-        stringProto.setPrimitive(new JsString(""));
+        stringProto.deferSetup(proto -> proto.setPrimitive(new JsString("")));
         numberProto.setPrimitive(new JsNumber(0));
         booleanProto.setPrimitive(JsBoolean.FALSE);
         bigintProto = coercion.prototypeOf(BigIntBuiltins.NAMES, "BigInt.prototype",
                 (receiver, name) -> BigIntBuiltins.getMethod(requireBigInt(receiver, name), name, ops));
         symbolProto = coercion.prototypeOf(SymbolBuiltins.NAMES, "Symbol.prototype",
                 (receiver, name) -> SymbolBuiltins.getMethod(requireSymbol(receiver, name), name));
-        installers.installSymbolAccessors(symbolProto);
+        symbolProto.deferSetup(installers::installSymbolAccessors);
         regexpProto = coercion.prototypeOf(RegexBuiltins.NAMES, "RegExp.prototype",
                 (receiver, name) -> RegexBuiltins.getMethod(requireRegExp(receiver, name), name, ops));
-        installers.installRegExpSymbolMethods(regexpProto);
-        installers.installRegExpAccessors(regexpProto);
+        regexpProto.deferSetup(proto -> {
+            installers.installRegExpSymbolMethods(proto);
+            installers.installRegExpAccessors(proto);
+        });
         mapProto = coercion.prototypeOf(MapBuiltins.NAMES, "Map.prototype",
                 (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name, false), name, invoker));
-        installers.installMapSizeAccessor(mapProto);
+        mapProto.deferSetup(installers::installMapSizeAccessor);
         weakMapProto = coercion.prototypeOf(MapBuiltins.WEAK_NAMES, "WeakMap.prototype",
                 (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name, true), name, invoker));
         setProto = coercion.prototypeOf(SetBuiltins.NAMES, "Set.prototype",
                 (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, false), name, invoker, ops));
-        installers.installSetSizeAccessor(setProto);
+        setProto.deferSetup(installers::installSetSizeAccessor);
         weakSetProto = coercion.prototypeOf(SetBuiltins.WEAK_NAMES, "WeakSet.prototype",
                 (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, true), name, invoker, ops));
         dateProto = coercion.prototypeOf(DateBuiltins.NAMES, "Date.prototype",
                 (receiver, name) -> DateBuiltins.isGeneric(name)
                         ? DateBuiltins.genericMethod(name, ops)
                         : DateBuiltins.getMethod(requireDate(receiver, name), name, ops));
-        installToPrimitive(dateProto, DateBuiltins.symbolToPrimitive(ops));
-        temporalDurationProto = temporalDurationPrototype();
-        temporalPlainTimeProto = coercion.prototypeOf(TemporalPlainTimeBuiltins.NAMES, "Temporal.PlainTime.prototype",
-                (receiver, name) -> TemporalPlainTimeBuiltins.getMethod(requireTemporalPlainTime(receiver, name), name,
-                        ops));
-        installers.installTemporalPlainTimeAccessors(temporalPlainTimeProto);
-        IntrinsicsInstallers.defineToStringTag(temporalPlainTimeProto, "Temporal.PlainTime");
-        temporalPlainDateProto = coercion.prototypeOf(TemporalPlainDateBuiltins.NAMES, "Temporal.PlainDate.prototype",
-                (receiver, name) -> TemporalPlainDateBuiltins.getMethod(requireTemporalPlainDate(receiver, name), name,
-                        ops));
-        TemporalPlainDateBuiltins.installAccessors(temporalPlainDateProto);
-        temporalInstantProto = coercion.prototypeOf(TemporalInstantBuiltins.NAMES, "Temporal.Instant.prototype",
-                (receiver, name) -> TemporalInstantBuiltins.getMethod(requireTemporalInstant(receiver, name), name,
-                        ops));
-        TemporalInstantBuiltins.installAccessors(temporalInstantProto);
-        temporalPlainYearMonthProto = coercion.prototypeOf(TemporalPlainYearMonthBuiltins.NAMES,
-                "Temporal.PlainYearMonth.prototype", (receiver, name) -> TemporalPlainYearMonthBuiltins
-                        .getMethod(requireTemporalPlainYearMonth(receiver, name), name, ops));
-        TemporalPlainYearMonthBuiltins.installAccessors(temporalPlainYearMonthProto);
-        IntrinsicsInstallers.defineToStringTag(temporalPlainYearMonthProto, "Temporal.PlainYearMonth");
-        temporalPlainMonthDayProto = coercion.prototypeOf(TemporalPlainMonthDayBuiltins.NAMES,
-                "Temporal.PlainMonthDay.prototype", (receiver, name) -> TemporalPlainMonthDayBuiltins
-                        .getMethod(requireTemporalPlainMonthDay(receiver, name), name, ops));
-        TemporalPlainMonthDayBuiltins.installAccessors(temporalPlainMonthDayProto);
-        IntrinsicsInstallers.defineToStringTag(temporalPlainMonthDayProto, "Temporal.PlainMonthDay");
-        temporalPlainDateTimeProto = coercion.prototypeOf(TemporalPlainDateTimeBuiltins.NAMES,
-                "Temporal.PlainDateTime.prototype", (receiver, name) -> TemporalPlainDateTimeBuiltins
-                        .getMethod(requireTemporalPlainDateTime(receiver, name), name, ops));
-        TemporalPlainDateTimeBuiltins.installAccessors(temporalPlainDateTimeProto);
-        temporalZonedDateTimeProto = coercion.prototypeOf(TemporalZonedDateTimeBuiltins.NAMES,
-                "Temporal.ZonedDateTime.prototype", (receiver, name) -> TemporalZonedDateTimeBuiltins
-                        .getMethod(requireTemporalZonedDateTime(receiver, name), name, ops));
-        TemporalZonedDateTimeBuiltins.installAccessors(temporalZonedDateTimeProto);
-        geoProto = coercion.prototypeOf(GeoBuiltins.NAMES, "Geo.prototype",
-                (receiver, name) -> GeoBuiltins.getMethod(requireGeo(receiver, name), name));
-        GeoBuiltins.installAccessors(geoProto);
-        IntrinsicsInstallers.defineToStringTag(geoProto, "Geo");
-        vectorProto = coercion.prototypeOf(VectorBuiltins.NAMES, "Vector.prototype",
-                (receiver, name) -> VectorBuiltins.getMethod(requireVector(receiver, name), name, ops));
-        VectorBuiltins.installAccessors(vectorProto);
-        IntrinsicsInstallers.defineToStringTag(vectorProto, "Vector");
-        dbDateTimeProto = coercion.prototypeOf(DbDateTimeBuiltins.NAMES, "DbDateTime.prototype",
-                (receiver, name) -> DbDateTimeBuiltins.getMethod(requireDbDateTime(receiver, name), name));
-        DbDateTimeBuiltins.installAccessors(dbDateTimeProto);
-        IntrinsicsInstallers.defineToStringTag(dbDateTimeProto, "DbDateTime");
-        dbTimeProto = coercion.prototypeOf(DbTimeBuiltins.NAMES, "DbTime.prototype",
-                (receiver, name) -> DbTimeBuiltins.getMethod(requireDbTime(receiver, name), name));
-        DbTimeBuiltins.installAccessors(dbTimeProto);
-        IntrinsicsInstallers.defineToStringTag(dbTimeProto, "DbTime");
+        dateProto.deferSetup(proto -> installToPrimitive(proto, DateBuiltins.symbolToPrimitive(ops)));
+        final var layout = new IntrinsicsLayout(this);
+        temporalDurationProto = layout.temporalDuration();
+        temporalPlainTimeProto = layout.temporalPlainTime();
+        temporalPlainDateProto = layout.temporalPlainDate();
+        temporalInstantProto = layout.temporalInstant();
+        temporalPlainYearMonthProto = layout.temporalPlainYearMonth();
+        temporalPlainMonthDayProto = layout.temporalPlainMonthDay();
+        temporalPlainDateTimeProto = layout.temporalPlainDateTime();
+        temporalZonedDateTimeProto = layout.temporalZonedDateTime();
+        geoProto = layout.geo();
+        vectorProto = layout.vector();
+        dbDateTimeProto = layout.dbDateTime();
+        dbTimeProto = layout.dbTime();
         arrayBufferProto = coercion.prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> ArrayBufferBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = coercion.prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
                 (receiver, name) -> DataViewBuiltins.dataViewMethod(requireView(receiver, name), name, ops));
         typedArrayProto = coercion.prototypeOf(TypedArrayBuiltins.NAMES, "TypedArray.prototype", (receiver,
                 name) -> TypedArrayIteration.getMethod(requireTypedArray(receiver, name), name, invoker, ops));
-        define(typedArrayProto, "toString", arrayProto.get("toString"));
-        installers.defineSymbol(typedArrayProto, JsSymbol.ITERATOR, typedArrayProto.get("values"));
-        installers.installTypedArrayGeometryAccessors(typedArrayProto);
-        installers.installTypedArrayToStringTag(typedArrayProto);
-        installers.installGeometryAccessors(arrayBufferProto, ArrayBufferBuiltins.bufferAccessorNames(),
-                (thisArg, name) -> ArrayBufferBuiltins.bufferMethod(requireBuffer(thisArg, name), name));
-        installers.installGeometryAccessors(dataViewProto, DataViewBuiltins.viewAccessorNames(),
-                (thisArg, name) -> DataViewBuiltins.dataViewMethod(requireView(thisArg, name), name));
+        typedArrayProto.deferSetup(proto -> {
+            define(proto, "toString", originalArrayToString());
+            installers.defineSymbol(proto, JsSymbol.ITERATOR, proto.get("values"));
+            defaultTypedArrayIterator = proto.getSymbol(JsSymbol.ITERATOR);
+            installers.installTypedArrayGeometryAccessors(proto);
+            installers.installTypedArrayToStringTag(proto);
+        });
+        arrayBufferProto.deferSetup(
+                proto -> installers.installGeometryAccessors(proto, ArrayBufferBuiltins.bufferAccessorNames(),
+                        (thisArg, name) -> ArrayBufferBuiltins.bufferMethod(requireBuffer(thisArg, name), name)));
+        dataViewProto
+                .deferSetup(proto -> installers.installGeometryAccessors(proto, DataViewBuiltins.viewAccessorNames(),
+                        (thisArg, name) -> DataViewBuiltins.dataViewMethod(requireView(thisArg, name), name)));
         for (final var kind : JsTypedArray.Kind.values()) {
             final var proto = new JsObject();
             proto.setProto(typedArrayProto);
-            TypedArrayBuiltins.defineBytesPerElement(proto.ownProperties(), kind);
+            proto.deferSetup(target -> TypedArrayBuiltins.defineBytesPerElement(target.ownProperties(), kind));
             typedArrayProtos.put(kind, proto);
         }
-        for (final var name : TypedArrayBuiltins.UINT8_NAMES) {
-            define(typedArrayProtos.get(JsTypedArray.Kind.UINT8), name, coercion.wrapper(name, "Uint8Array.prototype",
-                    (receiver, key) -> Uint8Base64.uint8Method(requireUint8(receiver, key), key, ops)));
-        }
+        typedArrayProtos.get(JsTypedArray.Kind.UINT8).deferSetup(proto -> {
+            for (final var name : TypedArrayBuiltins.UINT8_NAMES) {
+                define(proto, name, coercion.wrapper(name, "Uint8Array.prototype",
+                        (receiver, key) -> Uint8Base64.uint8Method(requireUint8(receiver, key), key, ops)));
+            }
+        });
         disposableStackProto = coercion.prototypeOf(DisposableStackBuiltins.NAMES, "DisposableStack.prototype",
                 (receiver, name) -> DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, this, invoker,
                         eventLoop, false));
-        DisposableStackBuiltins.installAccessors(disposableStackProto, false);
+        disposableStackProto.deferSetup(proto -> DisposableStackBuiltins.installAccessors(proto, false));
         asyncDisposableStackProto = coercion.prototypeOf(DisposableStackBuiltins.ASYNC_NAMES,
                 "AsyncDisposableStack.prototype",
                 (receiver, name) -> "disposeAsync".equals(name)
                         ? installers.disposeAsyncMethod(receiver, name, eventLoop)
                         : DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, this, invoker,
                                 eventLoop, true));
-        DisposableStackBuiltins.installAccessors(asyncDisposableStackProto, true);
+        asyncDisposableStackProto.deferSetup(proto -> DisposableStackBuiltins.installAccessors(proto, true));
         prototypes.installObjectPrototype();
         prototypes.installErrorPrototypes();
         installers.installIteratorSymbols();
         installers.installToStringTags();
         installers.installArrayUnscopables();
         throwTypeError = IntrinsicsPrototypes.makeThrowTypeError();
-        prototypes.installPoisonPill(functionProto, "caller");
-        prototypes.installPoisonPill(functionProto, "arguments");
+        functionProto.deferSetup(proto -> {
+            prototypes.installPoisonPill(proto, "caller");
+            prototypes.installPoisonPill(proto, "arguments");
+        });
         regexpStringIteratorProto = prototypes.regexpStringIteratorPrototype();
         arrayIteratorProto = JsIterators.prototype("Array Iterator", objectProto);
         stringIteratorProto = JsIterators.prototype("String Iterator", objectProto);
@@ -435,22 +444,6 @@ public final class Intrinsics {
         return new JsString(JsCoercion.toStr(receiver, ops));
     }
 
-    private JsObject temporalDurationPrototype() {
-        final var proto = new JsObject();
-        for (final var name : TemporalDurationBuiltins.ACCESSOR_NAMES) {
-            final var getter = new JsNativeFunction("get " + name, (thisArg, _) -> TemporalDurationBuiltins
-                    .fieldAccessor(requireTemporalDuration(thisArg, name), name));
-            getter.setLength(0);
-            proto.defineAccessor(name, getter, null);
-            proto.setFlags(name, HIDDEN);
-        }
-        for (final var name : TemporalDurationBuiltins.METHOD_NAMES) {
-            define(proto, name, coercion.wrapper(name, "Temporal.Duration.prototype", (receiver,
-                    key) -> TemporalDurationBuiltins.getMethod(requireTemporalDuration(receiver, key), key, ops)));
-        }
-        proto.setProto(objectProto);
-        return proto;
-    }
     public JsValue toObject(JsValue value) {
         return coercion.toObject(value);
     }

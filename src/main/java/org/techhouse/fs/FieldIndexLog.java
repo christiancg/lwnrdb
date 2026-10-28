@@ -9,6 +9,9 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
@@ -16,6 +19,8 @@ import org.techhouse.log.Logger;
 
 final class FieldIndexLog {
     private static final Logger logger = Logger.logFor(FieldIndexLog.class);
+    private static final Map<String, Map<String, Long>> unforced = new ConcurrentHashMap<>();
+    private static final AtomicLong appends = new AtomicLong();
     private static final String ADD = "+";
     private static final String REMOVE = "-";
     private static final int PREFIX_LENGTH = ADD.length() + Globals.ID_SEPARATOR.length();
@@ -25,30 +30,70 @@ final class FieldIndexLog {
     private FieldIndexLog() {
     }
 
+    private static void rememberUnforced(File log) {
+        final var file = log.getAbsoluteFile();
+        unforced.computeIfAbsent(file.getParent(), _ -> new ConcurrentHashMap<>()).put(file.getPath(),
+                appends.incrementAndGet());
+    }
+
+    static void forceUnforced(File collectionFolder, ForceGroup group) {
+        final var logs = unforced.get(collectionFolder.getAbsolutePath());
+        if (logs == null) {
+            return;
+        }
+        for (final var entry : List.copyOf(logs.entrySet())) {
+            final var path = entry.getKey();
+            final var append = entry.getValue();
+            final var file = new File(path);
+            if (file.exists()) {
+                group.add(file.toPath());
+                group.onceForced(() -> logs.remove(path, append));
+            } else {
+                logs.remove(path, append);
+            }
+        }
+    }
+
+    static void forgetUnder(File folder) {
+        final var prefix = folder.getAbsolutePath();
+        unforced.keySet().removeIf(path -> path.equals(prefix) || path.startsWith(prefix + File.separator));
+    }
+
     enum Replayed {
         CLEAN, ABSENT, UNRECOGNISED
     }
 
     static boolean append(File base, File log, List<IndexLogChange> changes) throws IOException {
         final var content = encode(changes);
+        final var knownLength = PageTails.knownTerminatedLength(log);
+        var logBytes = knownLength;
         if (content.size() > 0) {
-            FileLocks.cutUnterminatedTail(log);
-            final var lengthBeforeAppend = log.exists() ? log.length() : 0L;
+            if (knownLength < 0) {
+                FileLocks.cutUnterminatedTail(log);
+                logBytes = log.length();
+            }
+            final var lengthBeforeAppend = logBytes;
             var appended = false;
             try {
-                OwnerOnly.ensureOwnerOnlyFile(log.toPath());
+                if (knownLength < 0) {
+                    OwnerOnly.ensureOwnerOnlyFile(log.toPath());
+                }
                 try (var out = new FileOutputStream(log, true)) {
                     content.writeTo(out);
                 }
                 appended = true;
+                rememberUnforced(log);
+                PageTails.appendedWholeLines(log);
+                logBytes += content.size();
             } finally {
                 if (!appended && log.length() != lengthBeforeAppend) {
                     FileLocks.truncateTo(log, lengthBeforeAppend, APPEND_ROLLBACK_FAILURE);
                 }
             }
+        } else if (knownLength < 0) {
+            logBytes = log.length();
         }
-        final var baseBytes = base.exists() ? base.length() : 0L;
-        return log.exists() && log.length() >= Math.max(baseBytes, Globals.FIELD_INDEX_LOG_MIN_BYTES);
+        return logBytes >= Math.max(base.length(), Globals.FIELD_INDEX_LOG_MIN_BYTES);
     }
 
     private static ByteArrayOutputStream encode(List<IndexLogChange> changes) throws IOException {

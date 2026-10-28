@@ -64,10 +64,10 @@ public class OperationProcessorBeforeHookTest {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget", 200_000L);
         TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs", 2_000L);
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);

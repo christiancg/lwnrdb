@@ -6,22 +6,31 @@
 
     <groupId>org.techhouse</groupId>
     <artifactId>lwnrdb</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>${revision}</version>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+        </license>
+    </licenses>
 
     <properties>
+        <revision>1.0-SNAPSHOT</revision>
         <forkCount>4</forkCount>
+        <argLine/>
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <minimumCoverage>0.95</minimumCoverage>
-        <spotless.version>3.8.0</spotless.version>
+        <spotless.version>3.10.4</spotless.version>
         <checkstyle.plugin.version>3.6.0</checkstyle.plugin.version>
-        <checkstyle.version>13.7.0</checkstyle.version>
+        <checkstyle.version>14.3.0</checkstyle.version>
         <pmd.plugin.version>3.28.0</pmd.plugin.version>
         <pmd.version>7.28.0</pmd.version>
-        <spotbugs.plugin.version>4.10.2.0</spotbugs.plugin.version>
-        <spotbugs.version>4.10.2</spotbugs.version>
-        <enforcer.plugin.version>3.5.0</enforcer.plugin.version>
+        <spotbugs.plugin.version>4.10.5.0</spotbugs.plugin.version>
+        <spotbugs.version>4.10.5</spotbugs.version>
+        <enforcer.plugin.version>3.6.3</enforcer.plugin.version>
         <native.maven.plugin.version>1.1.2</native.maven.plugin.version>
     </properties>
 
@@ -29,23 +38,24 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
-            <version>6.1.1</version>
+            <version>6.1.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-params</artifactId>
-            <version>6.1.1</version>
+            <version>6.1.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>5.23.0</version>
+            <version>5.24.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
     <build>
+        <finalName>lwnrdb</finalName>
         <plugins>
             <!-- The regex engine resolves \p{...} against the JDK's own Unicode data, so the build JDK
                  decides what those escapes match, and every node of a cluster has to agree. The rule pins
@@ -80,7 +90,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.5.1</version>
                 <configuration>
                     <archive>
                         <manifest>
@@ -89,15 +99,19 @@
                             <addClasspath>true</addClasspath>
                             <mainClass>org.techhouse.Main</mainClass>
                         </manifest>
+                        <manifestEntries>
+                            <Enable-Final-Field-Mutation>ALL-UNNAMED</Enable-Final-Field-Mutation>
+                        </manifestEntries>
                     </archive>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.6</version>
+                <version>3.6.0</version>
                 <configuration>
                     <reuseForks>true</reuseForks>
+                    <argLine>@{argLine} -XX:-UseJVMCICompiler</argLine>
                     <systemPropertyVariables>
                         <lwnrdb.test.path>target/test-data-${surefire.forkNumber}</lwnrdb.test.path>
                         <lwnrdb.test.logPath>target/test-logs-${surefire.forkNumber}</lwnrdb.test.logPath>
@@ -110,7 +124,7 @@
                             <excludes>
                                 <exclude>**/config/ConfigReaderTest.java</exclude>
                                 <exclude>**/config/ConfigurationTest.java</exclude>
-                                <exclude>**/perf/AllocationBudgetTest.java</exclude>
+                                <exclude>**/perf/*AllocationBudgetTest.java</exclude>
                             </excludes>
                         </configuration>
                     </execution>
@@ -134,8 +148,9 @@
                         </goals>
                         <configuration>
                             <forkCount>1</forkCount>
+                            <argLine>@{argLine} -Xbatch</argLine>
                             <includes>
-                                <include>**/perf/AllocationBudgetTest.java</include>
+                                <include>**/perf/*AllocationBudgetTest.java</include>
                             </includes>
                         </configuration>
                     </execution>

@@ -38,15 +38,15 @@ public class AdminCacheProcedureTest {
 
     @BeforeEach
     void clear() throws Exception {
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
     }
 
     private ProcedureDefinition write(String name) throws Exception {
         final var definition = new ProcedureDefinition(name, "return " + 1L + ";", 1L, null, true, 1L, 1L, "alice");
-        fs.writeProcedure(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
         return definition;
     }
 
@@ -79,7 +79,7 @@ public class AdminCacheProcedureTest {
         write("drop");
         assertNotNull(cache.getProcedure(TestGlobals.DB, "keep"));
         assertNotNull(cache.getProcedure(TestGlobals.DB, "drop"));
-        fs.deleteProcedure(TestGlobals.DB, "drop");
+        fs.metadataFiles().deleteProcedure(TestGlobals.DB, "drop");
         cache.removeProcedure(TestGlobals.DB, "drop");
         assertNotNull(cache.getProcedure(TestGlobals.DB, "keep"));
         assertNull(cache.getProcedure(TestGlobals.DB, "drop"));
@@ -92,13 +92,13 @@ public class AdminCacheProcedureTest {
         cache.removeProceduresForDatabase("someOtherDb");
         assertNotNull(cache.getProcedure(TestGlobals.DB, "p"));
         cache.removeProceduresForDatabase(TestGlobals.DB);
-        fs.deleteProcedure(TestGlobals.DB, "p");
+        fs.metadataFiles().deleteProcedure(TestGlobals.DB, "p");
         assertNull(cache.getProcedure(TestGlobals.DB, "p"));
     }
 
     @Test
     public void test_a_malformed_procedure_file_refuses_rather_than_reading_as_absent() throws Exception {
-        fs.writeProcedure(TestGlobals.DB, "broken", "not json at all");
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, "broken", "not json at all");
 
         assertThrows(MetadataReadException.class, () -> cache.getProcedure(TestGlobals.DB, "broken"),
                 "conflating a read failure with absence makes an existing procedure answer PROCEDURE_NOT_FOUND");
@@ -106,7 +106,7 @@ public class AdminCacheProcedureTest {
 
     @Test
     public void test_a_read_failure_is_not_cached_as_absence() throws Exception {
-        fs.writeProcedure(TestGlobals.DB, "flaky", "not json at all");
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, "flaky", "not json at all");
         assertThrows(MetadataReadException.class, () -> cache.getProcedure(TestGlobals.DB, "flaky"));
 
         write("flaky");

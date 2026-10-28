@@ -16,7 +16,6 @@ import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.msg.TxReplicationPayload;
@@ -83,7 +82,7 @@ public class TransactionClusterIntegrationTest {
     private ClusterMessage forwardTx(String sessionId, Object request) {
         final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_TX_REQUEST, SECRET, node("edge", 1),
                 null);
-        message.setForwardBody(ForwardBody.encode(eJson.toJson(request)));
+        message.setForwardBody(eJson.toJson(request));
         message.setActingUser("admin");
         message.setTxSessionId(sessionId);
         message.setTxId(UUID.nameUUIDFromBytes(sessionId.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString());
@@ -149,7 +148,7 @@ public class TransactionClusterIntegrationTest {
     public void test_forward_tx_with_unparseable_body_is_error() throws Exception {
         final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_TX_REQUEST, SECRET, node("edge", 1),
                 null);
-        message.setForwardBody(ForwardBody.encode("not-json"));
+        message.setForwardBody("not-json");
         message.setTxSessionId("sess-bad");
         final var response = pool.request(cluster.serverAddress(), message, 2000);
         assertEquals(ClusterMessageType.ERROR, response.getType());

@@ -187,4 +187,27 @@ public class FileTreeDeleterTest {
         assertTrue(FileTreeDeleter.delete(db));
         assertFalse(db.exists());
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void test_deleting_a_tree_forgets_pk_index_states(@TempDir File tmp) throws Exception {
+        final var db = folder(tmp, "db");
+        final var inside = write(folder(db, "coll"), "coll-pk.idx");
+        final var outside = write(folder(tmp, "kept"), "kept-pk.idx");
+        final var field = PkIndexStore.class.getDeclaredField("fileStates");
+        field.setAccessible(true);
+        final var states = (java.util.Map<String, Object>) field.get(null);
+        final var state = new PkIndexStore.PkFileState(1L, null, 1L, 0L);
+        states.put(inside.getAbsolutePath(), state);
+        states.put(outside.getAbsolutePath(), state);
+        try {
+            assertTrue(FileTreeDeleter.delete(db));
+
+            assertFalse(states.containsKey(inside.getAbsolutePath()));
+            assertTrue(states.containsKey(outside.getAbsolutePath()));
+        } finally {
+            states.remove(outside.getAbsolutePath());
+            states.remove(inside.getAbsolutePath());
+        }
+    }
 }

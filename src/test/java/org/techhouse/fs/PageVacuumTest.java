@@ -14,8 +14,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,7 +62,7 @@ public class PageVacuumTest {
         assertEquals(List.of(vacuumed), rf.vacuumed, "the listener hears of every vacuum");
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
         assertEquals(a.toFileEntry(), rf.fx.indexed("a").toFileEntry(), "a record that did not move keeps its row");
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
     }
 
     @Test
@@ -84,7 +87,7 @@ public class PageVacuumTest {
         assertThrows(IOException.class, () -> rf.vacuum.vacuum(DB, COLL, 0, pageRows()));
 
         assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
-        assertEquals(0, rf.intents().length);
+        assertEquals(0, rf.intents());
         assertTrue(rf.vacuumed.isEmpty());
     }
 
@@ -118,15 +121,34 @@ public class PageVacuumTest {
     }
 
     @Test
-    public void aPageOfOnlyHolesVacuumsToAnEmptyFile() throws Exception {
+    public void aPageOfOnlyHolesTruncatesWithoutAnIntentOrTempFile() throws Exception {
         for (final var id : List.of("a", "c", "d")) {
             rf.replacer.delete(rf.fx.indexed(id));
         }
+        final var intentLog = rf.fx.paths.collectionFolder(DB, COLL).toPath()
+                .resolve(COLL + org.techhouse.config.Globals.INTENT_LOG_EXTENSION);
+        final var intentBytes = Files.exists(intentLog) ? Files.size(intentLog) : 0L;
 
-        rf.vacuum.vacuum(DB, COLL, 0, pageRows());
+        final var vacuumed = rf.vacuum.vacuum(DB, COLL, 0, pageRows());
 
         assertEquals(0L, rf.fx.page(0).length());
         assertTrue(rf.fx.page(0).exists(), "the page file stays, empty");
+        assertEquals(Map.of(), vacuumed.moves());
+        assertEquals(List.of(vacuumed), rf.vacuumed, "the listener still hears of it");
+        assertEquals(intentBytes, Files.exists(intentLog) ? Files.size(intentLog) : 0L, "no intent is written");
+        assertFalse(rf.fx.paths.vacuumFile(DB, COLL, 0).exists());
+    }
+
+    @Test
+    public void theDeletedIdIsExcludedFromTheRowsItVerifies() throws Exception {
+        final var c = rf.fx.indexed("c");
+        final var rows = rf.fx.indexedRows();
+        rf.replacer.delete(c);
+
+        rf.vacuum.vacuumAfterDelete(DB, COLL, 0, rows, new PageOccupancy(0L, 9L), "c");
+
+        assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
     }
 
     @Test
@@ -143,5 +165,136 @@ public class PageVacuumTest {
         assertNotNull(vacuumed);
         assertEquals(0L, vacuumed.page());
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+    }
+
+    private static PageOccupancy occupancyOf(List<PkIndexEntry> pageRows) {
+        return new PageOccupancy(PageRows.liveBytes(pageRows), pageRows.size());
+    }
+
+    private static Set<String> entriesOf(List<PkIndexEntry> rows) {
+        final var entries = new HashSet<String>();
+        rows.forEach(row -> entries.add(row.toFileEntry()));
+        return entries;
+    }
+
+    @Test
+    public void rowsFromLinesEqualTheWalkOnRandomPages() throws Exception {
+        for (var seed = 0; seed < 20; seed++) {
+            final var random = new Random(seed);
+            final var fixture = new ReplacerFixture(new File(tmp, "random-" + seed), DB, COLL);
+            final var ids = new ArrayList<String>();
+            for (var i = 0; i < 30; i++) {
+                final var id = String.format("r%02d", i);
+                fixture.fx.seed(i % 2, id);
+                ids.add(id);
+            }
+            for (final var id : ids) {
+                final var roll = random.nextInt(3);
+                final var row = fixture.fx.indexed(id);
+                if (roll == 0) {
+                    fixture.replacer.delete(row);
+                } else if (roll == 1) {
+                    fixture.replace(id, "v".repeat(1 + random.nextInt(20)), row.getPage(), PagePlacement.APPEND);
+                }
+            }
+            final var rows = fixture.fx.indexedRows();
+            for (final var page : List.of(0L, 1L)) {
+                final var walk = PageRows.of(fixture.fx.store, rows, DB, COLL, page);
+                final var lines = PageLines.recordsOf(fixture.fx.page(page), 0L);
+
+                final var found = PageVacuum.rowsOfLines(lines, rows, page, occupancyOf(walk));
+
+                assertNotNull(found, "seed " + seed + " page " + page);
+                assertEquals(entriesOf(walk), entriesOf(found), "seed " + seed + " page " + page);
+            }
+        }
+    }
+
+    @Test
+    public void theRowsOfAKnownPageAreFoundWithoutIteratingTheResidentRows() throws Exception {
+        final var rows = new NeverIteratedRows(rf.fx.indexedRows());
+
+        rf.vacuum.vacuum(DB, COLL, 0, rows, occupancyOf(pageRows()), null);
+
+        assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("c", "old-c")
+                + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+    }
+
+    @Test
+    public void aGroupOfAppendedRowsVacuumsAKnownPageWithoutAWalk() throws Exception {
+        final var configuration = org.techhouse.config.Configuration.getInstance();
+        final var maxPageSize = configuration.getMaxPageSize();
+        rf.replacer.delete(rf.fx.indexed("c"));
+        final var rows = new NeverIteratedRows(rf.fx.indexedRows());
+        final var group = 3L * ReplacerFixture.line("n", "new-n").length;
+        final var occupancy = occupancyOf(rf.fx.indexedRows());
+        TestUtils.setPrivateField(configuration, "maxPageSize", rf.fx.page(0).length() + 4);
+        try {
+            final var vacuumed = rf.vacuum.vacuumIfNeeded(DB, COLL, 0, group, null, rows, _ -> occupancy);
+
+            assertNotNull(vacuumed, "the page lacks room for the group and holds a quarter page dead");
+            assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("d", "old-d"),
+                    rf.fx.firstPageText());
+            assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+        } finally {
+            TestUtils.setPrivateField(configuration, "maxPageSize", maxPageSize);
+        }
+    }
+
+    @Test
+    public void aRowNamingAHoleAbortsThroughTheCountFallback() throws Exception {
+        final var hole = new PkIndexEntry(DB, COLL, "b", rf.fx.indexed("a").getLength(),
+                rf.fx.indexed("c").getPosition() - rf.fx.indexed("a").getLength(), 0, StorageFixture.OLD_VERSION);
+        final var rows = new ArrayList<>(rf.fx.indexedRows());
+        rows.add(1, hole);
+        final var before = Files.readAllBytes(rf.fx.page(0).toPath());
+
+        assertThrows(IOException.class,
+                () -> rf.vacuum.vacuum(DB, COLL, 0, rows, new PageOccupancy(0L, rows.size()), null));
+
+        assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
+        assertEquals(0, rf.intents());
+    }
+
+    @Test
+    public void anEmptiedPageIsTruncatedOnlyWhenTheWalkFindsNoRowOnIt() throws Exception {
+        final var stale = rf.fx.indexedRows();
+        for (final var id : List.of("a", "c", "d")) {
+            rf.replacer.delete(rf.fx.indexed(id));
+        }
+        final var before = Files.readAllBytes(rf.fx.page(0).toPath());
+
+        assertThrows(IOException.class, () -> rf.vacuum.vacuum(DB, COLL, 0, stale, new PageOccupancy(0L, 0L), null),
+                "a zero count never stands in for the walk before bytes are cut");
+
+        assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
+    }
+
+    @Test
+    public void aStaleCountFallsBackToTheExactWalk() throws Exception {
+        final var rows = rf.fx.indexedRows();
+
+        rf.vacuum.vacuum(DB, COLL, 0, rows, new PageOccupancy(0L, 7L), null);
+
+        assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("c", "old-c")
+                + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+    }
+
+    @Test
+    public void aRepositionByLookupMovesOnlyRowsStillAtTheirOldOffset() {
+        final var moved = new PkIndexEntry(DB, COLL, "c", 50, 10, 0);
+        final var replaced = new PkIndexEntry(DB, COLL, "d", 80, 10, 0);
+        final var elsewhere = new PkIndexEntry(DB, COLL, "e", 90, 10, 1);
+        final var rows = Map.of("c", moved, "d", replaced, "e", elsewhere);
+        final var vacuumed = new VacuumedPage(DB, COLL, 0, Map.of("c", new VacuumedPage.Move(50, 20), "d",
+                new VacuumedPage.Move(60, 30), "e", new VacuumedPage.Move(90, 40), "x", new VacuumedPage.Move(1, 0)));
+
+        vacuumed.reposition(rows::get);
+
+        assertEquals(20L, moved.getPosition());
+        assertEquals(80L, replaced.getPosition(), "a row no longer at the move's origin is left alone");
+        assertEquals(90L, elsewhere.getPosition(), "a row on another page is left alone");
     }
 }

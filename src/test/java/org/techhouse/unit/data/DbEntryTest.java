@@ -2,9 +2,11 @@ package org.techhouse.unit.data;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class DbEntryTest {
@@ -93,5 +95,57 @@ public class DbEntryTest {
     public void test_byte_size_is_zero_when_data_null() {
         DbEntry entry = new DbEntry();
         assertEquals(0, entry.byteSize());
+    }
+
+    private static DbEntry largeEntry() {
+        final var data = new JsonObject();
+        final var rows = new JsonArray();
+        for (var i = 0; i < 12_000; i++) {
+            final var row = new JsonObject();
+            row.addProperty("i", i);
+            row.addProperty("name", "row-" + i + "-日本\"q\"\n");
+            row.addProperty("score", i * 0.25);
+            row.addProperty("ok", i % 2 == 0);
+            rows.add(row);
+        }
+        data.add("rows", rows);
+        data.addProperty("blob", "z".repeat(200_000));
+        final var entry = DbEntry.fromJsonObject("db", "coll", data);
+        entry.set_id("large");
+        return entry;
+    }
+
+    @Test
+    public void aLargeDocumentEncodesToTheSameBytes() {
+        final var entry = largeEntry();
+
+        final var line = entry.encodeLine();
+
+        assertTrue(line.length > 1_000_000, String.valueOf(line.length));
+        assertArrayEquals((entry.toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8), line);
+        assertEquals(line.length, entry.byteSize());
+    }
+
+    @Test
+    public void reEncodingWithAKnownSizeKeepsTheBytes() {
+        final var entry = largeEntry();
+        final var first = entry.encodeLine();
+
+        final var second = entry.encodeLine();
+
+        assertNotSame(first, second);
+        assertArrayEquals(first, second);
+        assertEquals(second.length, entry.byteSize());
+    }
+
+    @Test
+    public void aSmallDocumentStillEncodesExactly() {
+        final var data = new JsonObject();
+        data.addProperty("v", "é");
+        final var entry = DbEntry.fromJsonObject("db", "coll", data);
+        entry.set_id("small");
+
+        assertArrayEquals(("{\"v\":\"é\",\"_id\":\"small\"}" + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8),
+                entry.encodeLine());
     }
 }

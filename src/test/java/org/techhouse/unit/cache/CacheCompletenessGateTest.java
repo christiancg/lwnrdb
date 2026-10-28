@@ -6,10 +6,10 @@ import static org.mockito.Mockito.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -19,7 +19,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-import org.techhouse.utils.ReflectionUtils;
 
 public class CacheCompletenessGateTest extends CacheFixtureSupport {
     @Test
@@ -106,10 +105,8 @@ public class CacheCompletenessGateTest extends CacheFixtureSupport {
             final var stream = cache.streamCollection(TestGlobals.DB, TestGlobals.COLL);
             assertNotNull(stream);
             stream.close();
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
             final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
-            final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", collType);
+            final var collectionMap = CacheResidents.documentsByCollection(userCache);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         } finally {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
@@ -283,5 +280,33 @@ public class CacheCompletenessGateTest extends CacheFixtureSupport {
         assertTrue(result.stream().noneMatch(e -> "deleted".equals(e.get_id())),
                 "a cached map holding more documents than the PK index is not complete, it is poisoned: serving it"
                         + " returns a deleted document from every later fully locked scan");
+    }
+
+    @Test
+    public void test_an_unknown_lock_free_count_declines_the_cached_map() throws Exception {
+        final var cache = new Cache();
+        final var fs = IocContainer.get(FileSystem.class);
+        TestUtils.createTestDatabaseAndCollection();
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        for (int i = 1; i <= 2; i++) {
+            final var onDisk = new JsonObject();
+            onDisk.addProperty(Globals.PK_FIELD, "d" + i);
+            fs.insertIntoCollection(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, onDisk));
+            final var stale = new JsonObject();
+            stale.addProperty(Globals.PK_FIELD, "stale" + i);
+            injectCachedEntry(collId, DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, stale));
+        }
+        assertEquals(2, cache.pkCountForCoverage(TestGlobals.DB, TestGlobals.COLL));
+        java.nio.file.Files.setLastModifiedTime(
+                java.nio.file.Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL, TestGlobals.COLL + "-pk.idx"),
+                java.nio.file.attribute.FileTime.fromMillis(0L));
+
+        assertEquals(-1, cache.pkCountForCoverage(TestGlobals.DB, TestGlobals.COLL));
+        final var loaded = cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(loaded.containsKey("d1") && loaded.containsKey("d2"), "an unknown count reads the pages");
+        assertFalse(loaded.containsKey("stale1"));
+        try (var streamed = cache.streamCollection(TestGlobals.DB, TestGlobals.COLL)) {
+            assertEquals(List.of("d1", "d2"), streamed.map(DbEntry::get_id).sorted().toList());
+        }
     }
 }

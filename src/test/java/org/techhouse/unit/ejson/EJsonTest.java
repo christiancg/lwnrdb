@@ -2,6 +2,7 @@ package org.techhouse.unit.ejson;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -130,8 +131,8 @@ public class EJsonTest {
     }
 
     private static final class TestClass {
-        private String name;
-        private int value;
+        String name;
+        int value;
 
         public String getName() {
             return name;
@@ -182,6 +183,8 @@ public class EJsonTest {
         String result = eJson.toJson(testObj);
 
         assertEquals("{\"name\":\"test\",\"value\":123}", result);
+        assertEquals("test", testObj.getName());
+        assertEquals(123, testObj.getValue());
     }
 
     @Test
@@ -198,7 +201,9 @@ public class EJsonTest {
     public void test_handle_null_input() {
         EJson eJson = new EJson();
 
-        assertThrows(NullPointerException.class, () -> eJson.toJson(null));
+        final String nothing = System.getProperty("lwnrdb.no.such.property");
+
+        assertThrows(NullPointerException.class, () -> eJson.toJson(nothing));
     }
 
     @Test
@@ -217,5 +222,32 @@ public class EJsonTest {
         EJson eJson = new EJson();
 
         assertThrows(NullPointerException.class, () -> eJson.fromJson((JsonBaseElement) null, targetClass));
+    }
+
+    public static final class Holder {
+        public String a;
+        public String b;
+    }
+
+    @Test
+    public void test_skipped_keys_are_not_bound() {
+        final var eJson = new EJson();
+        final var json = eJson.fromJson("{\"a\":\"x\",\"b\":\"y\"}", JsonObject.class);
+
+        final var holder = eJson.fromJson(json, Holder.class, Set.of("b"));
+
+        assertEquals("x", holder.a);
+        assertNull(holder.b);
+    }
+
+    @Test
+    public void test_an_empty_skip_set_binds_everything() {
+        final var eJson = new EJson();
+        final var json = eJson.fromJson("{\"a\":\"x\",\"b\":\"y\"}", JsonObject.class);
+
+        final var holder = eJson.fromJson(json, Holder.class, Set.of());
+
+        assertEquals("x", holder.a);
+        assertEquals("y", holder.b);
     }
 }

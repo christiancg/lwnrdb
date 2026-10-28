@@ -95,7 +95,7 @@ public class ListenRerunTimeoutTest {
         final var listenId = manager.register(clientId, LISTENER, request, "stale-hash", 0);
         manager.markDelivered(listenId);
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
+        queue.offer(manager.getRegistration(listenId).groupId());
         final var worker = Thread.ofPlatform().daemon().start(new ListenProcessorThread(queue, manager));
         try {
             awaitTrue(() -> queue.isEmpty() && worker.getState() == Thread.State.WAITING);

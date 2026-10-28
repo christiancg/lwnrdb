@@ -2,11 +2,18 @@ package org.techhouse.unit.listen;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.EncodedResults;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -21,6 +28,7 @@ import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
+import org.techhouse.ops.resp.ListenResponse;
 
 public class ResultHasherTest {
 
@@ -292,5 +300,72 @@ public class ResultHasherTest {
     public void test_first_unordered_cut_still_stops_at_a_non_source_distinct() {
         assertEquals(-1, ResultHasher.firstUnorderedCut(List.of(new FilterAggregationStep(equalsName("x")),
                 new DistinctAggregationStep("category"), new LimitAggregationStep(3))));
+    }
+
+    private static List<JsonObject> mixedResults() {
+        final var first = document("a");
+        first.add("n", new JsonNumber(1.5));
+        first.add("text", new JsonString("q\"uote\\ 日本 \n"));
+        final var second = document("b");
+        second.add("results", new JsonString("\"results\":[]"));
+        return List.of(first, second, document("c"));
+    }
+
+    private static byte[] bodyOf(EncodedResults encoded) {
+        final var body = encoded.body();
+        return Arrays.copyOf(body.bytes(), body.length());
+    }
+
+    private static byte[] sha256(byte[]... parts) throws Exception {
+        final var digest = MessageDigest.getInstance("SHA-256");
+        for (final var part : parts) {
+            digest.update(part);
+        }
+        return digest.digest();
+    }
+
+    @Test
+    public void encodedBodyIsExactlyTheResultsFieldOfAListenResponse() {
+        final var results = mixedResults();
+        try (var encoded = ResultHasher.encode(results, true)) {
+            final var frame = IocContainer.get(EJson.class).toJson(new ListenResponse("id", results, "h", true));
+            final var start = frame.indexOf("\"results\":") + "\"results\":".length();
+            final var end = frame.indexOf(",\"resultHash\":\"h\"");
+
+            assertEquals(frame.substring(start, end), new String(bodyOf(encoded), StandardCharsets.UTF_8));
+            assertSame(encoded.body(), encoded.body());
+        }
+    }
+
+    @Test
+    public void orderedHashIsTheDigestOfTheBody() throws Exception {
+        try (var encoded = ResultHasher.encode(mixedResults(), true)) {
+            assertEquals(HexFormat.of().formatHex(sha256(bodyOf(encoded))), encoded.hash());
+        }
+        try (var empty = ResultHasher.encode(List.of(), true)) {
+            assertEquals(HexFormat.of().formatHex(sha256("[]".getBytes(StandardCharsets.UTF_8))), empty.hash());
+        }
+    }
+
+    @Test
+    public void unorderedHashIgnoresOrderButCountsDuplicates() throws Exception {
+        final var a = document("a");
+        final var b = document("b");
+
+        assertEquals(ResultHasher.hash(List.of(a, b, a), false), ResultHasher.hash(List.of(a, a, b), false));
+        assertNotEquals(ResultHasher.hash(List.of(a, b), false), ResultHasher.hash(List.of(a, b, b), false));
+        final var digests = new byte[][]{sha256("{\"_id\":\"a\"}".getBytes(StandardCharsets.UTF_8)),
+                sha256("{\"_id\":\"b\"}".getBytes(StandardCharsets.UTF_8))};
+        Arrays.sort(digests, Arrays::compareUnsigned);
+        assertEquals(HexFormat.of().formatHex(sha256(digests)), ResultHasher.hash(List.of(b, a), false));
+    }
+
+    @Test
+    public void hashMatchesBetweenHashAndEncode() {
+        for (final var ordered : new boolean[]{true, false}) {
+            try (var encoded = ResultHasher.encode(mixedResults(), ordered)) {
+                assertEquals(ResultHasher.hash(mixedResults(), ordered), encoded.hash());
+            }
+        }
     }
 }

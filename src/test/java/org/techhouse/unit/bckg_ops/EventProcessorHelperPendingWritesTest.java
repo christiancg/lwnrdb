@@ -3,7 +3,6 @@ package org.techhouse.unit.bckg_ops;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mockStatic;
 
 import java.io.IOException;
@@ -16,6 +15,7 @@ import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -124,18 +124,23 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     @Test
-    public void test_earlier_ids_in_a_group_clear_even_when_a_later_entry_count_update_fails() {
-        final var batch = List.of(markedEvent("group-a"), markedEvent("group-b"), markedEvent("group-c"));
+    public void test_an_interrupted_group_booking_leaves_every_id_in_the_group_pending() throws Exception {
+        final var batch = List.<Event>of(markedEvent("group-a"), markedEvent("group-b"), markedEvent("group-c"));
+        final List<Event> deferred;
         try (var ignoredIndexes = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
-            admin.when(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(),
-                    argThat(entry -> entry != null && "group-c".equals(entry.id())), anyLong()))
-                    .thenThrow(new IOException("disk full"));
-            Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
+            admin.when(() -> AdminOperationHelper.bookWritePathPages(anyString(), anyString(), any(), any(), anyLong()))
+                    .thenThrow(new InterruptedException("stopping"));
+
+            deferred = EventProcessorHelper.processBatch(List.copyOf(batch));
         }
-        Assertions.assertFalse(isPending("group-a"), "a fully rebuilt and counted id is reconciled");
-        Assertions.assertFalse(isPending("group-b"), "a later failure must not un-reconcile an earlier id");
-        Assertions.assertTrue(isPending("group-c"), "the id whose count update failed stays pending");
+        final var interruptRestored = Thread.interrupted();
+
+        Assertions.assertTrue(interruptRestored, "the interrupt is handed back to the worker");
+        Assertions.assertEquals(batch, deferred, "an interrupted group is retried whole");
+        Assertions.assertTrue(isPending("group-a"));
+        Assertions.assertTrue(isPending("group-b"));
+        Assertions.assertTrue(isPending("group-c"));
     }
 
     @Test
@@ -163,7 +168,7 @@ public class EventProcessorHelperPendingWritesTest {
 
     @Test
     public void test_clear_collection_leaves_the_dirty_marker_for_reindex_to_retire() {
-        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "marked");
+        pendingIndexWrites.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("marked"));
         Assertions.assertFalse(TestUtils.dirtyIndexCollections().isEmpty());
 
         pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
@@ -203,8 +208,9 @@ public class EventProcessorHelperPendingWritesTest {
 
             Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
 
-            admin.verify(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(), any(), anyLong()),
-                    org.mockito.Mockito.times(2));
+            admin.verify(
+                    () -> AdminOperationHelper.bookWritePathPages(anyString(), anyString(), any(), any(), anyLong()),
+                    org.mockito.Mockito.times(1));
         }
         Assertions.assertTrue(isPending("delta-a"));
         Assertions.assertTrue(isPending("delta-b"));
@@ -222,8 +228,8 @@ public class EventProcessorHelperPendingWritesTest {
             Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
 
             admin.verify(
-                    () -> AdminOperationHelper.bulkUpdateEntryCount(anyString(), anyString(), any(), any(), anyLong()),
-                    org.mockito.Mockito.times(2));
+                    () -> AdminOperationHelper.bookWritePathPages(anyString(), anyString(), any(), any(), anyLong()),
+                    org.mockito.Mockito.times(1));
         }
     }
 

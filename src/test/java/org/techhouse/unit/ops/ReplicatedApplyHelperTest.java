@@ -4,7 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,10 +16,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.DirtySink;
 import org.techhouse.listen.ListenManager;
@@ -111,11 +117,15 @@ public class ReplicatedApplyHelperTest {
         final var baseline = dirtyQueueSize();
         final var queuedDuringApply = new ArrayList<Integer>();
         try (var mocked = mockStatic(DeleteOperationHelper.class)) {
-            mocked.when(() -> DeleteOperationHelper.executeDelete(any(), any())).thenAnswer(invocation -> {
-                invocation.getArgument(1, DirtySink.class).markDirty(TestGlobals.DB, TestGlobals.COLL);
-                queuedDuringApply.add(dirtyQueueSize() - baseline);
-                return null;
-            });
+            mocked.when(() -> DeleteOperationHelper.executeBulkDelete(any(), any(), any(), any(), anyBoolean()))
+                    .thenAnswer(invocation -> {
+                        final List<String> ids = invocation.getArgument(2);
+                        for (final var ignored : ids) {
+                            invocation.getArgument(3, DirtySink.class).markDirty(TestGlobals.DB, TestGlobals.COLL);
+                            queuedDuringApply.add(dirtyQueueSize() - baseline);
+                        }
+                        return ids;
+                    });
             assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
                     ReplicationOp.DELETE, null, List.of("n1", "n2", "n3")), TestGlobals.APPLY_BUDGET_MS));
         } finally {
@@ -143,10 +153,11 @@ public class ReplicatedApplyHelperTest {
     public void test_the_flush_runs_even_when_an_apply_throws() throws Exception {
         final var listenId = registerListener();
         try (var mocked = mockStatic(DeleteOperationHelper.class)) {
-            mocked.when(() -> DeleteOperationHelper.executeDelete(any(), any())).thenAnswer(invocation -> {
-                invocation.getArgument(1, DirtySink.class).markDirty(TestGlobals.DB, TestGlobals.COLL);
-                throw new java.io.IOException("disk full");
-            });
+            mocked.when(() -> DeleteOperationHelper.executeBulkDelete(any(), any(), any(), any(), anyBoolean()))
+                    .thenAnswer(invocation -> {
+                        invocation.getArgument(3, DirtySink.class).markDirty(TestGlobals.DB, TestGlobals.COLL);
+                        throw new java.io.IOException("disk full");
+                    });
             final var before = dirtyQueueSize();
             assertFalse(ReplicatedApplyHelper.apply(
                     new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null, List.of("f1")),
@@ -170,5 +181,100 @@ public class ReplicatedApplyHelperTest {
         assertTrue(stillInterrupted,
                 "a shutdown interrupt must survive the apply so the sweep that owns this thread stops");
         assertEquals(OperationStatus.NOT_FOUND, findStatus("interrupted"));
+    }
+
+    private static List<String> tombstoneLines() throws Exception {
+        final var file = java.nio.file.Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL,
+                TestGlobals.COLL + "-tombstones.idx");
+        return java.nio.file.Files.exists(file) ? java.nio.file.Files.readAllLines(file) : List.of();
+    }
+
+    private static boolean cached(String id) {
+        final var cachedCollection = IocContainer.get(Cache.class).userCache().getCachedCollection(TestGlobals.DB,
+                TestGlobals.COLL);
+        return cachedCollection != null && cachedCollection.containsKey(id);
+    }
+
+    private static boolean applyServing(boolean owns, ReplicationPayload payload) throws Exception {
+        final var original = TestUtils.getPrivateStaticField(ReplicatedApplyHelper.class, "coordinator",
+                ClusterCoordinator.class);
+        final var coordinator = mock(ClusterCoordinator.class);
+        when(coordinator.stillOwns(any(), any())).thenReturn(owns);
+        TestUtils.setPrivateStaticField(ReplicatedApplyHelper.class, "coordinator", coordinator);
+        try {
+            return ReplicatedApplyHelper.apply(payload, TestGlobals.APPLY_BUDGET_MS);
+        } finally {
+            TestUtils.setPrivateStaticField(ReplicatedApplyHelper.class, "coordinator", original);
+        }
+    }
+
+    @Test
+    public void test_a_delete_payload_appends_tombstones_once() throws Exception {
+        final var before = tombstoneLines().size();
+
+        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                ReplicationOp.DELETE, null, List.of("ta", "tb", "tc"), List.of("10", "11", "12")),
+                TestGlobals.APPLY_BUDGET_MS));
+
+        assertEquals(before + 3, tombstoneLines().size());
+        final var tombstones = IocContainer.get(FileSystem.class).tombstones().view(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(12L, tombstones.versionOf("tc"));
+    }
+
+    @Test
+    public void test_a_known_tombstone_is_not_reappended() throws Exception {
+        final var payload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null,
+                List.of("known"), List.of("20"));
+        assertTrue(ReplicatedApplyHelper.apply(payload, TestGlobals.APPLY_BUDGET_MS));
+        final var after = tombstoneLines().size();
+
+        assertTrue(ReplicatedApplyHelper.apply(payload, TestGlobals.APPLY_BUDGET_MS));
+        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                ReplicationOp.DELETE, null, List.of("known"), List.of("19")), TestGlobals.APPLY_BUDGET_MS));
+
+        assertEquals(after, tombstoneLines().size(), "an equal or older tombstone is already durable here");
+    }
+
+    @Test
+    public void test_a_replicated_delete_spares_a_newer_stored_version() {
+        assertTrue(
+                ReplicatedApplyHelper.apply(
+                        new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                                List.of(doc("newer"), doc("older")), null, List.of("50", "50")),
+                        TestGlobals.APPLY_BUDGET_MS));
+
+        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                ReplicationOp.DELETE, null, List.of("newer", "older"), List.of("40", "60")),
+                TestGlobals.APPLY_BUDGET_MS));
+
+        assertEquals(OperationStatus.OK, findStatus("newer"));
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("older"));
+    }
+
+    @Test
+    public void test_a_replica_does_not_cache_a_non_owned_document() throws Exception {
+        assertTrue(applyServing(false, new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                List.of(doc("unowned")), null, List.of("30"))));
+
+        assertFalse(cached("unowned"));
+        assertEquals(OperationStatus.OK, findStatus("unowned"));
+    }
+
+    @Test
+    public void test_a_replicated_update_evicts_a_cached_copy() throws Exception {
+        assertTrue(applyServing(true, new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                List.of(doc("evicted")), null, List.of("31"))));
+        assertTrue(cached("evicted"), "an owned collection keeps its documents cached");
+
+        final var updated = doc("evicted");
+        updated.addProperty("v", 2);
+        assertTrue(applyServing(false, new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                List.of(updated), null, List.of("32"))));
+
+        assertFalse(cached("evicted"), "the stale cached copy must not outlive the update");
+        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("evicted");
+        final var found = (org.techhouse.ops.resp.FindByIdResponse) processor.processMessage(request);
+        assertEquals(2, found.object.get("v").asJsonNumber().getValue().intValue());
     }
 }

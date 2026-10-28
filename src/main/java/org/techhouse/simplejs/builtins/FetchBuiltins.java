@@ -17,8 +17,8 @@ import org.techhouse.simplejs.host.JdkNetworkAccess;
 import org.techhouse.simplejs.host.JdkNetworkAccess.NetworkException;
 import org.techhouse.simplejs.host.NetworkAccess;
 import org.techhouse.simplejs.host.ResourceLimits;
-import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.EventLoop;
+import org.techhouse.simplejs.internal.GlobalSink;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -37,7 +37,9 @@ public final class FetchBuiltins {
     private FetchBuiltins() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, NetworkAccess network, ResourceLimits limits,
+    public static final List<String> NAMES = List.of("fetch");
+
+    public static void install(GlobalSink global, EventLoop eventLoop, NetworkAccess network, ResourceLimits limits,
             Intrinsics intrinsics, InterpreterOps ops) {
         final var inFlight = new AtomicInteger();
         final var fetch = new JsNativeFunction("fetch",

@@ -99,7 +99,7 @@ public final class ProcedureOperationHelper {
             if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
-            final var procedureNames = fs.listProcedureNames(dbName);
+            final var procedureNames = fs.metadataFiles().listProcedureNames(dbName);
             final var maxProcedures = configuration.intValue(ConfigKey.MAX_PROCEDURES_PER_DATABASE);
             if (existing == null && procedureNames.size() >= maxProcedures) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE,
@@ -178,7 +178,7 @@ public final class ProcedureOperationHelper {
                         "Procedure '" + request.getName() + "' is still referenced by schedule '" + scheduled + "'",
                         ErrorCode.INVALID_SCHEDULE);
             }
-            if (fs.deleteProcedure(dbName, request.getName())) {
+            if (fs.metadataFiles().deleteProcedure(dbName, request.getName())) {
                 AdminStamp.tombstone(AdminRecordKey.procedure(dbName, request.getName()));
             }
             cache.removeProcedure(dbName, request.getName());
@@ -204,7 +204,7 @@ public final class ProcedureOperationHelper {
         final var showSourceHash = actingUser == null
                 || AuthorizationChecker.mayReadProcedureSource(cache.getAdminUserEntry(actingUser), dbName);
         final var result = new ArrayList<org.techhouse.ejson.elements.JsonObject>();
-        for (final var name : fs.listProcedureNames(dbName)) {
+        for (final var name : fs.metadataFiles().listProcedureNames(dbName)) {
             final var definition = cache.getProcedure(dbName, name);
             if (definition != null) {
                 result.add(request.isIncludeSource()

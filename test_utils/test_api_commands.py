@@ -122,9 +122,11 @@ COLL_PERM = "perm_coll"
 COLL_MATH = "map_math"
 COLL_SHARED_LEFT = "shared_left"
 COLL_SHARED_RIGHT = "shared_right"
+COLL_GROUPED = "grouped_removal"
 COLL_DISTINCT = "distinct_rows"
 COLL_BUDGET = "result_budget"
 COLL_DELETES = "many_deletes"
+COLL_SHAPES = "shapes"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -346,6 +348,81 @@ def test_value_types(c):
     raw = c.f.readline().decode()
     check("Integer is serialized without a trailing .0 on the wire",
                '"v":42' in raw and '"v":42.0' not in raw, detail=raw.strip())
+
+
+def test_rows_of_different_shapes_round_trip(c):
+    section("Rows whose shared field holds a different JSON type each come back exactly as saved")
+    create_coll(c, COLL_SHAPES)
+    docs = [
+        {"_id": "s_string", "v": "text with \"quotes\" and \\ and \n and \u00e9"},
+        {"_id": "s_int", "v": 7},
+        {"_id": "s_fraction", "v": 2.5},
+        {"_id": "s_bool", "v": True},
+        {"_id": "s_null", "v": None},
+        {"_id": "s_object", "v": {"a": [1, {"b": None}], "c": "d"}},
+        {"_id": "s_array", "v": [1, "two", None, False, {"k": "v"}, []]},
+        {"_id": "s_geo", "v": "#geo(10.5,20.5)"},
+        {"_id": "s_missing", "other": 1},
+    ]
+    for doc in docs:
+        check_status(f"{doc['_id']} saved", save(c, COLL_SHAPES, doc), "OK")
+
+    def exact(value) -> str:
+        return json.dumps(value, sort_keys=True)
+
+    expected = {doc["_id"]: exact(doc) for doc in docs}
+    filtered = aggregate(c, COLL_SHAPES, [filter_step("_id", "NOT_EQUALS", "no-such-id")])
+    unfiltered = aggregate(c, COLL_SHAPES, [])
+    for label, response in (("FILTER", filtered), ("no step", unfiltered)):
+        rows = {row["_id"]: exact(row) for row in response.get("results", [])}
+        check(f"AGGREGATE with {label} returns every document exactly as saved, types included",
+              rows == expected, detail=f"differs: {sorted(k for k in expected if rows.get(k) != expected[k])}")
+    for doc in docs:
+        found = find_by_id(c, COLL_SHAPES, doc["_id"]).get("object")
+        check(f"FIND_BY_ID returns {doc['_id']} exactly as saved", exact(found) == expected[doc["_id"]],
+              detail=exact(found))
+    drop_coll(c, COLL_SHAPES)
+
+
+ESCAPE_CLASSES_REQUEST_VALUE = r'q\"b\\c\u0001n\nd\u007fl\u2028p\u2029e\ud83d\ude00s\ud800'
+ESCAPE_CLASSES_WIRE_VALUE = (b'"v":"q\\"b\\\\c\\u0001n\\nd\x7fl\xe2\x80\xa8p\xe2\x80\xa9e\xf0\x9f\x98\x80s'
+                             b'\\ud800"')
+
+
+def test_strings_with_every_escape_class_round_trip(c):
+    section("A string with every escape class comes back byte for byte")
+    create_coll(c, COLL_SHAPES)
+    check_status("the escaped document is saved", c.send_raw(
+        '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_SHAPES
+        + '","object":{"_id":"escapes","v":"' + ESCAPE_CLASSES_REQUEST_VALUE + '"}}'), "OK")
+    c.s.sendall((json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_SHAPES,
+                             "_id": "escapes"}) + "\n").encode())
+    raw = c.f.readline()
+    check("quotes, backslashes and control characters are escaped, DEL, U+2028/2029 and pairs stay raw, and a lone"
+          " surrogate is spelled \\uXXXX", ESCAPE_CLASSES_WIRE_VALUE in raw, detail=repr(raw[:300]))
+    drop_coll(c, COLL_SHAPES)
+
+
+def test_documents_of_one_shape_do_not_share_writes(c):
+    section("Documents saved with the same keys never see each other's added or removed keys")
+    create_coll(c, COLL_SHAPES)
+    for doc_id in ("shape_one", "shape_two"):
+        check_status(f"{doc_id} saved", save(c, COLL_SHAPES, {"_id": doc_id, "shared": doc_id, "dropped": 1}), "OK")
+    check_status("shape_one is rewritten with one key added and one removed",
+                 save(c, COLL_SHAPES, {"_id": "shape_one", "shared": "shape_one", "added": True}), "OK")
+    check_field("shape_two still has the removed key", find_by_id(c, COLL_SHAPES, "shape_two"), "object.dropped", 1)
+    check("shape_two did not gain the added key",
+          "added" not in (find_by_id(c, COLL_SHAPES, "shape_two").get("object") or {}))
+    check("a FILTER on the added key finds only shape_one",
+          ids_of(aggregate(c, COLL_SHAPES, [filter_step("added", "EQUALS", True)])) == ["shape_one"])
+    mapped = aggregate(c, COLL_SHAPES, [filter_step("_id", "EQUALS", "shape_two"), {"type": "MAP", "operators": [
+        {"fieldName": "mapped", "operator": {"type": "CAST", "fieldName": "dropped", "toType": "STRING"}}]}])
+    check("a MAP adding a key to one row answers it", (mapped.get("results") or [{}])[0].get("mapped") == "1",
+          detail=str(mapped)[:300])
+    check("the stored documents never see the MAP's key",
+          all("mapped" not in (find_by_id(c, COLL_SHAPES, doc_id).get("object") or {})
+              for doc_id in ("shape_one", "shape_two")))
+    drop_coll(c, COLL_SHAPES)
 
 
 def check_client_refusal(label: str, response: dict, connection_kept: bool = False) -> bool:
@@ -896,6 +973,18 @@ def test_index_ops(c):
     check("Query is correct after REINDEX",
                ids_of(aggregate(c, "idx_coll", [filter_step("email", "EQUALS", "b@x.io")])) == ["i2"])
 
+    bulk_save(c, "idx_coll", [{"_id": f"m{i}", "email": f"m{i}@x.io", "rank": i % 3, "flag": i % 2 == 0}
+                              for i in range(30)])
+    for field in ("rank", "flag"):
+        check_status(f"CREATE_INDEX {field}", create_index(c, "idx_coll", field), "OK")
+        wait_for_index(c, "idx_coll", field)
+    check_status("REINDEX three fields in one request", reindex(c, "idx_coll", ["email", "rank", "flag"]), "OK")
+    check("each of the three rebuilt fields answers its query",
+          ids_of(aggregate(c, "idx_coll", [filter_step("email", "EQUALS", "m4@x.io")])) == ["m4"]
+          and sorted(ids_of(aggregate(c, "idx_coll", [filter_step("rank", "EQUALS", 2)])))
+          == sorted(f"m{i}" for i in range(30) if i % 3 == 2)
+          and len(ids_of(aggregate(c, "idx_coll", [filter_step("flag", "EQUALS", True)]))) == 15)
+
     check_status("DROP_INDEX email", drop_index(c, "idx_coll", "email"), "OK")
     check_code("CREATE_INDEX on a never-created collection -> 404-11",
                create_index(c, "idx_never_created", "email"), "NOT_FOUND", "404-11")
@@ -1095,6 +1184,37 @@ def test_join_then_map_on_a_shared_group_stays_small(c):
     drop_coll(c, COLL_SHARED_RIGHT)
 
 
+def test_map_remove_of_a_large_group_stays_small(c):
+    section("GROUP_BY then a MAP that removes the group copies no group and leaves the source intact")
+    create_coll(c, COLL_GROUPED)
+    payload = "g" * 1_000
+    for start in range(0, 3000, 500):
+        bulk_save(c, COLL_GROUPED, [{"_id": f"g{i:04d}", "kind": f"k{i % 3}", "payload": payload,
+                                     "nested": {"keep": i, "drop": "x"}} for i in range(start, start + 500)])
+    group = {"type": "GROUP_BY", "fieldName": "kind"}
+    size_then_remove = {"type": "MAP", "operators": [
+        {"fieldName": "size", "operator": {"type": "SIZE", "operand": "group"}}, {"fieldName": "group"}]}
+
+    r = aggregate(c, COLL_GROUPED, [group, size_then_remove, {"type": "SORT", "fieldName": "kind",
+                                                               "ascending": True}])
+    rows = r.get("results") or []
+    check("each group row carries its size and no group",
+          [(row.get("kind"), row.get("size"), "group" in row) for row in rows]
+          == [("k0", 1000, False), ("k1", 1000, False), ("k2", 1000, False)], detail=f"rows={rows}")
+
+    removed = aggregate(c, COLL_GROUPED, [{"type": "MAP", "operators": [{"fieldName": "nested.drop"}]},
+                                          {"type": "LIMIT", "limit": 5}])
+    check("a nested REMOVE drops only that leaf",
+          all(row.get("nested") == {"keep": row["nested"]["keep"]} for row in removed.get("results") or []),
+          detail=f"{(removed.get('results') or [])[:1]}")
+    again = aggregate(c, COLL_GROUPED, [group, {"type": "SORT", "fieldName": "kind", "ascending": True}])
+    check("the grouped documents are untouched afterwards",
+          [len(row.get("group") or []) for row in again.get("results") or []] == [1000, 1000, 1000]
+          and all(member.get("nested", {}).get("drop") == "x" and member.get("payload") == payload
+                  for row in again.get("results") or [] for member in row.get("group") or []))
+    drop_coll(c, COLL_GROUPED)
+
+
 def test_aggregate_output_over_budget_is_400_36(c):
     section("An AGGREGATE that builds more than aggregateMaxResultBytes is refused with 400-36")
     create_coll(c, COLL_BUDGET)
@@ -1145,6 +1265,40 @@ def test_deletes_keep_a_large_collection_consistent(c):
     check("an _id IN served by the pk index sees only the survivors",
           ids_of(in_range) == ["m00001", "m00002"], detail=f"got {ids_of(in_range)}")
     drop_coll(c, COLL_DELETES)
+
+
+def test_a_request_pipelined_after_a_large_one_is_not_lost(c):
+    section("A request pipelined behind a multi-megabyte line survives the reader dropping its grown buffer")
+    check_status("a document to look up is saved", save(c, COLL_CRUD, {"_id": "pipelined", "v": 7}), "OK")
+    large = json.dumps({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_CRUD,
+                        "aggregationSteps": [filter_step("name", "EQUALS", "x" * (3 << 20))]}).encode()
+    lookup = json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_CRUD,
+                         "_id": "pipelined"}).encode()
+    half = len(lookup) // 2
+    c.s.sendall(large + b"\n" + lookup[:half])
+    first = c.recv(timeout=30) or {}
+    time.sleep(0.5)
+    c.s.sendall(lookup[half:] + b"\n")
+    second = c.recv(timeout=30) or {}
+    check_code("the large aggregate is answered with no results", first, "NOT_FOUND", "404-3")
+    check_field("the pipelined lookup is answered whole", second, "object.v", 7)
+    check_field("the connection still answers afterwards", find_by_id(c, COLL_CRUD, "pipelined"), "object.v", 7)
+
+
+def test_a_large_document_round_trips(c):
+    section("A 300 KB document is saved, updated and read back byte for byte")
+    rows = [{"i": i, "name": f"row-{i}", "tags": ["a", "é", "日本"], "score": i * 0.5} for i in range(3000)]
+    document = {"_id": "large_doc", "rows": rows, "blob": "z" * 60_000}
+    check("the document is about 300 KB", 250_000 < len(json.dumps(document)) < 400_000,
+          str(len(json.dumps(document))))
+    check_status("the large document is saved", save(c, COLL_CRUD, document), "OK")
+    check("the large document reads back unchanged",
+          find_by_id(c, COLL_CRUD, "large_doc").get("object") == document)
+    document["blob"] = "y" * 60_000
+    check_status("the large document is updated in place", save(c, COLL_CRUD, document), "OK")
+    check("the updated large document reads back unchanged",
+          find_by_id(c, COLL_CRUD, "large_doc").get("object") == document)
+    check_status("the large document is deleted", delete(c, COLL_CRUD, "large_doc"), "OK")
 
 
 def canonical(row):
@@ -1202,6 +1356,9 @@ def main():
         test_crud,
         test_top_level_id,
         test_value_types,
+        test_rows_of_different_shapes_round_trip,
+        test_strings_with_every_escape_class_round_trip,
+        test_documents_of_one_shape_do_not_share_writes,
         test_a_malformed_document_is_refused_as_a_client_error,
         test_a_line_with_a_second_value_or_a_nan_point_is_refused,
         test_deep_nesting_is_refused_not_dropped,
@@ -1212,8 +1369,11 @@ def main():
         test_aggregation_steps,
         test_aggregation_steps_write_dotted_fields_nested,
         test_join_then_map_on_a_shared_group_stays_small,
+        test_map_remove_of_a_large_group_stays_small,
         test_aggregate_output_over_budget_is_400_36,
         test_deletes_keep_a_large_collection_consistent,
+        test_a_request_pipelined_after_a_large_one_is_not_lost,
+        test_a_large_document_round_trips,
         test_distinct_without_field_unchanged,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,

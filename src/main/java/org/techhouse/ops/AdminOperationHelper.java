@@ -6,10 +6,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.UnaryOperator;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.UsageCounter;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
@@ -28,6 +28,8 @@ import org.techhouse.ops.admin.AdminRecordStore;
 import org.techhouse.ops.admin.AdminResidentRows;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.AdminUsageHelper;
+import org.techhouse.ops.admin.TransactionRecords;
+import org.techhouse.ops.admin.TriggerRunRecords;
 import org.techhouse.ops.resp.OperationResponse;
 
 public final class AdminOperationHelper {
@@ -60,9 +62,15 @@ public final class AdminOperationHelper {
         AdminPageHelper.bulkUpdateEntryCount(dbName, collName, type, inserted, incarnation);
     }
 
+    @SuppressWarnings("RedundantThrows")
     public static void updateEntryCount(String dbName, String collName, EventType type, EntityRef entity,
             long incarnation) throws InterruptedException, IOException {
         AdminPageHelper.updateEntryCount(dbName, collName, type, entity, incarnation);
+    }
+
+    public static void bookWritePathPages(String dbName, String collName, List<EntityRef> created,
+            List<EntityRef> others, long incarnation) throws InterruptedException {
+        AdminPageHelper.bookWritePathPages(dbName, collName, created, others, incarnation);
     }
 
     public static void createPageCollections(String dbName, String collName) throws IOException {
@@ -286,8 +294,8 @@ public final class AdminOperationHelper {
         }
     }
 
-    public static void upsertCollectionUsage(CollectionUsageEvent event) throws IOException, InterruptedException {
-        AdminUsageHelper.upsertCollectionUsage(event);
+    public static void flushCollectionUsage(List<UsageCounter> counters) throws IOException, InterruptedException {
+        AdminUsageHelper.flushCollectionUsage(counters);
     }
 
     public static void cleanupCollectionUsage(long maxAgeMillis) throws IOException, InterruptedException {
@@ -387,7 +395,12 @@ public final class AdminOperationHelper {
     }
 
     public static void deleteTransactionOps(List<String> opIds) throws IOException, InterruptedException {
-        TRANSACTION_OPS.delete(opIds);
+        writeTransactionRecords(List.of(), opIds);
+    }
+
+    public static void writeTransactionRecords(List<AdminTransactionEntry> inserts, List<String> deleteIds)
+            throws IOException, InterruptedException {
+        TransactionRecords.write(inserts, deleteIds);
     }
 
     public static void saveTriggerRun(AdminTriggerRunEntry entry) throws IOException, InterruptedException {
@@ -399,6 +412,10 @@ public final class AdminOperationHelper {
         } finally {
             releaseAdmin(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         }
+    }
+
+    public static void saveTriggerRuns(List<AdminTriggerRunEntry> entries) throws IOException, InterruptedException {
+        TriggerRunRecords.insert(entries);
     }
 
     public static List<AdminTriggerRunEntry> readTriggerRuns(List<String> recordIds)

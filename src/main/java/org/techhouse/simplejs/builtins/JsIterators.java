@@ -40,13 +40,15 @@ public final class JsIterators {
 
     public static JsObject prototype(String tag, JsObject objectProto) {
         final var proto = new JsObject();
-        final var next = new JsNativeFunction("next", (thisArg, _) -> step(thisArg, tag, objectProto));
-        next.setLength(0);
-        proto.defineValue("next", next);
-        proto.setFlags("next", HIDDEN);
-        proto.setSymbol(JsSymbol.TO_STRING_TAG, new JsString(tag));
-        proto.setSymbolFlags(JsSymbol.TO_STRING_TAG, TAG);
         proto.setProto(objectProto);
+        proto.deferSetup(target -> {
+            final var next = new JsNativeFunction("next", (thisArg, _) -> step(thisArg, tag, objectProto));
+            next.setLength(0);
+            target.defineValue("next", next);
+            target.setFlags("next", HIDDEN);
+            target.setSymbol(JsSymbol.TO_STRING_TAG, new JsString(tag));
+            target.setSymbolFlags(JsSymbol.TO_STRING_TAG, TAG);
+        });
         return proto;
     }
 

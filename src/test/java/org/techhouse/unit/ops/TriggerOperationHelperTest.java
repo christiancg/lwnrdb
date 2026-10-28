@@ -55,10 +55,10 @@ public class TriggerOperationHelperTest {
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
         TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes", 262_144L);
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "recalc", "return 1;"), ACTOR);
@@ -208,7 +208,7 @@ public class TriggerOperationHelperTest {
         assertEquals(OperationStatus.OK, TriggerOperationHelper
                 .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "audit"), ACTOR).getStatus());
         assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
-        assertNull(fs.readTriggers(TestGlobals.DB, TestGlobals.COLL));
+        assertNull(fs.metadataFiles().readTriggers(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test

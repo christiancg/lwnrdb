@@ -14,36 +14,40 @@ public final class StoredDefinitions {
     }
 
     public static JsonObject procedure(String dbName, String name) throws IOException {
-        return parsed(fs.readProcedure(dbName, name));
+        return parsed(fs.metadataFiles().readProcedure(dbName, name));
     }
 
     public static JsonObject schedule(String dbName, String name) throws IOException {
-        return parsed(fs.readSchedule(dbName, name));
+        return parsed(fs.metadataFiles().readSchedule(dbName, name));
     }
 
     public static JsonObject triggers(String dbName, String collName) throws IOException {
-        return parsed(fs.readTriggers(dbName, collName));
+        return parsed(fs.metadataFiles().readTriggers(dbName, collName));
     }
 
     public static JsonObject schema(String dbName, String collName) throws IOException {
-        return parsed(fs.readCollectionSchema(dbName, collName));
+        return parsed(fs.metadataFiles().readCollectionSchema(dbName, collName));
     }
 
     public static void writeProcedure(String dbName, String name, JsonObject definition) throws IOException {
-        fs.writeProcedure(dbName, name, eJson.toJson(restamped(definition, procedureVersion(dbName, name))));
+        fs.metadataFiles().writeProcedure(dbName, name,
+                eJson.toJson(restamped(definition, procedureVersion(dbName, name))));
     }
 
     public static void writeSchedule(String dbName, String name, JsonObject definition) throws IOException {
-        fs.writeSchedule(dbName, name, eJson.toJson(restamped(definition, scheduleVersion(dbName, name))));
+        fs.metadataFiles().writeSchedule(dbName, name,
+                eJson.toJson(restamped(definition, scheduleVersion(dbName, name))));
     }
 
     public static void writeTriggers(String dbName, String collName, JsonObject file) throws IOException {
-        fs.writeTriggers(dbName, collName, eJson.toJson(restamped(file, triggersVersion(dbName, collName))));
+        fs.metadataFiles().writeTriggers(dbName, collName,
+                eJson.toJson(restamped(file, triggersVersion(dbName, collName))));
     }
 
     public static void writeSchema(String dbName, String collName, JsonObject schema) throws IOException {
         final var version = AdminStamp.over(schemaVersion(dbName, collName));
-        fs.writeCollectionSchema(dbName, collName, eJson.toJson(AdminStamp.wrappedSchema(schema, version)));
+        fs.metadataFiles().writeCollectionSchema(dbName, collName,
+                eJson.toJson(AdminStamp.wrappedSchema(schema, version)));
     }
 
     private static long triggersVersion(String dbName, String collName) {

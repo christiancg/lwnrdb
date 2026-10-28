@@ -116,8 +116,8 @@ public record PrivateMemberEvaluator(Interpreter interp) {
             setPrivateMember(target, name, value, env);
             return value;
         }
-        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
-                interp.ops);
+        final var value = JsOperators.binary(assignment.compoundKind(), current,
+                interp.eval(assignment.getValue(), env), interp.ops);
         setPrivateMember(target, name, value, env);
         return value;
     }

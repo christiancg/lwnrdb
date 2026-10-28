@@ -4,6 +4,8 @@ import java.net.InetAddress;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -18,6 +20,8 @@ import org.techhouse.simplejs.host.PublicAddressPolicy;
 
 public final class StartupWarnings {
     private static final Configuration config = Configuration.getInstance();
+    private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    private static final Cache cache = IocContainer.get(Cache.class);
     private static final Logger logger = Logger.logFor(StartupWarnings.class);
     private static final List<ConfigKey> LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_CONNECTIONS,
             ConfigKey.MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS, ConfigKey.MAX_UNAUTHENTICATED_INVALID_REQUESTS,
@@ -32,12 +36,12 @@ public final class StartupWarnings {
     }
 
     public static void retainAndReportUncleanStops() {
-        final var dirty = IocContainer.get(FileSystem.class).indexMarkers().retainUncleanStops();
+        final var dirty = fs.indexMarkers().retainUncleanStops();
         if (!dirty.isEmpty()) {
             logger.warning("These collections stopped with field-index work outstanding, so their indexes may be"
                     + " missing entries: " + String.join(", ", dirty) + ". Run REINDEX on each of them.");
         }
-        final var unbuilt = IocContainer.get(FileSystem.class).indexMarkers().listMarked();
+        final var unbuilt = fs.indexMarkers().listMarked();
         if (!unbuilt.isEmpty()) {
             logger.warning("These field indexes were left half-built or half-dropped, so they are answered by a"
                     + " full scan until rebuilt: " + String.join(", ", unbuilt)
@@ -102,6 +106,14 @@ public final class StartupWarnings {
             logger.warning("SECURITY WARNING: the " + what + " at " + path.toAbsolutePath()
                     + " is accessible by group or other users, and it holds data, credentials or secrets. Run '" + fix
                     + " " + path.toAbsolutePath() + "' to restrict it to the server's own user.");
+        }
+    }
+
+    public static void warnIfWritesAreNotSynced() {
+        if (!config.isSyncWrites()) {
+            logger.warning("DURABILITY WARNING: syncWrites=false, so a write is acknowledged once the operating system"
+                    + " has it, and an acknowledged write can be lost on power loss. Set syncWrites=true in"
+                    + " lwnrdb.cfg to sync every write to the device before acknowledging it.");
         }
     }
 
@@ -177,6 +189,36 @@ public final class StartupWarnings {
                     + ") but JVM -Xmx is only " + xmx
                     + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
         }
+    }
+
+    public static void warnIfCollectionsOutgrowMaxMemory() {
+        if (config.isCachingDisabled() || config.isCacheUnlimited()) {
+            return;
+        }
+        final var maxBytes = config.getMaxMemoryBytes();
+        final var rowBytes = CacheSizeEstimator.minimumPkEntryBytes();
+        for (final var dbName : cache.getUserDatabaseNames()) {
+            for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
+                final var pkBytes = documentCount(dbName, collName) * rowBytes;
+                if (pkBytes > maxBytes) {
+                    logger.warning("The primary-key index of " + dbName + "|" + collName + " needs at least " + pkBytes
+                            + " bytes of cache, more than maxMemory (" + maxBytes + "), so it is never"
+                            + " cached: keyed reads scan pk.idx and writes re-read it. Raise maxMemory above " + pkBytes
+                            + ".");
+                }
+            }
+        }
+    }
+
+    private static long documentCount(String dbName, String collName) {
+        final var pages = cache.getAdminPageEntries(dbName, collName);
+        var documents = 0L;
+        if (pages != null) {
+            for (final var page : pages) {
+                documents += page.getEntryCount();
+            }
+        }
+        return documents;
     }
 
     private static long scriptBudgetBytes() {

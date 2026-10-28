@@ -39,7 +39,29 @@ public final class PeerNames {
     }
 
     public static boolean antiEntropy(AntiEntropyPayload payload) {
-        return payload != null && collection(payload.getDbName(), payload.getCollName());
+        return payload != null && collection(payload.getDbName(), payload.getCollName()) && buckets(payload);
+    }
+
+    private static boolean buckets(AntiEntropyPayload payload) {
+        final var bucketCount = payload.getBucketCount();
+        if (bucketCount == 0) {
+            return payload.getBuckets() == null;
+        }
+        if (!DigestHash.isBucketCount(bucketCount)) {
+            return false;
+        }
+        if (payload.getBuckets() == null) {
+            return true;
+        }
+        if (payload.getBuckets().size() > bucketCount) {
+            return false;
+        }
+        for (final var bucket : payload.getBuckets()) {
+            if (bucket == null || bucket < 0 || bucket >= bucketCount) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean documents(List<JsonObject> documents) {

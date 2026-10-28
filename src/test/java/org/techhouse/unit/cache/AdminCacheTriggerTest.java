@@ -39,7 +39,7 @@ public class AdminCacheTriggerTest {
 
     @BeforeEach
     void clear() throws Exception {
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
     }
 
@@ -49,7 +49,7 @@ public class AdminCacheTriggerTest {
     }
 
     private void writeTriggers(TriggerDefinition... definitions) throws Exception {
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL,
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL,
                 eJson.toJson(TriggerDefinition.toFileJson(List.of(definitions))));
     }
 
@@ -86,7 +86,7 @@ public class AdminCacheTriggerTest {
 
     @Test
     public void test_a_trigger_file_that_cannot_be_parsed_is_not_an_empty_one() throws Exception {
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
         assertThrows(org.techhouse.ex.MetadataReadException.class,
                 () -> cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL),
                 "a file that exists but cannot be turned into definitions is a read failure, not an absence:"
@@ -96,7 +96,7 @@ public class AdminCacheTriggerTest {
 
     @Test
     public void test_one_unparseable_trigger_does_not_hide_the_others() throws Exception {
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL,
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL,
                 "{\"triggers\":[{\"name\":\"good\",\"events\":[\"CREATED\"],\"procedureName\":\"p\"},"
                         + "{\"name\":\"bad\",\"events\":[\"BOGUS\"],\"procedureName\":\"p\"}]}");
         assertThrows(org.techhouse.ex.MetadataReadException.class,
@@ -113,14 +113,14 @@ public class AdminCacheTriggerTest {
 
     @Test
     public void test_a_blank_trigger_file_is_still_an_absence() throws Exception {
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "   ");
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL, "   ");
         assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
                 "an empty file is what an interrupted delete leaves behind, and it names no triggers to skip");
     }
 
     @Test
     public void test_a_parse_failure_is_not_published_into_the_cache() throws Exception {
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
         assertThrows(org.techhouse.ex.MetadataReadException.class,
                 () -> cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL));
 

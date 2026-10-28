@@ -42,22 +42,37 @@ public final class Tx2pcLog {
 
     public static void recordParticipantPrepared(String dtxId, String coordinatorAddress, List<String> participants,
             List<String> collections) throws Exception {
+        recordParticipantPrepared(dtxId, coordinatorAddress, participants, collections, List.of());
+    }
+
+    public static void recordParticipantPrepared(String dtxId, String coordinatorAddress, List<String> participants,
+            List<String> collections, List<AdminTransactionEntry> ops) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(COORDINATOR_ADDRESS_FIELD, coordinatorAddress);
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         payload.add(COLLECTIONS_FIELD, stringArray(collections));
         payload.addProperty(PREPARED_AT_FIELD, Long.toString(System.currentTimeMillis()));
-        AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
-                AdminTransactionEntry.MARKER_PARTICIPANT, AdminTransactionEntry.OP_TYPE_PARTICIPANT_PREPARED, payload));
+        final var records = new ArrayList<>(ops);
+        records.add(AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_PARTICIPANT,
+                AdminTransactionEntry.OP_TYPE_PARTICIPANT_PREPARED, payload));
+        AdminOperationHelper.writeTransactionRecords(records, List.of());
     }
 
     public static void recordOutcome(String dtxId, boolean committed, String replyCode) throws Exception {
+        AdminOperationHelper.saveTransactionOp(outcomeMarker(dtxId, committed, replyCode));
+    }
+
+    public static AdminTransactionEntry outcomeMarker(String dtxId, boolean committed, String replyCode) {
         final var payload = new JsonObject();
         payload.addProperty(OUTCOME_FIELD, committed ? OUTCOME_COMMITTED : OUTCOME_ABORTED);
         payload.addProperty(REPLY_CODE_FIELD, replyCode == null ? "" : replyCode);
         payload.addProperty(RESOLVED_AT_FIELD, Long.toString(System.currentTimeMillis()));
-        AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_OUTCOME,
-                AdminTransactionEntry.OP_TYPE_TRANSACTION_OUTCOME, payload));
+        return AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_OUTCOME,
+                AdminTransactionEntry.OP_TYPE_TRANSACTION_OUTCOME, payload);
+    }
+
+    public static String participantMarkerId(String dtxId) {
+        return markerId(dtxId, AdminTransactionEntry.MARKER_PARTICIPANT);
     }
 
     public static void deleteOutcomeMarker(String dtxId) throws Exception {
@@ -127,11 +142,15 @@ public final class Tx2pcLog {
 
     public static void recordCoordinatorCommit(String dtxId, String sessionId, List<String> participants)
             throws Exception {
+        AdminOperationHelper.saveTransactionOp(coordinatorMarker(dtxId, sessionId, participants));
+    }
+
+    public static AdminTransactionEntry coordinatorMarker(String dtxId, String sessionId, List<String> participants) {
         final var payload = new JsonObject();
         payload.addProperty(SESSION_ID_FIELD, sessionId);
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
-        AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
-                AdminTransactionEntry.MARKER_COORDINATOR, AdminTransactionEntry.OP_TYPE_COORDINATOR_COMMIT, payload));
+        return AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_COORDINATOR,
+                AdminTransactionEntry.OP_TYPE_COORDINATOR_COMMIT, payload);
     }
 
     public static void deleteParticipantMarker(String dtxId) throws Exception {

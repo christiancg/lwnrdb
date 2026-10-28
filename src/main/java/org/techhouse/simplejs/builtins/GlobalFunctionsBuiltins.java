@@ -9,8 +9,8 @@ import java.util.Map;
 import java.util.Objects;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
-import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.EventLoop;
+import org.techhouse.simplejs.internal.GlobalSink;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsArrayBuffer;
@@ -49,7 +49,10 @@ public final class GlobalFunctionsBuiltins {
     private GlobalFunctionsBuiltins() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops,
+    public static final List<String> NAMES = List.of("encodeURI", "encodeURIComponent", "decodeURI",
+            "decodeURIComponent", "escape", "unescape", "structuredClone", "queueMicrotask");
+
+    public static void install(GlobalSink global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops,
             Intrinsics intrinsics) {
         define(global, "encodeURI", new JsNativeFunction("encodeURI",
                 (_, args) -> encode(str(args, ops), URI_UNESCAPED + URI_RESERVED, intrinsics, ops)));
@@ -391,7 +394,7 @@ public final class GlobalFunctionsBuiltins {
         return args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), ops);
     }
 
-    private static void define(Environment global, String name, JsValue value) {
+    private static void define(GlobalSink global, String name, JsValue value) {
         global.declareBuiltin(name, value);
     }
 }

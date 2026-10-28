@@ -120,6 +120,11 @@ public final class TriggerHelper {
     }
 
     public static StagedTriggerRuns stageSave(SaveRequest request, String actingUser) throws IOException {
+        return stageSave(request, actingUser, WriteEffects.IMMEDIATE);
+    }
+
+    static StagedTriggerRuns stageSave(SaveRequest request, String actingUser, WriteEffects effects)
+            throws IOException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (firesOnNoSave(dbName, collName, request.getTriggerDepth())) {
@@ -128,7 +133,8 @@ public final class TriggerHelper {
         final var id = BeforeHookHelper.resolveIdForWrite(request);
         return id == null
                 ? StagedTriggerRuns.none()
-                : stageBeforeSave(dbName, collName, List.of(id), actingUser, request.getTriggerDepth());
+                : stageBeforeSave(dbName, collName, List.of(id), actingUser, request.getTriggerDepth(),
+                        effects.stagingSink());
     }
 
     public static StagedTriggerRuns stageBulkSave(BulkSaveRequest request, String actingUser) throws IOException {
@@ -144,11 +150,17 @@ public final class TriggerHelper {
                 ids.add(id);
             }
         }
-        return stageBeforeSave(dbName, collName, List.copyOf(ids), actingUser, request.getTriggerDepth());
+        return stageBeforeSave(dbName, collName, List.copyOf(ids), actingUser, request.getTriggerDepth(),
+                WriteEffects.IMMEDIATE.stagingSink());
     }
 
     public static StagedTriggerRuns stageDelete(DeleteRequest request, DbEntry captured, String actingUser)
             throws IOException {
+        return stageDelete(request, captured, actingUser, WriteEffects.IMMEDIATE);
+    }
+
+    static StagedTriggerRuns stageDelete(DeleteRequest request, DbEntry captured, String actingUser,
+            WriteEffects effects) throws IOException {
         if (captured == null) {
             return StagedTriggerRuns.none();
         }
@@ -156,7 +168,7 @@ public final class TriggerHelper {
         final var collName = request.getCollectionName();
         final var versions = priorVersionsOf(dbName, collName, List.of(captured.get_id()));
         return stageRuns(dbName, collName, EventType.DELETED, List.of(captured), actingUser, request.getTriggerDepth(),
-                (_, _, descriptor) -> TriggerRunLog.recordStaged(descriptor, versions));
+                (_, _, descriptor) -> TriggerRunLog.recordStaged(descriptor, versions, effects.stagingSink()));
     }
 
     private static boolean firesOnNoSave(String dbName, String collName, int depth) {
@@ -165,7 +177,7 @@ public final class TriggerHelper {
     }
 
     private static StagedTriggerRuns stageBeforeSave(String dbName, String collName, List<String> ids,
-            String actingUser, int depth) throws IOException {
+            String actingUser, int depth, TriggerRunLog.EntrySink sink) throws IOException {
         final var versions = priorVersionsOf(dbName, collName, ids);
         final var created = new ArrayList<DbEntry>();
         final var updated = new ArrayList<DbEntry>();
@@ -173,7 +185,7 @@ public final class TriggerHelper {
             final var placeholder = idOnlyEntry(dbName, collName, id);
             (versions.get(id) == AdminTriggerRunEntry.ABSENT_VERSION ? created : updated).add(placeholder);
         }
-        final RunRecorder staged = (_, _, descriptor) -> TriggerRunLog.recordStaged(descriptor, versions);
+        final RunRecorder staged = (_, _, descriptor) -> TriggerRunLog.recordStaged(descriptor, versions, sink);
         return StagedTriggerRuns.combine(
                 stageRuns(dbName, collName, EventType.CREATED, created, actingUser, depth, staged),
                 stageRuns(dbName, collName, EventType.UPDATED, updated, actingUser, depth, staged));
@@ -214,27 +226,37 @@ public final class TriggerHelper {
     }
 
     public static <T> T discardingOnFailure(StagedTriggerRuns staged, Callable<T> step) throws Exception {
+        return discardingOnFailure(staged, WriteEffects.IMMEDIATE, step);
+    }
+
+    static <T> T discardingOnFailure(StagedTriggerRuns staged, WriteEffects effects, Callable<T> step)
+            throws Exception {
         try {
             return step.call();
         } catch (Exception e) {
-            staged.discard();
+            effects.discard(staged);
             throw e;
         }
     }
 
     public static OperationResponse runStaged(StagedTriggerRuns staged, String dbName, String collName,
             String actingUser, int depth, Callable<OperationResponse> write) throws Exception {
+        return runStaged(staged, dbName, collName, actingUser, depth, WriteEffects.IMMEDIATE, write);
+    }
+
+    static OperationResponse runStaged(StagedTriggerRuns staged, String dbName, String collName, String actingUser,
+            int depth, WriteEffects effects, Callable<OperationResponse> write) throws Exception {
         final OperationResponse response;
         try {
             response = write.call();
         } catch (PartialBulkSaveException e) {
-            staged.submitLanded(landedIdsOf(e.committed(), staged), dbName, collName, actingUser, depth);
+            effects.submitLanded(staged, landedIdsOf(e.committed(), staged), dbName, collName, actingUser, depth);
             throw e;
         } catch (Exception e) {
-            staged.discard();
+            effects.discard(staged);
             throw e;
         }
-        staged.submitLanded(landedIdsOf(response, staged), dbName, collName, actingUser, depth);
+        effects.submitLanded(staged, landedIdsOf(response, staged), dbName, collName, actingUser, depth);
         return response;
     }
 
@@ -287,6 +309,11 @@ public final class TriggerHelper {
 
     public static boolean firesOnDelete(String dbName, String collName, int depth) {
         return !hasNotTriggerFor(dbName, collName, EventType.DELETED, depth);
+    }
+
+    public static boolean firesOnSave(String dbName, String collName, int depth) {
+        return !hasNotTriggerFor(dbName, collName, EventType.CREATED, depth)
+                || !hasNotTriggerFor(dbName, collName, EventType.UPDATED, depth);
     }
 
     private static boolean hasNotTriggerFor(String dbName, String collName, EventType type, int depth) {

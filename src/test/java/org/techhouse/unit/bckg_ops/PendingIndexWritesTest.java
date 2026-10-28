@@ -3,6 +3,7 @@ package org.techhouse.unit.bckg_ops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,11 +19,11 @@ public class PendingIndexWritesTest {
     }
 
     @Test
-    public void test_the_dirty_marker_is_set_on_enqueue_and_cleared_on_drain() throws Exception {
+    public void test_a_recovered_mark_sets_the_dirty_marker_and_the_drain_clears_it() throws Exception {
         org.techhouse.test.TestUtils.standardInitialSetup();
         org.techhouse.test.TestUtils.createTestDatabaseAndCollection();
         try {
-            pending.mark(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, "1");
+            pending.markRecovered(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, List.of("1"));
             assertEquals(List.of(org.techhouse.test.TestGlobals.DB + "|" + org.techhouse.test.TestGlobals.COLL),
                     TestUtils.dirtyIndexCollections(),
                     "queued index work must leave an on-disk marker an unclean stop can be seen by");
@@ -97,7 +98,9 @@ public class PendingIndexWritesTest {
         pending.clearCollection("db", "coll");
         assertEquals(1L, pending.mark("db", "coll", "2"));
         assertEquals(1L, pending.mark("db", "coll", List.of("3", "4")));
-        assertEquals(0L, pending.mark("db", "other", "1"), "a generation belongs to one collection");
+        assertEquals(1L, pending.mark("db", "other", "1"), "a pin is the epoch its collection was first marked in");
+        pending.clearCollection("db", "coll");
+        assertEquals(1L, pending.mark("db", "other", "2"), "another collection's clear leaves the pin alone");
     }
 
     @Test
@@ -146,10 +149,10 @@ public class PendingIndexWritesTest {
             fs.indexMarkers().clearDirty(db, coll);
             pending.clearCollection(db, coll);
 
-            pending.mark(db, coll, "new");
+            pending.markRecovered(db, coll, List.of("new"));
 
             assertEquals(List.of(db + "|" + coll), TestUtils.dirtyIndexCollections(),
-                    "the first write of the new life must write the marker the old life's drop deleted");
+                    "the first unlogged mark of the new life must write the marker the old life's drop deleted");
         } finally {
             org.techhouse.test.TestUtils.standardTearDown();
         }
@@ -179,5 +182,60 @@ public class PendingIndexWritesTest {
         assertEquals(Set.of("1"), pending.idsFor("db", "coll"));
         pending.clear("db", "coll", "1", newGeneration);
         assertTrue(pending.idsFor("db", "coll").isEmpty());
+    }
+
+    @Test
+    public void test_clear_collection_forgets_the_collection() throws Exception {
+        pending.mark("db", "coll", List.of("1", "2"));
+        pending.mark("db", "kept", "3");
+
+        pending.clearCollection("db", "coll");
+
+        assertFalse(TestUtils.getPrivateField(pending, "pending", Map.class).containsKey("db|coll"));
+        assertFalse(TestUtils.getPrivateField(pending, "pins", Map.class).containsKey("db|coll"));
+        assertTrue(TestUtils.getPrivateField(pending, "pins", Map.class).containsKey("db|kept"));
+        assertFalse(pending.holdsIndexWork("db", "coll"));
+        pending.clearDatabase("db");
+        assertTrue(TestUtils.getPrivateField(pending, "pending", Map.class).isEmpty());
+        assertTrue(TestUtils.getPrivateField(pending, "pins", Map.class).isEmpty());
+    }
+
+    @Test
+    public void test_a_pre_drop_clear_is_ignored_after_a_recreate() {
+        final var beforeDrop = pending.mark("db", "coll", "x");
+        pending.clearCollection("db", "coll");
+        final var recreated = pending.mark("db", "coll", "x");
+
+        pending.clear("db", "coll", "x", beforeDrop);
+
+        assertTrue(recreated > beforeDrop);
+        assertEquals(Set.of("x"), pending.idsFor("db", "coll"));
+        pending.clear("db", "coll", "x", recreated);
+        assertTrue(pending.idsFor("db", "coll").isEmpty());
+    }
+
+    @Test
+    public void test_a_pre_drop_clear_is_ignored_before_any_mark() {
+        final var beforeDrop = pending.mark("db", "coll", "x");
+        pending.clearCollection("db", "coll");
+
+        pending.clear("db", "coll", "x", beforeDrop);
+        pending.mark("db", "coll", "x");
+        pending.clear("db", "coll", List.of("x"), beforeDrop);
+
+        assertEquals(Set.of("x"), pending.idsFor("db", "coll"),
+                "a clear from the dropped life must not consume the first mark of the new one");
+    }
+
+    @Test
+    public void test_dropping_one_collection_keeps_anothers_pin() {
+        final var other = pending.mark("db", "other", "y");
+        pending.mark("db", "coll", "x");
+
+        pending.clearCollection("db", "coll");
+        pending.clear("db", "other", "y", other);
+
+        assertTrue(pending.idsFor("db", "other").isEmpty(), "the other collection's clear still applies");
+        assertEquals(other, pending.mark("db", "other", "z"));
     }
 }

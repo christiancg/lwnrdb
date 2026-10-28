@@ -55,6 +55,7 @@ public class AntiEntropyPullGateTest extends AntiEntropyTestBase {
             final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
             if (message.getType() == ClusterMessageType.DIGEST) {
                 response.setType(ClusterMessageType.DIGEST_ACK);
+                payload.setNodeId(HIGHER_NODE_ID);
                 payload.setDigest(digest);
             } else if (pulls.incrementAndGet() == failingPull) {
                 response.setType(ClusterMessageType.ERROR);
@@ -80,7 +81,7 @@ public class AntiEntropyPullGateTest extends AntiEntropyTestBase {
     private static List<DigestEntry> remoteOnlyDigestBeyondOneBatch() {
         final var digest = new ArrayList<DigestEntry>();
         for (var i = 0; i < BEYOND_ONE_BATCH; i++) {
-            digest.add(new DigestEntry("remote-" + i, PEER_VERSION, false, HIGHER_NODE_ID, 20L));
+            digest.add(new DigestEntry("remote-" + i, PEER_VERSION, false, 20L));
         }
         return digest;
     }
@@ -89,7 +90,7 @@ public class AntiEntropyPullGateTest extends AntiEntropyTestBase {
     public void test_an_equal_version_equal_length_copy_is_not_pulled() throws Exception {
         seed();
         final var local = localEntry();
-        injectPeer(peer(List.of(new DigestEntry(ID, local.getVersion(), false, HIGHER_NODE_ID, local.getLength())), 0),
+        injectPeer(peer(List.of(new DigestEntry(ID, local.getVersion(), false, local.getLength())), 0),
                 node(HIGHER_NODE_ID, 5001));
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
@@ -101,8 +102,7 @@ public class AntiEntropyPullGateTest extends AntiEntropyTestBase {
     public void test_an_equal_version_different_length_copy_is_still_pulled_from_the_higher_node_id() throws Exception {
         seed();
         final var local = localEntry();
-        injectPeer(
-                peer(List.of(new DigestEntry(ID, local.getVersion(), false, HIGHER_NODE_ID, local.getLength() + 1)), 0),
+        injectPeer(peer(List.of(new DigestEntry(ID, local.getVersion(), false, local.getLength() + 1)), 0),
                 node(HIGHER_NODE_ID, 5001));
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);

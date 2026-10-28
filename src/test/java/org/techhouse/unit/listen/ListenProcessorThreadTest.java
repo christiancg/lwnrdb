@@ -91,7 +91,7 @@ public class ListenProcessorThreadTest {
         final var listenId = registerDelivered(manager, clientId, dirtyReq, hash);
 
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
+        queue.offer(manager.getRegistration(listenId).groupId());
         final var thread = new ListenProcessorThread(queue, manager);
         final var t = new Thread(thread);
         t.setDaemon(true);
@@ -113,7 +113,7 @@ public class ListenProcessorThreadTest {
         final var listenId = registerDelivered(manager, clientId, dirtyReq, "stale-hash-that-will-not-match");
 
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
+        queue.offer(manager.getRegistration(listenId).groupId());
         final var thread = new ListenProcessorThread(queue, manager);
         final var t = new Thread(thread);
         t.setDaemon(true);
@@ -152,10 +152,10 @@ public class ListenProcessorThreadTest {
 
             @Override
             public List<BaseAggregationStep> getAggregationSteps() {
-                // ListenManager.register() reads this twice; only the later call, made from processAggregation,
+                // ListenManager.register() reads this 3 times; only a later call, made from processAggregation,
                 // should fail, so the query re-run inside processListen throws instead of register() itself.
                 calls++;
-                if (calls > 2) {
+                if (calls > 3) {
                     throw new RuntimeException("boom");
                 }
                 return List.of();
@@ -166,7 +166,7 @@ public class ListenProcessorThreadTest {
                 "stale-hash-for-rerun-throws-test");
 
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
+        queue.offer(manager.getRegistration(listenId).groupId());
         final var thread = new ListenProcessorThread(queue, manager);
         final var t = new Thread(thread);
         t.setDaemon(true);
@@ -234,7 +234,7 @@ public class ListenProcessorThreadTest {
         final ListenProcessorThread thread;
         try {
             final var queue = new LinkedBlockingQueue<UUID>();
-            queue.offer(listenId);
+            queue.offer(manager.getRegistration(listenId).groupId());
             thread = new ListenProcessorThread(queue, manager);
         } finally {
             restoreClientTracker(original);
@@ -256,31 +256,17 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        final var listenId = registerDelivered(manager, UUID.randomUUID(), dirtyReq, "stale-hash-for-push-test");
-
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
         final var pushed = new ByteArrayOutputStream();
         clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(pushed));
+        final var listenId = registerDelivered(manager, clientId, dirtyReq, "stale-hash-for-push-test");
         final var registration = manager.getRegistration(listenId);
-        final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash(), registration.delivered(), null, 0L);
-        final var manager2 = new ListenManager() {
-            @Override
-            public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {
-                return id.equals(listenId) ? repointed : super.getRegistration(id);
-            }
-
-            @Override
-            public boolean unregister(UUID id) {
-                return manager.unregister(id);
-            }
-        };
 
         try {
             final var queue = new LinkedBlockingQueue<UUID>();
-            queue.offer(listenId);
-            final var thread = new ListenProcessorThread(queue, manager2);
+            queue.offer(registration.groupId());
+            final var thread = new ListenProcessorThread(queue, manager);
             final var t = new Thread(thread);
             t.setDaemon(true);
             t.start();
@@ -303,8 +289,6 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        final var listenId = registerDelivered(manager, UUID.randomUUID(), dirtyReq, "stale-hash-for-write-fail-test");
-
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
         final var throwingWriter = new OutputStream() {
@@ -319,25 +303,13 @@ public class ListenProcessorThreadTest {
             }
         };
         clientTracker.registerOutbound(clientId, TestUtils.inlineOutbound(throwingWriter));
+        final var listenId = registerDelivered(manager, clientId, dirtyReq, "stale-hash-for-write-fail-test");
         final var registration = manager.getRegistration(listenId);
-        final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash(), registration.delivered(), null, 0L);
-        final var manager2 = new ListenManager() {
-            @Override
-            public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {
-                return id.equals(listenId) ? repointed : super.getRegistration(id);
-            }
-
-            @Override
-            public boolean unregister(UUID id) {
-                return manager.unregister(id);
-            }
-        };
 
         try {
             final var queue = new LinkedBlockingQueue<UUID>();
-            queue.offer(listenId);
-            final var thread = new ListenProcessorThread(queue, manager2);
+            queue.offer(registration.groupId());
+            final var thread = new ListenProcessorThread(queue, manager);
             final var t = new Thread(thread);
             t.setDaemon(true);
             t.start();
@@ -439,7 +411,7 @@ public class ListenProcessorThreadTest {
 
     private ListenManager runOnce(ListenManager manager) throws InterruptedException {
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(lastListenId);
+        queue.offer(manager.getRegistration(lastListenId).groupId());
         final var t = new Thread(new ListenProcessorThread(queue, manager));
         t.setDaemon(true);
         t.start();

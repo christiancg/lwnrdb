@@ -11,7 +11,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -97,8 +96,8 @@ public class PendingMarkBeforeWriteTest {
             waitUntilPending();
             assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(ID),
                     "the id must be pending before its page write can land");
-            assertTrue(TestUtils.dirtyIndexCollections().contains(DIRTY_KEY),
-                    "a kill during the page write must leave the index-dirty marker behind");
+            assertFalse(TestUtils.dirtyIndexCollections().contains(DIRTY_KEY),
+                    "a logged write writes no index-dirty marker: its log record is what startup replays");
             assertFalse(running.isDone(), "the write must still be blocked on the page");
         } finally {
             pageLock.unlock();
@@ -173,8 +172,7 @@ public class PendingMarkBeforeWriteTest {
 
         SaveOperationHelper.executeBulkSave(bulk);
 
-        final LinkedBlockingQueue<?> queue = TestUtils.getPrivateField(stubTaskManager, "queue",
-                LinkedBlockingQueue.class);
+        final var queue = TestUtils.queuedBackgroundEvents(stubTaskManager);
         final var events = queue.stream().filter(BulkEntityEvent.class::isInstance).map(BulkEntityEvent.class::cast)
                 .toList();
         assertEquals(1, events.size());

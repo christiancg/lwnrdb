@@ -3,11 +3,13 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.analyze.ReadObserver;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -373,6 +375,37 @@ public class AggregationSortViaIndexTest {
 
         assertEquals(scanned, indexed, "a page must not change because a field happened to gain an index");
         assertEquals(scanned.subList(3, 6), indexed.subList(3, 6), "SKIP + LIMIT must select the same page");
+    }
+
+    private List<String> sortedIdsFromTheIndex() throws IOException {
+        return IndexHelper.getSortedIdsForField(TestGlobals.DB, TestGlobals.COLL, FIELD,
+                Comparator.comparingDouble(entry -> ((Number) entry.getValue()).doubleValue()), Long.MAX_VALUE,
+                ReadObserver.NONE);
+    }
+
+    @Test
+    public void test_size_sum_coverage_answers_when_every_document_is_indexed() throws Exception {
+        seed(50);
+
+        final var ids = sortedIdsFromTheIndex();
+
+        assertNotNull(ids, "fifty ids in fifty single-id entries cover fifty pk rows");
+        assertEquals(50, Set.copyOf(ids).size());
+        assertEquals(runIds(new SkipAggregationStep(0), new SortAggregationStep(FIELD, true)),
+                runIds(new SortAggregationStep(FIELD, true)));
+    }
+
+    @Test
+    public void test_size_sum_coverage_declines_on_a_document_without_the_value() throws Exception {
+        seed(50);
+        final var bare = new JsonObject();
+        bare.add(Globals.PK_FIELD, new JsonString("bare"));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
+                DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, bare));
+
+        assertNull(sortedIdsFromTheIndex(), "fifty ids under fifty-one pk rows must decline");
+        assertEquals(runIds(new SkipAggregationStep(0), new SortAggregationStep(FIELD, true)),
+                runIds(new SortAggregationStep(FIELD, true)));
     }
 
     private List<String> idsSorted() throws IOException {

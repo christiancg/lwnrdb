@@ -18,7 +18,6 @@ import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.Tx2pcCoordinator;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
@@ -80,8 +79,8 @@ public class TriggerRemoteOnlyBodyTest {
                 case COMMIT_TX -> reply.setType(ClusterMessageType.COMMIT_TX_ACK);
                 case FORWARD_TX_REQUEST -> {
                     reply.setType(ClusterMessageType.FORWARD_RESPONSE);
-                    reply.setForwardBody(ForwardBody.encode(eJson
-                            .toJson(OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed"))));
+                    reply.setForwardBody(eJson
+                            .toJson(OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed")));
                 }
                 default -> reply.setType(ClusterMessageType.ABORT_TX_ACK);
             }

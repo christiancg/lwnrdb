@@ -2,9 +2,12 @@ package org.techhouse.unit.ejson.type_adapters;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -61,24 +64,13 @@ public class TypeAdapterFactoryTest {
         assertEquals(adapter, retrievedAdapter);
     }
 
+    static List<String> listOfStrings() {
+        return List.of();
+    }
+
     @Test
-    public void test_returns_cached_adapter_when_type_exists() throws ClassNotFoundException {
-        Type listType = new ParameterizedType() {
-            @Override
-            public Type[] getActualTypeArguments() {
-                return new Type[]{String.class};
-            }
-
-            @Override
-            public Type getRawType() {
-                return List.class;
-            }
-
-            @Override
-            public Type getOwnerType() {
-                return null;
-            }
-        };
+    public void test_returns_cached_adapter_when_type_exists() throws Exception {
+        Type listType = TypeAdapterFactoryTest.class.getDeclaredMethod("listOfStrings").getGenericReturnType();
 
         TypeAdapter<?> firstCall = TypeAdapterFactory.getAdapter(listType);
 
@@ -114,5 +106,55 @@ public class TypeAdapterFactoryTest {
     public void test_json_base_element_adapter_syntax_token_throws() {
         TypeAdapter<JsonBaseElement> adapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
         assertThrows(IllegalStateException.class, () -> adapter.toJson(JsonSyntaxToken.COMMA));
+    }
+
+    @Test
+    public void test_a_registered_adapter_is_returned_without_computing() {
+        final class Registered {
+        }
+        final TypeAdapter<Registered> adapter = new TypeAdapter<>() {
+            @Override
+            public String toJson(Registered value) {
+                return "{}";
+            }
+
+            @Override
+            public Registered fromJson(JsonBaseElement value) {
+                return new Registered();
+            }
+        };
+
+        TypeAdapterFactory.registerTypeAdapter(Registered.class, adapter);
+
+        assertSame(adapter, TypeAdapterFactory.getAdapter(Registered.class));
+        assertSame(adapter, TypeAdapterFactory.getAdapter(Registered.class));
+    }
+
+    @Test
+    public void test_an_unknown_class_gets_one_reflection_adapter_under_concurrency() throws Exception {
+        final class Fresh {
+        }
+        final var threads = 16;
+        final var start = new CountDownLatch(1);
+        final var adapters = Collections
+                .synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<TypeAdapter<?>, Boolean>()));
+        final var workers = new ArrayList<Thread>();
+        for (var i = 0; i < threads; i++) {
+            workers.add(Thread.ofVirtual().start(() -> {
+                try {
+                    start.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                adapters.add(TypeAdapterFactory.getAdapter(Fresh.class));
+            }));
+        }
+        start.countDown();
+        for (final var worker : workers) {
+            worker.join();
+        }
+
+        assertEquals(1, adapters.size());
+        assertInstanceOf(ReflectionTypeAdapter.class, adapters.iterator().next());
     }
 }

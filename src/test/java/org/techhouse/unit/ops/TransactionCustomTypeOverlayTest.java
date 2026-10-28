@@ -8,8 +8,7 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.util.List;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.ClientTracker;
@@ -44,21 +43,17 @@ public class TransactionCustomTypeOverlayTest {
     final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
-    @BeforeAll
-    static void setUpBeforeClass() throws Exception {
+    @BeforeEach
+    void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
+        TestUtils.resetClients();
     }
 
-    @AfterAll
-    public static void tearDownAll() throws NoSuchFieldException, IllegalAccessException {
+    @AfterEach
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
-    }
-
-    @BeforeEach
-    void resetClientTracker() throws Exception {
-        TestUtils.resetClients();
     }
 
     private UUID newClient() {

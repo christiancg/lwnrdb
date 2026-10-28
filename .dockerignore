@@ -35,6 +35,8 @@ db/
 logs/
 test_log/
 test_utils/
+test262/
+plans/
 
 # TLS keystores / certs (auto-generated, contain private keys)
 certs/

@@ -158,14 +158,10 @@ public final class InterpreterUtils {
     }
 
     public static JsValue numericOld(JsValue oldValue, InterpreterOps ops) {
-        if (oldValue instanceof JsBigInt) {
+        if (oldValue instanceof JsBigInt || oldValue instanceof JsNumber) {
             return oldValue;
         }
         return new JsNumber(JsCoercion.toNumber(oldValue, ops));
-    }
-
-    public static String baseOperator(String assignmentOperator) {
-        return assignmentOperator.substring(0, assignmentOperator.length() - 1);
     }
 
     public static boolean shouldNotApplyLogical(String operator, JsValue current) {

@@ -47,14 +47,23 @@ public record IntrinsicsCoercion(Intrinsics intrinsics) {
 
     public JsObject prototypeOf(List<String> names, String label, MethodResolver resolver) {
         final var proto = new JsObject();
-        for (final var name : names) {
-            Intrinsics.define(proto, name, wrapper(name, label, resolver));
-        }
         proto.setProto(intrinsics.objectProto);
+        proto.deferSetup(target -> installMethods(target, names, label, resolver));
         return proto;
     }
 
+    public void installMethods(JsObject proto, List<String> names, String label, MethodResolver resolver) {
+        final var lengths = BuiltinLengths.lengthsFor(label);
+        for (final var name : names) {
+            Intrinsics.define(proto, name, wrapper(name, label, resolver, BuiltinLengths.lengthIn(lengths, name)));
+        }
+    }
+
     public JsNativeFunction wrapper(String name, String label, MethodResolver resolver) {
+        return wrapper(name, label, resolver, BuiltinLengths.lengthOf(label, name));
+    }
+
+    private JsNativeFunction wrapper(String name, String label, MethodResolver resolver, int length) {
         final var wrapped = new JsNativeFunction(name, (thisArg, args) -> {
             final var method = resolver.resolve(thisArg, name);
             if (method == null) {
@@ -63,7 +72,7 @@ public record IntrinsicsCoercion(Intrinsics intrinsics) {
             return JsIterators.linkPrototype(intrinsics.invoker.call(method, thisArg, args),
                     intrinsics.prototypes.builtinIteratorProto(label, name));
         });
-        wrapped.setLength(BuiltinLengths.lengthOf(label, name));
+        wrapped.setLength(length);
         return wrapped;
     }
 }

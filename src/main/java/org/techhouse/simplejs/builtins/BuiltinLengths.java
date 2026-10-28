@@ -6,7 +6,7 @@ import java.util.Map;
 
 public final class BuiltinLengths {
     private static final int DEFAULT_LENGTH = 1;
-    private static final Map<String, Integer> LENGTHS = new HashMap<>();
+    private static final Map<String, Map<String, Integer>> LENGTHS = new HashMap<>();
     private static final List<String> STATIC_OWNERS = List.of("Object", "Array", "String", "Number", "Boolean", "Math",
             "JSON", "Promise", "RegExp", "Symbol", "Map", "Set", "WeakMap", "WeakSet", "Date", "Reflect", "Proxy",
             "ArrayBuffer", "DataView", "BigInt", "Iterator", "AsyncIterator", "DisposableStack", "AsyncDisposableStack",
@@ -137,13 +137,22 @@ public final class BuiltinLengths {
     }
 
     private static void put(String label, int length, String... names) {
+        final var lengths = LENGTHS.computeIfAbsent(label, ignored -> new HashMap<>());
         for (final var name : names) {
-            LENGTHS.put(label + "." + name, length);
+            lengths.put(name, length);
         }
     }
 
+    public static Map<String, Integer> lengthsFor(String label) {
+        return LENGTHS.getOrDefault(label, Map.of());
+    }
+
+    public static int lengthIn(Map<String, Integer> lengths, String name) {
+        return lengths.getOrDefault(name, DEFAULT_LENGTH);
+    }
+
     public static int lengthOf(String label, String name) {
-        return LENGTHS.getOrDefault(label + "." + name, DEFAULT_LENGTH);
+        return lengthIn(lengthsFor(label), name);
     }
 
     private static void globals(int length, String... names) {

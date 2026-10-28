@@ -44,4 +44,37 @@ public class ClusterMessageSerializationTest {
         assertEquals("Invalid cluster secret", parsed.getErrorMessage());
         assertNull(parsed.getSender());
     }
+
+    @Test
+    public void test_a_forward_body_with_quotes_newlines_and_surrogates_round_trips() {
+        final var body = "{\"type\":\"SAVE\",\"object\":{\"_id\":\"q\\\"x\",\"t\":\"line\\nbreak \u0001 \\ud83d\"}}"
+                + "\n\t\u0000 \ud83d\ude00 \udc00 \"\\";
+        final var message = new ClusterMessage();
+        message.setType(ClusterMessageType.FORWARD_REQUEST);
+        message.setForwardBody(body);
+
+        final var line = eJson.toJson(message);
+        final var parsed = eJson.fromJson(line, ClusterMessage.class);
+
+        assertEquals(body, parsed.getForwardBody());
+        assertEquals(-1, line.indexOf('\n'), "the frame must stay one line");
+    }
+
+    @Test
+    public void test_a_frame_carries_only_the_fields_it_sets() {
+        final var message = new ClusterMessage();
+        message.setType(ClusterMessageType.FORWARD_REQUEST);
+        message.setCorrelationId("c-9");
+        message.setForwardBody("{}");
+
+        final var json = eJson.toJson(message);
+        final var parsed = eJson.fromJson(json, ClusterMessage.class);
+
+        assertEquals(-1, json.indexOf("null"), json);
+        assertEquals(-1, json.indexOf("replication"), json);
+        assertEquals("c-9", parsed.getCorrelationId());
+        assertEquals("{}", parsed.getForwardBody());
+        assertNull(parsed.getReplication());
+        assertNull(parsed.getAntiEntropy());
+    }
 }

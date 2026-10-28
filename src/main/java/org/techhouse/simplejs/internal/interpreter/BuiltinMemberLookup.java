@@ -172,12 +172,12 @@ final class BuiltinMemberLookup {
 
     JsValue getStringMember(JsString string, String key) {
         if ("length".equals(key)) {
-            return new JsNumber(string.getValue().length());
+            return new JsNumber(string.length());
         }
         final var index = arrayIndex(key);
         if (index != null) {
-            return index < string.getValue().length()
-                    ? new JsString(String.valueOf(string.getValue().charAt(index)))
+            return index < string.length()
+                    ? new JsString(String.valueOf(string.charAt(index)))
                     : JsUndefined.getInstance();
         }
         return intrinsicMember(string, key);

@@ -17,7 +17,6 @@ import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
@@ -27,6 +26,7 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.test.TransactionRecordCalls;
 
 public class TransactionFencedTeardownTest {
 
@@ -61,6 +61,7 @@ public class TransactionFencedTeardownTest {
         request.setObject(document(id));
         request.set_id(id);
         TransactionOperationHelper.bufferSave(request, transaction);
+        TransactionRecordCalls.persistBufferedOps(transaction);
         TxCommitLog.recordLocalCommit(transaction.getTransactionId().toString(), transaction.getBufferedOpIds(),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         return clientId;
@@ -75,6 +76,7 @@ public class TransactionFencedTeardownTest {
         request.setObject(document(id));
         request.set_id(id);
         TransactionOperationHelper.bufferSave(request, transaction);
+        TransactionRecordCalls.persistBufferedOps(transaction);
         Tx2pcLog.recordParticipantPrepared(transaction.getTransactionId().toString(), "127.0.0.1:9000",
                 List.of("127.0.0.1:9000"), List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         return clientId;
@@ -271,7 +273,7 @@ public class TransactionFencedTeardownTest {
     }
 
     @Test
-    public void test_a_fenced_commit_keeps_the_transaction_registered() throws Exception {
+    public void test_a_fenced_commit_keeps_the_transaction_registered() {
         final var clientId = clientTracker.registerForwardedClient("fenced-owner");
         TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
@@ -282,8 +284,7 @@ public class TransactionFencedTeardownTest {
         TransactionOperationHelper.bufferSave(request, transaction);
         final var corrupt = new AdminTransactionEntry(transaction.getTransactionId().toString(), "client", 99,
                 AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, new JsonObject());
-        AdminOperationHelper.saveTransactionOp(corrupt);
-        transaction.getBufferedOpIds().add(corrupt.get_id());
+        transaction.addPendingOp(corrupt);
 
         final var response = TransactionOperationHelper.commit(clientId);
 

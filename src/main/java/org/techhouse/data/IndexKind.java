@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 
 public enum IndexKind {
@@ -26,6 +27,16 @@ public enum IndexKind {
         final var classes = new ArrayList<Class<?>>(List.of(Number.class, Boolean.class, String.class));
         classes.addAll(CustomTypeFactory.getCustomTypes().values());
         return classes;
+    }
+
+    public static Class<?> scalarIndexClassOf(Object value) {
+        return switch (value) {
+            case Number _ -> Number.class;
+            case Boolean _ -> Boolean.class;
+            case String _ -> String.class;
+            case JsonCustom<?> custom -> CustomTypeFactory.getCustomTypes().get(custom.getCustomTypeName());
+            default -> throw new IllegalStateException("Unexpected value: " + value);
+        };
     }
 
     public static String fileLabel(Class<?> valueClass) {

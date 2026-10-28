@@ -32,7 +32,7 @@ public class JsonWriter {
         try {
             TypeAdapterFactory.getAdapter(tClass).toJson(obj, out);
             out.append(terminator);
-            return out.toByteArray();
+            return out.takeExact();
         } finally {
             out.release();
         }

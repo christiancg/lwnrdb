@@ -7,7 +7,6 @@ import java.util.concurrent.TimeoutException;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.DurableReplayIncompleteException;
@@ -45,13 +44,13 @@ final class ClusterTxMessageHandler {
         final var response = new ClusterMessage();
         final var sessionId = request.getTxSessionId();
         try {
-            final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            final var parsed = RequestParser.parseRequest(request.getForwardBody());
             final var refused = ForwardedRequestGate.checkTransactional(parsed, request.getActingUser(),
                     sessionHoldsTransaction(sessionId));
             final var schemaError = refused != null ? refused : SchemaValidationHelper.check(parsed);
             if (schemaError != null) {
                 response.setType(ClusterMessageType.FORWARD_RESPONSE);
-                response.setForwardBody(ForwardBody.encode(eJson.toJson(schemaError)));
+                response.setForwardBody(eJson.toJson(schemaError));
                 return response;
             }
             final var edgeNodeId = request.getSender() != null ? request.getSender().getNodeId() : null;
@@ -66,7 +65,7 @@ final class ClusterTxMessageHandler {
                 clientTracker.removeTxSession(sessionId);
             }
             response.setType(ClusterMessageType.FORWARD_RESPONSE);
-            response.setForwardBody(ForwardBody.encode(eJson.toJson(result)));
+            response.setForwardBody(eJson.toJson(result));
         } catch (TimeoutException e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Forwarded transaction op did not resolve within the ack timeout");

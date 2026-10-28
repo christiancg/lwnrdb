@@ -7,21 +7,14 @@ import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ScriptLoad;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRegistry;
 
 public class ScriptLoadTest {
-    private final ScriptRunRegistry registry = IocContainer.get(ScriptRunRegistry.class);
-    private final ScriptLoad load = new ScriptLoad();
-
-    @AfterEach
-    public void cleanUp() {
-        registry.list().forEach(run -> registry.unregister(run.runId()));
-    }
+    private final ScriptRunRegistry registry = new ScriptRunRegistry();
+    private final ScriptLoad load = new ScriptLoad(registry);
 
     private String register() {
         return registry.register(ScriptRunKind.RUN_SCRIPT, "db", null, "u", null).runId();

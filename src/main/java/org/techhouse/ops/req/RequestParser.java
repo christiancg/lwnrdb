@@ -2,6 +2,7 @@ package org.techhouse.ops.req;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
@@ -10,6 +11,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
@@ -45,6 +47,7 @@ public final class RequestParser {
     }
 
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final Set<String> AGGREGATION_STEPS_KEY = Set.of("aggregationSteps");
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         return parseRequest(message, Integer.MAX_VALUE);
@@ -64,8 +67,8 @@ public final class RequestParser {
     private static OperationRequest parseRoot(final Supplier<JsonObject> rootParser) throws InvalidCommandException {
         try {
             final var root = rootParser.get();
-            final var baseReq = eJson.fromJson(root, OperationRequest.class);
-            return switch (baseReq.getType()) {
+            final var type = OperationType.valueOf(root.get("type").asJsonString().getValue());
+            return switch (type) {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);
                 case SAVE -> {
                     final var parsed = eJson.fromJson(root, SaveRequest.class);
@@ -88,6 +91,7 @@ public final class RequestParser {
                 case REINDEX -> eJson.fromJson(root, ReindexRequest.class);
                 case SAVE_SCHEMA -> eJson.fromJson(root, SaveSchemaRequest.class);
                 case DELETE_SCHEMA -> eJson.fromJson(root, DeleteSchemaRequest.class);
+                case GET_SCHEMA -> eJson.fromJson(root, GetSchemaRequest.class);
                 case CLOSE_CONNECTION -> eJson.fromJson(root, CloseConnectionRequest.class);
                 case AUTHENTICATE -> eJson.fromJson(root, AuthenticateRequest.class);
                 case CREATE_USER -> eJson.fromJson(root, CreateUserRequest.class);
@@ -130,32 +134,29 @@ public final class RequestParser {
     }
 
     private static OperationRequest parseAggregationRequest(final JsonObject parsed) {
-        final var aggRequest = eJson.fromJson(parsed, AggregateRequest.class);
-        final var steps = new ArrayList<BaseAggregationStep>();
-        final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
-        final var jsonArray = parsed.get("aggregationSteps").asJsonArray();
-        for (var i = 0; i < roughlyParsedAggSteps.size(); i++) {
-            final var type = roughlyParsedAggSteps.get(i).getType();
-            steps.add(parseAggregationStep(type, jsonArray, i));
-        }
-        aggRequest.setAggregationSteps(steps);
+        final var aggRequest = eJson.fromJson(parsed, AggregateRequest.class, AGGREGATION_STEPS_KEY);
+        aggRequest.setAggregationSteps(parseAggregationSteps(parsed.get("aggregationSteps").asJsonArray()));
         return aggRequest;
     }
 
     private static OperationRequest parseListenRequest(final JsonObject parsed) {
-        final var listenRequest = eJson.fromJson(parsed, ListenRequest.class);
-        final var roughlyParsedSteps = listenRequest.getAggregationSteps();
-        if (roughlyParsedSteps == null || roughlyParsedSteps.isEmpty()) {
+        final var listenRequest = eJson.fromJson(parsed, ListenRequest.class, AGGREGATION_STEPS_KEY);
+        final var stepsElement = parsed.get("aggregationSteps");
+        if (stepsElement == null || stepsElement.isJsonNull()) {
             return listenRequest;
         }
-        final var steps = new ArrayList<BaseAggregationStep>();
-        final var jsonArray = parsed.get("aggregationSteps").asJsonArray();
-        for (var i = 0; i < roughlyParsedSteps.size(); i++) {
-            final var type = roughlyParsedSteps.get(i).getType();
-            steps.add(parseAggregationStep(type, jsonArray, i));
-        }
-        listenRequest.setAggregationSteps(steps);
+        final var jsonArray = stepsElement.asJsonArray();
+        listenRequest.setAggregationSteps(jsonArray.isEmpty() ? new ArrayList<>() : parseAggregationSteps(jsonArray));
         return listenRequest;
+    }
+
+    private static List<BaseAggregationStep> parseAggregationSteps(final JsonArray jsonArray) {
+        final var steps = new ArrayList<BaseAggregationStep>(jsonArray.size());
+        for (var i = 0; i < jsonArray.size(); i++) {
+            final var typeName = jsonArray.get(i).asJsonObject().get("type").asJsonString().getValue();
+            steps.add(parseAggregationStep(AggregationStepType.valueOf(typeName), jsonArray, i));
+        }
+        return steps;
     }
 
     private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray,

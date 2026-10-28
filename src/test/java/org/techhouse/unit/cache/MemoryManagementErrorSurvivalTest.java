@@ -3,14 +3,12 @@ package org.techhouse.unit.cache;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,11 +67,11 @@ public class MemoryManagementErrorSurvivalTest {
     }
 
     private void sweepThrows(Throwable failure) {
-        doThrow(failure).when(failingCache).listCacheableResources(any());
+        doThrow(failure).when(failingCache).footprintBytes();
     }
 
     private void sweepSucceeds() {
-        doReturn(List.of()).when(failingCache).listCacheableResources(any());
+        doReturn(0L).when(failingCache).footprintBytes();
     }
 
     @Test
@@ -108,12 +106,12 @@ public class MemoryManagementErrorSurvivalTest {
         final Method flush = MemoryManagement.class.getDeclaredMethod("flushUsageProfileSafely");
         flush.setAccessible(true);
         final var tracker = TestUtils.usageTrackerOf(memoryManagement);
-        final var realCounters = TestUtils.getPrivateField(tracker, "dirtyKeys", Object.class);
-        TestUtils.setPrivateField(tracker, "dirtyKeys", null);
+        final var realCounters = TestUtils.getPrivateField(tracker, "unflushed", Object.class);
+        TestUtils.setPrivateField(tracker, "unflushed", null);
         try {
             assertDoesNotThrow(() -> flush.invoke(memoryManagement));
         } finally {
-            TestUtils.setPrivateField(tracker, "dirtyKeys", realCounters);
+            TestUtils.setPrivateField(tracker, "unflushed", realCounters);
         }
     }
 }

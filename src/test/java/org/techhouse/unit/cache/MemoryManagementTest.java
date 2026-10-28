@@ -3,17 +3,15 @@ package org.techhouse.unit.cache;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.AdmissionDecision;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cache.UsageCounter;
@@ -42,7 +40,7 @@ public class MemoryManagementTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", savedMaxMemoryBytes);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.stopSweepThread();
-        TestUtils.setPrivateField(TestUtils.usageTrackerOf(mm), "counters", new ConcurrentHashMap<>());
+        TestUtils.resetUsageCounters(TestUtils.usageTrackerOf(mm));
         TestUtils.standardTearDown();
     }
 
@@ -264,9 +262,9 @@ public class MemoryManagementTest {
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "userColl", null);
         org.techhouse.ops.AdminOperationHelper
-                .upsertCollectionUsage(new org.techhouse.bckg_ops.events.CollectionUsageEvent(AccessKind.COLLECTION,
-                        "userDb", "userColl", null, System.currentTimeMillis()));
-        TestUtils.setPrivateField(TestUtils.usageTrackerOf(mm), "counters", new ConcurrentHashMap<>());
+                .flushCollectionUsage(java.util.List.of(new org.techhouse.cache.UsageCounter(AccessKind.COLLECTION,
+                        "userDb", "userColl", null, 1L, System.currentTimeMillis())));
+        TestUtils.resetUsageCounters(TestUtils.usageTrackerOf(mm));
         mm.loadProfileFromAdmin();
         assertNotNull(mm.getCounter(AccessKind.COLLECTION, "userDb", "userColl", null));
     }
@@ -364,7 +362,7 @@ public class MemoryManagementTest {
     }
 
     @Test
-    public void test_userCacheBytes_reflects_resources() throws Exception {
+    public void test_userCacheBytes_reflects_resources() {
         final var mm = IocContainer.get(MemoryManagement.class);
         assertEquals(0L, mm.userCacheBytes());
         seedCollectionCache("coll", 10);
@@ -424,40 +422,26 @@ public class MemoryManagementTest {
                 "cold should be evicted first to make headroom");
     }
 
-    private void seedFieldIndex(String collName) throws NoSuchFieldException, IllegalAccessException {
-        final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
-        };
-        final var fieldIndexMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
-                "fieldIndexMap", type);
-        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
-        indexes.put("f|String",
+    private void seedFieldIndex(String collName) {
+        CacheResidents.residentFieldIndex(IocContainer.get(org.techhouse.cache.UserCache.class),
+                Cache.getCollectionIdentifier("userDb", collName), "f|String",
                 List.of(new FieldIndexEntry<>("userDb", collName, "value", new HashSet<>(List.of("id1")))));
-        fieldIndexMap.put(Cache.getCollectionIdentifier("userDb", collName), indexes);
     }
 
-    private void seedCollectionCache(String collName, int count) throws NoSuchFieldException, IllegalAccessException {
-        final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
-                "collectionMap", type);
-        final var inner = new ConcurrentHashMap<String, DbEntry>();
+    private void seedCollectionCache(String collName, int count) {
+        final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
         for (int i = 0; i < count; i++) {
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id" + i);
             obj.addProperty("v", "x".repeat(64));
-            final var entry = DbEntry.fromJsonObject("userDb", collName, obj);
-            inner.put(entry.get_id(), entry);
+            CacheResidents.residentDocument(userCache, Cache.getCollectionIdentifier("userDb", collName),
+                    DbEntry.fromJsonObject("userDb", collName, obj));
         }
-        collectionMap.put(Cache.getCollectionIdentifier("userDb", collName), inner);
     }
 
-    private void seedPkIndex(String collName) throws NoSuchFieldException, IllegalAccessException {
-        final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
-        };
-        final var pkIndexMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
-                "pkIndexMap", type);
-        final var list = new ArrayList<PkIndexEntry>();
-        list.add(new PkIndexEntry("userDb", collName, "id0", 0, 10, 0));
-        pkIndexMap.put(Cache.getCollectionIdentifier("userDb", collName), list);
+    private void seedPkIndex(String collName) {
+        CacheResidents.residentPk(IocContainer.get(org.techhouse.cache.UserCache.class),
+                Cache.getCollectionIdentifier("userDb", collName),
+                List.of(new PkIndexEntry("userDb", collName, "id0", 0, 10, 0)));
     }
 }

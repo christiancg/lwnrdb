@@ -13,14 +13,15 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.utils.JsonUtils;
 
 public class JsonObjectMapContractTest {
     private static final int OPERATIONS = 400;
@@ -65,6 +66,42 @@ public class JsonObjectMapContractTest {
                 assertMatchesReference(reference, object, "seed " + seed + " op " + operation);
                 assertNull(object.get("absent"));
                 assertEquals(-1, object.indexOf("absent"));
+            }
+        }
+    }
+
+    @Test
+    public void randomOperationsOnASharedShapeMatchALinkedHashMapAndLeaveTheSiblingAlone() {
+        for (final var members : new int[]{3, 20}) {
+            final var keys = new String[members];
+            final var reference = new LinkedHashMap<String, JsonBaseElement>();
+            final var siblingReference = new LinkedHashMap<String, JsonBaseElement>();
+            final var values = new JsonBaseElement[members];
+            final var siblingValues = new JsonBaseElement[members];
+            for (var i = 0; i < members; i++) {
+                keys[i] = "k" + i;
+                values[i] = new JsonNumber(i);
+                siblingValues[i] = new JsonNumber(100 + i);
+                reference.put(keys[i], values[i]);
+                siblingReference.put(keys[i], siblingValues[i]);
+            }
+            final var shape = Objects.requireNonNull(JsonObject.shapeOf(keys, 0, members));
+            final var object = JsonObject.withShape(shape, values);
+            final var sibling = JsonObject.withShape(shape, siblingValues);
+            final var random = new Random(members);
+            for (var operation = 0; operation < OPERATIONS; operation++) {
+                final var key = "k" + random.nextInt(members + 10);
+                if (random.nextInt(4) == 0) {
+                    reference.remove(key);
+                    object.remove(key);
+                } else {
+                    final var value = new JsonNumber(random.nextInt(4));
+                    reference.put(key, value);
+                    object.add(key, value);
+                }
+                final var context = members + " members, op " + operation;
+                assertMatchesReference(reference, object, context);
+                assertMatchesReference(siblingReference, sibling, "sibling, " + context);
             }
         }
     }
@@ -137,7 +174,7 @@ public class JsonObjectMapContractTest {
         }
 
         final var withoutId = object.copyWithout("_id");
-        final var forWrites = object.copyForWrites(Set.of("nested"));
+        final var forWrites = object.copyForWrites(JsonUtils.writeTreeOf(List.of("nested.inner")));
         final var deep = object.deepCopy();
 
         assertEquals("nested", withoutId.keyAt(0));

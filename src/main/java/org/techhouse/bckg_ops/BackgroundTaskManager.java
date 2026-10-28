@@ -1,9 +1,7 @@
 package org.techhouse.bckg_ops;
 
-import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.config.ConfigKey;
@@ -13,7 +11,7 @@ import org.techhouse.log.Logger;
 public class BackgroundTaskManager {
     private final Logger logger = Logger.logFor(BackgroundTaskManager.class);
     private final Configuration configuration = Configuration.getInstance();
-    private final LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
+    private final BackgroundLanes lanes = new BackgroundLanes(configuration.getBackgroundProcessingThreads());
     private final AtomicInteger inFlight = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private final AtomicInteger parked = new AtomicInteger();
@@ -31,7 +29,16 @@ public class BackgroundTaskManager {
 
     public void submitFollowOn(Event op) {
         inFlight.incrementAndGet();
-        queue.add(op);
+        lanes.add(op);
+    }
+
+    public boolean submitMaintenance(Event op) {
+        if (draining) {
+            logger.warning("Rejecting a maintenance task during shutdown: " + op);
+            return false;
+        }
+        lanes.addMaintenance(op);
+        return true;
     }
 
     public synchronized void startBackgroundWorkers() {
@@ -40,7 +47,7 @@ public class BackgroundTaskManager {
         workerCount.set(threadCount);
         parked.set(0);
         for (int i = 0; i < threadCount; i++) {
-            final var thread = new BackgroundProcessorThread(queue, inFlight, parked, workerCount, idleSignal);
+            final var thread = new BackgroundProcessorThread(lanes, i, inFlight, parked, workerCount, idleSignal);
             pool.execute(thread);
         }
         logger.info("Started listening for background tasks");
@@ -65,24 +72,35 @@ public class BackgroundTaskManager {
     }
 
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0 && parked.get() >= workerCount.get();
+        return lanes.isEmpty() && lanes.maintenanceOpen() == 0 && inFlight.get() == 0
+                && parked.get() >= workerCount.get();
     }
 
     public int pending() {
         return inFlight.get();
     }
 
+    public int gatedPending() {
+        return inFlight.get() - lanes.historyQueued();
+    }
+
+    public int queuedHistory() {
+        return lanes.historyQueued();
+    }
+
+    public int maintenancePending() {
+        return lanes.maintenanceOpen();
+    }
+
     public boolean awaitCapacity(long waitMs) throws InterruptedException {
         final var maxEvents = configuration.intValue(ConfigKey.BACKGROUND_QUEUE_MAX_EVENTS);
-        return pending() < maxEvents || idleSignal.awaitIdle(() -> pending() < maxEvents, waitMs);
+        return gatedPending() < maxEvents || idleSignal.awaitIdle(() -> gatedPending() < maxEvents, waitMs);
     }
 
     public synchronized void stopBackgroundWorkers() {
         workerCount.set(0);
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Background");
-        final var discarded = new ArrayList<Event>();
-        queue.drainTo(discarded);
-        inFlight.addAndGet(-discarded.size());
+        inFlight.addAndGet(-lanes.discardAll());
         logger.info("Stopped listening for background tasks");
     }
 }

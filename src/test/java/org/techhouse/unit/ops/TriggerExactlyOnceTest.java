@@ -34,6 +34,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -78,6 +79,9 @@ public class TriggerExactlyOnceTest {
         TestUtils.setPrivateField(configuration, "triggersEnabled", true);
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
         captured.clear();
+        final var clearCounter = new DeleteRequest(TestGlobals.DB, COUNTER_COLL);
+        clearCounter.set_id("total");
+        processor.processMessage(clearCounter);
         triggerExecutor.stop();
         // Captures the queued events instead of running them, so a test can inspect the durable record while
         // the run is still pending and then drive the dispatcher itself.
@@ -100,7 +104,7 @@ public class TriggerExactlyOnceTest {
 
     private void installProcedure(String name, String source) throws Exception {
         final var definition = new ProcedureDefinition(name, source, 1L, null, true, 1L, 1L, DEFINER);
-        fs.writeProcedure(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
         cache.putProcedure(TestGlobals.DB, definition);
     }
 

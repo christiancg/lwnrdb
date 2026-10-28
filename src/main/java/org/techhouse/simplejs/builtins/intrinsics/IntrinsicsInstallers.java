@@ -45,25 +45,31 @@ import org.techhouse.simplejs.values.JsValue;
 
 public record IntrinsicsInstallers(Intrinsics intrinsics) {
     public void installToStringTags() {
-        defineToStringTag(intrinsics.iteratorProto, "Generator");
-        defineToStringTag(intrinsics.mapProto, "Map");
-        defineToStringTag(intrinsics.weakMapProto, "WeakMap");
-        defineToStringTag(intrinsics.setProto, "Set");
-        defineToStringTag(intrinsics.weakSetProto, "WeakSet");
-        defineToStringTag(intrinsics.bigintProto, "BigInt");
-        defineToStringTag(intrinsics.arrayBufferProto, "ArrayBuffer");
-        defineToStringTag(intrinsics.dataViewProto, "DataView");
-        defineToStringTag(intrinsics.disposableStackProto, "DisposableStack");
-        defineToStringTag(intrinsics.asyncDisposableStackProto, "AsyncDisposableStack");
-        defineToStringTag(intrinsics.temporalDurationProto, "Temporal.Duration");
-        defineToStringTag(intrinsics.temporalPlainDateProto, "Temporal.PlainDate");
-        defineToStringTag(intrinsics.temporalInstantProto, "Temporal.Instant");
-        defineToStringTag(intrinsics.temporalPlainDateTimeProto, "Temporal.PlainDateTime");
-        defineToStringTag(intrinsics.temporalZonedDateTimeProto, "Temporal.ZonedDateTime");
-        final var getter = new JsNativeFunction("get [Symbol.toStringTag]", (thisArg, _) -> typedArrayTag(thisArg));
-        getter.setLength(0);
-        intrinsics.typedArrayProto.defineSymbolAccessor(JsSymbol.TO_STRING_TAG, getter, null);
-        intrinsics.typedArrayProto.setSymbolFlags(JsSymbol.TO_STRING_TAG, PropertyFlags.TAG);
+        deferTag(intrinsics.iteratorProto, "Generator");
+        deferTag(intrinsics.mapProto, "Map");
+        deferTag(intrinsics.weakMapProto, "WeakMap");
+        deferTag(intrinsics.setProto, "Set");
+        deferTag(intrinsics.weakSetProto, "WeakSet");
+        deferTag(intrinsics.bigintProto, "BigInt");
+        deferTag(intrinsics.arrayBufferProto, "ArrayBuffer");
+        deferTag(intrinsics.dataViewProto, "DataView");
+        deferTag(intrinsics.disposableStackProto, "DisposableStack");
+        deferTag(intrinsics.asyncDisposableStackProto, "AsyncDisposableStack");
+        deferTag(intrinsics.temporalDurationProto, "Temporal.Duration");
+        deferTag(intrinsics.temporalPlainDateProto, "Temporal.PlainDate");
+        deferTag(intrinsics.temporalInstantProto, "Temporal.Instant");
+        deferTag(intrinsics.temporalPlainDateTimeProto, "Temporal.PlainDateTime");
+        deferTag(intrinsics.temporalZonedDateTimeProto, "Temporal.ZonedDateTime");
+        intrinsics.typedArrayProto.deferSetup(proto -> {
+            final var getter = new JsNativeFunction("get [Symbol.toStringTag]", (thisArg, _) -> typedArrayTag(thisArg));
+            getter.setLength(0);
+            proto.defineSymbolAccessor(JsSymbol.TO_STRING_TAG, getter, null);
+            proto.setSymbolFlags(JsSymbol.TO_STRING_TAG, PropertyFlags.TAG);
+        });
+    }
+
+    private static void deferTag(JsObject target, String tag) {
+        target.deferSetup(proto -> defineToStringTag(proto, tag));
     }
 
     public JsValue typedArrayTag(JsValue receiver) {
@@ -72,34 +78,38 @@ public record IntrinsicsInstallers(Intrinsics intrinsics) {
     }
 
     public void installArrayUnscopables() {
-        final var unscopables = new JsObject();
-        unscopables.setProto(null);
-        for (final var name : UNSCOPABLE_ARRAY_METHODS) {
-            unscopables.set(name, JsBoolean.TRUE);
-        }
-        intrinsics.arrayProto.setSymbol(JsSymbol.UNSCOPABLES, unscopables);
-        intrinsics.arrayProto.setSymbolFlags(JsSymbol.UNSCOPABLES, PropertyFlags.TAG);
+        intrinsics.arrayProto.deferSetup(proto -> {
+            final var unscopables = new JsObject();
+            unscopables.setProto(null);
+            for (final var name : UNSCOPABLE_ARRAY_METHODS) {
+                unscopables.set(name, JsBoolean.TRUE);
+            }
+            proto.setSymbol(JsSymbol.UNSCOPABLES, unscopables);
+            proto.setSymbolFlags(JsSymbol.UNSCOPABLES, PropertyFlags.TAG);
+        });
     }
 
     public void installIteratorSymbols() {
-        defineSymbol(intrinsics.arrayProto, JsSymbol.ITERATOR, intrinsics.arrayProto.get("values"));
-        defineSymbol(intrinsics.mapProto, JsSymbol.ITERATOR, intrinsics.mapProto.get("entries"));
-        defineSymbol(intrinsics.setProto, JsSymbol.ITERATOR, intrinsics.setProto.get("values"));
-        defineSymbol(intrinsics.stringProto, JsSymbol.ITERATOR,
-                new JsNativeFunction("[Symbol.iterator]",
-                        (thisArg, _) -> JsIterators.linkPrototype(JsIterators.of(InterpreterUtils
-                                .stringCodePoints(JsCoercion.toStr(
-                                        intrinsics.requireStringValue(thisArg, "[Symbol.iterator]"), intrinsics.ops))
-                                .iterator()), intrinsics.stringIteratorProto)));
-        defineSymbol(intrinsics.iteratorProto, JsSymbol.ITERATOR,
-                new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg));
-        defineSymbol(intrinsics.asyncIteratorProto, JsSymbol.ASYNC_ITERATOR,
-                new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
-        defineToStringTag(intrinsics.promiseProto, "Promise");
-        defineToStringTag(intrinsics.asyncIteratorProto, "AsyncGenerator");
-        intrinsics.defaultArrayIterator = intrinsics.arrayProto.getSymbol(JsSymbol.ITERATOR);
-        intrinsics.defaultStringIterator = intrinsics.stringProto.getSymbol(JsSymbol.ITERATOR);
-        intrinsics.defaultTypedArrayIterator = intrinsics.typedArrayProto.getSymbol(JsSymbol.ITERATOR);
+        intrinsics.arrayProto.deferSetup(proto -> {
+            defineSymbol(proto, JsSymbol.ITERATOR, proto.get("values"));
+            intrinsics.rememberDefaultArrayIterator(proto.getSymbol(JsSymbol.ITERATOR));
+        });
+        intrinsics.mapProto.deferSetup(proto -> defineSymbol(proto, JsSymbol.ITERATOR, proto.get("entries")));
+        intrinsics.setProto.deferSetup(proto -> defineSymbol(proto, JsSymbol.ITERATOR, proto.get("values")));
+        intrinsics.stringProto.deferSetup(proto -> {
+            defineSymbol(proto, JsSymbol.ITERATOR,
+                    new JsNativeFunction("[Symbol.iterator]", (thisArg,
+                            _) -> JsIterators.linkPrototype(JsIterators.of(InterpreterUtils.stringCodePoints(JsCoercion
+                                    .toStr(intrinsics.requireStringValue(thisArg, "[Symbol.iterator]"), intrinsics.ops))
+                                    .iterator()), intrinsics.stringIteratorProto)));
+            intrinsics.rememberDefaultStringIterator(proto.getSymbol(JsSymbol.ITERATOR));
+        });
+        intrinsics.iteratorProto.deferSetup(proto -> defineSymbol(proto, JsSymbol.ITERATOR,
+                new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg)));
+        intrinsics.asyncIteratorProto.deferSetup(proto -> defineSymbol(proto, JsSymbol.ASYNC_ITERATOR,
+                new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg)));
+        deferTag(intrinsics.promiseProto, "Promise");
+        deferTag(intrinsics.asyncIteratorProto, "AsyncGenerator");
     }
 
     public void installSymbolAccessors(JsObject proto) {
@@ -124,11 +134,11 @@ public record IntrinsicsInstallers(Intrinsics intrinsics) {
         hasInstance.setLength(1);
         proto.setSymbol(JsSymbol.HAS_INSTANCE, hasInstance);
         proto.setSymbolFlags(JsSymbol.HAS_INSTANCE, new PropertyFlags(false, false, false));
-        intrinsics.defaultHasInstance = hasInstance;
+        intrinsics.rememberDefaultHasInstance(hasInstance);
     }
 
     public boolean isDefaultHasInstance(JsValue candidate) {
-        return candidate == intrinsics.defaultHasInstance;
+        return candidate == intrinsics.defaultHasInstance();
     }
 
     public void defineSymbol(JsObject target, JsSymbol key, JsValue value) {
@@ -143,10 +153,10 @@ public record IntrinsicsInstallers(Intrinsics intrinsics) {
 
     public boolean isDefaultIterator(JsValue target, JsValue candidate) {
         final var expected = switch (target) {
-            case JsArray ignored -> intrinsics.defaultArrayIterator;
-            case JsArguments ignored -> intrinsics.defaultArrayIterator;
-            case JsString ignored -> intrinsics.defaultStringIterator;
-            case JsTypedArray ignored -> intrinsics.defaultTypedArrayIterator;
+            case JsArray ignored -> intrinsics.defaultArrayIterator();
+            case JsArguments ignored -> intrinsics.defaultArrayIterator();
+            case JsString ignored -> intrinsics.defaultStringIterator();
+            case JsTypedArray ignored -> intrinsics.defaultTypedArrayIterator();
             default -> null;
         };
         return expected != null && candidate == expected;

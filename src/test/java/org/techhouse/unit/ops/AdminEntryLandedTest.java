@@ -24,10 +24,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.cache.UsageCounter;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminCollectionUsageEntry;
@@ -78,6 +78,8 @@ public class AdminEntryLandedTest {
         final var mocked = mockStatic(AdminPageHelper.class, CALLS_REAL_METHODS);
         mocked.when(() -> AdminPageHelper.baseUpdateEntryCount(eq(Globals.ADMIN_DB_NAME), eq(collName), any(),
                 anyList(), anyBoolean())).thenThrow(failure);
+        mocked.when(() -> AdminPageHelper.baseUpdateEntryCountOfRefs(eq(Globals.ADMIN_DB_NAME), eq(collName), any(),
+                anyList())).thenThrow(failure);
         return mocked;
     }
 
@@ -159,10 +161,9 @@ public class AdminEntryLandedTest {
         return pageRowFailingWith(Globals.ADMIN_COLLECTION_USAGE_NAME, new IOException("disk full"));
     }
 
-    private CollectionUsageEvent usageEvent(String indexKey) {
+    private List<UsageCounter> usageEvent(String indexKey) {
         memoryManagement.recordAccess(AccessKind.FIELD_INDEX, TestGlobals.DB, TestGlobals.COLL, indexKey);
-        return new CollectionUsageEvent(AccessKind.FIELD_INDEX, TestGlobals.DB, TestGlobals.COLL, indexKey,
-                System.currentTimeMillis());
+        return List.of(memoryManagement.getCounter(AccessKind.FIELD_INDEX, TestGlobals.DB, TestGlobals.COLL, indexKey));
     }
 
     private static String usageId(String indexKey) {
@@ -178,11 +179,11 @@ public class AdminEntryLandedTest {
     public void test_a_new_usage_record_is_published_when_its_page_row_fails() throws Exception {
         final var event = usageEvent("landedNewUsage");
         try (var ignored = usagePageRowFailing()) {
-            assertDoesNotThrow(() -> AdminOperationHelper.upsertCollectionUsage(event));
+            assertDoesNotThrow(() -> AdminOperationHelper.flushCollectionUsage(event));
         }
         assertNotNull(cache.getPkIndexCollectionUsage(usageId("landedNewUsage")));
 
-        AdminOperationHelper.upsertCollectionUsage(usageEvent("landedNewUsage"));
+        AdminOperationHelper.flushCollectionUsage(usageEvent("landedNewUsage"));
 
         assertEquals(1, usageRowsOnDisk(usageId("landedNewUsage")),
                 "a usage record left unpublished is inserted a second time under the same _id");
@@ -190,10 +191,10 @@ public class AdminEntryLandedTest {
 
     @Test
     public void test_an_updated_usage_record_is_published_with_its_new_position() throws Exception {
-        AdminOperationHelper.upsertCollectionUsage(usageEvent("landedUpdatedUsage"));
+        AdminOperationHelper.flushCollectionUsage(usageEvent("landedUpdatedUsage"));
         final var event = usageEvent("landedUpdatedUsage");
         try (var ignored = usagePageRowFailing()) {
-            assertDoesNotThrow(() -> AdminOperationHelper.upsertCollectionUsage(event));
+            assertDoesNotThrow(() -> AdminOperationHelper.flushCollectionUsage(event));
         }
 
         final var onDisk = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME).stream()
@@ -206,8 +207,8 @@ public class AdminEntryLandedTest {
 
     @Test
     public void test_a_usage_cleanup_continues_past_a_failing_page_row() throws Exception {
-        AdminOperationHelper.upsertCollectionUsage(usageEvent("expiredUsageOne"));
-        AdminOperationHelper.upsertCollectionUsage(usageEvent("expiredUsageTwo"));
+        AdminOperationHelper.flushCollectionUsage(usageEvent("expiredUsageOne"));
+        AdminOperationHelper.flushCollectionUsage(usageEvent("expiredUsageTwo"));
         try (var ignored = usagePageRowFailing()) {
             assertDoesNotThrow(() -> AdminOperationHelper.cleanupCollectionUsage(-60_000L));
         }
@@ -222,7 +223,7 @@ public class AdminEntryLandedTest {
     public void test_an_interrupted_usage_page_row_restores_the_interrupt() throws Exception {
         final var event = usageEvent("interruptedUsage");
         try (var ignored = pageRowFailingWith(Globals.ADMIN_COLLECTION_USAGE_NAME, new InterruptedException("stop"))) {
-            AdminOperationHelper.upsertCollectionUsage(event);
+            AdminOperationHelper.flushCollectionUsage(event);
         }
 
         assertTrue(Thread.interrupted(), "the interrupt must survive the swallowed bookkeeping failure");
@@ -272,9 +273,14 @@ public class AdminEntryLandedTest {
         final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
 
         final String errorCode;
-        try (var mocked = mockStatic(TxCommitLog.class, CALLS_REAL_METHODS)) {
-            mocked.when(() -> TxCommitLog.recordLocalCommit(any(), any(), any()))
-                    .thenThrow(new IOException("disk full"));
+        try (var ignored = mockStatic(AdminOperationHelper.class, invocation -> {
+            if ("writeTransactionRecords".equals(invocation.getMethod().getName())
+                    && invocation.<List<AdminTransactionEntry>>getArgument(0).stream()
+                            .anyMatch(entry -> entry.get_id().equals(TxCommitLog.markerId(txId)))) {
+                throw new IOException("disk full");
+            }
+            return invocation.callRealMethod();
+        })) {
             errorCode = TransactionOperationHelper.commit(clientId).getErrorCode();
         }
 

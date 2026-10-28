@@ -2,7 +2,9 @@ package org.techhouse.simplejs.internal;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.*;
 
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.FunctionExpression;
@@ -16,6 +18,7 @@ import org.techhouse.simplejs.values.JsValue;
 
 final class FunctionFactory {
     private final Interpreter interpreter;
+    private final Map<List<JsNode>, FunctionShape> shapes = new IdentityHashMap<>();
 
     FunctionFactory(Interpreter interpreter) {
         this.interpreter = interpreter;
@@ -44,12 +47,23 @@ final class FunctionFactory {
             boolean async, boolean generator, Environment closure, String sourceText) {
         final var function = new JsFunction(name, params, body, arrow, expressionBody, async, generator, closure);
         function.setSourceText(sourceText);
+        function.setShape(shapeOf(params, sourceText));
         function.setModuleName(interpreter.callStack.currentModule());
         if (generator) {
             function.getPrototype()
                     .setProto(async ? interpreter.intrinsics.asyncIteratorProto : interpreter.intrinsics.iteratorProto);
         }
         return function;
+    }
+
+    private FunctionShape shapeOf(List<JsNode> params, String sourceText) {
+        final var cached = shapes.get(params);
+        if (cached != null && cached.describes(params, sourceText)) {
+            return cached;
+        }
+        final var shape = FunctionShape.of(params, sourceText);
+        shapes.put(params, shape);
+        return shape;
     }
 
     JsValue evalCall(CallExpression call, Environment env) {

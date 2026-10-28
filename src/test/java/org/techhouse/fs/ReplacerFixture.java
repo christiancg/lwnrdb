@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongFunction;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
@@ -21,7 +22,7 @@ final class ReplacerFixture {
         fx = new StorageFixture(root, dbName, collName);
         vacuum = new PageVacuum(fx.paths, fx.store, fx.journal);
         vacuum.onVacuum(vacuumed::add);
-        replacer = new RecordReplacer(fx.paths, fx.store, fx.journal, vacuum);
+        replacer = new RecordReplacer(fx.paths, fx.store, vacuum);
         appender = new PageAppender(fx.paths, fx.store, vacuum);
     }
 
@@ -41,7 +42,7 @@ final class ReplacerFixture {
 
     PkIndexEntry replace(String id, String value, long targetPage, PagePlacement placement) throws IOException {
         final var entry = entry(id, value, targetPage);
-        return replacer.replace(entry, line(id, value), fx.indexed(id), targetPage, placement, null);
+        return replacer.replace(entry, line(id, value), fx.indexed(id), targetPage, placement);
     }
 
     IndexedDbEntry indexed(String id, String value) throws IOException {
@@ -57,15 +58,25 @@ final class ReplacerFixture {
     }
 
     List<IndexedDbEntry> bulk(List<IndexedDbEntry> entries) throws IOException {
-        return replacer.bulkReplace(fx.dbName, fx.collName, entries, null,
-                updated -> line(updated.get_id(), updated.getData().get("v").asJsonString().getValue()));
+        return bulk(entries, null, null);
+    }
+
+    List<IndexedDbEntry> bulk(List<IndexedDbEntry> entries, List<PkIndexEntry> residentRows,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
+        return replacer.bulkReplace(fx.dbName, fx.collName, entries, residentRows,
+                updated -> line(updated.get_id(), updated.getData().get("v").asJsonString().getValue()), occupancy);
+    }
+
+    PageOccupancy occupancyOf(long page) throws IOException {
+        final var rows = PageRows.of(fx.store, null, fx.dbName, fx.collName, page);
+        return new PageOccupancy(PageRows.liveBytes(rows), rows.size());
     }
 
     String valueOf(PkIndexEntry row) throws IOException {
         return fx.readAt(row);
     }
 
-    File[] intents() {
-        return fx.markers();
+    int intents() throws IOException {
+        return fx.openIntents();
     }
 }

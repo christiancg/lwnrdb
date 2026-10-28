@@ -1,0 +1,70 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  verify:
+    name: Build & Verify
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run Maven Verify
+        run: mvn -B --no-transfer-progress verify -Drevision="${VERSION#v}"
+      - name: Upload jar
+        uses: actions/upload-artifact@v7
+        with:
+          name: lwnrdb-jar
+          path: target/lwnrdb.jar
+          retention-days: 1
+
+  github-release:
+    name: GitHub release
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: lwnrdb-jar
+      - name: Create release
+        run: |
+          mv lwnrdb.jar "lwnrdb-${VERSION#v}.jar"
+          PRERELEASE=""
+          case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "${VERSION}" "lwnrdb-${VERSION#v}.jar" --title "${VERSION}" --generate-notes ${PRERELEASE}
+
+  docker:
+    name: Docker image
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push
+        run: |
+          IMAGE=ghcr.io/christiancg/lwnrdb
+          TAGS="-t ${IMAGE}:${VERSION#v}"
+          case "${VERSION}" in *-*) ;; *) TAGS="${TAGS} -t ${IMAGE}:latest" ;; esac
+          docker build --build-arg REVISION="${VERSION#v}" ${TAGS} .
+          docker push "${IMAGE}:${VERSION#v}"
+          case "${VERSION}" in *-*) ;; *) docker push "${IMAGE}:latest" ;; esac

@@ -75,12 +75,10 @@ public class CompiledScriptReuseTest {
     }
 
     @Test
-    public void test_compiled_script_exposes_its_source_and_hash() {
+    public void test_compiled_script_exposes_its_source() {
         final var compiled = simpleJs.compile("return 1;", false);
         assertEquals("return 1;", compiled.source());
         assertFalse(compiled.strictScriptGoal());
-        assertEquals(64, compiled.sourceHash().length());
-        assertEquals(compiled.sourceHash(), simpleJs.compile("return 1;", false).sourceHash());
     }
 
     @Test

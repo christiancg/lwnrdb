@@ -63,9 +63,14 @@ public final class VersionedApply {
     private final Map<String, Map<String, Long>> tombstonesByCollection = new HashMap<>();
     private final Map<String, ApplyOutcome> outcomes = new HashMap<>();
     private final DirtySink sink;
+    private CommitWriteGroups groups = CommitWriteGroups.NONE;
 
     public VersionedApply(DirtySink sink) {
         this.sink = sink;
+    }
+
+    void groupWritesIn(CommitWriteGroups commitGroups) {
+        this.groups = commitGroups;
     }
 
     public Map<String, ApplyOutcome> outcomes() {
@@ -79,6 +84,9 @@ public final class VersionedApply {
     public void apply(AdminTransactionEntry op) throws Exception {
         final var dbName = op.getTargetDb();
         final var collName = op.getTargetColl();
+        if (CommitWriteGroups.writesData(op)) {
+            groups.ensureOpen(dbName, collName);
+        }
         switch (op.getOpType()) {
             case AdminTransactionEntry.OP_TYPE_SAVE -> applySave(dbName, collName, op.getPayload(), op.versionAt(0));
             case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> applyBulkSave(op);

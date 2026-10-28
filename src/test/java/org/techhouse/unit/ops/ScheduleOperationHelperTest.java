@@ -59,11 +59,11 @@ public class ScheduleOperationHelperTest {
         TestUtils.setPrivateField(configuration, "scriptMaxSourceBytes", 262_144L);
         TestUtils.setPrivateField(configuration, "scheduleMaxPerDatabase", 100);
         TestUtils.setPrivateField(configuration, "scriptTimeZone", "UTC");
-        for (final var name : fs.listScheduleNames(TestGlobals.DB)) {
-            fs.deleteSchedule(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listScheduleNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteSchedule(TestGlobals.DB, name);
         }
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeSchedulesForDatabase(TestGlobals.DB);
         cache.removeProceduresForDatabase(TestGlobals.DB);
@@ -275,6 +275,36 @@ public class ScheduleOperationHelperTest {
         assertFalse(summary.has("args"));
         assertEquals("nightly", summary.get("name").asJsonString().getValue());
         assertTrue(summary.get("nextRunAt").asJsonNumber().getValue().longValue() > System.currentTimeMillis());
+    }
+
+    @Test
+    public void test_include_args_lists_args() throws Exception {
+        final var request = intervalRequest("weekly");
+        final var args = new JsonObject();
+        args.add("limit", new JsonNumber(7));
+        request.setArgs(args);
+        save(request);
+        final var list = new ListSchedulesRequest(TestGlobals.DB);
+        list.setIncludeArgs(true);
+
+        final var listed = ((ListSchedulesResponse) ScheduleOperationHelper.executeList(list)).getSchedules();
+
+        assertEquals(args, listed.getFirst().get("args"));
+        assertTrue(listed.getFirst().has("nextRunAt"));
+    }
+
+    @Test
+    public void test_default_listing_omits_args() throws Exception {
+        final var request = intervalRequest("weekly");
+        final var args = new JsonObject();
+        args.add("limit", new JsonNumber(7));
+        request.setArgs(args);
+        save(request);
+
+        final var listed = ((ListSchedulesResponse) ScheduleOperationHelper
+                .executeList(new ListSchedulesRequest(TestGlobals.DB))).getSchedules();
+
+        assertFalse(listed.getFirst().has("args"));
     }
 
     @Test

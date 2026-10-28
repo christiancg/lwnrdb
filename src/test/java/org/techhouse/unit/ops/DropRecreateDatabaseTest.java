@@ -249,9 +249,9 @@ public class DropRecreateDatabaseTest {
 
         assertEquals(OperationStatus.OK,
                 processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL)).getStatus());
-        pending.mark(TestGlobals.DB, TestGlobals.COLL, "new_life");
+        pending.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("new_life"));
         assertTrue(TestUtils.dirtyIndexCollections().contains(TestGlobals.DB + "|" + TestGlobals.COLL),
-                "the re-created collection's first pending write must write its own dirty marker");
+                "the re-created collection's first unlogged mark must write its own dirty marker");
     }
 
     @Test
@@ -262,7 +262,7 @@ public class DropRecreateDatabaseTest {
         assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
 
         recreateCollection();
-        pending.mark(TestGlobals.DB, TestGlobals.COLL, "new_life");
+        pending.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("new_life"));
         assertEquals(List.of("new_life"), List.copyOf(pending.idsFor(TestGlobals.DB, TestGlobals.COLL)));
         assertTrue(TestUtils.dirtyIndexCollections().contains(TestGlobals.DB + "|" + TestGlobals.COLL));
     }

@@ -1,6 +1,7 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -11,6 +12,18 @@ interface UserCacheDelegate {
 
     default List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         return userCache().getPkIndexAndLoadIfNecessary(dbName, collName);
+    }
+
+    default PkIndexEntry pkRowFor(String dbName, String collName, String id) throws IOException {
+        return userCache().pkRowFor(dbName, collName, id);
+    }
+
+    default int pkCountForCoverage(String dbName, String collName) {
+        try {
+            return userCache().pkCountForCoverage(dbName, collName);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     default void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
@@ -47,8 +60,16 @@ interface UserCacheDelegate {
     }
 
     default void rememberFieldIndexBatch(String dbName, String collName, String indexIdentifier, int previousCount,
-            long deltaBytes) {
-        userCache().rememberFieldIndexBatch(dbName, collName, indexIdentifier, previousCount, deltaBytes);
+            long deltaBytes, int changedIds) {
+        userCache().rememberFieldIndexBatch(dbName, collName, indexIdentifier, previousCount, deltaBytes, changedIds);
+    }
+
+    default String canonicalPkId(String dbName, String collName, String id) {
+        return userCache().canonicalPkId(dbName, collName, id);
+    }
+
+    default void signalIfOverBudget() {
+        userCache().signalIfOverBudget();
     }
 
     default FieldIndexLookup fieldIndexLookup(String dbName, String collName, String fieldName) {

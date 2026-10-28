@@ -36,13 +36,6 @@
       "unsafeAllocated": true
     },
     {
-      "type": "org.techhouse.cluster.msg.ForwardBody",
-      "allDeclaredFields": true,
-      "allDeclaredMethods": true,
-      "allDeclaredConstructors": true,
-      "unsafeAllocated": true
-    },
-    {
       "type": "org.techhouse.cluster.msg.InDoubtTx",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -1212,13 +1205,6 @@
       "unsafeAllocated": true
     },
     {
-      "type": "org.techhouse.listen.ResultHasher$ResultWrapper",
-      "allDeclaredFields": true,
-      "allDeclaredMethods": true,
-      "allDeclaredConstructors": true,
-      "unsafeAllocated": true
-    },
-    {
       "type": "org.techhouse.analyze.AnalyzeResult",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -1339,6 +1325,48 @@
     },
     {
       "type": "org.techhouse.ops.req.OperationRequest$SchemaCheck",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.IdSearchable",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.IdSet",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.IdSet$1",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.SortedChunks",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.GetSchemaRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.GetSchemaResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,

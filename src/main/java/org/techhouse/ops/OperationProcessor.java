@@ -37,6 +37,7 @@ import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.GetSchemaRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
 import org.techhouse.ops.req.ListSchedulesRequest;
@@ -110,6 +111,7 @@ public class OperationProcessor {
             case REINDEX -> processReindex((ReindexRequest) operationRequest);
             case SAVE_SCHEMA -> processSaveSchema((SaveSchemaRequest) operationRequest);
             case DELETE_SCHEMA -> processDeleteSchema((DeleteSchemaRequest) operationRequest);
+            case GET_SCHEMA -> processGetSchema((GetSchemaRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
@@ -122,7 +124,7 @@ public class OperationProcessor {
             case LIST_USERS -> processListUsers((ListUsersRequest) operationRequest);
             case SET_PASSWORD ->
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
-            case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
+            case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats(actingUser);
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
             case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest, clientId);
             case START_TRANSACTION ->
@@ -351,24 +353,27 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
-            final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName, collName);
-            if (ownershipError != null) {
-                return ownershipError;
-            }
-            final var schemaError = SchemaValidationHelper.check(saveRequest);
-            if (schemaError != null) {
-                return schemaError;
-            }
-            final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
-            if (hookError != null) {
-                return hookError;
-            }
-            final var local = TriggerHelper.runStaged(TriggerHelper.stageSave(saveRequest, actingUser), dbName,
-                    collName, actingUser, saveRequest.getTriggerDepth(),
-                    () -> SaveOperationHelper.executeSave(saveRequest));
-            return ClusterWriteHelper.afterSave(dbName, collName, local);
-        });
+        return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING,
+                GroupCommit.forSave(saveRequest), effects -> {
+                    final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return GroupCommit.answered(ownershipError);
+                    }
+                    final var schemaError = SchemaValidationHelper.check(saveRequest);
+                    if (schemaError != null) {
+                        return GroupCommit.answered(schemaError);
+                    }
+                    final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
+                    if (hookError != null) {
+                        return GroupCommit.answered(hookError);
+                    }
+                    final var staged = TriggerHelper.stageSave(saveRequest, actingUser, effects);
+                    return () -> ClusterWriteHelper.afterSave(dbName, collName,
+                            TriggerHelper.runStaged(staged, dbName, collName, actingUser, saveRequest.getTriggerDepth(),
+                                    effects, () -> SaveOperationHelper.executeSave(saveRequest)),
+                            effects);
+                });
     }
 
     private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction,
@@ -382,32 +387,34 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
-                () -> {
+        return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.DELETE,
+                ErrorCode.ERROR_DELETING, GroupCommit.forDelete(deleteRequest), effects -> {
                     final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.DELETE, dbName,
                             collName);
                     if (ownershipError != null) {
-                        return ownershipError;
+                        return GroupCommit.answered(ownershipError);
                     }
                     // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
                             deleteRequest.getTriggerDepth());
                     final var hookError = BeforeHookHelper.beforeDelete(deleteRequest, actingUser);
                     if (hookError != null) {
-                        return hookError;
+                        return GroupCommit.answered(hookError);
                     }
-                    final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser);
-                    final var reservation = TriggerHelper.discardingOnFailure(staged,
-                            () -> ClusterWriteHelper.reserveDelete(dbName, collName, deleteRequest.get_id()));
-                    if (reservation.ownerLost()) {
-                        staged.discard();
-                        return new OperationResponse(OperationType.DELETE, ErrorCode.NOT_COLLECTION_OWNER);
-                    }
-                    final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
-                            deleteRequest.getTriggerDepth(),
-                            () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservation.version()));
-                    return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
-                            reservation.version(), local);
+                    final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser, effects);
+                    return () -> {
+                        final var reservation = TriggerHelper.discardingOnFailure(staged, effects,
+                                () -> ClusterWriteHelper.reserveDelete(dbName, collName, deleteRequest.get_id()));
+                        if (reservation.ownerLost()) {
+                            effects.discard(staged);
+                            return new OperationResponse(OperationType.DELETE, ErrorCode.NOT_COLLECTION_OWNER);
+                        }
+                        final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
+                                deleteRequest.getTriggerDepth(), effects,
+                                () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservation.version()));
+                        return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+                                reservation.version(), local, effects);
+                    };
                 });
     }
 
@@ -439,6 +446,12 @@ public class OperationProcessor {
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
                 ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
+    }
+
+    private OperationResponse processGetSchema(GetSchemaRequest request) {
+        final var collectionId = Cache.getCollectionIdentifier(request.getDatabaseName(), request.getCollectionName());
+        return OperationLocks.withReadLocks(false, List.of(collectionId), OperationType.GET_SCHEMA,
+                ErrorCode.ERROR_RETRIEVING, () -> SchemaOperationHelper.executeGetSchema(request));
     }
 
 }

@@ -100,4 +100,26 @@ public class PeerNamesTest {
         assertFalse(PeerNames.txPayload(new TxReplicationPayload(List.of())));
         assertFalse(PeerNames.txPayload(null));
     }
+
+    private static AntiEntropyPayload digestQuery(int bucketCount, List<Integer> buckets) {
+        final var payload = new AntiEntropyPayload("shop", "orders");
+        payload.setBucketCount(bucketCount);
+        payload.setBuckets(buckets);
+        return payload;
+    }
+
+    @Test
+    public void test_a_digest_query_names_a_power_of_two_bucket_count_and_buckets_inside_it() {
+        assertTrue(PeerNames.antiEntropy(digestQuery(16, null)));
+        assertTrue(PeerNames.antiEntropy(digestQuery(4096, List.of(0, 4095))));
+        assertFalse(PeerNames.antiEntropy(digestQuery(48, null)));
+        assertFalse(PeerNames.antiEntropy(digestQuery(8192, null)));
+        assertFalse(PeerNames.antiEntropy(digestQuery(-16, null)));
+        assertFalse(PeerNames.antiEntropy(digestQuery(16, List.of(16))));
+        assertFalse(PeerNames.antiEntropy(digestQuery(16, List.of(-1))));
+        assertFalse(PeerNames.antiEntropy(digestQuery(0, List.of(1))));
+        final var withNull = new ArrayList<Integer>();
+        withNull.add(null);
+        assertFalse(PeerNames.antiEntropy(digestQuery(16, withNull)));
+    }
 }

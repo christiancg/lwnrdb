@@ -20,7 +20,7 @@ public class JsonObject extends JsonBaseElement {
     private String[] keys;
     private JsonBaseElement[] values;
     private int size;
-    private int[] slots;
+    private Object memberIndex;
 
     public JsonObject() {
         keys = NO_KEYS;
@@ -30,6 +30,57 @@ public class JsonObject extends JsonBaseElement {
     public JsonObject(int expectedMembers) {
         keys = expectedMembers == 0 ? NO_KEYS : new String[expectedMembers];
         values = expectedMembers == 0 ? NO_VALUES : new JsonBaseElement[expectedMembers];
+    }
+
+    public static JsonObject withShape(KeyShape shape, JsonBaseElement[] values) {
+        if (values.length != shape.size()) {
+            throw new IllegalArgumentException("A shape of " + shape.size() + " keys needs as many values");
+        }
+        final var object = new JsonObject();
+        object.keys = shape.keys();
+        object.values = values;
+        object.size = values.length;
+        object.memberIndex = shape;
+        return object;
+    }
+
+    public static KeyShape shapeOf(String[] source, int from, int to) {
+        final var keys = Arrays.copyOfRange(source, from, to);
+        for (final var key : keys) {
+            Objects.requireNonNull(key, "property == null");
+        }
+        final var slots = keys.length > INDEXED_ABOVE ? slotsFor(keys, keys.length) : null;
+        if (slots == null ? hasDuplicateKey(keys) : slots.length == 0) {
+            return null;
+        }
+        return new KeyShape(keys, slots, KeyShape.hashOf(source, from, to));
+    }
+
+    private static boolean hasDuplicateKey(String[] keys) {
+        for (var i = 1; i < keys.length; i++) {
+            for (var j = 0; j < i; j++) {
+                if (keys[i].equals(keys[j])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public KeyShape shape() {
+        return memberIndex instanceof KeyShape shared ? shared : null;
+    }
+
+    private int[] slots() {
+        return memberIndex instanceof KeyShape shared ? shared.slots() : (int[]) memberIndex;
+    }
+
+    private void ownKeys() {
+        if (!(memberIndex instanceof KeyShape shared)) {
+            return;
+        }
+        keys = keys.clone();
+        memberIndex = shared.slots() == null ? null : shared.slots().clone();
     }
 
     public void add(String property, JsonBaseElement value) {
@@ -47,13 +98,14 @@ public class JsonObject extends JsonBaseElement {
             values[at] = value;
             return;
         }
+        ownKeys();
         if (size == keys.length) {
             grow();
         }
         keys[size] = property;
         values[size] = value;
         size++;
-        if (slots != null) {
+        if (memberIndex != null) {
             insertSlot(size - 1);
         } else if (size > INDEXED_ABOVE) {
             rebuildSlots();
@@ -91,14 +143,43 @@ public class JsonObject extends JsonBaseElement {
         if (at < 0) {
             return;
         }
+        ownKeys();
+        if (memberIndex != null) {
+            if (size - 1 > INDEXED_ABOVE) {
+                removeSlot(at);
+            } else {
+                memberIndex = null;
+            }
+        }
         final var after = size - at - 1;
         System.arraycopy(keys, at + 1, keys, at, after);
         System.arraycopy(values, at + 1, values, at, after);
         size--;
         keys[size] = null;
         values[size] = null;
-        if (slots != null) {
-            rebuildSlots();
+    }
+
+    private void removeSlot(int position) {
+        final var slots = (int[]) memberIndex;
+        final var mask = slots.length - 1;
+        final var stored = position + 1;
+        var hole = homeSlot(keys[position], mask);
+        while (slots[hole] != stored) {
+            hole = (hole + 1) & mask;
+        }
+        slots[hole] = 0;
+        for (var probe = (hole + 1) & mask; slots[probe] != 0; probe = (probe + 1) & mask) {
+            final var home = homeSlot(keys[slots[probe] - 1], mask);
+            if (((probe - home) & mask) >= ((probe - hole) & mask)) {
+                slots[hole] = slots[probe];
+                slots[probe] = 0;
+                hole = probe;
+            }
+        }
+        for (var slot = 0; slot < slots.length; slot++) {
+            if (slots[slot] > stored) {
+                slots[slot]--;
+            }
         }
     }
 
@@ -127,6 +208,7 @@ public class JsonObject extends JsonBaseElement {
     }
 
     public int indexSlots() {
+        final var slots = slots();
         return slots == null ? 0 : slots.length;
     }
 
@@ -143,8 +225,9 @@ public class JsonObject extends JsonBaseElement {
         if (memberName == null) {
             return -1;
         }
+        final var slots = slots();
         if (slots != null) {
-            return indexedPositionOf(memberName);
+            return indexedPositionOf(slots, memberName);
         }
         for (var i = 0; i < size; i++) {
             if (memberName.equals(keys[i])) {
@@ -154,7 +237,7 @@ public class JsonObject extends JsonBaseElement {
         return -1;
     }
 
-    private int indexedPositionOf(String memberName) {
+    private int indexedPositionOf(int[] slots, String memberName) {
         final var mask = slots.length - 1;
         for (var slot = homeSlot(memberName, mask);; slot = (slot + 1) & mask) {
             final var stored = slots[slot];
@@ -191,17 +274,27 @@ public class JsonObject extends JsonBaseElement {
     }
 
     private void rebuildSlots() {
-        if (size <= INDEXED_ABOVE) {
-            slots = null;
-            return;
+        memberIndex = size <= INDEXED_ABOVE ? null : slotsFor(keys, size);
+    }
+
+    private static int[] slotsFor(String[] keys, int count) {
+        final var table = new int[Integer.highestOneBit(count * 4 - 1)];
+        final var mask = table.length - 1;
+        for (var position = 0; position < count; position++) {
+            var slot = homeSlot(keys[position], mask);
+            while (table[slot] != 0) {
+                if (keys[table[slot] - 1].equals(keys[position])) {
+                    return new int[0];
+                }
+                slot = (slot + 1) & mask;
+            }
+            table[slot] = position + 1;
         }
-        slots = new int[Integer.highestOneBit(size * 4 - 1)];
-        for (var i = 0; i < size; i++) {
-            insertSlot(i);
-        }
+        return table;
     }
 
     private void insertSlot(int position) {
+        final var slots = (int[]) memberIndex;
         if ((size << 1) > slots.length) {
             rebuildSlots();
             return;
@@ -242,6 +335,13 @@ public class JsonObject extends JsonBaseElement {
 
     @Override
     public JsonObject deepCopy() {
+        if (memberIndex instanceof KeyShape shared) {
+            final var copied = new JsonBaseElement[size];
+            for (var i = 0; i < size; i++) {
+                copied[i] = values[i].deepCopy();
+            }
+            return withShape(shared, copied);
+        }
         final var result = new JsonObject(size);
         for (var i = 0; i < size; i++) {
             result.put(keys[i], values[i].deepCopy());
@@ -249,13 +349,27 @@ public class JsonObject extends JsonBaseElement {
         return result;
     }
 
-    public JsonObject copyForWrites(Set<String> writtenRoots) {
+    public JsonObject copyForWrites(WriteTree tree) {
+        if (memberIndex instanceof KeyShape shared) {
+            final var copied = new JsonBaseElement[size];
+            for (var i = 0; i < size; i++) {
+                copied[i] = copiedForWrites(tree, keys[i], values[i]);
+            }
+            return withShape(shared, copied);
+        }
         final var result = new JsonObject(size);
         for (var i = 0; i < size; i++) {
-            final var value = values[i];
-            result.put(keys[i], writtenRoots.contains(keys[i]) ? value.deepCopy() : value);
+            result.put(keys[i], copiedForWrites(tree, keys[i], values[i]));
         }
         return result;
+    }
+
+    private static JsonBaseElement copiedForWrites(WriteTree tree, String key, JsonBaseElement value) {
+        final var node = tree.child(key);
+        if (node != null && node.hasChildren() && value instanceof JsonObject nested) {
+            return nested.copyForWrites(node);
+        }
+        return value;
     }
 
     public JsonObject copyWithout(String key) {

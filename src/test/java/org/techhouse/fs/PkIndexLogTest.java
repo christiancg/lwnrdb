@@ -70,7 +70,7 @@ public class PkIndexLogTest {
     public void aDeleteRowRemovesTheId() throws IOException {
         store.appendRows(DB, COLL, List.of(row("a", 0, 1), row("b", 10, 1)));
 
-        store.appendDeletes(DB, COLL, List.of("a"));
+        PkRowWrites.deleteRows(paths, store, DB, COLL, List.of("a"));
 
         assertEquals(List.of(row("b", 10, 1).toFileEntry()), folded());
         assertEquals(PkIndexEntry.toDeleteRow("a"), lines().getLast());
@@ -79,7 +79,7 @@ public class PkIndexLogTest {
     @Test
     public void anIdDeletedThenReinsertedIsLive() throws IOException {
         store.appendRows(DB, COLL, List.of(row("a", 0, 1)));
-        store.appendDeletes(DB, COLL, List.of("a"));
+        PkRowWrites.deleteRows(paths, store, DB, COLL, List.of("a"));
 
         store.appendRows(DB, COLL, List.of(row("a", 30, 3)));
 
@@ -98,7 +98,7 @@ public class PkIndexLogTest {
         }
         assertEquals(10 + Globals.PK_LOG_MIN_DEAD_ROWS - 1, lines().size(), "below the threshold nothing compacts");
 
-        store.appendDeletes(DB, COLL, List.of("id-9"));
+        PkRowWrites.deleteRows(paths, store, DB, COLL, List.of("id-9"));
 
         final var compacted = lines();
         assertEquals(9, compacted.size(), "reaching the threshold folds the log back to one row per live id");
@@ -209,7 +209,7 @@ public class PkIndexLogTest {
 
     @Test
     public void anAppendToAFreshFileCreatesItWithoutABlankLine() throws IOException {
-        store.indexNewPKValue(DB, COLL, "first", 0L, 10, 0L, 1L);
+        store.appendRows(DB, COLL, List.of(row("first", 0, 1)));
 
         final var content = Files.readString(pkIndexFile().toPath(), StandardCharsets.UTF_8);
         assertEquals(row("first", 0, 1).toFileEntry() + Globals.NEWLINE, content);
@@ -235,7 +235,7 @@ public class PkIndexLogTest {
         try (var files = mockStatic(Files.class, CALLS_REAL_METHODS)) {
             files.when(() -> Files.readAllBytes(pkIndexFile().toPath())).thenThrow(new IOException("disk gone"));
 
-            assertDoesNotThrow(() -> store.appendDeletes(DB, COLL, List.of("id-9")),
+            assertDoesNotThrow(() -> PkRowWrites.deleteRows(paths, store, DB, COLL, List.of("id-9")),
                     "the delete row landed, so a failed compaction must not report the append as failed");
         }
 

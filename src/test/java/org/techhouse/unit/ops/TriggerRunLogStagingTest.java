@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -104,6 +105,39 @@ public class TriggerRunLogStagingTest {
             versioned += chunk.getPriorVersions().size();
         }
         assertEquals(entries.size(), versioned);
+    }
+
+    @Test
+    public void test_a_sink_receives_every_chunk() throws Exception {
+        final var entries = entriesSpanningSeveralChunks();
+        final var sunk = new ArrayList<AdminTriggerRunEntry>();
+
+        final var runId = TriggerRunLog.recordStaged(descriptor(EventType.CREATED, entries),
+                versionsOf(entries, AdminTriggerRunEntry.ABSENT_VERSION), sunk::add);
+
+        assertNotNull(runId);
+        assertTrue(sunk.size() > 1, "the run spans several chunks");
+        assertEquals(List.of(), TriggerRunLog.pending(), "a sink writes nothing itself");
+        assertEquals(entries.size(), sunk.stream().mapToInt(chunk -> chunk.getIds().size()).sum());
+        assertTrue(sunk.stream()
+                .allMatch(chunk -> runId.equals(chunk.getRunId()) && chunk.getStatus() == TriggerRunStatus.STAGED));
+        AdminOperationHelper.saveTriggerRuns(sunk);
+        assertEquals(sunk.size(), TriggerRunLog.pending().size());
+        assertEquals(sunk.size(), TriggerRunLog.recordIdsFor(runId).size());
+    }
+
+    @Test
+    public void test_a_failing_sink_records_nothing_and_answers_no_run() throws Exception {
+        final var sunk = new ArrayList<AdminTriggerRunEntry>();
+
+        final var runId = TriggerRunLog.recordStaged(descriptor(EventType.CREATED, List.of(idEntry("a"))),
+                Map.of("a", AdminTriggerRunEntry.ABSENT_VERSION), entry -> {
+                    throw new java.io.IOException("refused " + entry.get_id());
+                });
+
+        assertNull(runId);
+        assertEquals(List.of(), sunk);
+        assertEquals(List.of(), TriggerRunLog.pending());
     }
 
     @Test

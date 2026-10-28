@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -253,5 +254,73 @@ public class FilterCountFastPathAgreementTest extends FilterResolutionSupport {
         assertThrows(ScriptCallableException.class, () -> AggregationOperationHelper.processAggregation(request));
         indexField(FIELD);
         assertThrows(ScriptCallableException.class, () -> AggregationOperationHelper.processAggregation(request));
+    }
+
+    @Test
+    public void test_a_range_count_matches_the_rows_with_and_without_pending_ids() throws Exception {
+        seed();
+        indexField(FIELD);
+        final var queries = new LinkedHashMap<String, FilterAggregationStep>();
+        queries.put("bounded",
+                new FilterAggregationStep(new ConjunctionOperator(ConjunctionOperatorType.AND,
+                        List.of(new FieldOperator(FieldOperatorType.GREATER_THAN_EQUALS, FIELD, new JsonNumber(1.5)),
+                                new FieldOperator(FieldOperatorType.SMALLER_THAN_EQUALS, FIELD, new JsonNumber(2))))));
+        queries.put("one-sided", filter(FieldOperatorType.GREATER_THAN, FIELD, new JsonNumber(1.5)));
+        assertCountMatchesRows(queries);
+
+        insert("c", FIELD, new JsonNumber(9));
+        final var pending = org.techhouse.ioc.IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
+        pending.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("c"));
+        try {
+            assertCountMatchesRows(queries);
+        } finally {
+            pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    @Test
+    public void test_an_equals_count_sums_the_run_sizes_and_declines_while_an_id_is_pending() throws Exception {
+        seedStrings();
+        insert("d", FIELD, JsonBoolean.TRUE);
+        insert("e", FIELD, new JsonNumber(2));
+        indexField(FIELD);
+        final var alpha = filter(FieldOperatorType.EQUALS, FIELD, new JsonString("ALPHA"));
+        assertEquals(2, rows(alpha).size());
+        assertEquals(2, countOf(alpha));
+        assertEquals(1, countOf(filter(FieldOperatorType.EQUALS, FIELD, JsonBoolean.TRUE)));
+        assertEquals(1, countOf(filter(FieldOperatorType.EQUALS, FIELD, new JsonNumber(2))));
+        assertEquals(0, countOf(filter(FieldOperatorType.EQUALS, FIELD, new JsonString("zzz"))));
+
+        final var locks = org.techhouse.ioc.IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        locks.lockRead(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class).stream()
+                    .filter(entry -> "Alpha".equals(entry.getValue())).findFirst().orElseThrow().getIds().add("b");
+            assertEquals(3L, fastCountOf(alpha, new CountAggregationStep()).result().get("count").asJsonNumber()
+                    .getValue().longValue(), "the EQUALS count sums the run's id sets instead of building one");
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        final var pending = org.techhouse.ioc.IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
+        pending.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("b"));
+        try {
+            assertEquals(2, countOf(alpha), "a pending id sends the count down the set path that corrects it");
+        } finally {
+            pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    @Test
+    public void test_an_equals_count_on_id_or_a_hash_operand_is_not_summed_from_a_run() throws Exception {
+        seed();
+        insert("d", FIELD, arrayOf(new JsonNumber(1)));
+        indexField(FIELD);
+
+        assertEquals(1, countOf(filter(FieldOperatorType.EQUALS, Globals.PK_FIELD, new JsonString("b"))));
+        assertEquals(1, countOf(filter(FieldOperatorType.EQUALS, FIELD, arrayOf(new JsonNumber(1)))));
+        assertEquals(0, countOf(filter(FieldOperatorType.EQUALS, FIELD, new JsonObject())));
+        assertEquals(rows(filter(FieldOperatorType.EQUALS, FIELD, JsonNull.INSTANCE)).size(),
+                countOf(filter(FieldOperatorType.EQUALS, FIELD, JsonNull.INSTANCE)));
     }
 }

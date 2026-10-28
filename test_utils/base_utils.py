@@ -28,7 +28,7 @@ PORT = 8989
 USERNAME = "admin"
 PASSWORD = "Tst-Admin-9xQ2mV"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
+JAR_PATH = os.path.join(REPO_ROOT, "target", "lwnrdb.jar")
 SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
 SERVER_PROC_PATTERN = SERVER_BIN or JAR_PATH
 
@@ -383,6 +383,50 @@ def local_commit_markers(work_dir: str) -> int:
     return total
 
 
+def open_intents(folder: str) -> list:
+    if not os.path.isdir(folder):
+        return []
+    found = []
+    for name in sorted(n for n in os.listdir(folder) if n.endswith(".intents")):
+        with open(os.path.join(folder, name), "rb") as fp:
+            lines = fp.read().decode("utf-8", errors="replace").split("\n")
+        begun, done = [], set()
+        for line in lines:
+            fields = line.split(PK_FIELD_SEPARATOR)
+            if fields[0] == "INTENT" and len(fields) > 1:
+                begun.append(fields[1])
+            elif fields[0] == "DONE" and len(fields) == 2:
+                done.add(fields[1])
+        found += [f"{name}#{seq}" for seq in begun if seq not in done]
+    return found
+
+
+WAL_HEADER_BYTES = 18
+
+
+def damage_after_the_last_checkpoint(folder: str):
+    for name in (n for n in os.listdir(folder) if n.endswith(".wal")):
+        os.remove(os.path.join(folder, name))
+
+
+def logged_writes(folder: str) -> int:
+    if not os.path.isdir(folder):
+        return 0
+    logged = 0
+    for name in (n for n in os.listdir(folder) if n.endswith(".wal")):
+        with open(os.path.join(folder, name), "rb") as fp:
+            data = fp.read()
+        at = 0
+        while at + WAL_HEADER_BYTES <= len(data) and data[at:at + 1] == b"W":
+            kind = data[at + 1:at + 2]
+            length = int.from_bytes(data[at + 10:at + 14], "big")
+            if at + WAL_HEADER_BYTES + length > len(data):
+                break
+            logged = 0 if kind == b"C" else logged + (1 if kind == b"R" else -1)
+            at += WAL_HEADER_BYTES + length
+    return logged
+
+
 def read_pk_log(pk_path: str) -> list:
     with open(pk_path, "rb") as fp:
         lines = fp.read().decode("utf-8", errors="replace").split("\n")
@@ -420,6 +464,12 @@ def dump_log(log_path: str, tail_bytes: int = 4000) -> None:
         print(f"--- server log tail ---\n{tail}\n--- end ---", file=sys.stderr)
     except OSError:
         pass
+
+
+def client_argv() -> list:
+    if SERVER_BIN:
+        return [SERVER_BIN]
+    return ["java", "-jar", JAR_PATH]
 
 
 def server_argv(xmx: str = "512m", jar: Optional[str] = None) -> list:

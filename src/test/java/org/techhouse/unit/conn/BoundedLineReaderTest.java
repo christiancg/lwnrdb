@@ -18,6 +18,7 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.BoundedLineReader;
 import org.techhouse.conn.RequestLine;
 import org.techhouse.ex.RequestTooLargeException;
@@ -284,5 +285,61 @@ public class BoundedLineReaderTest {
             final var utf8 = text.getBytes(StandardCharsets.UTF_8);
             assertFalse(new RequestLine(utf8, 0, utf8.length).isBlank(), text);
         }
+    }
+
+    private static int bufferLength(BoundedLineReader reader) throws Exception {
+        return TestUtils.getPrivateField(reader, "buffer", byte[].class).length;
+    }
+
+    @Test
+    public void aLineOverAMegabyteDoesNotKeepItsBuffer() throws Exception {
+        final var line = "x".repeat(2 << 20);
+        final var reader = reader(line + "\nok\n");
+
+        assertEquals(line, reader.readLine(4 << 20));
+
+        assertEquals(Globals.BUFFER_SIZE, bufferLength(reader));
+        assertEquals("ok", reader.readLine(4 << 20));
+    }
+
+    @Test
+    public void aPipelinedPartialLineSurvivesTheShrink() throws Exception {
+        final var line = "x".repeat(2 << 20);
+        final var request = "{\"type\":\"FIND_BY_ID\",\"_id\":\"abc\"}";
+        final var half = request.length() / 2;
+        try (var stream = new ScriptedStream()) {
+            final var reader = reader(stream.then(line + "\n" + request.substring(0, half)).thenTimeout()
+                    .then(request.substring(half) + "\n"));
+
+            assertEquals(line, reader.readLine(1000, 4 << 20));
+            assertEquals(Globals.BUFFER_SIZE, bufferLength(reader));
+            assertThrows(SocketTimeoutException.class, () -> reader.readLine(1000, 4 << 20));
+            assertEquals(request, reader.readLine(1000, 4 << 20));
+        }
+    }
+
+    @Test
+    public void aLeftoverLargerThanTheDefaultKeepsTheBuffer() throws Exception {
+        final var line = "x".repeat(3 << 19);
+        final var leftover = "y".repeat(Globals.BUFFER_SIZE + 8192);
+        try (var stream = new ScriptedStream()) {
+            final var reader = reader(stream.then(line + "\n" + leftover).thenTimeout().then("\n"));
+
+            assertEquals(line, reader.readLine(1000, 4 << 20));
+            assertTrue(bufferLength(reader) > 1 << 20);
+            assertThrows(SocketTimeoutException.class, () -> reader.readLine(1000, 4 << 20));
+            assertEquals(leftover, reader.readLine(1000, 4 << 20));
+            assertEquals(Globals.BUFFER_SIZE, bufferLength(reader));
+        }
+    }
+
+    @Test
+    public void aBufferUnderTheThresholdIsKept() throws Exception {
+        final var line = "x".repeat(512 * 1024);
+        final var reader = reader(line + "\n");
+
+        assertEquals(line, reader.readLine(4 << 20));
+
+        assertEquals(1 << 20, bufferLength(reader));
     }
 }

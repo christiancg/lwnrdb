@@ -56,7 +56,7 @@ public class ScheduleHandoffTest {
     private ScheduleRegistry.Entry registerSchedule(String name) throws Exception {
         final var definition = new ScheduleDefinition(name, "proc", null, 1_000L, null, 0L, true, "owner", null, 1L, 1L,
                 1L, "owner");
-        fs.writeSchedule(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeSchedule(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
         cache.removeSchedule(TestGlobals.DB, name);
         registry.loadAll();
         return registry.entries().stream()

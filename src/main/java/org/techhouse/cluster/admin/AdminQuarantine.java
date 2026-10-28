@@ -1,7 +1,6 @@
 package org.techhouse.cluster.admin;
 
 import java.util.List;
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
@@ -14,6 +13,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.DroppedCollections;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.admin.CollectionIncarnation;
 
@@ -25,7 +25,6 @@ final class AdminQuarantine {
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
-    private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
 
     void quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation) throws Exception {
@@ -47,8 +46,7 @@ final class AdminQuarantine {
         AdminOperationHelper.deletePageCollections(dbName, collName);
         listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
         final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, incarnation);
-        cache.evictCollection(dbName, collName);
-        pendingIndexWrites.clearCollection(dbName, collName);
+        DroppedCollections.forgetCollection(dbName, collName);
         triggerExecutor.discardQueuedFor(dbName, collName);
         TriggerRunLog.discardAllFor(dbName, collName);
         return moved;
@@ -100,6 +98,7 @@ final class AdminQuarantine {
         } finally {
             locks.releaseDatabaseExclusive(dbName);
             locks.removeDatabaseLock(dbName);
+            locks.removeLock(dbName, Globals.COLLECTION_NAMES_LOCK);
         }
     }
 
@@ -111,8 +110,7 @@ final class AdminQuarantine {
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
                 listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
                 final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
-                cache.evictDatabase(dbName);
-                pendingIndexWrites.clearDatabase(dbName);
+                DroppedCollections.forgetDatabase(dbName);
                 compiledProcedures.invalidateDatabase(dbName);
                 scheduleRegistry.removeDatabase(dbName);
                 triggerExecutor.discardQueuedFor(dbName, null);

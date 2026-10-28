@@ -16,12 +16,17 @@ public final class FieldPredicateFactory {
     }
 
     @SuppressWarnings("unchecked")
-    private static Integer compareCustom(JsonCustom<?> operator, JsonCustom<?> toTestWith) {
+    static Integer compareCustom(JsonCustom<?> operator, JsonCustom<?> toTestWith) {
         final var customClass = operator.getClass();
         return customClass.cast(operator).compare(customClass.cast(toTestWith).getCustomValue());
     }
 
     public static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
+        if ((operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN)
+                && operator.getValue() instanceof JsonArray operands) {
+            return membershipTester(operands, InOperands.of(operands, JsonUtils.isPrimaryKeyPath(operator.getField())),
+                    operation == FieldOperatorType.IN);
+        }
         return (JsonObject toTest, String fieldName) -> {
             final var toTestElement = JsonUtils.resolvePath(toTest, fieldName);
             if (toTestElement == null) {
@@ -40,6 +45,20 @@ public final class FieldPredicateFactory {
                         JsonUtils.isPrimaryKeyPath(fieldName));
             }
             return false;
+        };
+    }
+
+    private static BiPredicate<JsonObject, String> membershipTester(JsonArray operands, InOperands lookup, boolean in) {
+        return (JsonObject toTest, String fieldName) -> {
+            final var stored = JsonUtils.resolvePath(toTest, fieldName);
+            if (stored == null) {
+                return false;
+            }
+            final var exact = JsonUtils.isPrimaryKeyPath(fieldName);
+            final var found = exact == lookup.exact()
+                    ? lookup.contains(stored)
+                    : containsEquivalent(operands, stored, exact);
+            return in == found;
         };
     }
 
@@ -208,7 +227,7 @@ public final class FieldPredicateFactory {
         return false;
     }
 
-    private static boolean elementsMatch(JsonBaseElement operand, JsonBaseElement stored, boolean exactStrings) {
+    static boolean elementsMatch(JsonBaseElement operand, JsonBaseElement stored, boolean exactStrings) {
         if (operand.isJsonPrimitive() && stored.isJsonPrimitive()) {
             return primitiveOperandMatches(operand, stored, FieldOperatorType.EQUALS, exactStrings);
         }

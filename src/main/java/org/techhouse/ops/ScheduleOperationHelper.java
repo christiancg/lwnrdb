@@ -88,7 +88,7 @@ public final class ScheduleOperationHelper {
             if (foreign != null) {
                 return foreign;
             }
-            final var scheduleNames = fs.listScheduleNames(dbName);
+            final var scheduleNames = fs.metadataFiles().listScheduleNames(dbName);
             if (existing == null && scheduleNames.size() >= configuration.getScheduleMaxPerDatabase()) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.TOO_MANY_SCHEDULES);
             }
@@ -215,7 +215,7 @@ public final class ScheduleOperationHelper {
             if (foreign != null) {
                 return foreign;
             }
-            if (fs.deleteSchedule(dbName, request.getName())) {
+            if (fs.metadataFiles().deleteSchedule(dbName, request.getName())) {
                 AdminStamp.tombstone(AdminRecordKey.schedule(dbName, request.getName()));
             }
             cache.removeSchedule(dbName, request.getName());
@@ -241,17 +241,17 @@ public final class ScheduleOperationHelper {
                     ErrorCode.DATABASE_NOT_FOUND);
         }
         final var result = new ArrayList<JsonObject>();
-        for (final var name : fs.listScheduleNames(dbName)) {
+        for (final var name : fs.metadataFiles().listScheduleNames(dbName)) {
             final var definition = cache.getSchedule(dbName, name);
             if (definition != null) {
-                result.add(summaryOf(dbName, definition));
+                result.add(summaryOf(dbName, definition, request.isIncludeArgs()));
             }
         }
         return new ListSchedulesResponse("Ok", result);
     }
 
-    private static JsonObject summaryOf(String dbName, ScheduleDefinition definition) {
-        final var json = definition.toSummaryJson();
+    private static JsonObject summaryOf(String dbName, ScheduleDefinition definition, boolean includeArgs) {
+        final var json = includeArgs ? definition.toJsonObject() : definition.toSummaryJson();
         final var entry = registry.get(dbName, definition.getName());
         if (entry != null) {
             json.addProperty("nextRunAt", entry.getNextRunAt());
@@ -293,7 +293,7 @@ public final class ScheduleOperationHelper {
 
     public static List<ScheduleDefinition> schedulesIn(String dbName) throws IOException {
         final var result = new ArrayList<ScheduleDefinition>();
-        for (final var name : fs.listScheduleNames(dbName)) {
+        for (final var name : fs.metadataFiles().listScheduleNames(dbName)) {
             final var definition = cache.getSchedule(dbName, name);
             if (definition != null) {
                 result.add(definition);

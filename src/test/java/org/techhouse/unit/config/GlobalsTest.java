@@ -13,9 +13,9 @@ public class GlobalsTest {
     @Test
     public void test_writes_are_not_opened_in_a_device_synchronous_mode() {
         assertEquals("rw", Globals.RW_PERMISSIONS,
-                "durability is best-effort by decision: 'rwd'/'rws' were dropped because they covered only "
-                        + "four of the write paths and not the PK index, so nothing was durable end to end. "
-                        + "See the invariant in CLAUDE.md before changing this.");
+                "durability is the explicit SyncedWrites forces at defined points, not a file mode: 'rwd'/'rws' "
+                        + "covered only four of the write paths and not the PK index. See the invariant in "
+                        + "CLAUDE.md before changing this.");
     }
 
     @Test

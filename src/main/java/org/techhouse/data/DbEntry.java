@@ -3,9 +3,11 @@ package org.techhouse.data;
 import java.util.Objects;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonSizeEstimator;
 
 public class DbEntry extends JsonDocumentEntry {
     private static final int ENCODE_SIZE_HINT = 1024;
+    private static final int ESTIMATED_PRESIZE_ABOVE = 64 * 1024;
     private long page;
     private long version;
 
@@ -51,10 +53,20 @@ public class DbEntry extends JsonDocumentEntry {
 
     public byte[] encodeLine() {
         stampId();
-        final var line = eJson.toJsonLine(data, cachedByteSize > 0 ? cachedByteSize : ENCODE_SIZE_HINT,
-                Globals.NEWLINE);
+        final var line = eJson.toJsonLine(data, encodeSizeHint(), Globals.NEWLINE);
         cachedByteSize = line.length;
         return line;
+    }
+
+    private int encodeSizeHint() {
+        if (cachedByteSize > 0) {
+            return cachedByteSize;
+        }
+        final var estimate = JsonSizeEstimator.estimate(data);
+        if (estimate <= ESTIMATED_PRESIZE_ABOVE) {
+            return ENCODE_SIZE_HINT;
+        }
+        return (int) Math.min(estimate + estimate / 8 + Globals.NEWLINE.length(), Integer.MAX_VALUE);
     }
 
     public long getPage() {

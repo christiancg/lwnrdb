@@ -23,8 +23,6 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.agg.FieldOperatorType;
-import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.CaseFolding;
 import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SaltedKey;
@@ -126,11 +124,78 @@ public final class IndexEntryReader {
     }
 
     private static boolean doesNotCoverEveryDocument(List<FieldIndexEntry<?>> entries, String dbName, String collName) {
-        final var covered = new HashSet<String>();
+        return coversFewer(idCount(entries), dbName, collName);
+    }
+
+    private static boolean coversFewer(long covered, String dbName, String collName) {
+        final var documents = cache.pkCountForCoverage(dbName, collName);
+        return documents < 0 || covered < documents;
+    }
+
+    private static long idCount(List<? extends FieldIndexEntry<?>> entries) {
+        var count = 0L;
         for (final var entry : entries) {
-            covered.addAll(entry.getIds());
+            count += entry.getIds().size();
         }
-        return covered.size() < cache.pkIndexSize(dbName, collName);
+        return count;
+    }
+
+    public static List<Object> distinctValuesForField(String dbName, String collName, String fieldName,
+            ReadObserver observer) throws IOException {
+        if (cache.hasNoIndex(dbName, collName, fieldName)) {
+            return null;
+        }
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
+        if (!pendingBefore.isEmpty()) {
+            return valuesOf(getIndexEntriesForField(dbName, collName, fieldName, observer));
+        }
+        final var values = new ArrayList<>();
+        final var hashIds = new HashSet<String>();
+        var covered = 0L;
+        try {
+            rl.lockIndexRead(dbName, collName, fieldName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while acquiring index read lock", e);
+        }
+        try {
+            for (var type : IndexKind.scalarIndexClasses()) {
+                final var entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
+                if (entries != null) {
+                    covered += idCount(entries);
+                    entries.forEach(entry -> values.add(entry.getValue()));
+                }
+            }
+            for (var kind : IndexKind.HASH_KINDS) {
+                final var hashEntries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+                if (hashEntries != null) {
+                    hashEntries.forEach(entry -> hashIds.addAll(entry.getIds()));
+                }
+            }
+        } finally {
+            rl.releaseIndexRead(dbName, collName, fieldName);
+        }
+        final var hashed = new ArrayList<FieldIndexEntry<?>>();
+        if (!hashIds.isEmpty()) {
+            addHashIndexEntries(hashed, dbName, collName, fieldName, hashIds, observer);
+        }
+        if (!PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName).isEmpty()) {
+            return valuesOf(getIndexEntriesForField(dbName, collName, fieldName, observer));
+        }
+        covered += idCount(hashed);
+        hashed.forEach(entry -> values.add(entry.getValue()));
+        if (values.isEmpty() || coversFewer(covered, dbName, collName)) {
+            return null;
+        }
+        if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
+            cache.recordFieldIndexAccess(dbName, collName, fieldName);
+        }
+        recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
+        return values;
+    }
+
+    private static List<Object> valuesOf(List<FieldIndexEntry<?>> entries) {
+        return entries == null ? null : entries.stream().<Object>map(FieldIndexEntry::getValue).toList();
     }
 
     public static List<String> idsInOrder(List<FieldIndexEntry<?>> sortedEntries, Comparator<FieldIndexEntry<?>> order,
@@ -282,20 +347,18 @@ public final class IndexEntryReader {
         }
         recordAnalyzeIndexUse(dbName, collName, fieldName, observer);
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
-        final var matchingIds = new HashSet<String>();
+        final var lookupValues = new ArrayList<>(localValues.size());
         final var foldedStringKeys = new HashSet<String>();
         for (var localValue : localValues) {
             if (localValue instanceof JsonString string && !string.isJsonCustom()
                     && !foldedStringKeys.add(CaseFolding.foldKey(string.getValue()))) {
                 continue;
             }
-            final var lookupValue = IndexValueCodec.elementToLookupValue(localValue);
-            final var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, localValue);
-            final var ids = cache.getIdsFromIndex(dbName, collName, fieldName, operator, lookupValue);
-            if (ids == null) {
-                return null;
-            }
-            matchingIds.addAll(ids);
+            lookupValues.add(IndexValueCodec.elementToLookupValue(localValue));
+        }
+        final var matchingIds = cache.getIdsEqualToAny(dbName, collName, fieldName, lookupValues);
+        if (matchingIds == null) {
+            return null;
         }
         final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (pendingIds.isEmpty()) {

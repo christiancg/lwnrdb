@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
-import org.techhouse.simplejs.internal.Environment;
+import java.util.List;
+import org.techhouse.simplejs.internal.GlobalSink;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
 
@@ -8,7 +9,9 @@ public final class TemporalBuiltins {
     private TemporalBuiltins() {
     }
 
-    public static JsObject install(Environment global, Intrinsics intrinsics, InterpreterOps ops) {
+    public static final List<String> NAMES = List.of("Temporal");
+
+    public static JsObject install(GlobalSink global, Intrinsics intrinsics, InterpreterOps ops) {
         final var temporal = new JsObject();
         temporal.setProto(intrinsics.objectProto);
         installCtor(temporal, "Duration", TemporalDurationBuiltins.create(ops), intrinsics.temporalDurationProto);
@@ -37,8 +40,10 @@ public final class TemporalBuiltins {
     private static void installCtor(JsObject temporal, String name, JsNativeFunction ctor, JsObject proto) {
         ctor.setPrototype(proto);
         ctor.markConstructor();
-        proto.defineValue("constructor", ctor);
-        proto.setFlags("constructor", JsObject.PropertyFlags.HIDDEN);
+        proto.deferSetup(target -> {
+            target.defineValue("constructor", ctor);
+            target.setFlags("constructor", JsObject.PropertyFlags.HIDDEN);
+        });
         temporal.defineValue(name, ctor);
         temporal.setFlags(name, JsObject.PropertyFlags.HIDDEN);
     }

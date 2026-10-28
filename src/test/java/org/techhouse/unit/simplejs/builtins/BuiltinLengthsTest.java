@@ -20,6 +20,16 @@ public class BuiltinLengthsTest {
     }
 
     @Test
+    public void test_a_label_resolves_to_its_lengths_once() {
+        final var array = BuiltinLengths.lengthsFor("Array.prototype");
+        assertEquals(0, BuiltinLengths.lengthIn(array, "pop"));
+        assertEquals(2, BuiltinLengths.lengthIn(array, "splice"));
+        assertEquals(1, BuiltinLengths.lengthIn(array, "map"));
+        assertEquals(1, BuiltinLengths.lengthIn(BuiltinLengths.lengthsFor("Nonexistent.prototype"), "x"));
+        assertEquals(0, BuiltinLengths.lengthsFor("Nonexistent.prototype").size());
+    }
+
+    @Test
     public void test_listed_lengths() {
         assertEquals(0, BuiltinLengths.lengthOf("Array.prototype", "pop"));
         assertEquals(2, BuiltinLengths.lengthOf("Array.prototype", "splice"));

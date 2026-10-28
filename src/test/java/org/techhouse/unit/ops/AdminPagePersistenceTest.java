@@ -1,12 +1,11 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -20,6 +19,7 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminPageHelper;
+import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -72,9 +72,11 @@ public class AdminPagePersistenceTest {
         final var entry = entryOnPage("p1", 0L);
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0L, entry.byteSize());
         AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry), true);
+        PageRowWriteBack.flushAll();
 
         assertTrue(persistedBytes() > 0,
-                "page metadata for a user collection must reach disk even when the in-memory entry already exists");
+                "page metadata for a user collection must reach disk once written back, even when the in-memory entry"
+                        + " already exists");
     }
 
     @Test
@@ -162,33 +164,35 @@ public class AdminPagePersistenceTest {
     }
 
     @Test
-    public void test_a_failed_page_insert_leaves_the_cache_untouched() throws Exception {
+    public void test_a_new_page_is_published_without_touching_the_storage_page() throws Exception {
         final var seed = entryOnPage("seed", 0L);
         AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(seed), false);
+        PageRowWriteBack.flushAll();
         final var newPage = entryOnPage("newPage", 7L);
 
-        withAnUnwritableStoragePage(() -> assertThrows(IOException.class, () -> AdminPageHelper
-                .baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(newPage), false)));
+        withAnUnwritableStoragePage(() -> assertDoesNotThrow(() -> AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB,
+                TestGlobals.COLL, EventType.CREATED, List.of(newPage), false)));
 
         assertTrue(
-                cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().noneMatch(e -> e.getPage() == 7L),
-                "a page row that never reached disk must not be published: a restart reloads from disk and"
-                        + " the occupancy of that page is then under-counted for the life of the collection");
+                cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().anyMatch(e -> e.getPage() == 7L),
+                "a user collection's row is published in memory and written back later; startup rebuilds the rows"
+                        + " from the page files, so a row that never reached disk is not under-counted");
     }
 
     @Test
-    public void test_a_failed_touched_page_update_leaves_the_counters_untouched() throws Exception {
+    public void test_a_touched_page_delta_is_published_without_touching_the_storage_page() throws Exception {
         final var entry = entryOnPage("tracked", 2L);
         AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry),
                 false);
+        PageRowWriteBack.flushAll();
         final var sizeBefore = sizeOfPage(2L);
         final var countBefore = countOfPage(2L);
 
-        withAnUnwritableStoragePage(() -> assertThrows(IOException.class, () -> AdminPageHelper
-                .baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED, List.of(entry), false)));
+        withAnUnwritableStoragePage(() -> assertDoesNotThrow(() -> AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB,
+                TestGlobals.COLL, EventType.DELETED, List.of(entry), false)));
 
-        assertEquals(sizeBefore, sizeOfPage(2L), "the delta must not be published before its write lands");
-        assertEquals(countBefore, countOfPage(2L), "the delta must not be published before its write lands");
+        assertEquals(sizeBefore - entry.byteSize(), sizeOfPage(2L));
+        assertEquals(countBefore - 1, countOfPage(2L));
     }
 
     @Test

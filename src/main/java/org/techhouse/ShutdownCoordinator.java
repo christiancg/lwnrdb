@@ -13,12 +13,14 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.admin.PageRowWriteBack;
 
 /**
  * The step order is the contract: refuse new work before draining so the queues can reach empty, release open
@@ -33,6 +35,7 @@ public class ShutdownCoordinator {
     private final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private final FileSystem fileSystem = IocContainer.get(FileSystem.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -76,7 +79,9 @@ public class ShutdownCoordinator {
         // After the triggers and before the background queue: a scheduled run enqueues into both.
         step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));
         step("drain background tasks", () -> backgroundTaskManager.drain(remaining(deadline)));
+        step("flush page rows", PageRowWriteBack::flushAll);
         step("stop listen workers", listenManager::stopWorkers);
+        step("checkpoint every write-ahead log", () -> fileSystem.checkpointWriteAheadLogs(deadline));
         step("leave the cluster", () -> {
             if (clusterConfig.isEnabled()) {
                 membershipService.stop();

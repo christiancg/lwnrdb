@@ -1,14 +1,13 @@
 package org.techhouse.cache;
 
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.cache.heap.DocumentHeapSizer;
 import org.techhouse.cache.heap.HeapLayout;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IdSet;
 import org.techhouse.data.PkIndexEntry;
 
 public final class CacheSizeEstimator {
@@ -19,7 +18,6 @@ public final class CacheSizeEstimator {
     private static final String SHORTEST_ID = "x";
     private static final int SHORTEST_LIVE_PK_ROW_BYTES = 11;
     private static final int TYPICAL_INDEXED_ID_BYTES = TYPICAL_ID_LENGTH + 1;
-    private static final Class<?> HASH_MAP_NODE = HeapLayout.jdkClass("java.util.HashMap$Node");
     private static final Class<?> CONCURRENT_HASH_MAP_NODE = HeapLayout
             .jdkClass("java.util.concurrent.ConcurrentHashMap$Node");
 
@@ -78,6 +76,14 @@ public final class CacheSizeEstimator {
         return total / entries.size();
     }
 
+    public static long minimumPkEntryBytes() {
+        return pkEntrySize(SHORTEST_ID, HeapLayout.current());
+    }
+
+    public static long minimumFieldIndexBytes(int entryCount) {
+        return entryCount * fieldEntryOverhead(HeapLayout.current());
+    }
+
     private static long pkEntrySize(String id, HeapLayout layout) {
         return layout.referenceBytes() + layout.shallowSize(PkIndexEntry.class) + layout.stringSize(id);
     }
@@ -103,10 +109,12 @@ public final class CacheSizeEstimator {
     }
 
     public static long estimateCollectionSize(Map<String, DbEntry> entries) {
-        if (entries == null)
-            return 0L;
+        return entries == null ? 0L : estimateCollectionEntries(entries.values());
+    }
+
+    public static long estimateCollectionEntries(Collection<DbEntry> entries) {
         long total = 0L;
-        for (var e : entries.values()) {
+        for (var e : entries) {
             total += estimateCollectionEntry(e);
         }
         return total;
@@ -117,8 +125,8 @@ public final class CacheSizeEstimator {
     }
 
     public static long estimateFieldIndexSizeByCount(int entryCount, HeapLayout layout) {
-        final var singleIdEntry = fieldEntryOverhead(layout) + layout.presizedHashTableSize(1)
-                + idSize(TYPICAL_ID, layout) + layout.shallowSize(Double.class);
+        final var singleIdEntry = fieldEntryOverhead(layout) + idSlotsSize(1, layout) + idSize(TYPICAL_ID, layout)
+                + layout.shallowSize(Double.class);
         return entryCount * singleIdEntry;
     }
 
@@ -131,16 +139,34 @@ public final class CacheSizeEstimator {
             return 0L;
         long total = 0L;
         for (var e : entries) {
-            total += fieldEntryOverhead(layout) + DocumentHeapSizer.indexedValueSize(e.getValue(), layout);
             final var ids = e.getIds();
-            if (ids != null) {
-                total += layout.presizedHashTableSize(ids.size());
-                for (final var id : ids) {
-                    total += idSize(id, layout);
-                }
+            if (ids == null) {
+                total += fieldEntryOverhead(layout) + DocumentHeapSizer.indexedValueSize(e.getValue(), layout);
+                continue;
+            }
+            total += fieldEntryShellSize(e.getValue(), ids.size(), layout);
+            for (final var id : ids) {
+                total += idSize(id, layout);
             }
         }
         return total;
+    }
+
+    public static long fieldEntryShellSize(Object value, int idCount) {
+        return fieldEntryShellSize(value, idCount, HeapLayout.current());
+    }
+
+    private static long fieldEntryShellSize(Object value, int idCount, HeapLayout layout) {
+        return fieldEntryOverhead(layout) + DocumentHeapSizer.indexedValueSize(value, layout)
+                + idSlotsSize(idCount, layout);
+    }
+
+    private static long idSlotsSize(int idCount, HeapLayout layout) {
+        return idCount == 0 ? 0L : layout.referenceArraySize(IdSet.slotsFor(idCount));
+    }
+
+    public static long fieldIndexIdSize(String id) {
+        return idSize(id, HeapLayout.current());
     }
 
     public static long estimateFieldIndexLookupSize(int ids) {
@@ -148,17 +174,14 @@ public final class CacheSizeEstimator {
     }
 
     public static long estimateFieldIndexLookupSize(int ids, HeapLayout layout) {
-        return layout.shallowSize(FieldIndexLookup.class) + layout.shallowSize(HashMap.class)
-                + layout.hashTableSize(ids)
-                + (long) ids * (layout.shallowSize(HASH_MAP_NODE) + layout.shallowSize(FieldIndexLookup.Located.class));
+        return FieldIndexLookup.estimatedBytes(ids, layout);
     }
 
     private static long fieldEntryOverhead(HeapLayout layout) {
-        return layout.referenceBytes() + layout.shallowSize(FieldIndexEntry.class) + layout.shallowSize(HashSet.class)
-                + layout.shallowSize(HashMap.class);
+        return layout.referenceBytes() + layout.shallowSize(FieldIndexEntry.class) + layout.shallowSize(IdSet.class);
     }
 
     private static long idSize(String id, HeapLayout layout) {
-        return layout.shallowSize(HASH_MAP_NODE) + layout.stringSize(id);
+        return layout.stringSize(id);
     }
 }

@@ -50,8 +50,8 @@ public class AdminCacheBoundsTest {
 
     @BeforeEach
     void clear() throws IOException {
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
+        for (final var name : fs.metadataFiles().listProcedureNames(TestGlobals.DB)) {
+            fs.metadataFiles().deleteProcedure(TestGlobals.DB, name);
         }
         cache.removeProceduresForDatabase(TestGlobals.DB);
         cache.removeCollectionSchemasForDatabase(TestGlobals.DB);
@@ -80,14 +80,14 @@ public class AdminCacheBoundsTest {
 
     private ProcedureDefinition writeProcedure(String name, String source) throws Exception {
         final var definition = new ProcedureDefinition(name, source, 1L, null, true, 1L, 1L, "alice");
-        fs.writeProcedure(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
+        fs.metadataFiles().writeProcedure(TestGlobals.DB, name, eJson.toJson(definition.toJsonObject()));
         return definition;
     }
 
     private void writeTriggers() throws Exception {
         final var definition = new TriggerDefinition("t1", java.util.Set.of(EventType.CREATED), "proc",
                 TriggerDefinition.MODE_DOCUMENT, false, true, "alice", 1L, 1L, 1L, "alice");
-        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL,
+        fs.metadataFiles().writeTriggers(TestGlobals.DB, TestGlobals.COLL,
                 eJson.toJson(TriggerDefinition.toFileJson(List.of(definition))));
     }
 
@@ -195,7 +195,7 @@ public class AdminCacheBoundsTest {
         cache.getTriggersFor(TestGlobals.DB, "other");
         assertEquals(1, cache.metadataCacheStats().triggerEntries());
         assertEquals(1, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).size());
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
     }
 

@@ -2,6 +2,7 @@ package org.techhouse.ejson.type_adapters.impl;
 
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonPrimitive;
+import org.techhouse.ejson.internal.JsonElementWriter;
 import org.techhouse.ejson.internal.JsonOut;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
@@ -18,7 +19,7 @@ public class JsonPrimitiveTypeAdapter implements TypeAdapter<JsonPrimitive<?>> {
         if (value == null) {
             out.append("null");
         } else {
-            TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value, out);
+            JsonElementWriter.write(value, out);
         }
     }
 

@@ -58,7 +58,7 @@ public class ListenStopRaceTest {
 
     private static void runOnce(ListenManager manager, UUID listenId) throws InterruptedException {
         final var queue = new LinkedBlockingQueue<UUID>();
-        queue.offer(listenId);
+        queue.offer(manager.getRegistration(listenId).groupId());
         final var worker = new Thread(new ListenProcessorThread(queue, manager));
         worker.setDaemon(true);
         worker.start();

@@ -58,6 +58,11 @@ public final class Configuration {
         return values.get(key);
     }
 
+    public void override(ConfigKey key, String value) {
+        values.put(key, value);
+        resolved.remove(key);
+    }
+
     public static Configuration getInstance() {
         if (!config.loading && (config.values.isEmpty() || "0".equals(config.values.get(ConfigKey.PORT)))) {
             config.load();
@@ -474,6 +479,14 @@ public final class Configuration {
 
     public boolean isFaultInjectionEnabled() {
         return booleanValue(ConfigKey.FAULT_INJECTION_ENABLED);
+    }
+
+    public boolean isSyncWrites() {
+        return booleanValue(ConfigKey.SYNC_WRITES);
+    }
+
+    public long getWalCheckpointBytes() {
+        return sizeValue(ConfigKey.WAL_CHECKPOINT_BYTES);
     }
 
 }

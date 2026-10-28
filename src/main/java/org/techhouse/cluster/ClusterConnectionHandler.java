@@ -11,11 +11,13 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import javax.net.ssl.SSLException;
 import org.techhouse.bckg_ops.BackgroundBacklogGate;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.admin.AdminRecordMerge;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
-import org.techhouse.cluster.msg.ForwardBody;
+import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.BoundedLineReader;
 import org.techhouse.conn.ClientTracker;
@@ -106,6 +108,7 @@ public class ClusterConnectionHandler implements Runnable {
             // One lock because gossip answers off this thread: two writers interleaving their JSON would
             // corrupt the frame stream. Replying out of order is fine - the peer dispatches on correlationId.
             final var writerLock = new ReentrantLock();
+            final var lanes = new ApplyLanes(concurrent);
             final var maxFrameBytes = clusterConfig.maxFrameBytes();
             String line;
             while ((line = reader.readLine(maxFrameBytes)) != null) {
@@ -116,13 +119,44 @@ public class ClusterConnectionHandler implements Runnable {
                 if (request == null) {
                     continue;
                 }
+                final Runnable answer = () -> respondSafely(writer, writerLock, request);
+                final var laneKey = laneKeyOf(request);
                 if (mayOvertake(request.getType())) {
-                    concurrent.execute(() -> respondSafely(writer, writerLock, request));
+                    concurrent.execute(answer);
+                } else if (laneKey != null) {
+                    lanes.submit(laneKey, answer);
                 } else {
-                    ordered.execute(() -> respondSafely(writer, writerLock, request));
+                    ordered.execute(answer);
                 }
             }
         }
+    }
+
+    static String laneKeyOf(ClusterMessage request) {
+        return switch (request.getType()) {
+            case REPLICATE -> collectionOf(request.getReplication());
+            case REPLICATE_TX -> singleCollectionOf(request.getTxReplication());
+            default -> null;
+        };
+    }
+
+    private static String collectionOf(ReplicationPayload payload) {
+        return payload != null && PeerNames.collection(payload.getDbName(), payload.getCollName())
+                ? Cache.getCollectionIdentifier(payload.getDbName(), payload.getCollName())
+                : null;
+    }
+
+    private static String singleCollectionOf(TxReplicationPayload batch) {
+        if (batch == null || batch.getEntries().isEmpty()) {
+            return null;
+        }
+        final var key = collectionOf(batch.getEntries().getFirst());
+        for (final var entry : batch.getEntries()) {
+            if (key == null || !key.equals(collectionOf(entry))) {
+                return null;
+            }
+        }
+        return key;
     }
 
     private static boolean mayOvertake(ClusterMessageType type) {
@@ -207,7 +241,7 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleForward(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.FORWARD_RESPONSE, "Failed to execute forwarded request",
-                response -> response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request)))));
+                response -> response.setForwardBody(eJson.toJson(executeForwarded(request))));
     }
 
     private ClusterMessage handleListScripts() {
@@ -265,8 +299,7 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage handleReindexBroadcast(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.REINDEX_BROADCAST_ACK, "Failed to rebuild the indexes",
                 response -> {
-                    final var reindex = (ReindexRequest) RequestParser
-                            .parseRequest(ForwardBody.decode(request.getForwardBody()));
+                    final var reindex = (ReindexRequest) RequestParser.parseRequest(request.getForwardBody());
                     final var validation = RequestValidator.validate(reindex);
                     if (!validation.isValid()) {
                         response.setType(ClusterMessageType.ERROR);
@@ -285,7 +318,7 @@ public class ClusterConnectionHandler implements Runnable {
     // again. The synthetic client carries the acting user so admin ops apply with the correct identity.
     private OperationResponse executeForwarded(ClusterMessage request) {
         final var actingUser = request.getActingUser();
-        final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+        final var parsed = RequestParser.parseRequest(request.getForwardBody());
         final var refused = ForwardedRequestGate.check(parsed, actingUser);
         if (refused != null) {
             return refused;
@@ -339,8 +372,7 @@ public class ClusterConnectionHandler implements Runnable {
         }
         return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(antiEntropyService.buildDigest(query.getDbName(), query.getCollName(),
-                    query.getSummary(), query.incarnationValue()));
+            response.setAntiEntropy(antiEntropyService.buildDigest(query));
         });
     }
 
@@ -376,8 +408,7 @@ public class ClusterConnectionHandler implements Runnable {
             return response;
         }
         response.setType(ClusterMessageType.FORWARD_RESPONSE);
-        response.setForwardBody(
-                ForwardBody.encode(eJson.toJson(new OperationResponse(forwardedType, ErrorCode.SERVER_SHUTTING_DOWN))));
+        response.setForwardBody(eJson.toJson(new OperationResponse(forwardedType, ErrorCode.SERVER_SHUTTING_DOWN)));
         return response;
     }
 
@@ -387,7 +418,7 @@ public class ClusterConnectionHandler implements Runnable {
 
     private static OperationType forwardedType(ClusterMessage request) {
         try {
-            return RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody())).getType();
+            return RequestParser.parseRequest(request.getForwardBody()).getType();
         } catch (RuntimeException unparseable) {
             return null;
         }

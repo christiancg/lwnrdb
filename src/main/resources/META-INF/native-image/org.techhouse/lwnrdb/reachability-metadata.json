@@ -76,6 +76,9 @@
       ]
     },
     {
+      "type": "java.util.concurrent.atomic.AtomicInteger"
+    },
+    {
       "type": "org.techhouse.ShutdownCoordinator",
       "methods": [
         {
@@ -116,6 +119,12 @@
         },
         {
           "name": "suggestions"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
         }
       ]
     },
@@ -250,6 +259,9 @@
     },
     {
       "type": "org.techhouse.cache.FieldIndexLookup$Located"
+    },
+    {
+      "type": "org.techhouse.cache.FieldIndexLookup$Table"
     },
     {
       "type": "org.techhouse.cache.MemoryManagement",
@@ -554,6 +566,15 @@
       "type": "org.techhouse.cluster.msg.AntiEntropyPayload",
       "fields": [
         {
+          "name": "bucketCount"
+        },
+        {
+          "name": "bucketSummaries"
+        },
+        {
+          "name": "buckets"
+        },
+        {
           "name": "collName"
         },
         {
@@ -570,6 +591,9 @@
         },
         {
           "name": "incarnation"
+        },
+        {
+          "name": "nodeId"
         },
         {
           "name": "staleIncarnation"
@@ -930,6 +954,9 @@
     },
     {
       "type": "org.techhouse.data.FieldIndexEntry"
+    },
+    {
+      "type": "org.techhouse.data.IdSet"
     },
     {
       "type": "org.techhouse.data.IndexedDbEntry",
@@ -1501,6 +1528,9 @@
       ]
     },
     {
+      "type": "org.techhouse.ops.req.GetSchemaRequest"
+    },
+    {
       "type": "org.techhouse.ops.req.ListCollectionsRequest"
     },
     {
@@ -1528,6 +1558,11 @@
     },
     {
       "type": "org.techhouse.ops.req.ListSchedulesRequest",
+      "fields": [
+        {
+          "name": "includeArgs"
+        }
+      ],
       "methods": [
         {
           "name": "<init>",
@@ -1745,6 +1780,9 @@
     {
       "type": "org.techhouse.ops.req.SaveProcedureRequest",
       "fields": [
+        {
+          "name": "description"
+        },
         {
           "name": "name"
         },
@@ -1979,6 +2017,17 @@
       ]
     },
     {
+      "type": "org.techhouse.ops.req.agg.OperatorType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
       "type": "org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator",
       "fields": [
         {
@@ -2141,6 +2190,17 @@
       ]
     },
     {
+      "type": "org.techhouse.ops.req.agg.step.map.MapOperationType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
       "type": "org.techhouse.ops.req.agg.step.map.MapOperator",
       "fields": [
         {
@@ -2216,7 +2276,13 @@
       ]
     },
     {
-      "type": "org.techhouse.ops.resp.CloseConnectionResponse"
+      "type": "org.techhouse.ops.resp.CloseConnectionResponse",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
     },
     {
       "type": "org.techhouse.ops.resp.DeleteResponse"
@@ -2234,6 +2300,14 @@
       "fields": [
         {
           "name": "stats"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.GetSchemaResponse",
+      "fields": [
+        {
+          "name": "schema"
         }
       ]
     },
@@ -2467,7 +2541,13 @@
       ]
     },
     {
-      "type": "org.techhouse.ops.resp.StopListenResponse"
+      "type": "org.techhouse.ops.resp.StopListenResponse",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
     },
     {
       "type": "org.techhouse.ops.resp.TestTriggerResponse",

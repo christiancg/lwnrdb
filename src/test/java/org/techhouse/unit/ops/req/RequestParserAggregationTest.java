@@ -10,6 +10,7 @@ import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
@@ -20,7 +21,12 @@ import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
+import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 
@@ -240,5 +246,48 @@ public class RequestParserAggregationTest {
         AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
         assertNotNull(result);
         assertEquals(1, result.getAggregationSteps().size());
+    }
+
+    @Test
+    public void test_every_step_type_parses_without_a_rough_bind() {
+        final var steps = """
+                [{"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"a","value":1}},
+                 {"type":"MAP","operators":[{"fieldName":"b"}]},
+                 {"type":"GROUP_BY","fieldName":"c"},
+                 {"type":"JOIN","joinCollection":"other","localField":"l","remoteField":"r","asField":"j"},
+                 {"type":"COUNT"},
+                 {"type":"DISTINCT","fieldName":"d"},
+                 {"type":"LIMIT","limit":5},
+                 {"type":"SKIP","skip":2},
+                 {"type":"SORT","fieldName":"e","ascending":true},
+                 {"type":"REDUCE","script":"acc","initialValue":0,"resultField":"sum"}]""";
+        final var request = (AggregateRequest) RequestParser.parseRequest(
+                "{\"type\":\"AGGREGATE\",\"databaseName\":\"testDB\",\"collectionName\":\"c\",\"analyze\":true,\"aggregationSteps\":"
+                        + steps + "}");
+
+        final var parsed = request.getAggregationSteps();
+        assertEquals(List.of(AggregationStepType.values()), parsed.stream().map(BaseAggregationStep::getType).toList());
+        assertInstanceOf(FilterAggregationStep.class, parsed.get(0));
+        assertInstanceOf(MapAggregationStep.class, parsed.get(1));
+        assertEquals("c", ((GroupByAggregationStep) parsed.get(2)).getFieldName());
+        assertEquals("j", ((JoinAggregationStep) parsed.get(3)).getAsField());
+        assertEquals(5, ((LimitAggregationStep) parsed.get(6)).getLimit());
+        assertEquals(2, ((SkipAggregationStep) parsed.get(7)).getSkip());
+        assertEquals("sum", ((ReduceAggregationStep) parsed.get(9)).getResultField());
+        assertTrue(request.isAnalyze());
+    }
+
+    @Test
+    public void test_an_unknown_step_type_is_an_invalid_command() {
+        final var message = "{\"type\":\"AGGREGATE\",\"databaseName\":\"testDB\",\"collectionName\":\"c\",\"aggregationSteps\":[{\"type\":\"NOT_A_STEP\"}]}";
+
+        assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(message));
+    }
+
+    @Test
+    public void test_a_step_without_a_type_is_an_invalid_command() {
+        final var message = "{\"type\":\"AGGREGATE\",\"databaseName\":\"testDB\",\"collectionName\":\"c\",\"aggregationSteps\":[{\"limit\":1}]}";
+
+        assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(message));
     }
 }

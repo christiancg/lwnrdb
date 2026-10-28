@@ -38,7 +38,7 @@ public class AdminCacheSchemaTest {
     @BeforeEach
     void reset() throws Exception {
         adminCache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
-        fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+        fs.metadataFiles().deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 
     private JsonObject schema(String type) {
@@ -61,7 +61,7 @@ public class AdminCacheSchemaTest {
 
     @Test
     public void test_lazy_load_from_disk() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(schema("string")));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(schema("string")));
         assertEquals(schema("string"), adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
@@ -81,12 +81,12 @@ public class AdminCacheSchemaTest {
 
     @Test
     public void test_a_read_failure_is_not_cached_as_absence() throws Exception {
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\": \"obj");
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\": \"obj");
 
         assertThrows(MetadataReadException.class,
                 () -> adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
 
-        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(schema("object")));
+        fs.metadataFiles().writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(schema("object")));
         assertEquals(schema("object"), adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL),
                 "a failed read must not be remembered as a definitive absence");
     }

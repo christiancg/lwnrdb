@@ -5,10 +5,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongFunction;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -25,6 +28,7 @@ public class FileSystem {
     private final FilePaths paths = new FilePaths();
     private final IndexMarkers indexMarkers = new IndexMarkers(paths);
     private final TombstoneStore tombstones = new TombstoneStore(paths);
+    private final MetadataFiles metadataFiles = new MetadataFiles(paths);
     private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
@@ -32,15 +36,20 @@ public class FileSystem {
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
     private final WriteIntentJournal writeIntentJournal = new WriteIntentJournal(paths);
     private final PageVacuum pageVacuum = new PageVacuum(paths, pkIndexStore, writeIntentJournal);
-    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, writeIntentJournal,
-            pageVacuum);
+    private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, pageVacuum);
     private final PageAppender pageAppender = new PageAppender(paths, pkIndexStore, pageVacuum);
     private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
             writeIntentJournal);
     private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
+    private final WriteAheadLog writeAheadLog = new WriteAheadLog(paths);
+    private final WalCheckpoints walCheckpoints = new WalCheckpoints(paths, writeAheadLog);
 
     public void onVacuum(Consumer<VacuumedPage> listener) {
         pageVacuum.onVacuum(listener);
+    }
+
+    public void guardCheckpoints(CheckpointGuard guard) {
+        WriteAheadLog.guardWith(guard);
     }
 
     public void createBaseDbPath() {
@@ -53,6 +62,10 @@ public class FileSystem {
                 throw new DirectoryNotFoundException(directory.getAbsolutePath());
             }
         }
+    }
+
+    public void verifyDeviceSync() throws IOException {
+        SyncedWrites.verifyFolderSync(new File(paths.dbPath()).toPath());
     }
 
     public void createAdminDatabase() throws IOException {
@@ -108,6 +121,7 @@ public class FileSystem {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
         final var deleted = isAbsent(dbFolder) || FileTreeDeleter.delete(dbFolder);
         FileLocks.evictAllUnder(dbFolder);
+        paths.forgetDatabase(dbName);
         return deleted;
     }
 
@@ -133,6 +147,7 @@ public class FileSystem {
         final var collectionFolder = new File(collectionFile.getParent());
         final var deleted = isAbsent(collectionFolder) || FileTreeDeleter.delete(collectionFolder);
         FileLocks.evictAllUnder(collectionFolder);
+        paths.forgetCollection(dbName, collectionName);
         return deleted;
     }
 
@@ -140,66 +155,8 @@ public class FileSystem {
         return !Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS);
     }
 
-    public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {
-        MetadataFileStore.write(paths.schemaFile(dbName, collName), schemaJson);
-    }
-
-    public String readCollectionSchema(String dbName, String collName) throws IOException {
-        return MetadataFileStore.read(paths.schemaFile(dbName, collName));
-    }
-
-    public boolean deleteCollectionSchema(String dbName, String collName) throws IOException {
-        return MetadataFileStore.delete(paths.schemaFile(dbName, collName));
-    }
-
-    public void writeProcedure(String dbName, String name, String json) throws IOException {
-        MetadataFileStore.ensureFolder(paths.proceduresFolder(dbName), "procedures", dbName);
-        MetadataFileStore.write(paths.procedureFile(dbName, name), json);
-    }
-
-    public String readProcedure(String dbName, String name) throws IOException {
-        final var file = paths.procedureFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
-    }
-
-    public boolean deleteProcedure(String dbName, String name) throws IOException {
-        final var file = paths.procedureFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
-    }
-
-    public List<String> listProcedureNames(String dbName) throws IOException {
-        return MetadataFileStore.listNames(paths.proceduresFolder(dbName), Globals.PROCEDURE_FILE_EXTENSION);
-    }
-
-    public void writeSchedule(String dbName, String name, String json) throws IOException {
-        MetadataFileStore.ensureFolder(paths.schedulesFolder(dbName), "schedules", dbName);
-        MetadataFileStore.write(paths.scheduleFile(dbName, name), json);
-    }
-
-    public String readSchedule(String dbName, String name) throws IOException {
-        final var file = paths.scheduleFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
-    }
-
-    public boolean deleteSchedule(String dbName, String name) throws IOException {
-        final var file = paths.scheduleFile(dbName, name);
-        return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
-    }
-
-    public List<String> listScheduleNames(String dbName) throws IOException {
-        return MetadataFileStore.listNames(paths.schedulesFolder(dbName), Globals.SCHEDULE_FILE_EXTENSION);
-    }
-
-    public void writeTriggers(String dbName, String collName, String json) throws IOException {
-        MetadataFileStore.write(paths.triggersFile(dbName, collName), json);
-    }
-
-    public String readTriggers(String dbName, String collName) throws IOException {
-        return MetadataFileStore.read(paths.triggersFile(dbName, collName));
-    }
-
-    public boolean deleteTriggers(String dbName, String collName) throws IOException {
-        return MetadataFileStore.delete(paths.triggersFile(dbName, collName));
+    public MetadataFiles metadataFiles() {
+        return metadataFiles;
     }
 
     public IndexMarkers indexMarkers() {
@@ -228,6 +185,15 @@ public class FileSystem {
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
         return pkIndexStore.readWholePkIndexFile(dbName, collectionName);
+    }
+
+    public Map<String, PkIndexEntry> pkRowsFor(String dbName, String collName, Collection<String> ids)
+            throws IOException {
+        return pkIndexStore.rowsFor(dbName, collName, ids);
+    }
+
+    public OptionalLong trustedLiveRows(String dbName, String collName) {
+        return pkIndexStore.trustedLiveRows(dbName, collName);
     }
 
     public long pkIndexFileBytes(String dbName, String collectionName) {
@@ -263,6 +229,12 @@ public class FileSystem {
         return pageAppender.bulkInsert(dbName, collName, entries, storagePageResolver, encodedLines);
     }
 
+    public <T extends DbEntry> List<IndexedDbEntry> writeBatch(String dbName, String collName, List<T> inserts,
+            Function<? super T, Long> pageOf, Function<? super T, byte[]> lines, List<PkIndexEntry> deletes)
+            throws IOException {
+        return pageAppender.bulkInsertAndDelete(dbName, collName, inserts, pageOf, lines, deletes);
+    }
+
     public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
         return pageAppender.insert(entry, entry.encodeLine());
     }
@@ -275,14 +247,44 @@ public class FileSystem {
         recordReplacer.delete(pkIndexEntry);
     }
 
-    public PkIndexEntry relocate(DbEntry entry, PkIndexEntry oldRow, long targetPage, byte[] encodedLine,
-            List<PkIndexEntry> residentRows) throws IOException {
-        entry.setPage(targetPage);
-        return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows);
+    public void deleteFromCollection(PkIndexEntry pkIndexEntry, List<PkIndexEntry> residentRows,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
+        recordReplacer.delete(pkIndexEntry, residentRows, occupancy);
     }
 
-    public List<PkIndexEntry> recoverWriteIntents() throws IOException {
-        return writeIntentRecovery.recoverAll();
+    public void vacuumPagesAfterDelete(String dbName, String collName, Collection<Long> pages,
+            List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy) {
+        recordReplacer.vacuumAfterDeletes(dbName, collName, pages, residentRows, occupancy);
+    }
+
+    public PkIndexEntry relocate(DbEntry entry, PkIndexEntry oldRow, long targetPage, byte[] encodedLine,
+            List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy) throws IOException {
+        entry.setPage(targetPage);
+        return recordReplacer.replace(entry, encodedLine, oldRow, targetPage, null, residentRows, occupancy);
+    }
+
+    public List<PkIndexEntry> redoWriteAheadLogs() throws IOException {
+        return WalRedo.redoAll(paths);
+    }
+
+    public void recoverWriteIntents() throws IOException {
+        writeIntentRecovery.recoverAll();
+        cutUncommittedAdminCopies();
+    }
+
+    private void cutUncommittedAdminCopies() throws IOException {
+        for (final var collName : Globals.ADMIN_COLLECTION_NAMES) {
+            cutUncommittedCopiesOf(Globals.ADMIN_DB_NAME, collName);
+            cutUncommittedCopiesOf(Globals.ADMIN_PAGES_DB_NAME,
+                    AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME, collName));
+        }
+    }
+
+    private void cutUncommittedCopiesOf(String dbName, String collName) throws IOException {
+        if (paths.collectionFolder(dbName, collName).isDirectory()) {
+            OrphanedPageRecords.cutUncommittedCopies(paths, pkIndexStore, dbName, collName,
+                    pageFileLengths(dbName, collName).keySet());
+        }
     }
 
     public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
@@ -292,7 +294,13 @@ public class FileSystem {
 
     public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
             List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines) throws IOException {
-        return recordReplacer.bulkReplace(dbName, collName, entries, residentRows, encodedLines);
+        return bulkUpdateFromCollection(dbName, collName, entries, residentRows, encodedLines, null);
+    }
+
+    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries,
+            List<PkIndexEntry> residentRows, Function<? super IndexedDbEntry, byte[]> encodedLines,
+            LongFunction<PageOccupancy> occupancy) throws IOException {
+        return recordReplacer.bulkReplace(dbName, collName, entries, residentRows, encodedLines, occupancy);
     }
 
     public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
@@ -301,13 +309,14 @@ public class FileSystem {
 
     public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
             List<PkIndexEntry> residentRows) throws IOException {
-        return updateFromCollection(entry, pkIndexEntry, encodedLine, null, residentRows);
+        return updateFromCollection(entry, pkIndexEntry, encodedLine, null, residentRows, null);
     }
 
     public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry, byte[] encodedLine,
-            PagePlacement placement, List<PkIndexEntry> residentRows) throws IOException {
-        return recordReplacer.replace(entry, encodedLine, pkIndexEntry, pkIndexEntry.getPage(), placement,
-                residentRows);
+            PagePlacement placement, List<PkIndexEntry> residentRows, LongFunction<PageOccupancy> occupancy)
+            throws IOException {
+        return recordReplacer.replace(entry, encodedLine, pkIndexEntry, pkIndexEntry.getPage(), placement, residentRows,
+                occupancy);
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
@@ -366,15 +375,48 @@ public class FileSystem {
     }
 
     public void healTornPageTails(String dbName, String collName) throws IOException {
-        TornPageTail.healAll(paths, dbName, collName, pageFileLengths(dbName, collName).keySet(),
-                () -> readWholePkIndexFile(dbName, collName));
+        healTornPageTails(pkRowsSession(dbName, collName));
     }
 
-    public List<PkIndexEntry> retireDanglingPkEntries(String dbName, String collName) throws IOException {
-        return OrphanedPageRecords.retireDangling(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
+    public PkRowsSession pkRowsSession(String dbName, String collName) {
+        return new PkRowsSession(pkIndexStore, dbName, collName);
+    }
+
+    public long highestPkVersion(String dbName, String collName) throws IOException {
+        return pkIndexStore.highestVersion(dbName, collName);
+    }
+
+    public void healTornPageTails(PkRowsSession session) throws IOException {
+        TornPageTail.healAll(paths, session.dbName(), session.collName(),
+                pageFileLengths(session.dbName(), session.collName()).keySet(), session::rows);
+    }
+
+    public List<PkIndexEntry> retireDanglingPkEntries(PkRowsSession session) throws IOException {
+        return OrphanedPageRecords.retireDangling(session, pageFileLengths(session.dbName(), session.collName()));
+    }
+
+    public void checkpointWriteAheadLogs(long deadline) {
+        walCheckpoints.atShutdown(deadline);
+    }
+
+    public int checkpointIdleWriteAheadLogs(long idleMillis, int maxLogs, CollectionTryLock collectionLocks) {
+        return walCheckpoints.idle(idleMillis, maxLogs, collectionLocks);
+    }
+
+    public void openWriteGroup(String dbName, String collName) throws IOException {
+        writeAheadLog.openGroup(dbName, collName);
+    }
+
+    public boolean forceWriteGroup(String dbName, String collName) throws IOException {
+        return writeAheadLog.forceGroup(dbName, collName);
+    }
+
+    public boolean settleWriteGroup(String dbName, String collName) throws IOException {
+        return writeAheadLog.closeGroup(dbName, collName);
     }
 
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
+        writeAheadLog.checkpoint(dbName, collName);
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
             writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
@@ -388,18 +430,17 @@ public class FileSystem {
     }
 
     private void refuseStaleWriteIntents(String dbName, String collName) throws IOException {
-        final var stale = writeIntentRecovery.replayableMarkersOf(dbName, collName);
+        final var stale = writeIntentRecovery.replayableIntentsOf(dbName, collName);
         if (!stale.isEmpty()) {
             throw PkIndexRebuild.refused(dbName, collName, "write intent(s) " + stale + " were left by writes this"
                     + " process could not clean up after, and a rebuild would freeze whatever half of each write the"
-                    + " pages hold. Restart the server, which recovers them, or fix what stopped their removal and"
-                    + " delete them");
+                    + " pages hold. Restart the server, which recovers them");
         }
     }
 
-    public List<DbEntry> adoptOrphanedRecords(String dbName, String collName) throws IOException {
-        return OrphanedPageRecords.adoptAll(paths, pkIndexStore, dbName, collName,
-                pageFileLengths(dbName, collName).keySet());
+    public List<DbEntry> adoptOrphanedRecords(PkRowsSession session) throws IOException {
+        return OrphanedPageRecords.adoptAll(paths, session,
+                pageFileLengths(session.dbName(), session.collName()).keySet());
     }
 
     public long pageFileCount(String dbName, String collName) throws IOException {

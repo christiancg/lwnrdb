@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class Transaction {
@@ -21,6 +22,8 @@ public class Transaction {
     // Carried so a trigger's own transaction cannot restart the cascade at zero and loop forever.
     private int triggerDepth;
     private final List<String> bufferedOpIds = new ArrayList<>();
+    private final List<AdminTransactionEntry> pendingOps = new ArrayList<>();
+    private boolean opsDurable;
     // LinkedHashMap, not HashMap: inserts must stream in a stable order after the committed documents.
     private final Map<String, LinkedHashMap<String, JsonObject>> overlay = new HashMap<>();
     private final Map<String, Map<String, Long>> versions = new HashMap<>();
@@ -88,8 +91,21 @@ public class Transaction {
         return heldLocks;
     }
 
-    public void addBufferedOpId(String opId) {
-        bufferedOpIds.add(opId);
+    public void addPendingOp(AdminTransactionEntry op) {
+        pendingOps.add(op);
+        bufferedOpIds.add(op.get_id());
+    }
+
+    public List<AdminTransactionEntry> getPendingOps() {
+        return pendingOps;
+    }
+
+    public boolean areOpsDurable() {
+        return opsDurable;
+    }
+
+    public void markOpsDurable() {
+        opsDurable = true;
     }
 
     public List<String> getBufferedOpIds() {
@@ -109,7 +125,7 @@ public class Transaction {
     }
 
     public void recordSave(String collId, String id, JsonObject doc, long version) {
-        overlay.computeIfAbsent(collId, _ -> new LinkedHashMap<>()).put(id, doc.deepCopy());
+        overlay.computeIfAbsent(collId, _ -> new LinkedHashMap<>()).put(id, doc);
         recordVersion(collId, id, version);
     }
 

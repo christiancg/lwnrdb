@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
@@ -21,6 +20,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.DroppedCollections;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
@@ -42,7 +42,6 @@ public final class DatabaseOperationHelper {
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
-    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final Configuration configuration = Configuration.getInstance();
 
@@ -199,6 +198,7 @@ public final class DatabaseOperationHelper {
             if (barrierHeld) {
                 locks.releaseDatabaseExclusive(dbName);
                 locks.removeDatabaseLock(dbName);
+                locks.removeLock(dbName, Globals.COLLECTION_NAMES_LOCK);
             }
         }
     }
@@ -208,8 +208,7 @@ public final class DatabaseOperationHelper {
         if (!fs.deleteDatabase(dbName)) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         }
-        cache.evictDatabase(dbName);
-        pendingIndexWrites.clearDatabase(dbName);
+        DroppedCollections.forgetDatabase(dbName);
         AdminOperationHelper.deleteDatabaseEntry(dbName);
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);

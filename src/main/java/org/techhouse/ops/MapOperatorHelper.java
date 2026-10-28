@@ -1,7 +1,9 @@
 package org.techhouse.ops;
 
-import java.util.function.BiPredicate;
+import java.util.Collections;
+import java.util.Set;
 import java.util.function.DoubleBinaryOperator;
+import java.util.function.Predicate;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -11,17 +13,13 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.JsonElementWriter;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
-import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.ScriptMidOperator;
-import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
-import org.techhouse.ops.req.agg.operators.CustomOperator;
-import org.techhouse.ops.req.agg.operators.FieldOperator;
-import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
@@ -37,80 +35,29 @@ public final class MapOperatorHelper {
     }
 
     public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context) {
-        return processOperator(operator, toMap, context, new MapResultBudget(context));
+        final var writtenRoots = JsonUtils.writeTreeOf(Collections.singletonList(operator.getFieldName())).roots();
+        return processOperator(operator, toMap, context, new MapResultBudget(context),
+                conditionOf(operator, context, writtenRoots), writtenRoots);
+    }
+
+    static Predicate<JsonObject> conditionOf(MapOperator operator, PipelineContext context, Set<String> writtenRoots) {
+        final var condition = operator.getCondition();
+        return condition == null ? null : OperatorPredicate.of(condition, context, writtenRoots);
     }
 
     static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineContext context,
-            MapResultBudget budget) {
-        final var condition = operator.getCondition();
-        boolean continueProcessing = true;
-        if (condition != null) {
-            continueProcessing = filterCondition(condition, toMap, context);
+            MapResultBudget budget, Predicate<JsonObject> condition, Set<String> writtenRoots) {
+        if (condition != null && !condition.test(toMap)) {
+            return toMap;
         }
-        return continueProcessing ? switch (operator.getType()) {
-            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context, budget);
+        return switch (operator.getType()) {
+            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context, budget, writtenRoots);
             case REMOVE_FIELD -> removeField((RemoveFieldMapOperator) operator, toMap);
-        } : toMap;
-    }
-
-    private static boolean filterCondition(BaseOperator condition, JsonObject toMap, PipelineContext context) {
-        return switch (condition.getType()) {
-            case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) condition, toMap, context);
-            case FIELD -> processFieldOperator((FieldOperator) condition, toMap);
-            case CUSTOM -> processCustomOperator((CustomOperator) condition, toMap, context);
-            case SCRIPT -> processScriptOperator((ScriptOperator) condition, toMap, context);
         };
-    }
-
-    private static boolean processScriptOperator(ScriptOperator operator, JsonObject toMap, PipelineContext context) {
-        return FilterOperatorHelper.testScript(operator, toMap, context);
-    }
-
-    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap, PipelineContext context) {
-        final var tester = context != null
-                ? context.customTesterFor(operator)
-                : FilterOperatorHelper.getCustomTester(operator);
-        return tester.test(toMap, operator.getField());
-    }
-
-    private static boolean processConjunctionOperator(ConjunctionOperator operator, JsonObject toMap,
-            PipelineContext context) {
-        final var steps = operator.getOperators();
-        var trueCount = 0;
-        for (var step : steps) {
-            final var partialResult = switch (step.getType()) {
-                case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) step, toMap, context);
-                case FIELD -> processFieldOperator((FieldOperator) step, toMap);
-                case CUSTOM -> processCustomOperator((CustomOperator) step, toMap, context);
-                case SCRIPT -> processScriptOperator((ScriptOperator) step, toMap, context);
-            };
-            if (partialResult) {
-                trueCount++;
-            }
-        }
-        return switch (operator.getConjunctionType()) {
-            case AND -> trueCount == steps.size();
-            case OR -> trueCount > 0;
-            case XOR -> trueCount == 1;
-            case NOR -> trueCount == 0;
-            case NAND -> trueCount != steps.size();
-        };
-    }
-
-    private static boolean processFieldOperator(FieldOperator operator, JsonObject toMap) {
-
-        final var tester = FilterOperatorHelper.getTester(operator, operator.getFieldOperatorType());
-        return internalBaseFiltering(tester, operator, toMap);
-    }
-
-    private static boolean internalBaseFiltering(BiPredicate<JsonObject, String> test, FieldOperator operator,
-            JsonObject toMap) {
-        final var fieldName = operator.getField();
-        return test.test(toMap, fieldName);
     }
 
     private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineContext context,
-            MapResultBudget budget) {
+            MapResultBudget budget, Set<String> writtenRoots) {
         final var addFieldName = operator.getFieldName();
         final var midOperator = operator.getOperator();
         return switch (midOperator.getType()) {
@@ -127,16 +74,16 @@ public final class MapOperatorHelper {
             case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
             case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap, budget);
             case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap, budget);
-            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context, budget);
+            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context, budget, writtenRoots);
         };
     }
 
     private static JsonObject script(ScriptMidOperator midOperator, String addFieldName, JsonObject toMap,
-            PipelineContext context, MapResultBudget budget) {
-        final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
+            PipelineContext context, MapResultBudget budget, Set<String> writtenRoots) {
+        final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, writtenRoots, context);
         if (value != null) {
             context.guardResultValue(EJsonInterop.estimatedBytes(value));
-            budget.charge(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value));
+            budget.charge(JsonElementWriter.utf8Length(value));
             JsonUtils.setPath(toMap, addFieldName, value);
         }
         return toMap;

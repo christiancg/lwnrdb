@@ -60,6 +60,10 @@ public final class JsonStrings {
             out.append("null");
             return;
         }
+        out.appendEscaped(value);
+    }
+
+    static void appendEscapedRuns(final JsonOut out, final String value) {
         final var length = value.length();
         var runStart = 0;
         for (var i = 0; i < length; i++) {
@@ -72,7 +76,7 @@ public final class JsonStrings {
         out.append(value, runStart, length);
     }
 
-    private static void appendEscape(final JsonOut out, final char c) {
+    static void appendEscape(final JsonOut out, final char c) {
         switch (c) {
             case '"' -> out.append('\\').append('"');
             case '\\' -> out.append('\\').append('\\');
@@ -136,7 +140,7 @@ public final class JsonStrings {
         return Character.isLowSurrogate(c) && (index == 0 || !Character.isHighSurrogate(value.charAt(index - 1)));
     }
 
-    private static boolean needsEscaping(final String value, final int index) {
+    static boolean needsEscaping(final String value, final int index) {
         final var c = value.charAt(index);
         return c == '"' || c == '\\' || c < LAST_CONTROL_CHARACTER || isLoneSurrogate(value, index);
     }

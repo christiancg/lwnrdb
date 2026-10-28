@@ -318,4 +318,29 @@ public class AggregationGroupingStepTest {
             TestUtils.releaseAllLocks();
         }
     }
+
+    private static JsonObject grouped(String id, String tag) {
+        final var row = new JsonObject();
+        if (id != null) {
+            row.add(Globals.PK_FIELD, new JsonString(id));
+        }
+        row.addProperty("kind", "k");
+        row.addProperty("tag", tag);
+        return row;
+    }
+
+    @Test
+    public void test_a_group_lists_ids_in_order_and_id_less_rows_first_in_encounter_order() throws IOException {
+        final var rows = List.of(grouped("c", "1"), grouped(null, "first"), grouped("a", "2"), grouped(null, "second"),
+                grouped("b", "3"));
+
+        final var result = AggregationOperationHelper.processStepsOnStream(List.of(new GroupByAggregationStep("kind")),
+                rows.stream());
+
+        assertEquals(1, result.size());
+        final var tags = new ArrayList<String>();
+        result.getFirst().get("group").asJsonArray()
+                .forEach(row -> tags.add(row.asJsonObject().get("tag").asJsonString().getValue()));
+        assertEquals(List.of("first", "second", "2", "3", "1"), tags);
+    }
 }

@@ -26,6 +26,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
@@ -122,6 +123,7 @@ public class AdminOperationHelperTest {
         entry.setPage(0L);
         AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
                 java.util.List.of(EntityRef.of(entry)), 0L);
+        PageRowWriteBack.flushAll();
 
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, TestGlobals.DB,
                 TestGlobals.COLL);
@@ -231,23 +233,23 @@ public class AdminOperationHelperTest {
     public void test_upsert_collection_usage_creates_then_updates() throws Exception {
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
-        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
-                org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
-                System.currentTimeMillis());
-        AdminOperationHelper.upsertCollectionUsage(event);
+        final var event = java.util.List
+                .of(new org.techhouse.cache.UsageCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB,
+                        TestGlobals.COLL, null, 1L, System.currentTimeMillis()));
+        AdminOperationHelper.flushCollectionUsage(event);
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
         Cache cache = IocContainer.get(Cache.class);
         assertNotNull(cache.getPkIndexCollectionUsage(id));
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
-        assertDoesNotThrow(() -> AdminOperationHelper.upsertCollectionUsage(event));
+        assertDoesNotThrow(() -> AdminOperationHelper.flushCollectionUsage(event));
     }
 
     @Test
     public void test_upsert_collection_usage_ignores_admin_db() throws Exception {
-        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
-                org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null,
-                System.currentTimeMillis());
-        AdminOperationHelper.upsertCollectionUsage(event);
+        final var event = java.util.List
+                .of(new org.techhouse.cache.UsageCounter(org.techhouse.cache.AccessKind.COLLECTION,
+                        Globals.ADMIN_DB_NAME, "databases", null, 1L, System.currentTimeMillis()));
+        AdminOperationHelper.flushCollectionUsage(event);
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(Globals.ADMIN_DB_NAME, "databases",
                 "");
         Cache cache = IocContainer.get(Cache.class);
@@ -261,9 +263,10 @@ public class AdminOperationHelperTest {
         // Do not register the collection — getCollectionEntry returns null, simulating a dropped state.
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, droppedDb, droppedColl, null);
-        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
-                org.techhouse.cache.AccessKind.COLLECTION, droppedDb, droppedColl, null, System.currentTimeMillis());
-        AdminOperationHelper.upsertCollectionUsage(event);
+        final var event = java.util.List
+                .of(new org.techhouse.cache.UsageCounter(org.techhouse.cache.AccessKind.COLLECTION, droppedDb,
+                        droppedColl, null, 1L, System.currentTimeMillis()));
+        AdminOperationHelper.flushCollectionUsage(event);
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(droppedDb, droppedColl, "");
         Cache cache = IocContainer.get(Cache.class);
         assertNull(cache.getPkIndexCollectionUsage(id), "no usage row must be written for a dropped collection");
@@ -273,10 +276,10 @@ public class AdminOperationHelperTest {
     public void test_cleanup_collection_usage_removes_stale_only() throws Exception {
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
-        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
-                org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
-                System.currentTimeMillis());
-        AdminOperationHelper.upsertCollectionUsage(event);
+        final var event = java.util.List
+                .of(new org.techhouse.cache.UsageCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB,
+                        TestGlobals.COLL, null, 1L, System.currentTimeMillis()));
+        AdminOperationHelper.flushCollectionUsage(event);
         AdminOperationHelper.cleanupCollectionUsage(Long.MAX_VALUE);
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
         Cache cache = IocContainer.get(Cache.class);

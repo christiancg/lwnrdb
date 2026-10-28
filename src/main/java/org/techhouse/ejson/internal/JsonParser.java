@@ -155,13 +155,21 @@ public final class JsonParser {
     }
 
     private JsonObject popObject(int base) {
+        final var shape = keyTable == null ? ShapeTable.shared(memberKeys, base, memberCount) : null;
+        final var object = shape == null
+                ? memberwise(base)
+                : JsonObject.withShape(shape, Arrays.copyOfRange(memberValues, base, memberCount));
+        Arrays.fill(memberKeys, base, memberCount, null);
+        Arrays.fill(memberValues, base, memberCount, null);
+        memberCount = base;
+        return object;
+    }
+
+    private JsonObject memberwise(int base) {
         final var object = new JsonObject(memberCount - base);
         for (var index = base; index < memberCount; index++) {
             object.add(memberKeys[index], memberValues[index]);
-            memberKeys[index] = null;
-            memberValues[index] = null;
         }
-        memberCount = base;
         return object;
     }
 

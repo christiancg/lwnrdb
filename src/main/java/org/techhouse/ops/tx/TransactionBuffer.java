@@ -2,6 +2,7 @@ package org.techhouse.ops.tx;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
@@ -17,9 +18,9 @@ import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.BulkBeforeHooks;
 import org.techhouse.ops.CollectionReadinessGuard;
+import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.SchemaValidationHelper;
@@ -42,7 +43,7 @@ public final class TransactionBuffer {
     private TransactionBuffer() {
     }
 
-    public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {
+    public static void bufferTriggerRunConsume(Transaction transaction, String runId) {
         final var payload = new JsonObject();
         payload.addProperty(AdminTransactionEntry.TRIGGER_RUN_ID_FIELD, runId);
         bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN, "", "", payload, List.of(),
@@ -74,11 +75,12 @@ public final class TransactionBuffer {
                 return hooked.rejection();
             }
             final var effective = hooked.document();
-            final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective, OperationType.SAVE);
+            final var entry = DbEntry.fromJsonObject(dbName, collName, effective);
+            final var sizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
             if (sizeError != null) {
                 return sizeError;
             }
-            final var bytes = byteSizeOf(dbName, collName, effective);
+            final long bytes = entry.byteSize();
             if (exceedsLimits(transaction, 1, bytes)) {
                 return new OperationResponse(OperationType.SAVE, ErrorCode.TRANSACTION_TOO_LARGE);
             }
@@ -114,7 +116,8 @@ public final class TransactionBuffer {
             final var array = new JsonArray();
             final var inserted = new ArrayList<String>();
             final var updated = new ArrayList<String>();
-            final var overlayUpdates = new java.util.LinkedHashMap<String, JsonObject>();
+            final var overlayUpdates = new LinkedHashMap<String, JsonObject>();
+            var bulkBytes = 0L;
             try (var hooks = BulkBeforeHooks.open(dbName, collName,
                     clientTracker.getAuthenticatedUsername(transaction.getClientId()),
                     SchemaValidationHelper.budgetFor(request))) {
@@ -126,11 +129,12 @@ public final class TransactionBuffer {
                         return hooked.rejection();
                     }
                     final var effective = hooked.document();
-                    final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective,
-                            OperationType.BULK_SAVE);
+                    final var entry = DbEntry.fromJsonObject(dbName, collName, effective);
+                    final var sizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
                     if (sizeError != null) {
                         return sizeError;
                     }
+                    bulkBytes += entry.byteSize();
                     array.add(effective);
                     if (isUpdate) {
                         updated.add(id);
@@ -140,7 +144,6 @@ public final class TransactionBuffer {
                     overlayUpdates.put(id, effective);
                 }
             }
-            final var bulkBytes = byteSizeOf(dbName, collName, overlayUpdates.values());
             if (exceedsLimits(transaction, overlayUpdates.size(), bulkBytes)) {
                 return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.TRANSACTION_TOO_LARGE);
             }
@@ -198,25 +201,20 @@ public final class TransactionBuffer {
     }
 
     private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
-            JsonObject payload, List<String> insertedIds, List<Long> versions, long bytes) throws Exception {
+            JsonObject payload, List<String> insertedIds, List<Long> versions, long bytes) {
         final var seq = transaction.nextSeq();
         final var opEntry = new AdminTransactionEntry(transaction.getTransactionId().toString(),
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
         opEntry.setTriggerContext(insertedIds, clientTracker.getAuthenticatedUsername(transaction.getClientId()),
                 transaction.getTriggerDepth());
         opEntry.setVersions(versions);
-        AdminOperationHelper.saveTransactionOp(opEntry);
-        transaction.addBufferedOpId(opEntry.get_id());
+        transaction.addPendingOp(opEntry);
         transaction.accountBuffered(versions.size(), bytes);
         return seq;
     }
 
     private static long byteSizeOf(String dbName, String collName, JsonObject document) {
         return DbEntry.fromJsonObject(dbName, collName, document).byteSize();
-    }
-
-    private static long byteSizeOf(String dbName, String collName, java.util.Collection<JsonObject> documents) {
-        return documents.stream().mapToLong(document -> byteSizeOf(dbName, collName, document)).sum();
     }
 
     private static boolean exceedsLimits(Transaction transaction, int ops, long bytes) {
