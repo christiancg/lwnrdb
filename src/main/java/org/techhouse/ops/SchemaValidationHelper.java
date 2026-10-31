@@ -120,7 +120,7 @@ public final class SchemaValidationHelper {
     }
 
     private static String errorsAgainst(JsonObject schema, JsonObject object, SchemaBudget budget) {
-        final var result = eJson.validateInstance(withoutId(object), schema, budget);
+        final var result = eJson.validateInstanceWithout(object, Globals.PK_FIELD, schema, budget);
         return result.isValid() ? null : String.join("; ", result.getErrors());
     }
 
@@ -132,6 +132,15 @@ public final class SchemaValidationHelper {
     private static void rememberChecked(OperationRequest request, Object payload, JsonObject schema,
             SchemaBudget budget) {
         request.setSchemaCheck(new OperationRequest.SchemaCheck(payload, schema, budget));
+    }
+
+    public static void forgetCollection(String dbName, String collName) {
+        checkedSchemas.remove(dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName);
+    }
+
+    public static void forgetDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        checkedSchemas.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     private static void requireValidSchema(String dbName, String collName, JsonObject schema) {
@@ -147,20 +156,6 @@ public final class SchemaValidationHelper {
             throw new InvalidSchemaException("Cannot validate against an invalid schema: "
                     + String.join("; ", checked.metaResult().getErrors()));
         }
-    }
-
-    // _id is system-assigned, not user data the schema governs, so additionalProperties:false need not declare it.
-    private static JsonObject withoutId(JsonObject object) {
-        if (object == null || !object.has(Globals.PK_FIELD)) {
-            return object;
-        }
-        final var copy = new JsonObject();
-        for (final var entry : object.entrySet()) {
-            if (!Globals.PK_FIELD.equals(entry.getKey())) {
-                copy.add(entry.getKey(), entry.getValue());
-            }
-        }
-        return copy;
     }
 
     private static String idOf(JsonObject object) {

@@ -377,6 +377,36 @@ def test_sandbox_limits(conn: Conn):
     check_result("a benign RegExp still matches", conn.run("return /a(b+)c/.exec('xabbbc')[1];"), "bbb")
 
 
+def test_regexp_test_answers_like_exec(conn: Conn):
+    section("RegExp.prototype.test answers like exec without building its result")
+    check_result("test agrees with exec and moves lastIndex the same way for global and sticky regexes",
+                 conn.run("const out = [];\n"
+                          "for (const flags of ['', 'g', 'y', 'gy', 'i', 'u']) {\n"
+                          "  const a = new RegExp('b+', flags), b = new RegExp('b+', flags);\n"
+                          "  for (const s of ['abbabbb', 'bb', 'xyz', 'Bb', '']) {\n"
+                          "    for (let k = 0; k < 3; k++) out.push(a.test(s) === (b.exec(s) !== null) "
+                          "&& a.lastIndex === b.lastIndex);\n"
+                          "  }\n"
+                          "}\n"
+                          "return out.every(x => x);"), True)
+    check_result("a global test walks lastIndex through the matches",
+                 conn.run("const r = /b+/g; const out = [];\n"
+                          "for (let k = 0; k < 3; k++) out.push(r.test('abbabbb') + ':' + r.lastIndex);\n"
+                          "return out;"), ["true:3", "true:7", "false:0"])
+    check_result("a user-defined exec is still called by test",
+                 conn.run("const r = /a/; let calls = 0;\n"
+                          "r.exec = function (s) { calls++; return s === 'a' ? {} : null; };\n"
+                          "return [r.test('a'), r.test('b'), calls];"), [True, False, 2])
+    loop = "const r = /ab+c/; let c = 0;\nfor (let i = 0; i < 1000; i++) { if ("
+    via_test = conn.run(loop + "r.test('xxabbbcxx')) c++; }\nreturn c;")
+    via_exec = conn.run(loop + "r.exec('xxabbbcxx') !== null) c++; }\nreturn c;")
+    test_instructions = (via_test.get("metrics") or {}).get("instructions", 0)
+    exec_instructions = (via_exec.get("metrics") or {}).get("instructions", 0)
+    check("test is charged two instructions per call over exec, as before",
+          via_test.get("result") == 1000 and test_instructions - exec_instructions == 2000,
+          f"test={test_instructions} exec={exec_instructions} result={via_test.get('result')!r}")
+
+
 def test_native_recursion_is_an_error_not_a_hang(conn: Conn):
     section("Native recursion over script data is bounded")
     nest = "let a = [];\nfor (let i = 0; i < 20000; i++) { a = [a]; }\n"
@@ -2014,6 +2044,7 @@ def main():
             test_unbudgeted_native_work_is_bounded(conn)
             test_native_work_hardened_after_the_third_audit(conn)
             test_run_metrics(conn)
+            test_regexp_test_answers_like_exec(conn)
             test_history_kinds(conn)
             test_a_script_cannot_mutate_the_run_history(conn)
             test_fetch_unavailable(conn)

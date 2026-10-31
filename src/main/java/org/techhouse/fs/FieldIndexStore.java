@@ -57,6 +57,31 @@ final class FieldIndexStore {
         }
     }
 
+    boolean appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, IndexTypeReader foldSource) throws IOException {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
+        if (indexFile == null) {
+            return false;
+        }
+        final var logFile = FilePaths.logFileOf(indexFile);
+        final var lock = FileLocks.lockWrite(indexFile);
+        try {
+            if (!FieldIndexLog.append(indexFile, logFile, changes)) {
+                return false;
+            }
+            final var folded = foldSource.read();
+            if (folded == null) {
+                throw new IOException("The " + typeLabel + " index of " + dbName + "|" + collName + "." + fieldName
+                        + " could not be read to fold its log, so its changes stay logged;"
+                        + " run REINDEX on the collection to rebuild it");
+            }
+            replaceType(indexFile, logFile, folded);
+            return folded.isEmpty();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     static void replaceType(File indexFile, File logFile, List<? extends FieldIndexEntry<?>> entries)
             throws IOException {
         PageTails.forget(logFile);

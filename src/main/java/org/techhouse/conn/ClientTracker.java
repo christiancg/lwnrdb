@@ -1,8 +1,6 @@
 package org.techhouse.conn;
 
 import java.net.Socket;
-import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -11,8 +9,10 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiConsumer;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
 import org.techhouse.data.Transaction;
@@ -75,7 +75,7 @@ public class ClientTracker {
             final var id = UUID.randomUUID();
             final var client = new Client("tx-forwarded");
             client.setAuthenticatedUsername(username);
-            client.setLastCommandTime(LocalDateTime.now());
+            client.setLastCommandNanos(System.nanoTime());
             clients.put(id, client);
             final var executor = Executors.newSingleThreadExecutor(Thread.ofVirtual().name("tx-session-", 0).factory());
             return new TxSession(id, executor, edgeNodeId);
@@ -167,8 +167,10 @@ public class ClientTracker {
 
     public long millisSinceLastCommand(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
-        final var last = client != null ? client.getLastCommandTime() : null;
-        return last == null ? 0 : Duration.between(last, LocalDateTime.now()).toMillis();
+        if (client == null || !client.hasCommanded()) {
+            return 0;
+        }
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - client.getLastCommandNanos());
     }
 
     public void updateLastCommandTime(UUID clientId) {
@@ -176,7 +178,7 @@ public class ClientTracker {
             return;
         final var client = clients.get(clientId);
         if (client != null) {
-            client.setLastCommandTime(LocalDateTime.now());
+            client.setLastCommandNanos(System.nanoTime());
         }
     }
 
@@ -233,6 +235,15 @@ public class ClientTracker {
             return null;
         final var client = clients.get(clientId);
         return client != null ? client.getOutbound() : null;
+    }
+
+    public void forEachOutbound(BiConsumer<UUID, OutboundQueue> action) {
+        for (final var entry : clients.entrySet()) {
+            final var outbound = entry.getValue().getOutbound();
+            if (outbound != null) {
+                action.accept(entry.getKey(), outbound);
+            }
+        }
     }
 
     public ReentrantLock getWriterLock(UUID clientId) {

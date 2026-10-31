@@ -38,6 +38,7 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.simplejs.ScriptCallable;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.JsonUtils;
 
 public class FilterOperatorHelper {
@@ -151,8 +152,10 @@ public class FilterOperatorHelper {
         for (var entry : operator.getArgs().entrySet()) {
             args.put(entry.getKey(), entry.getValue());
         }
+        final var compiled = operator.getField() == null ? null : FieldPath.of(operator.getField());
         return (JsonObject toTest, String fieldName) -> {
-            final var element = JsonUtils.resolvePath(toTest, fieldName);
+            final var path = compiled == null ? FieldPath.of(fieldName) : compiled.reusedFor(fieldName);
+            final var element = path.resolve(toTest);
             if (element == null || !element.isJsonCustom()) {
                 return false;
             }
@@ -193,9 +196,10 @@ public class FilterOperatorHelper {
             args.put(entry.getKey(), entry.getValue());
         }
         final var heap = new PriorityQueue<>(WORST_FIRST);
+        final var path = FieldPath.of(fieldName);
         try (var scored = candidates) {
             scored.forEach(document -> {
-                final var score = scoreDocument(document, fieldName, operatorName, args);
+                final var score = scoreDocument(document, path, operatorName, args);
                 if (score == null) {
                     return;
                 }
@@ -211,9 +215,9 @@ public class FilterOperatorHelper {
         return heap.stream().sorted(WORST_FIRST.reversed()).map(ScoredDocument::document);
     }
 
-    private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
+    private static Double scoreDocument(JsonObject document, FieldPath path, String operatorName,
             Map<String, JsonBaseElement> args) {
-        final var element = JsonUtils.resolvePath(document, fieldName);
+        final var element = path.resolve(document);
         if (element == null || !element.isJsonCustom()) {
             return null;
         }

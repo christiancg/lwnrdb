@@ -21,6 +21,7 @@ import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.ioc.IocContainer;
@@ -53,6 +54,7 @@ public class MainTest {
         IocContainer.get(TriggerExecutor.class).stop();
         IocContainer.get(ScheduleExecutor.class).stop();
         IocContainer.get(ScriptRunHistory.class).stopSweep();
+        IocContainer.get(WriteStallWatchdog.class).stop();
         ScriptHeapGuard.setCeilingPercent(ScriptHeapGuard.OFF);
         final var dbPath = new File(TestGlobals.PATH);
         if (dbPath.exists()) {

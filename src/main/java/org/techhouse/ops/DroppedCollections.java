@@ -18,6 +18,7 @@ public final class DroppedCollections {
         pendingIndexWrites.clearCollection(dbName, collName);
         GroupCommit.forget(dbName, collName);
         memoryManagement.forgetUsage(dbName, collName);
+        SchemaValidationHelper.forgetCollection(dbName, collName);
     }
 
     public static void forgetDatabase(String dbName) {
@@ -25,5 +26,6 @@ public final class DroppedCollections {
         pendingIndexWrites.clearDatabase(dbName);
         GroupCommit.forgetDatabase(dbName);
         memoryManagement.forgetDatabaseUsage(dbName);
+        SchemaValidationHelper.forgetDatabase(dbName);
     }
 }

@@ -21,6 +21,7 @@ import org.techhouse.ops.admin.GrantRewrite;
 import org.techhouse.ops.admin.RestampedRecords;
 import org.techhouse.ops.auth.AuthFailureThrottle;
 import org.techhouse.ops.auth.PasswordCheckGate;
+import org.techhouse.ops.auth.VerifiedPasswords;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
@@ -33,6 +34,7 @@ public class UserOperationHelper {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final AuthFailureThrottle authFailureThrottle = IocContainer.get(AuthFailureThrottle.class);
     private static final PasswordCheckGate passwordCheckGate = IocContainer.get(PasswordCheckGate.class);
+    private static final VerifiedPasswords verifiedPasswords = IocContainer.get(VerifiedPasswords.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     public static Map<String, List<String>> ownedDatabasesByUser(Collection<AdminDbEntry> databases) {
@@ -53,13 +55,14 @@ public class UserOperationHelper {
             final var key = AuthFailureThrottle.keyOf(address, username);
             pauseFor(key, AuthFailureThrottle.addressKeyOf(address));
             final var user = cache.getAdminUserEntry(username);
-            final boolean verified = passwordCheckGate.run(() -> user == null
-                    ? PasswordHasher.dummyVerify(password)
-                    : PasswordHasher.verify(password, user.getPasswordHash()));
-            if (!verified) {
+            if (user == null) {
+                passwordCheckGate.run(() -> PasswordHasher.dummyVerify(password));
                 return failedAttempt(key, address, clientId);
             }
             final var verifiedHash = user.getPasswordHash();
+            if (!passwordMatches(username, verifiedHash, password)) {
+                return failedAttempt(key, address, clientId);
+            }
             final var bound = AdminOperationHelper.withUsersLock(() -> {
                 final var current = cache.getAdminUserEntry(username);
                 if (current == null || !verifiedHash.equals(current.getPasswordHash())) {
@@ -74,6 +77,18 @@ public class UserOperationHelper {
             authFailureThrottle.recordSuccess(key);
             return bound;
         });
+    }
+
+    private static boolean passwordMatches(String username, String storedHash, String password)
+            throws InterruptedException {
+        if (verifiedPasswords.matches(username, storedHash, password)) {
+            return true;
+        }
+        final boolean verified = passwordCheckGate.run(() -> PasswordHasher.verify(password, storedHash));
+        if (verified) {
+            verifiedPasswords.remember(username, storedHash, password);
+        }
+        return verified;
     }
 
     private static void pauseFor(String key, String addressKey) throws InterruptedException {

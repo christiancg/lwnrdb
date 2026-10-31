@@ -19,6 +19,8 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.PipelineContext;
+import org.techhouse.ops.PointHoldTooNarrow;
+import org.techhouse.ops.PointServablePipeline;
 import org.techhouse.ops.ScriptOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -79,22 +81,52 @@ public final class ReadPathHelper {
 
     public static OperationResponse processAggregateOperation(AggregateRequest aggregateRequest,
             Transaction activeTransaction) {
+        final var overlay = activeTransaction != null
+                ? activeTransaction.overlayFor(Cache.getCollectionIdentifier(aggregateRequest.getDatabaseName(),
+                        aggregateRequest.getCollectionName()))
+                : null;
+        final var overlaid = overlay != null && !overlay.isEmpty();
+        if (!overlaid && !aggregateRequest.isDirtyRead() && PointServablePipeline.test(aggregateRequest)) {
+            try {
+                return aggregate(aggregateRequest, activeTransaction, false, true);
+            } catch (PointHoldTooNarrow tooNarrow) {
+                return aggregate(aggregateRequest, activeTransaction, false, false);
+            }
+        }
+        return aggregate(aggregateRequest, activeTransaction, overlaid, false);
+    }
+
+    private static List<String> acquireLocks(AggregateRequest aggregateRequest, Transaction activeTransaction,
+            boolean pointHold) throws InterruptedException {
+        final var timeout = activeTransaction != null ? configuration.getTransactionLockTimeoutMs() : 0L;
+        if (pointHold) {
+            return locks.acquirePointReadLock(false, Cache.getCollectionIdentifier(aggregateRequest.getDatabaseName(),
+                    aggregateRequest.getCollectionName()), timeout);
+        }
+        return locks.acquireReadLocks(aggregateRequest.isDirtyRead(),
+                AggregationOperationHelper.aggregateLockSet(aggregateRequest), timeout);
+    }
+
+    private static void releaseLocks(List<String> readLocks, boolean pointHold) {
+        if (pointHold) {
+            locks.releasePointReadLocks(readLocks);
+        } else {
+            locks.releaseReadLocks(readLocks);
+        }
+    }
+
+    private static OperationResponse aggregate(AggregateRequest aggregateRequest, Transaction activeTransaction,
+            boolean overlaid, boolean pointHold) {
         List<String> readLocks = List.of();
         final var analyzeContext = aggregateRequest.isAnalyze() ? new AnalyzeContext() : null;
         final var dbName = aggregateRequest.getDatabaseName();
-        final var collName = aggregateRequest.getCollectionName();
-        final var overlay = activeTransaction != null
-                ? activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName))
-                : null;
         try {
             final var notRegistered = CollectionReadinessGuard.precheckRead(OperationType.AGGREGATE, dbName,
                     AggregationOperationHelper.aggregateCollections(aggregateRequest));
             if (notRegistered != null) {
                 return notRegistered;
             }
-            final var lockSet = AggregationOperationHelper.aggregateLockSet(aggregateRequest);
-            final var acquired = locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet,
-                    activeTransaction != null ? configuration.getTransactionLockTimeoutMs() : 0L);
+            final var acquired = acquireLocks(aggregateRequest, activeTransaction, pointHold);
             if (acquired == null) {
                 return new OperationResponse(OperationType.AGGREGATE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
             }
@@ -109,8 +141,8 @@ public final class ReadPathHelper {
             }
             final List<JsonObject> results;
             try (var context = PipelineContext.fromConfiguration(analyzeContext)) {
-                results = runPipeline(aggregateRequest, activeTransaction, overlay != null && !overlay.isEmpty(),
-                        context);
+                results = runPipeline(aggregateRequest, activeTransaction, overlaid,
+                        pointHold ? context.holdingPoint() : context);
             }
             CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
                     aggregateRequest.getCollectionName());
@@ -122,6 +154,8 @@ public final class ReadPathHelper {
             return results.isEmpty()
                     ? new OperationResponse(OperationType.AGGREGATE, ErrorCode.NO_RESULTS)
                     : new AggregateResponse("Ok", results);
+        } catch (PointHoldTooNarrow tooNarrow) {
+            throw tooNarrow;
         } catch (ScriptCallableException scriptFailure) {
             return new OperationResponse(OperationType.AGGREGATE, scriptFailure.getMessage(),
                     ScriptOperationHelper.errorCodeFor(scriptFailure.getErrorName()));
@@ -131,7 +165,7 @@ public final class ReadPathHelper {
             logger.error(OperationType.AGGREGATE + " failed with " + ErrorCode.ERROR_AGGREGATING.getCode(), e);
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
-            locks.releaseReadLocks(readLocks);
+            releaseLocks(readLocks, pointHold);
         }
     }
 

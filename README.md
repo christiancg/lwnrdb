@@ -74,7 +74,7 @@ Each request is one line terminated by `\n`; a single `\r` right before it is st
 - **Authentication deadline.** A connection must authenticate within `authTimeoutMs` (default `10000`) of being accepted. The deadline is absolute: traffic, blank lines and failed `AUTHENTICATE` attempts do not extend it. When it expires the server answers one `CLOSE_CONNECTION` frame with `408-4` and closes the connection. With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that stalls or drips its handshake is closed at `authTimeoutMs` plus one second. A TLS connection over `maxConnections` or `maxUnauthenticatedConnectionsPerAddress` is closed before its handshake, with no frame (the refusal could only be sent after the handshake it would cost). Once authenticated, a connection is never closed for being idle.
 - **Unauthenticated connections per address.** One remote address may hold at most `maxUnauthenticatedConnectionsPerAddress` (default `16`) connections that have not authenticated yet; the next one is answered `503-14` and closed. Authenticating frees the slot. Clients behind one NAT address share the allowance.
 - **Invalid requests before authentication.** A connection that sends `maxUnauthenticatedInvalidRequests` (default `5`) requests before it authenticates that are not a successful `AUTHENTICATE` (unparseable lines, requests answered `401-1`, failed attempts) is closed after the last answer.
-- **Slow readers.** Every response and LISTEN update goes through a per-connection outbound queue written by its own thread, so a client that stops reading never blocks the server: its open transaction is still rolled back after `transactionIdleTimeoutMs`, and the LISTEN worker keeps notifying everyone else. Once the unread backlog passes `clientOutboundQueueMaxBytes` (default `16Mb`, counted in UTF-8 bytes as written to the socket) the backlog is dropped, the connection's listens end, one `CLOSE_CONNECTION` frame with `413-1` is queued and the connection is closed. A single response larger than the cap is still delivered when nothing is waiting behind it.
+- **Slow readers.** Every response and LISTEN update goes through a per-connection outbound queue, so a client that stops reading never blocks a LISTEN worker or another connection. A response of at most 16Kb to a connection that sends one request at a time is written by the connection's own thread; anything larger, every LISTEN update, and every response on a connection that has ever sent a request before the previous one was answered (pipelining) is written by a separate writer thread, so such a connection keeps reading and its open transaction is still rolled back after `transactionIdleTimeoutMs`. A response write that makes no progress for `clientWriteStallTimeoutMs` (default `30000`) closes the connection, which rolls back its open transaction. Once the unread backlog passes `clientOutboundQueueMaxBytes` (default `16Mb`, counted in UTF-8 bytes as written to the socket) the backlog is dropped, the connection's listens end, one `CLOSE_CONNECTION` frame with `413-1` is queued and the connection is closed. A single response larger than the cap is still delivered when nothing is waiting behind it. Across all connections the encoded responses waiting to be written are bounded by `maxUnsentResponseBytes` (default a quarter of the heap): a read whose response of 64Kb or more would pass it is answered `503-17` instead, and retrying it is safe.
 - **Idle transactions.** A connection holding an open transaction must send its next request within `transactionIdleTimeoutMs` (default `30000`), and a transaction is rolled back once it is older than `transactionMaxAgeMs` (default `600000`) however busy it is; see [Transactions](#transactions).
 - `maxConnections` counts client sockets only; forwarded cluster requests and transaction sessions no longer take a slot.
 
@@ -996,7 +996,7 @@ The reserved `_id` field is **excluded** from validation (it is a system-assigne
 
 **Custom (EJson) types.** Beyond the standard `type`, a dedicated `customType` keyword asserts one of the extended types (`geo`, `vector`, `datetime`, `time`), e.g. `{"customType":"geo"}` requires a `#geo(lat,lng)` value. Custom-typed values also satisfy `"type":"string"` (they are stored as strings), but only `customType` distinguishes a geo from an arbitrary string.
 
-Schemas are **user data**: each is stored as `{collection}-schema.json` in the collection's folder and cached in memory so validation adds negligible per-write cost. Their compiled regular expressions are cached node-wide, weighed by estimated heap against `schemaPatternCacheMaxBytes` (least recently used first out). Under clustering they are replicated to every node (the schema op is coordinator-serialized DDL, and the coordinator ships the resulting versioned schema record to its peers) and reconciled by admin anti-entropy, so a node that was down during a `SAVE_SCHEMA`/`DELETE_SCHEMA` catches up on rejoin; a deleted schema leaves a permanent tombstone, so it is never brought back.
+Schemas are **user data**: each is stored as `{collection}-schema.json` in the collection's folder and cached in memory so validation adds negligible per-write cost. Their compiled regular expressions are cached node-wide, weighed by estimated heap against `schemaPatternCacheMaxBytes` (approximately least recently used first out; a cache hit takes no lock, so validation with patterns scales across connections). Under clustering they are replicated to every node (the schema op is coordinator-serialized DDL, and the coordinator ships the resulting versioned schema record to its peers) and reconciled by admin anti-entropy, so a node that was down during a `SAVE_SCHEMA`/`DELETE_SCHEMA` catches up on rejoin; a deleted schema leaves a permanent tombstone, so it is never brought back.
 
 ### Users & Permissions
 
@@ -1019,7 +1019,14 @@ Failed attempts are throttled, never locked out:
 - **Unknown users cost the same.** An unknown username is checked against a dummy hash of the same strength and
   answers the same `401-3`, so response time does not reveal which usernames exist.
 - **Bounded hashing.** At most `maxConcurrentPasswordChecks` password hashes (`AUTHENTICATE` and `SET_PASSWORD`)
-  run at once (default: one per available processor); the rest queue.
+  run at once (default: one per available processor), on their own threads, so a burst of logins does not slow
+  requests on connections that are already authenticated; the rest queue.
+- **Repeated logins skip the hash.** With `authVerifierCacheEnabled=true` (the default) a successful
+  `AUTHENTICATE` is remembered as a keyed MAC of the user's stored hash and the password, under a key that lives
+  only in the server's memory, so the next `AUTHENTICATE` with the same password answers without the hash. A wrong
+  password, a changed password, a deleted user or a server restart all fall back to the full hash. The first login
+  of each user after a start still costs a full hash (about 10 ms of CPU), so clients that open many short
+  connections should keep a connection pool.
 
 #### `CREATE_USER` (admin only)
 `globalPermissions`, `databasePermissions`, `collectionPermissions`, and `scriptPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format; `scriptPermissions` keys are database names and its values are the levels `NONE`, `RUN` or `MANAGE` (the boolean form older clients send is still accepted — `true` reads as `RUN`). See [Permission model](#permission-model).
@@ -1460,6 +1467,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-14` | `ERROR` | Too many unauthenticated connections from this address (`maxUnauthenticatedConnectionsPerAddress`); sent as a `CLOSE_CONNECTION` frame and the connection is closed (with `tlsEnabled=true` it is closed before its handshake, with no frame) |
 | `503-15` | `ERROR` | The server's listen registrations already keep `listenMaxRetainedBytes` of requests; retry once some end |
 | `503-16` | `ERROR` | The background index queue is full and nothing was written; retry shortly *(a `SAVE`, `BULK_SAVE`, `DELETE` or `COMMIT_TRANSACTION` that found `backgroundQueueMaxEvents` events queued and no room within `backgroundBacklogWaitMs`; a write forwarded to a full owner gets it at once. Writes inside a transaction are buffered and enqueue nothing, so only their commit is held back, and the transaction stays open)* |
+| `503-17` | `ERROR` | The server holds the maximum bytes of unsent responses; retry shortly *(the response would have pushed the encoded responses waiting to be written, across every connection, past `maxUnsentResponseBytes`; a response under 64Kb and the response to a write are never refused, so only a read gets it, and repeating the read is safe)* |
 
 ### Quickstart
 
@@ -1650,8 +1658,11 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `authFailureDelayBaseMs` | Valid number ≥ 0 (default `250`). Delay before the next `AUTHENTICATE` for a username from the same address after a failure, doubled per consecutive failure. `0` disables the delay |
 | `authFailureDelayMaxMs` | Valid number ≥ 0 and ≥ `authFailureDelayBaseMs` (default `30000`). Cap on that delay |
 | `maxConcurrentPasswordChecks` | Valid number ≥ 0 (default `0`, one per available processor). Password hashes allowed to run at once |
+| `authVerifierCacheEnabled` | `true` or `false` (default `true`). Lets a repeated successful `AUTHENTICATE` skip the password hash: the server remembers a keyed MAC of the user's stored hash and the password (never the password), so a changed password stops matching at once, and a wrong password still pays the full hash and the failure delay |
 | `maxRequestSize` | Human-readable size (default `64Mb`), at least `maxEntrySize` and at most `1Gb`. Largest request line an authenticated connection may send; a longer one is answered `400-22` and the connection closed. Before authenticating a line is capped at 64Kb whatever this says |
 | `clientOutboundQueueMaxBytes` | Human-readable size (default `16Mb`). Largest unread backlog of responses and LISTEN updates one connection may hold, counted in the UTF-8 bytes they take on the wire (line terminators included, so a CJK character counts 3); past it the connection's listens end, `413-1` is queued and the connection is closed. A single larger response is still delivered when nothing waits behind it |
+| `maxUnsentResponseBytes` | Human-readable size (default `0`, a quarter of the JVM's maximum heap). Largest total of encoded responses the server holds, across every connection, while they wait to be written or are being written; a read whose response would pass it is answered `503-17`. A response under 64Kb and the response to a write are always delivered, and LISTEN updates are bounded by `listenMaxRetainedBytes` instead |
+| `clientWriteStallTimeoutMs` | Valid number ≥ 1000 (default `30000`). Milliseconds writing a response to a connection may make no progress before the server closes it (rolling back its open transaction), which frees what it held for a client that stopped reading |
 | `authTimeoutMs` | Valid number ≥ 1 (default `10000`). Milliseconds a new connection has to authenticate, counted from accept and never extended; then `408-4` and the connection is closed |
 | `maxListensPerUser` | Valid number ≥ 0 (default `256`). `LISTEN` registrations one user may hold across all of their connections; past it, `400-38`. `0` means unlimited and is warned at startup |
 | `listenMaxRequestBytes` | Human-readable size (default `1Mb`). Largest `LISTEN` request line; a longer one is answered `400-37` before it runs |
@@ -1724,7 +1735,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `aggregationScriptTimeoutMs` | Valid number ≥ 1 (default `2000`). Wall clock for the same set of operators, also per pipeline; exceeding it aborts the query with `408-1` |
 | `aggregationScriptMaxSourceBytes` | Human-readable size > 0 (default `16Kb`). Max source size of a single script operator; a larger one is rejected with `400-10` |
 | `maxConcurrentScripts` | Valid number ≥ 0 (default `16`); `0` disables the cap. Max client-initiated script runs on this node at once; a caller refused after waiting `scriptQueueWaitMs` gets `503-6`. Triggers and schedules are bounded by their own pools instead, so the node-wide ceiling on concurrent interpreters is `maxConcurrentScripts + triggerThreads + scheduleThreads` — and that sum × `scriptMaxMemoryBytes` is the worst-case script heap, **additive** with `maxMemory` and the metadata cache budgets |
-| `maxConcurrentScriptsPerUser` | Valid number ≥ 0 (default `4`); `0` disables the slice. Max script runs one user may have on this node at once — a trigger or schedule counts against its definer. Checked before the node-wide wait and never waits itself: a caller at its own ceiling gets `503-6` naming `user` at once. A trigger refused here is retried after `triggerRetryBackoffMs` without consuming an attempt; a scheduled run refused here skips that occurrence |
+| `maxConcurrentScriptsPerUser` | Valid number ≥ 0 (default `4`); `0` disables the slice. Max script runs one user may have on this node at once — a trigger or schedule counts against its definer. Checked before the node-wide wait and never waits itself: a caller at its own ceiling gets `503-6` naming `user` at once. A trigger waits up to `scriptQueueWaitMs` for its definer's slices; one still refused is retried after `triggerRetryBackoffMs` without consuming an attempt; a scheduled run refused here skips that occurrence |
 | `maxConcurrentScriptsPerDatabase` | Valid number ≥ 0 (default `8`); `0` disables the slice. The same bound per database, `503-6` naming `database`. From `2` up, the last slot is kept for the database's owners and admins running `RUN_SCRIPT`/`CALL_PROCEDURE`, so other users, triggers and schedules stop one short of it |
 | `scriptQueueWaitMs` | Valid number ≥ 0 (default `250`); `0` rejects immediately. How long a run waits for a permit before `503-6`. The wait absorbs bursts so a short spike queues instead of erroring; it may legally exceed `scriptTimeoutMs` |
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
@@ -1773,6 +1784,7 @@ maxFailedAuthAttempts=5
 authFailureDelayBaseMs=250
 authFailureDelayMaxMs=30000
 maxConcurrentPasswordChecks=0
+authVerifierCacheEnabled=true
 filePath=db
 logPath=logs
 maxPageSize=2Mb
@@ -1799,6 +1811,10 @@ shutdownTimeoutMs=15000
 maxRequestSize=64Mb
 # unread responses one connection may leave queued before it is closed (413-1)
 clientOutboundQueueMaxBytes=16Mb
+# encoded responses the server holds unsent across all connections (503-17); 0 = a quarter of the heap
+maxUnsentResponseBytes=0
+# ms a response write may make no progress before the connection is closed
+clientWriteStallTimeoutMs=30000
 # ms a new connection has to authenticate (408-4), and ms an open transaction may sit idle (409-16)
 authTimeoutMs=10000
 transactionIdleTimeoutMs=30000
@@ -2002,6 +2018,8 @@ acting user on the node that runs it (see [docs/clustering.md](docs/clustering.m
 - `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
 
 Eviction order is LFU. Access counts are recorded asynchronously and persisted in the `admin/collection_usage` collection; records older than 24h are pruned hourly. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
+
+A primary-key index or a field-index type that cannot fit in `maxMemory` (or any of them while caching is disabled) is never cached, and the log names it once. Keyed reads and writes then find their rows with one streaming pass over `pk.idx` for the ids they name, and index maintenance appends each change to that type's `.idxlog` without loading the type, folding the log into the `.idx` only once it outgrows it. Queries on such a field still load it from disk, so a deployment that queries it should raise `maxMemory` above the size the warning gives.
 
 **Sizing `-Xmx` against the cap.** `maxMemory` bounds the cache's real heap, so the rest of `-Xmx` is what the collector, the page a scan is reading, in-flight requests and scripts get. Size `-Xmx` to roughly twice `maxMemory`, plus the metadata cache and script budgets; startup logs a warning when `-Xmx > maxMemory × 2`, suggesting `maxMemory` around half of `-Xmx`. `maxMemory` cannot reclaim metaspace, JIT code or committed-but-unused heap, so the OS-visible process size stays above it. The image and the run commands use G1 (`-XX:+UseG1GC`): ZGC runs without compressed references, which cost 21% more live heap for the same load (183.1 MB against 151.8 MB under G1) and about 2.5x the peak process size on the Docker bench (1,161 MB against 468 MB at 0.3 scale). The flag is explicit because the JVM picks SerialGC by itself in a container under 2 CPUs or 1792 MB. Under ZGC the container's peak memory followed the heap ceiling, not the data: on the Docker bench (100k documents of about 512 B, about 190 MB of live heap after a full GC) the same run peaked at 1.2 GiB under a 1 GiB ceiling, 1.6 GiB under 1.4 GiB and 2.7 GiB under 2.8 GiB, with no extra CPU per operation and no allocation stalls under the smaller ceilings, so keep the ceiling near the rule above rather than at most of the container. If you run ZGC anyway, `-XX:SoftMaxHeapSize` keeps it near a smaller heap and lets it exceed it only under pressure (1.3 GiB peak under a 2.8 GiB ceiling). The Docker image sets no heap flag, so its JVM sizes the heap at a quarter of the container's memory; change it with `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=50` (or `-Xmx` through the same variable), and keep the heap at least as large as `maxMemory` plus the metadata and script budgets, or the JVM can run out of memory before the cache budget evicts anything.
 

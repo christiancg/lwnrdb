@@ -13,8 +13,8 @@ import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-final class WriteEffects {
-    static final WriteEffects IMMEDIATE = new WriteEffects(false);
+public final class WriteEffects {
+    static final WriteEffects IMMEDIATE = new WriteEffects(false, false);
     private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
     private static final Logger logger = Logger.logFor(WriteEffects.class);
 
@@ -31,34 +31,59 @@ final class WriteEffects {
     private final Set<String> upsertIds;
     private final Map<String, Long> deleteVersions;
     private final List<TakeBack> takeBacks;
+    private DurablePrefix durablePrefix = DurablePrefix.NONE;
 
-    private WriteEffects(boolean deferred) {
+    private record DurablePrefix(int staged, int afterForce, int discarded, Set<String> upsertIds,
+            Map<String, Long> deleteVersions, int takeBacks) {
+        static final DurablePrefix NONE = new DurablePrefix(0, 0, 0, Set.of(), Map.of(), 0);
+    }
+
+    private WriteEffects(boolean deferred, boolean buffered) {
         this.deferred = deferred;
+        staging = buffered ? new ArrayList<>() : List.of();
+        stagingSink = buffered ? staging::add : AdminOperationHelper::saveTriggerRun;
         if (deferred) {
-            staging = new ArrayList<>();
             afterForce = new ArrayList<>();
             discarded = new ArrayList<>();
             upsertIds = new LinkedHashSet<>();
             deleteVersions = new LinkedHashMap<>();
             takeBacks = new ArrayList<>();
-            stagingSink = staging::add;
         } else {
-            staging = List.of();
             afterForce = List.of();
             discarded = List.of();
             upsertIds = Set.of();
             deleteVersions = Map.of();
             takeBacks = List.of();
-            stagingSink = AdminOperationHelper::saveTriggerRun;
         }
     }
 
     static WriteEffects grouped() {
-        return new WriteEffects(true);
+        return new WriteEffects(true, true);
+    }
+
+    public static WriteEffects batched() {
+        return new WriteEffects(false, true);
     }
 
     TriggerRunLog.EntrySink stagingSink() {
         return stagingSink;
+    }
+
+    int stagedCount() {
+        return staging.size();
+    }
+
+    void markDurablePrefix(int stagedByPrefix) {
+        durablePrefix = new DurablePrefix(stagedByPrefix, afterForce.size(), discarded.size(),
+                new LinkedHashSet<>(upsertIds), new LinkedHashMap<>(deleteVersions), takeBacks.size());
+    }
+
+    List<String> durablePrefixUpsertIds() {
+        return List.copyOf(durablePrefix.upsertIds());
+    }
+
+    Map<String, Long> durablePrefixDeleteVersions() {
+        return durablePrefix.deleteVersions();
     }
 
     void submitLanded(StagedTriggerRuns staged, Map<EventType, Set<String>> landedIds, String dbName, String collName,
@@ -99,45 +124,60 @@ final class WriteEffects {
         return deleteVersions;
     }
 
-    boolean replicates() {
-        return !upsertIds.isEmpty() || !deleteVersions.isEmpty();
-    }
-
-    void flushStaging(String subject) {
+    public void flushStaging(String subject) {
         if (staging.isEmpty()) {
             return;
         }
+        writeStaging(subject);
+        if (deferred) {
+            faultInjector.at(FaultPoint.GROUP_RUNS_STAGED, subject);
+        }
+    }
+
+    private void writeStaging(String subject) {
+        final var runs = TriggerRunLog.chunksByRun(staging);
         try {
-            AdminOperationHelper.saveTriggerRuns(staging);
+            AdminOperationHelper.saveTriggerRuns(staging, TriggerRunLog.recordIdsForAll(runs.keySet()));
+            return;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            logger.warning("Interrupted while recording the staged trigger runs of a write group on " + subject
+            logger.warning("Interrupted while recording the staged trigger runs of a write on " + subject
                     + "; they run without a durable record");
+            return;
         } catch (Exception e) {
-            logger.warning("Failed to record the staged trigger runs of a write group on " + subject
-                    + "; they run without a durable record: " + e.getMessage());
+            logger.warning("Failed to record the staged trigger runs of a write on " + subject
+                    + " in one record; recording them one run at a time: " + e.getMessage());
         }
-        faultInjector.at(FaultPoint.GROUP_RUNS_STAGED, subject);
+        var unrecorded = 0;
+        for (final var run : runs.entrySet()) {
+            if (!TriggerRunLog.rewriteRun(run.getKey(), run.getValue())) {
+                unrecorded++;
+            }
+        }
+        if (unrecorded > 0) {
+            logger.warning(unrecorded + " of the " + runs.size() + " staged trigger runs of a write on " + subject
+                    + " could not be recorded either; they run without a durable record");
+        }
     }
 
     void runAfterForce() {
-        for (final var effect : afterForce) {
+        runAfterForce(afterForce.size(), discarded.size());
+    }
+
+    private void runAfterForce(int effects, int discards) {
+        for (final var effect : afterForce.subList(0, effects)) {
             effect.run();
         }
-        for (final var staged : discarded) {
+        for (final var staged : discarded.subList(0, discards)) {
             staged.discard();
         }
     }
 
     void abandon(String subject) {
-        final var runIds = new LinkedHashSet<String>();
-        for (final var entry : staging) {
-            runIds.add(entry.getRunId());
-        }
-        for (final var runId : runIds) {
-            TriggerRunLog.discard(runId);
-        }
-        for (final var takeBack : takeBacks) {
+        runAfterForce(durablePrefix.afterForce(), durablePrefix.discarded());
+        TriggerRunLog.discardAll(
+                TriggerRunLog.chunksByRun(staging.subList(durablePrefix.staged(), staging.size())).keySet());
+        for (final var takeBack : takeBacks.subList(durablePrefix.takeBacks(), takeBacks.size())) {
             try {
                 takeBack.run();
             } catch (Exception e) {

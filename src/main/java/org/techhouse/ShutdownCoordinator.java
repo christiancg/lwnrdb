@@ -13,6 +13,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -42,6 +43,7 @@ public class ShutdownCoordinator {
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
     private final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
+    private final WriteStallWatchdog writeStallWatchdog = IocContainer.get(WriteStallWatchdog.class);
 
     private volatile boolean alreadyRun;
 
@@ -67,6 +69,7 @@ public class ShutdownCoordinator {
             scriptRunHistory.stopSweep();
             triggerExecutor.stopSweep();
             scheduleExecutor.stopTicking();
+            writeStallWatchdog.stop();
             if (clusterConfig.isEnabled()) {
                 antiEntropyService.stop(remaining(deadline));
                 adminAntiEntropyService.stop(remaining(deadline));

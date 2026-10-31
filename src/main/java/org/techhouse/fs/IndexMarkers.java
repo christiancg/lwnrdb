@@ -46,6 +46,9 @@ public final class IndexMarkers {
 
     public boolean isMarked(String dbName, String collName, String fieldName) {
         ensureLoaded();
+        if (marked.isEmpty()) {
+            return false;
+        }
         final var key = keyOf(dbName, collName, fieldName);
         if (!marked.contains(key)) {
             return false;

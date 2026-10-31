@@ -30,7 +30,6 @@ import org.techhouse.test.TestUtils;
 
 public class GroupCommitTest {
     private static final long WAIT_MS = GroupCommitFixture.WAIT_MS;
-    private static final long GROUP_BASE_FORCE = 1L;
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -90,7 +89,7 @@ public class GroupCommitTest {
         final var responses = runQueued(times(8, number -> save("n" + number, "v" + number)));
 
         assertTrue(responses.stream().allMatch(response -> response.getStatus() == OperationStatus.OK));
-        assertEquals(GROUP_BASE_FORCE + 1L, walForces());
+        assertEquals(1L, walForces());
         for (var number = 0; number < 8; number++) {
             assertEquals("v" + number, valueOf("n" + number));
         }
@@ -113,7 +112,7 @@ public class GroupCommitTest {
         assertEquals("v1", valueOf("fresh"));
         assertEquals("v2", valueOf("seed"));
         assertNull(valueOf("kept"));
-        assertEquals(GROUP_BASE_FORCE + 1L, walForces());
+        assertEquals(1L, walForces());
     }
 
     @Test
@@ -139,7 +138,7 @@ public class GroupCommitTest {
 
         assertTrue(responses.stream().allMatch(response -> response.getStatus() == OperationStatus.OK));
         assertEquals("second", valueOf("seed"));
-        assertEquals(GROUP_BASE_FORCE + 1L, walForces());
+        assertEquals(1L, walForces());
     }
 
     @Test
@@ -204,11 +203,11 @@ public class GroupCommitTest {
         final var responses = runQueued(times(count, number -> save("m" + number, "v")));
 
         assertTrue(responses.stream().allMatch(response -> response.getStatus() == OperationStatus.OK));
-        assertEquals(GROUP_BASE_FORCE + 2L, walForces());
+        assertEquals(2L, walForces());
     }
 
     @Test
-    public void test_a_single_queued_write_opens_no_group() throws Exception {
+    public void test_a_single_queued_write_forces_once() throws Exception {
         final var responses = runQueued(List.of(() -> save("alone", "v")));
 
         assertEquals(OperationStatus.OK, responses.getFirst().getStatus());

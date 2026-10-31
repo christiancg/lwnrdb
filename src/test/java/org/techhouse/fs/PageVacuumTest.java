@@ -145,7 +145,7 @@ public class PageVacuumTest {
         final var rows = rf.fx.indexedRows();
         rf.replacer.delete(c);
 
-        rf.vacuum.vacuumAfterDelete(DB, COLL, 0, rows, new PageOccupancy(0L, 9L), "c");
+        rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows, new PageOccupancy(0L, 9L), WrittenRows.deleted("c"));
 
         assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
@@ -214,7 +214,7 @@ public class PageVacuumTest {
     public void theRowsOfAKnownPageAreFoundWithoutIteratingTheResidentRows() throws Exception {
         final var rows = new NeverIteratedRows(rf.fx.indexedRows());
 
-        rf.vacuum.vacuum(DB, COLL, 0, rows, occupancyOf(pageRows()), null);
+        rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows, occupancyOf(pageRows()), WrittenRows.NONE);
 
         assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("c", "old-c")
                 + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
@@ -250,8 +250,23 @@ public class PageVacuumTest {
         rows.add(1, hole);
         final var before = Files.readAllBytes(rf.fx.page(0).toPath());
 
-        assertThrows(IOException.class,
-                () -> rf.vacuum.vacuum(DB, COLL, 0, rows, new PageOccupancy(0L, rows.size()), null));
+        assertThrows(IOException.class, () -> rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows,
+                new PageOccupancy(0L, rows.size()), WrittenRows.NONE));
+
+        assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
+        assertEquals(0, rf.intents());
+    }
+
+    @Test
+    public void aRowNamingAHoleAbortsWhenTheRowsArePointScanned() throws Exception {
+        rf.fx.store.appendRows(DB, COLL, List.of(new PkIndexEntry(DB, COLL, "b", rf.fx.indexed("a").getLength(),
+                rf.fx.indexed("c").getPosition() - rf.fx.indexed("a").getLength(), 0, StorageFixture.NEW_VERSION)));
+        final var before = Files.readAllBytes(rf.fx.page(0).toPath());
+
+        assertThrows(
+                IOException.class, () -> rf.vacuum.vacuumAfterWrite(DB, COLL, 0, PointScannedRows.INSTANCE,
+                        new PageOccupancy(0L, 4L), WrittenRows.NONE),
+                "the walk sees the row whose id has no line on the page");
 
         assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
         assertEquals(0, rf.intents());
@@ -265,7 +280,8 @@ public class PageVacuumTest {
         }
         final var before = Files.readAllBytes(rf.fx.page(0).toPath());
 
-        assertThrows(IOException.class, () -> rf.vacuum.vacuum(DB, COLL, 0, stale, new PageOccupancy(0L, 0L), null),
+        assertThrows(IOException.class,
+                () -> rf.vacuum.vacuumAfterWrite(DB, COLL, 0, stale, new PageOccupancy(0L, 0L), WrittenRows.NONE),
                 "a zero count never stands in for the walk before bytes are cut");
 
         assertArrayEquals(before, Files.readAllBytes(rf.fx.page(0).toPath()));
@@ -275,7 +291,7 @@ public class PageVacuumTest {
     public void aStaleCountFallsBackToTheExactWalk() throws Exception {
         final var rows = rf.fx.indexedRows();
 
-        rf.vacuum.vacuum(DB, COLL, 0, rows, new PageOccupancy(0L, 7L), null);
+        rf.vacuum.vacuumAfterWrite(DB, COLL, 0, rows, new PageOccupancy(0L, 7L), WrittenRows.NONE);
 
         assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("c", "old-c")
                 + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());

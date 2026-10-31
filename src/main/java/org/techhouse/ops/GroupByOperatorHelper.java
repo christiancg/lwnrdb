@@ -18,7 +18,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
-import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.SaltedKey;
 
 final class GroupByOperatorHelper {
@@ -41,14 +41,15 @@ final class GroupByOperatorHelper {
                 return groupByViaIndex(indexEntries, dbName, collName, fieldName, context);
             }
         }
+        final var path = FieldPath.of(fieldName);
         final Map<SaltedKey, List<JsonObject>> grouped;
         try (var documents = context.source(resultStream, dbName, collName)) {
-            grouped = documents.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).collect(
-                    Collectors.groupingBy(jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, fieldName))));
+            grouped = documents.filter(path::isIn)
+                    .collect(Collectors.groupingBy(jsonObject -> new SaltedKey(path.valueIn(jsonObject))));
         }
         return grouped.entrySet().stream().map(jsonElementListEntry -> {
             final var groupedEntry = new JsonObject();
-            JsonUtils.setPath(groupedEntry, fieldName, jsonElementListEntry.getKey().element());
+            path.set(groupedEntry, jsonElementListEntry.getKey().element());
             groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(jsonElementListEntry.getValue(), context));
             return groupedEntry;
         });
@@ -87,6 +88,7 @@ final class GroupByOperatorHelper {
         for (var dbEntry : fetched) {
             docById.put(dbEntry.get_id(), dbEntry.getData());
         }
+        final var path = FieldPath.of(fieldName);
         final var grouped = new ArrayList<JsonObject>();
         for (var indexEntry : indexEntries) {
             context.tick(indexEntry.getIds().size());
@@ -101,7 +103,7 @@ final class GroupByOperatorHelper {
                 continue;
             }
             final var groupedEntry = new JsonObject();
-            JsonUtils.setPath(groupedEntry, fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
+            path.set(groupedEntry, IndexHelper.indexValueToElement(indexEntry.getValue()));
             groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(groupDocuments, context));
             grouped.add(groupedEntry);
         }

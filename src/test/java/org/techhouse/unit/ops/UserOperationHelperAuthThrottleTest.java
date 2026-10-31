@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.techhouse.test.LockHolder.startParked;
@@ -191,7 +192,9 @@ public class UserOperationHelperAuthThrottleTest {
             final var result = new AtomicReference<OperationResponse>();
             final var authenticate = startParked(
                     () -> UserOperationHelper.processAuthenticate(request(USER, PASSWORD), clientId), result);
+            verify(permits, timeout(10_000)).release();
 
+            assertTrue(authenticate.isAlive());
             assertNull(clientTracker.getAuthenticatedUsername(clientId));
             assertEquals(gate.size(), permits.availablePermits(), "no permit is held across the users lock");
             holder.release();

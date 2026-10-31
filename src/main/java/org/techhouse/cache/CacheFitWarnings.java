@@ -14,7 +14,8 @@ final class CacheFitWarnings {
         if (bytes > maxBytes && warned.add(Cache.getCollectionIdentifier(dbName, collName))) {
             logger.warning("The primary-key index of " + dbName + "|" + collName + " needs about " + bytes
                     + " bytes of cache, more than maxMemory (" + maxBytes + "), so it is never cached: keyed reads"
-                    + " scan pk.idx and writes re-read it. Raise maxMemory above " + bytes + " to keep it resident.");
+                    + " and writes scan pk.idx for the ids they name. Raise maxMemory above " + bytes
+                    + " to keep it resident.");
         }
     }
 
@@ -22,8 +23,8 @@ final class CacheFitWarnings {
         final var key = Cache.getCollectionIdentifier(dbName, collName) + Globals.COLL_IDENTIFIER_SEPARATOR + indexKey;
         if (bytes > maxBytes && warned.add(key)) {
             logger.warning("The field index " + indexKey + " of " + dbName + "|" + collName + " needs about " + bytes
-                    + " bytes of cache, more than maxMemory (" + maxBytes + "), so it is never cached and every"
-                    + " read or write of it loads it from disk. Raise maxMemory above " + bytes
+                    + " bytes of cache, more than maxMemory (" + maxBytes + "), so it is never cached: every read"
+                    + " of it loads it from disk and writes append to its log. Raise maxMemory above " + bytes
                     + " to keep it resident.");
         }
     }

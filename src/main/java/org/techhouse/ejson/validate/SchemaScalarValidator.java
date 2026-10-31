@@ -6,47 +6,47 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
 class SchemaScalarValidator {
-    void validateString(JsonString instance, JsonObject obj, JsonSchema schema, String path, List<String> errors) {
+    void validateString(JsonString instance, JsonObject obj, JsonSchema schema, SchemaPath path, List<String> errors) {
         final var value = instance.getValue();
         final var length = value.codePointCount(0, value.length());
         final var min = obj.get(SchemaKeywords.MIN_LENGTH);
         if (min != null && length < min.asJsonNumber().getValue().intValue()) {
-            errors.add(SchemaValidator.at(path) + ": string is shorter than " + min.asJsonNumber().getValue().intValue()
+            errors.add(path.describe() + ": string is shorter than " + min.asJsonNumber().getValue().intValue()
                     + " characters");
         }
         final var max = obj.get(SchemaKeywords.MAX_LENGTH);
         if (max != null && length > max.asJsonNumber().getValue().intValue()) {
-            errors.add(SchemaValidator.at(path) + ": string is longer than " + max.asJsonNumber().getValue().intValue()
+            errors.add(path.describe() + ": string is longer than " + max.asJsonNumber().getValue().intValue()
                     + " characters");
         }
         final var pattern = obj.get(SchemaKeywords.PATTERN);
         if (pattern != null && !SchemaPatterns.matches(pattern.asJsonString().getValue(), value, schema.budget())) {
-            errors.add(SchemaValidator.at(path) + ": string does not match the required pattern");
+            errors.add(path.describe() + ": string does not match the required pattern");
         }
     }
 
-    void validateNumber(double value, JsonObject obj, String path, List<String> errors) {
+    void validateNumber(double value, JsonObject obj, SchemaPath path, List<String> errors) {
         final var minimum = obj.get(SchemaKeywords.MINIMUM);
         if (minimum != null && value < minimum.asJsonNumber().doubleValue()) {
-            errors.add(SchemaValidator.at(path) + ": value is less than the minimum");
+            errors.add(path.describe() + ": value is less than the minimum");
         }
         final var maximum = obj.get(SchemaKeywords.MAXIMUM);
         if (maximum != null && value > maximum.asJsonNumber().doubleValue()) {
-            errors.add(SchemaValidator.at(path) + ": value is greater than the maximum");
+            errors.add(path.describe() + ": value is greater than the maximum");
         }
         final var exclusiveMinimum = obj.get(SchemaKeywords.EXCLUSIVE_MINIMUM);
         if (exclusiveMinimum != null && value <= exclusiveMinimum.asJsonNumber().doubleValue()) {
-            errors.add(SchemaValidator.at(path) + ": value is not greater than the exclusive minimum");
+            errors.add(path.describe() + ": value is not greater than the exclusive minimum");
         }
         final var exclusiveMaximum = obj.get(SchemaKeywords.EXCLUSIVE_MAXIMUM);
         if (exclusiveMaximum != null && value >= exclusiveMaximum.asJsonNumber().doubleValue()) {
-            errors.add(SchemaValidator.at(path) + ": value is not less than the exclusive maximum");
+            errors.add(path.describe() + ": value is not less than the exclusive maximum");
         }
         final var multipleOf = obj.get(SchemaKeywords.MULTIPLE_OF);
         if (multipleOf != null) {
             final var divisor = multipleOf.asJsonNumber().doubleValue();
             if (isNotMultiple(value, divisor)) {
-                errors.add(SchemaValidator.at(path) + ": value is not a multiple of " + divisor);
+                errors.add(path.describe() + ": value is not a multiple of " + divisor);
             }
         }
     }

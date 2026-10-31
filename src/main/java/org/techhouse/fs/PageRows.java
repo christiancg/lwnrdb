@@ -3,6 +3,7 @@ package org.techhouse.fs;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import org.techhouse.data.IdSearchable;
 import org.techhouse.data.PkIndexEntry;
@@ -18,7 +19,9 @@ final class PageRows {
 
     static List<PkIndexEntry> of(PkIndexStore store, List<PkIndexEntry> residentRows, String dbName, String collName,
             long page, String excludedId) throws IOException {
-        final var rows = residentRows != null ? residentRows : store.readWholePkIndexFile(dbName, collName);
+        final var rows = residentRows != null && !(residentRows instanceof PointScannedRows)
+                ? residentRows
+                : store.readWholePkIndexFile(dbName, collName);
         final var onPage = new ArrayList<PkIndexEntry>();
         for (final var row : rows) {
             if (row.getPage() == page && !row.getValue().equals(excludedId)) {
@@ -26,6 +29,22 @@ final class PageRows {
             }
         }
         return onPage;
+    }
+
+    static List<PkIndexEntry> forLines(PkIndexStore store, List<PkIndexEntry> residentRows, String dbName,
+            String collName, List<PageLines.Line> lines) throws IOException {
+        if (!(residentRows instanceof PointScannedRows)) {
+            return residentRows;
+        }
+        final var ids = new ArrayList<String>(lines.size());
+        for (final var line : lines) {
+            if (line.id() != null) {
+                ids.add(line.id());
+            }
+        }
+        final var rows = new ArrayList<>(store.rowsFor(dbName, collName, ids).values());
+        rows.sort(Comparator.comparing(PkIndexEntry::getValue));
+        return rows;
     }
 
     static PkIndexEntry rowOf(List<PkIndexEntry> rows, String id) {

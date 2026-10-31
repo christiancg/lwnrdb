@@ -189,6 +189,99 @@ def test_pattern_uses_ecma_semantics(c):
                save_schema(c, COLL, {"type": "object", "patternProperties": {"(?i)^a": {}}}), "ERROR", "400-8")
 
 
+NESTED_PATTERN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "pattern": "^[a-z]+[0-9]*$"},
+        "address": {"type": "object", "properties": {"zip": {"type": "string", "pattern": "^[0-9]{5}$"}}},
+        "tags": {"type": "array", "items": {"type": "string", "pattern": "^t[0-9]+$"}},
+    },
+    "patternProperties": {"^x-[a-z]+$": {"type": "number"}},
+}
+
+
+def check_message_has(label, response, *fragments):
+    message = response.get("message") or ""
+    check(label, response.get("errorCode") == "400-7" and all(fragment in message for fragment in fragments),
+          f"code={response.get('errorCode')} msg={message!r}")
+
+
+def test_pattern_results_and_error_paths(c):
+    section("pattern results and the error paths they report")
+    check_status("save a nested pattern schema", save_schema(c, COLL, NESTED_PATTERN_SCHEMA), "OK")
+    check_status("a document matching every pattern is accepted",
+                 save(c, COLL, {"_id": "pat-ok", "name": "user42", "address": {"zip": "12345"},
+                                "tags": ["t1", "t22"], "x-extra": 3}), "OK")
+    check_message_has("a nested pattern failure names its path",
+                      save(c, COLL, {"_id": "pat-zip", "name": "user", "address": {"zip": "12a45"}}),
+                      "/address/zip: string does not match the required pattern")
+    check_message_has("an array item failure names its index",
+                      save(c, COLL, {"_id": "pat-tag", "name": "user", "tags": ["t1", "x2", "t3", "y"]}),
+                      "/tags/1: string does not match the required pattern",
+                      "/tags/3: string does not match the required pattern")
+    check_message_has("a patternProperties match is validated against its schema",
+                      save(c, COLL, {"_id": "pat-x", "name": "user", "x-extra": "text"}),
+                      "/x-extra: value does not match the required type")
+    check_status("a key outside patternProperties is not constrained",
+                 save(c, COLL, {"_id": "pat-free", "name": "user", "X-extra": "text"}), "OK")
+    check("no refused document was persisted",
+          all(find_by_id(c, COLL, _id).get("status") == "NOT_FOUND" for _id in ("pat-zip", "pat-tag", "pat-x")))
+    bulk = bulk_save(c, COLL, [{"_id": f"pat-bulk-{i}", "name": f"user{i}", "tags": [f"t{i}"]} for i in range(200)])
+    check_status("a bulk save of 200 pattern-checked documents is accepted", bulk, "OK")
+
+
+def test_the_id_is_invisible_to_the_schema(c):
+    section("_id is not governed by the schema")
+    check_status("save a closed schema", save_schema(c, COLL, {
+        "type": "object", "additionalProperties": False, "maxProperties": 1,
+        "propertyNames": {"maxLength": 2}, "properties": {"ab": {}}}), "OK")
+    check_status("_id passes additionalProperties, maxProperties and propertyNames",
+                 save(c, COLL, {"_id": "id-ok", "ab": 1}), "OK")
+    check_status("a schema requiring _id", save_schema(c, COLL, {"type": "object", "required": ["_id"]}), "OK")
+    check_message_has("requiring _id refuses every document, as before",
+                      save(c, COLL, {"_id": "id-required", "ab": 1}), "<root>: missing required property '_id'")
+    check_status("a schema with a nested _id rule",
+                 save_schema(c, COLL, {"type": "object", "properties": {
+                     "inner": {"type": "object", "required": ["_id"], "properties": {"_id": {"type": "string"}},
+                               "additionalProperties": False}}}), "OK")
+    check_status("a nested _id is ordinary data",
+                 save(c, COLL, {"_id": "id-nested", "inner": {"_id": "x"}}), "OK")
+    check_message_has("and is validated like any other property",
+                      save(c, COLL, {"_id": "id-nested-type", "inner": {"_id": 1}}),
+                      "/inner/_id: value does not match the required type")
+    check_message_has("and a nested object without it is refused",
+                      save(c, COLL, {"_id": "id-nested-bad", "inner": {}}), "/inner: missing required property '_id'")
+
+
+def test_a_recreated_collection_validates_against_its_new_schema(c):
+    section("a dropped and re-created collection or database validates against its new schema")
+    coll = "recreated"
+    for round_number, (pattern, good, bad) in enumerate((("^a+$", "aaa", "bbb"), ("^b+$", "bbb", "aaa"))):
+        create_coll(c, coll)
+        check_status(f"round {round_number}: save the schema {pattern}",
+                     save_schema(c, coll, {"type": "object", "properties": {"v": {"pattern": pattern}}}), "OK")
+        check_status(f"round {round_number}: {good!r} is accepted", save(c, coll, {"_id": "g", "v": good}), "OK")
+        check_code(f"round {round_number}: {bad!r} is refused",
+                   save(c, coll, {"_id": "b", "v": bad}), "ERROR", "400-7")
+        check_status(f"round {round_number}: drop the collection",
+                     c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    create_coll(c, coll)
+    check_status("a re-created collection without a schema accepts anything",
+                 save(c, coll, {"_id": "any", "v": "zzz"}), "OK")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+    other_db = "schema_recreate_db"
+    for round_number, (pattern, good, bad) in enumerate((("^a+$", "aaa", "bbb"), ("^b+$", "bbb", "aaa"))):
+        drop_db(c, other_db)
+        create_db(c, other_db)
+        create_coll(c, coll, db=other_db)
+        save_schema(c, coll, {"type": "object", "properties": {"v": {"pattern": pattern}}}, db=other_db)
+        check_status(f"database round {round_number}: {good!r} is accepted",
+                     save(c, coll, {"_id": "g", "v": good}, db=other_db), "OK")
+        check_code(f"database round {round_number}: {bad!r} is refused",
+                   save(c, coll, {"_id": "b", "v": bad}, db=other_db), "ERROR", "400-7")
+    drop_db(c, other_db)
+
+
 HOSTILE = "x" * 800 + "!"
 REDOS_SCHEMA = {"type": "object", "properties": {"name": {"type": "string", "pattern": "(x+x+)+y"}}}
 BUDGET_DEADLINE_S = 15
@@ -516,6 +609,9 @@ def main():
         test_multiple_of_rejects_a_tiny_non_multiple,
         test_multiple_of_is_exact_for_huge_values,
         test_pattern_uses_ecma_semantics,
+        test_pattern_results_and_error_paths,
+        test_the_id_is_invisible_to_the_schema,
+        test_a_recreated_collection_validates_against_its_new_schema,
         test_pattern_redos_is_refused_within_a_deadline,
         test_pattern_properties_redos_is_refused,
         test_bulk_save_with_one_redos_document_is_atomic,

@@ -150,8 +150,11 @@ public final class TriggerHelper {
                 ids.add(id);
             }
         }
-        return stageBeforeSave(dbName, collName, List.copyOf(ids), actingUser, request.getTriggerDepth(),
-                WriteEffects.IMMEDIATE.stagingSink());
+        final var effects = WriteEffects.batched();
+        final var staged = stageBeforeSave(dbName, collName, List.copyOf(ids), actingUser, request.getTriggerDepth(),
+                effects.stagingSink());
+        effects.flushStaging(Cache.getCollectionIdentifier(dbName, collName));
+        return staged;
     }
 
     public static StagedTriggerRuns stageDelete(DeleteRequest request, DbEntry captured, String actingUser)
@@ -212,17 +215,19 @@ public final class TriggerHelper {
     }
 
     public static StagedTriggerRuns stageCommittedIds(String dbName, String collName, EventType type, List<String> ids,
-            String actingUser, int depth, String txId) {
+            String actingUser, int depth, String txId, WriteEffects batch) {
         return stageCommitted(dbName, collName, type, committedEntries(dbName, collName, type, ids, depth), actingUser,
-                depth, txId);
+                depth, txId, batch);
     }
 
     public static StagedTriggerRuns stageCommitted(String dbName, String collName, EventType type,
-            List<DbEntry> entries, String actingUser, int depth, String txId) {
+            List<DbEntry> entries, String actingUser, int depth, String txId, WriteEffects batch) {
         return stageRuns(dbName, collName, type, entries, actingUser, depth,
-                (trigger, group, descriptor) -> TriggerRunLog.recordDeterministic(descriptor, txId,
-                        TriggerRunLog.deterministicRunId(txId, dbName, collName, trigger.getName(), type,
-                                trigger.isBatchMode() ? null : group.getFirst().get_id())));
+                (trigger, group, descriptor) -> TriggerRunLog
+                        .recordDeterministic(descriptor, txId,
+                                TriggerRunLog.deterministicRunId(txId, dbName, collName, trigger.getName(), type,
+                                        trigger.isBatchMode() ? null : group.getFirst().get_id()),
+                                batch.stagingSink()));
     }
 
     public static <T> T discardingOnFailure(StagedTriggerRuns staged, Callable<T> step) throws Exception {

@@ -13,9 +13,10 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.conn.OutboundQueue;
 
 public class Client {
+    private static final long NO_COMMAND = Long.MIN_VALUE;
     private final String address;
     private final LocalDateTime connectionTime = LocalDateTime.now();
-    private LocalDateTime lastCommandTime;
+    private volatile long lastCommandNanos = NO_COMMAND;
     private String authenticatedUsername;
     private volatile OutboundQueue outbound;
     private final ReentrantLock writerLock = new ReentrantLock();
@@ -43,12 +44,16 @@ public class Client {
         return connectionTime;
     }
 
-    public LocalDateTime getLastCommandTime() {
-        return lastCommandTime;
+    public long getLastCommandNanos() {
+        return lastCommandNanos;
     }
 
-    public void setLastCommandTime(LocalDateTime lastCommandTime) {
-        this.lastCommandTime = lastCommandTime;
+    public boolean hasCommanded() {
+        return lastCommandNanos != NO_COMMAND;
+    }
+
+    public void setLastCommandNanos(long lastCommandNanos) {
+        this.lastCommandNanos = lastCommandNanos;
     }
 
     public String getAuthenticatedUsername() {
@@ -141,18 +146,18 @@ public class Client {
         if (!(o instanceof Client client))
             return false;
         return Objects.equals(address, client.address) && Objects.equals(connectionTime, client.connectionTime)
-                && Objects.equals(lastCommandTime, client.lastCommandTime)
+                && lastCommandNanos == client.lastCommandNanos
                 && Objects.equals(authenticatedUsername, client.authenticatedUsername);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(address, connectionTime, lastCommandTime, authenticatedUsername);
+        return Objects.hash(address, connectionTime, lastCommandNanos, authenticatedUsername);
     }
 
     @Override
     public String toString() {
-        return "Client(address=" + address + ", connectionTime=" + connectionTime + ", lastCommandTime="
-                + lastCommandTime + ", authenticatedUsername=" + authenticatedUsername + ")";
+        return "Client(address=" + address + ", connectionTime=" + connectionTime + ", lastCommandNanos="
+                + lastCommandNanos + ", authenticatedUsername=" + authenticatedUsername + ")";
     }
 }

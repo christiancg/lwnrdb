@@ -129,6 +129,23 @@ requests without reading; a client that catches up within a second reads this as
 {"type": "CLOSE_CONNECTION", "status": "ERROR", "message": "The connection's outbound buffer overflowed", "errorCode": "413-1"}
 ```
 
+Responses waiting to be written across every connection past `maxUnsentResponseBytes` (a quarter of the heap
+by default; start a server with `maxUnsentResponseBytes=10Mb`) → `503-17` for the read whose response would
+cross it; a response under 64Kb and the response to a write are always delivered. Open three connections, each sending an `AGGREGATE` whose
+result is ~3 MB without reading it, then send the same `AGGREGATE` from a fourth connection that reads:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The server holds the maximum bytes of unsent responses; retry shortly", "errorCode": "503-17"}
+```
+
+A connection whose response write makes no progress for `clientWriteStallTimeoutMs` (30000 by default, at least
+1000) is closed by the server and its transaction rolled back; the three non-readers above are closed once it
+passes, which frees the budget for the fourth.
+
+With `authVerifierCacheEnabled=true` (the default) a second `AUTHENTICATE` with the same password answers without
+recomputing the password hash; a wrong password after a cached success is still refused and still counts toward
+`maxFailedAuthAttempts`, and the old password stops working right after a `SET_PASSWORD`.
+
 A non-admin `SET_PASSWORD` on another user → `403-1` whether or not that user exists:
 
 ```json

@@ -169,6 +169,8 @@ public enum ErrorCode {
     LISTEN_RETAINED_BYTES_EXHAUSTED("503-15", "The server holds the maximum bytes of listen registrations, retry later",
             OperationStatus.ERROR),
     BACKGROUND_BACKLOG("503-16", "The background index queue is full and nothing was written; retry shortly",
+            OperationStatus.ERROR),
+    RESPONSE_BUDGET_EXHAUSTED("503-17", "The server holds the maximum bytes of unsent responses; retry shortly",
             OperationStatus.ERROR);
     // @formatter:on
 

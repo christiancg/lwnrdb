@@ -155,6 +155,16 @@ final class WalCodec {
         return frame(PENDING, seq, payload.array());
     }
 
+    static byte[] withPending(byte[] checkpointFrame, long pendingSeq, Collection<String> pending) {
+        if (pending.isEmpty()) {
+            return checkpointFrame;
+        }
+        final var pendingFrame = encodePending(pendingSeq, pending);
+        final var joined = Arrays.copyOf(checkpointFrame, checkpointFrame.length + pendingFrame.length);
+        System.arraycopy(pendingFrame, 0, joined, checkpointFrame.length, pendingFrame.length);
+        return joined;
+    }
+
     static byte[] encodeRewriteBegin(long seq, long page, long lengthBefore) {
         return frame(REWRITE_BEGIN, seq,
                 ByteBuffer.allocate(Long.BYTES * 2).putLong(page).putLong(lengthBefore).array());

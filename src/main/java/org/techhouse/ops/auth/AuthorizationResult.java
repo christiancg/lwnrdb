@@ -3,6 +3,7 @@ package org.techhouse.ops.auth;
 import org.techhouse.ops.ErrorCode;
 
 public final class AuthorizationResult {
+    private static final AuthorizationResult ALLOW = new AuthorizationResult(true, null, null);
     private final boolean allowed;
     private final String reason;
     private final ErrorCode errorCode;
@@ -14,7 +15,7 @@ public final class AuthorizationResult {
     }
 
     public static AuthorizationResult allow() {
-        return new AuthorizationResult(true, null, null);
+        return ALLOW;
     }
 
     public static AuthorizationResult deny(String reason) {

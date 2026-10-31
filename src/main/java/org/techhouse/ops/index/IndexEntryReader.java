@@ -24,7 +24,7 @@ import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.CaseFolding;
-import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.SaltedKey;
 
 public final class IndexEntryReader {
@@ -249,9 +249,10 @@ public final class IndexEntryReader {
         final var docs = cache.getEntriesByIds(dbName, collName, hashIds);
         observer.scanned(docs.size());
         final var byValue = new HashMap<SaltedKey, FieldIndexEntry<JsonBaseElement>>();
+        final var path = FieldPath.of(fieldName);
         for (var doc : docs) {
             final var data = doc.getData();
-            final var value = JsonUtils.resolvePath(data, fieldName);
+            final var value = path.resolve(data);
             if (value == null) {
                 continue;
             }
@@ -288,9 +289,10 @@ public final class IndexEntryReader {
         for (var entry : combined) {
             byValue.put(new SaltedKey(IndexValueCodec.indexValueToElement(entry.getValue())), entry);
         }
+        final var path = FieldPath.of(fieldName);
         for (var dbEntry : PendingWriteReconciler.pendingDocuments(dbName, collName, pendingIds, observer)) {
             final var data = dbEntry.getData();
-            final var element = JsonUtils.resolvePath(data, fieldName);
+            final var element = path.resolve(data);
             if (element == null) {
                 continue;
             }
@@ -364,9 +366,10 @@ public final class IndexEntryReader {
         if (pendingIds.isEmpty()) {
             return matchingIds;
         }
+        final var compiled = FieldPath.of(fieldName);
         return PendingWriteReconciler.correctIds(matchingIds, dbName, collName, pendingIds, fieldName,
                 (data, field) -> {
-                    final var resolved = JsonUtils.resolvePath(data, field);
+                    final var resolved = compiled.reusedFor(field).resolve(data);
                     return resolved != null && localValues.contains(resolved);
                 }, observer);
     }

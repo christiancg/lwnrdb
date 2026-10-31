@@ -83,6 +83,15 @@ public class ConnectionTest {
     }
 
     @Test
+    public void test_retries_a_read_refused_503_17_then_succeeds() throws IOException {
+        server.reply("AGGREGATE", FakeLineServer.error("AGGREGATE", "ERROR", "503-17"), FakeLineServer.ok("AGGREGATE"));
+        try (var connection = server.connect()) {
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"AGGREGATE\"}")));
+        }
+        assertEquals(2, server.types().stream().filter("AGGREGATE"::equals).count());
+    }
+
+    @Test
     public void test_gives_up_after_five_attempts() throws IOException {
         server.reply("SAVE", FakeLineServer.error("SAVE", "ERROR", "503-2"));
         try (var connection = server.connect()) {

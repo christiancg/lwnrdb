@@ -32,6 +32,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.TriggerRunLog;
+import org.techhouse.ops.WriteEffects;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -115,7 +116,7 @@ public class TransactionTriggerStagingTest {
             assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
         }
 
-        final var recorded = calls.indexOf("recordDeterministic");
+        final var recorded = calls.indexOf("saveTriggerRuns");
         assertTrue(recorded >= 0, "the commit recorded no trigger run: " + calls);
         assertTrue(recorded < calls.indexOf(CLEAR_LOCAL_COMMIT),
                 "the run must be durable before the evidence that would replay the commit is gone: " + calls);
@@ -159,10 +160,12 @@ public class TransactionTriggerStagingTest {
         cache.putTriggers(TestGlobals.DB, OTHER_COLL,
                 List.of(triggerOn(EventType.CREATED, TriggerDefinition.MODE_DOCUMENT)));
         try {
+            final var batch = WriteEffects.batched();
             TriggerHelper.stageCommitted(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
-                    List.of(entryOf(TestGlobals.COLL, DOC_ID)), "owner", 0, TX_ID);
+                    List.of(entryOf(TestGlobals.COLL, DOC_ID)), "owner", 0, TX_ID, batch);
             TriggerHelper.stageCommitted(TestGlobals.DB, OTHER_COLL, EventType.CREATED,
-                    List.of(entryOf(OTHER_COLL, DOC_ID)), "owner", 0, TX_ID);
+                    List.of(entryOf(OTHER_COLL, DOC_ID)), "owner", 0, TX_ID, batch);
+            batch.flushStaging(TX_ID);
 
             final var runs = TriggerRunLog.pending();
             assertEquals(2, runs.size(), "each collection's run must keep its own record");
@@ -178,9 +181,13 @@ public class TransactionTriggerStagingTest {
         cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
                 List.of(triggerOn(EventType.DELETED, TriggerDefinition.MODE_BATCH)));
 
-        TriggerHelper.stageCommitted(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED, List
-                .of(entryOf(TestGlobals.COLL, "d1"), entryOf(TestGlobals.COLL, "d2"), entryOf(TestGlobals.COLL, "d3")),
-                "owner", 0, TX_ID);
+        final var batch = WriteEffects.batched();
+        TriggerHelper
+                .stageCommitted(
+                        TestGlobals.DB, TestGlobals.COLL, EventType.DELETED, List.of(entryOf(TestGlobals.COLL, "d1"),
+                                entryOf(TestGlobals.COLL, "d2"), entryOf(TestGlobals.COLL, "d3")),
+                        "owner", 0, TX_ID, batch);
+        batch.flushStaging(TX_ID);
 
         final var runs = TriggerRunLog.pending();
         assertEquals(1, runs.size());

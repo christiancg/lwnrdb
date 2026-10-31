@@ -203,8 +203,8 @@ public final class StartupWarnings {
                 if (pkBytes > maxBytes) {
                     logger.warning("The primary-key index of " + dbName + "|" + collName + " needs at least " + pkBytes
                             + " bytes of cache, more than maxMemory (" + maxBytes + "), so it is never"
-                            + " cached: keyed reads scan pk.idx and writes re-read it. Raise maxMemory above " + pkBytes
-                            + ".");
+                            + " cached: keyed reads and writes scan pk.idx for the ids they name. Raise maxMemory"
+                            + " above " + pkBytes + ".");
                 }
             }
         }

@@ -1,7 +1,9 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
+import java.util.List;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -23,6 +25,7 @@ public final class SchemaOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
     private SchemaOperationHelper() {
     }
@@ -71,7 +74,20 @@ public final class SchemaOperationHelper {
         return OperationResponse.ok(OperationType.DELETE_SCHEMA, "Collection schema deleted successfully");
     }
 
-    public static OperationResponse executeGetSchema(GetSchemaRequest request) {
+    public static OperationResponse processGetSchema(GetSchemaRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        final var collectionId = Cache.getCollectionIdentifier(dbName, collName);
+        final var response = OperationLocks.withReadLocks(false, List.of(collectionId), OperationType.GET_SCHEMA,
+                ErrorCode.ERROR_RETRIEVING, () -> executeGetSchema(request));
+        if (ErrorCode.COLLECTION_NOT_FOUND.getCode().equals(response.getErrorCode())
+                && cache.getAdminCollectionEntry(dbName, collName) == null) {
+            locks.removeCollectionLock(dbName, collName);
+        }
+        return response;
+    }
+
+    private static OperationResponse executeGetSchema(GetSchemaRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (cache.getAdminCollectionEntry(dbName, collName) == null) {

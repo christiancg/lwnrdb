@@ -26,6 +26,7 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
@@ -62,6 +63,7 @@ public class ServerMain {
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private static final MetadataCachePruner metadataCachePruner = IocContainer.get(MetadataCachePruner.class);
     private static final ShutdownCoordinator shutdownCoordinator = IocContainer.get(ShutdownCoordinator.class);
+    private static final WriteStallWatchdog writeStallWatchdog = IocContainer.get(WriteStallWatchdog.class);
     private static ClusterServer clusterServer;
     private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
@@ -121,6 +123,7 @@ public class ServerMain {
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
         scriptRunHistory.startSweep();
+        writeStallWatchdog.start();
         StartupWarnings.warnIfXmxExceedsMaxMemory();
         StartupWarnings.warnIfCachesExceedHeap();
         StartupWarnings.warnIfCollectionsOutgrowMaxMemory();

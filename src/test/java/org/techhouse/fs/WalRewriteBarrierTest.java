@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -185,6 +186,96 @@ public class WalRewriteBarrierTest {
 
             redo();
 
+            assertHolds(Map.of("b", "old-b", "c", "new-c"));
+        } finally {
+            TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxPageSize", 2_097_152L);
+        }
+    }
+
+    private AtomicInteger countingLogForces() throws Exception {
+        final var log = rf.fx.paths.writeAheadLog(DB, COLL).toPath().toAbsolutePath().normalize();
+        final var logForces = new AtomicInteger();
+        TestUtils.setPrivateStaticField(SyncedWrites.class, "forcer", (Forcer) (channel, path) -> {
+            if (path.toAbsolutePath().normalize().equals(log)) {
+                logForces.incrementAndGet();
+            }
+            power.force(channel, path);
+        });
+        return logForces;
+    }
+
+    private void vacuumEndingAGroupThenReopen() throws IOException {
+        wal.openGroup(DB, COLL);
+        rf.replace("c", "new-c", 1, null);
+        deleteTracked("a");
+        assertNull(wal.openGroupOf(DB, COLL), "the vacuum ended the group");
+        wal.openGroup(DB, COLL);
+        for (final var id : List.of("d", "e")) {
+            rf.appender.insert(rf.entry(id, "old-" + id, 2), ReplacerFixture.line(id, "old-" + id));
+        }
+    }
+
+    @Test
+    public void test_the_writes_after_a_vacuum_share_one_reopened_group_and_one_force() throws Exception {
+        TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxPageSize", 75L);
+        try {
+            final var logForces = countingLogForces();
+            wal.openGroup(DB, COLL);
+            rf.replace("c", "new-c", 1, null);
+            deleteTracked("a");
+            wal.openGroup(DB, COLL);
+            final var beforeAppends = logForces.get();
+            for (final var id : List.of("d", "e")) {
+                rf.appender.insert(rf.entry(id, "old-" + id, 2), ReplacerFixture.line(id, "old-" + id));
+            }
+            assertEquals(beforeAppends, logForces.get(), "the reopened group appends without forcing");
+
+            assertTrue(wal.forceGroup(DB, COLL));
+            assertEquals(beforeAppends + 1, logForces.get(), "one force covers every write after the vacuum");
+            power.powerLoss();
+            redo();
+
+            assertHolds(Map.of("b", "old-b", "c", "new-c", "d", "old-d", "e", "old-e"));
+        } finally {
+            TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxPageSize", 2_097_152L);
+        }
+    }
+
+    @Test
+    public void test_a_power_loss_after_the_rewrite_end_drops_the_unforced_reopened_group() throws Exception {
+        TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxPageSize", 75L);
+        try {
+            vacuumEndingAGroupThenReopen();
+            final var rewrites = decodedLog().rewrites();
+            assertFalse(rewrites.isEmpty(), "the vacuum's barrier is in the log");
+            power.powerLoss();
+
+            redo();
+
+            assertHolds(Map.of("b", "old-b", "c", "new-c"));
+        } finally {
+            TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxPageSize", 2_097_152L);
+        }
+    }
+
+    @Test
+    public void test_a_failed_force_of_the_reopened_group_keeps_the_barrier() throws Exception {
+        TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxPageSize", 75L);
+        try {
+            vacuumEndingAGroupThenReopen();
+            final var log = rf.fx.paths.writeAheadLog(DB, COLL).toPath().toAbsolutePath().normalize();
+            TestUtils.setPrivateStaticField(SyncedWrites.class, "forcer", (Forcer) (channel, path) -> {
+                if (path.toAbsolutePath().normalize().equals(log)) {
+                    throw new IOException("force refused for " + path);
+                }
+                power.force(channel, path);
+            });
+
+            assertFalse(wal.forceGroup(DB, COLL));
+            assertFalse(wal.closeGroup(DB, COLL));
+
+            assertFalse(decodedLog().rewrites().isEmpty(), "the take-back never cuts the barrier frames");
+            TestUtils.setPrivateStaticField(SyncedWrites.class, "forcer", power);
             assertHolds(Map.of("b", "old-b", "c", "new-c"));
         } finally {
             TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxPageSize", 2_097_152L);

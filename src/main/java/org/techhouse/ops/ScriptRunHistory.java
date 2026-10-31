@@ -61,13 +61,14 @@ public class ScriptRunHistory {
     private static final LongAdder dropped = new LongAdder();
     private static final AtomicReference<ScheduledExecutorService> sweeper = new AtomicReference<>();
     private static final AtomicBoolean queueFull = new AtomicBoolean();
+    private static final HeldHistoryRuns heldRuns = new HeldHistoryRuns();
 
     public static void record(ScriptRunRecord runRecord) {
         if (runRecord == null || !isEnabled() || !recordsKind(runRecord.kind())) {
             return;
         }
         final var cap = configuration.intValue(ConfigKey.SCRIPT_RUN_HISTORY_MAX_QUEUED);
-        if (taskManager.queuedHistory() >= cap) {
+        if (taskManager.queuedHistory() + heldRuns.rows() >= cap) {
             dropped.increment();
             if (queueFull.compareAndSet(false, true)) {
                 logger.warning("The script run history queue holds " + cap + " rows (scriptRunHistoryMaxQueued);"
@@ -135,6 +136,17 @@ public class ScriptRunHistory {
         if (!isEnabled()) {
             return;
         }
+        final var batch = deduplicated(events);
+        if (batch.isEmpty()) {
+            return;
+        }
+        if (batch.size() == 1 && heldRuns.hold(batch.getFirst(), sweeper.get(), taskManager::submitFollowOn)) {
+            return;
+        }
+        writeBatch(deduplicated(heldRuns.takeWith(batch)));
+    }
+
+    private static List<ScriptRunHistoryEvent> deduplicated(List<ScriptRunHistoryEvent> events) {
         final var byRun = new LinkedHashMap<Object, ScriptRunHistoryEvent>();
         for (final var event : events) {
             final var runRecord = event.getRecord();
@@ -142,10 +154,10 @@ public class ScriptRunHistory {
                 byRun.put(runRecord.runId() == null ? event : runRecord.runId(), event);
             }
         }
-        if (byRun.isEmpty()) {
-            return;
-        }
-        final var batch = List.copyOf(byRun.values());
+        return List.copyOf(byRun.values());
+    }
+
+    private static void writeBatch(List<ScriptRunHistoryEvent> batch) {
         if (batch.size() == 1) {
             write(batch.getFirst().getRecord(), batch.getFirst().getRetries());
             return;
@@ -263,6 +275,9 @@ public class ScriptRunHistory {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        for (final var waiting : heldRuns.takeAll()) {
+            writeBatch(deduplicated(waiting));
+        }
     }
 
     public static long getRecorded() {
@@ -274,6 +289,7 @@ public class ScriptRunHistory {
     }
 
     public static void reset() {
+        heldRuns.takeAll();
         knownDatabases.clear();
         recorded.reset();
         dropped.reset();

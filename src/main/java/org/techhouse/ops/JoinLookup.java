@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.PrimaryKeyIndexResolver;
 import org.techhouse.ops.tx.OverlayRead;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SaltedKey;
 
@@ -29,8 +30,9 @@ final class JoinLookup {
             List<JsonObject> leftEntries, String localField, Transaction transaction, PipelineContext context)
             throws IOException {
         final var localValues = new SaltedElementSet();
+        final var localPath = FieldPath.of(localField);
         for (var left : leftEntries) {
-            final var localValue = JsonUtils.resolvePath(left, localField);
+            final var localValue = localPath.resolve(left);
             if (localValue != null) {
                 localValues.add(localValue);
             }
@@ -80,8 +82,9 @@ final class JoinLookup {
             PipelineContext context) {
         context.tick(matchedDocs.size());
         final var matchedByKey = new HashMap<SaltedKey, List<JsonObject>>();
+        final var remotePath = FieldPath.of(remoteField);
         for (var data : matchedDocs) {
-            final var key = JsonUtils.resolvePath(data, remoteField);
+            final var key = remotePath.resolve(data);
             if (key != null) {
                 matchedByKey.computeIfAbsent(new SaltedKey(key), _ -> new ArrayList<>()).add(data);
             }
@@ -93,11 +96,11 @@ final class JoinLookup {
 
     private static Map<SaltedKey, JsonArray> groupByRemoteField(Stream<JsonObject> documents, String remoteField,
             PipelineContext context) {
+        final var remotePath = FieldPath.of(remoteField);
         try (var remoteDocuments = context.watch(documents)) {
-            return remoteDocuments.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
-                    .collect(Collectors.groupingBy(
-                            jsonObject -> new SaltedKey(JsonUtils.getFromPath(jsonObject, remoteField)), HashMap::new,
-                            Collectors.collectingAndThen(Collectors.toList(),
+            return remoteDocuments.filter(remotePath::isIn)
+                    .collect(Collectors.groupingBy(jsonObject -> new SaltedKey(remotePath.valueIn(jsonObject)),
+                            HashMap::new, Collectors.collectingAndThen(Collectors.toList(),
                                     rows -> GroupByOperatorHelper.inIdOrder(rows, context))));
         }
     }

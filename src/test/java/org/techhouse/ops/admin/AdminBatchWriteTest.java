@@ -119,6 +119,41 @@ public class AdminBatchWriteTest {
     }
 
     @Test
+    public void test_a_rewrite_spanning_records_never_deletes_what_an_earlier_record_reinserted() throws Exception {
+        final var original = List.of(entry("tx", 0, 10), entry("tx", 1, 10), entry("tx", 2, 10));
+        AdminBatchWrite.writeInChunks(COLL, rows, original, lines::get, List.of());
+        final var rewrite = List.of(entry("tx", 0, LARGE_PAYLOAD_CHARS), entry("tx", 1, LARGE_PAYLOAD_CHARS),
+                entry("tx", 2, LARGE_PAYLOAD_CHARS));
+        final var replaced = original.stream().map(AdminTransactionEntry::get_id).toList();
+        final var before = walForces();
+
+        AdminBatchWrite.writeInChunks(COLL, rows, rewrite, lines::get, replaced);
+
+        assertEquals(2, walForces() - before);
+        assertEquals(Set.copyOf(replaced), rows.published.keySet());
+        for (final var entry : rewrite) {
+            assertEquals(lines.get(entry).length, rows.published.get(entry.get_id()).getLength());
+            assertEquals(entry.get_id(), fs.getById(rows.published.get(entry.get_id())).get_id());
+        }
+    }
+
+    @Test
+    public void test_a_rewrite_spanning_records_still_deletes_the_rows_it_does_not_reinsert() throws Exception {
+        final var original = List.of(entry("tx", 0, 10), entry("tx", 1, 10), entry("tx", 2, 10));
+        AdminBatchWrite.writeInChunks(COLL, rows, original, lines::get, List.of());
+        final var rewrite = List.of(entry("tx", 0, LARGE_PAYLOAD_CHARS), entry("tx", 1, LARGE_PAYLOAD_CHARS),
+                entry("tx", 3, LARGE_PAYLOAD_CHARS));
+        final var replaced = original.stream().map(AdminTransactionEntry::get_id).toList();
+        final var before = walForces();
+
+        AdminBatchWrite.writeInChunks(COLL, rows, rewrite, lines::get, replaced);
+
+        assertEquals(2, walForces() - before);
+        assertEquals(Set.of(rewrite.get(0).get_id(), rewrite.get(1).get_id(), rewrite.get(2).get_id()),
+                rows.published.keySet());
+    }
+
+    @Test
     public void test_rows_are_published_only_after_their_record_landed() throws Exception {
         final var first = entry("tx", 0, 10);
         AdminBatchWrite.write(COLL, rows, List.of(first), lines::get, List.of());

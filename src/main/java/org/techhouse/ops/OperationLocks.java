@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -83,22 +84,23 @@ public final class OperationLocks {
 
     public static OperationResponse withReadLocks(boolean dirtyRead, List<String> collectionIds, OperationType type,
             ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
-        return withAcquiredReadLocks(timeout -> locks.acquireReadLocks(dirtyRead, collectionIds, timeout), type,
-                errorCode, bounded, attempt);
+        return withAcquiredReadLocks(timeout -> locks.acquireReadLocks(dirtyRead, collectionIds, timeout),
+                locks::releaseReadLocks, type, errorCode, bounded, attempt);
     }
 
     public static OperationResponse withPointReadLock(boolean dirtyRead, String collectionId, OperationType type,
             ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
-        return withAcquiredReadLocks(timeout -> locks.acquirePointReadLock(dirtyRead, collectionId, timeout), type,
-                errorCode, bounded, attempt);
+        return withAcquiredReadLocks(timeout -> locks.acquirePointReadLock(dirtyRead, collectionId, timeout),
+                locks::releasePointReadLocks, type, errorCode, bounded, attempt);
     }
 
     private interface ReadLockAcquisition {
         List<String> acquire(long timeoutMillis) throws InterruptedException;
     }
 
-    private static OperationResponse withAcquiredReadLocks(ReadLockAcquisition acquisition, OperationType type,
-            ErrorCode errorCode, boolean bounded, OperationResponse.Attempt attempt) {
+    private static OperationResponse withAcquiredReadLocks(ReadLockAcquisition acquisition,
+            Consumer<List<String>> release, OperationType type, ErrorCode errorCode, boolean bounded,
+            OperationResponse.Attempt attempt) {
         final var readLocks = new ArrayList<String>();
         try {
             return OperationResponse.respondOrError(type, errorCode, () -> {
@@ -110,7 +112,7 @@ public final class OperationLocks {
                 return attempt.run();
             });
         } finally {
-            locks.releaseReadLocks(readLocks);
+            release.accept(readLocks);
         }
     }
 }

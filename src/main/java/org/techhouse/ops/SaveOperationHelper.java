@@ -4,15 +4,18 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.PkIndexList;
+import org.techhouse.cache.WriterPkRows;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -27,6 +30,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.DirtySink;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.admin.CollectionIncarnation;
+import org.techhouse.ops.index.IndexedValue;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
@@ -87,48 +91,46 @@ public final class SaveOperationHelper {
         if (sizeError != null) {
             return sizeError;
         }
-        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        var foundIndexEntry = -1;
-        if (saveRequest.get_id() != null) {
-            foundIndexEntry = PkIndexList.positionOf(primaryKeyIndex, saveRequest.get_id());
-        }
+        final var requestId = saveRequest.get_id();
+        final var pkRows = cache.pkRowsForWriter(dbName, collName, requestId == null ? List.of() : List.of(requestId));
+        final var idxEntry = requestId == null ? null : pkRows.row(requestId);
+        final var priorFields = PriorIndexedValues.fieldsOf(dbName, collName);
         var eventType = EventType.CREATED;
         PkIndexEntry savedPkIndexEntry;
         final long pendingGeneration;
-        if (foundIndexEntry >= 0) {
-            final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
+        final Map<String, IndexedValue> priors;
+        if (idxEntry != null) {
             final var placement = placementFor(dbName, collName, idxEntry, encodedLine.length);
             if (placement == PagePlacement.RELOCATE) {
                 // The grown document no longer fits its page; relocate as delete + insert so page metadata
                 // and field indexes stay correct through the standard background events.
-                return relocateWithListensHeld(dbName, collName, entry, idxEntry, primaryKeyIndex, encodedLine,
+                return relocateWithListensHeld(dbName, collName, entry, idxEntry, pkRows, encodedLine,
                         saveRequest.isBackgroundFollowOn(), sink);
             }
+            priors = PriorIndexedValues.ofStored(priorFields, dbName, collName, idxEntry);
             adoptResidentId(entry, idxEntry);
             entry.setPage(idxEntry.getPage());
             final var previousLength = idxEntry.getLength();
             pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
             savedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
                     pendingGeneration, () -> fs.updateFromCollection(entry, idxEntry, encodedLine, placement,
-                            primaryKeyIndex, cache.pageOccupancy(dbName, collName)));
+                            pkRows.vacuumRows(), cache.pageOccupancy(dbName, collName)));
             cache.updatePageSizeForUpdateInMemory(dbName, collName, savedPkIndexEntry.getPage(),
                     savedPkIndexEntry.getLength() - previousLength);
             eventType = EventType.UPDATED;
         } else {
+            priors = PriorIndexedValues.of(priorFields, null);
             entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
             pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
             savedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
                     pendingGeneration, () -> fs.insertIntoCollection(entry, encodedLine));
             cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(), savedPkIndexEntry.getLength());
         }
-        if (eventType == EventType.UPDATED) {
-            replaceRow(primaryKeyIndex, savedPkIndexEntry);
-        } else {
-            insertRow(primaryKeyIndex, savedPkIndexEntry);
-        }
+        editRow(pkRows.editable(), savedPkIndexEntry, eventType == EventType.UPDATED);
         cache.addEntryToCache(dbName, collName, entry);
-        submit(new EntityEvent(eventType, dbName, collName, entry, CollectionIncarnation.current(dbName, collName),
-                pendingGeneration), saveRequest.isBackgroundFollowOn());
+        submit(new EntityEvent(eventType, dbName, collName, EntityRef.of(entry, priors),
+                CollectionIncarnation.current(dbName, collName), pendingGeneration),
+                saveRequest.isBackgroundFollowOn());
         sink.markDirty(dbName, collName);
         cache.signalIfOverBudget();
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
@@ -197,7 +199,9 @@ public final class SaveOperationHelper {
                         "Duplicate _id in bulk save request: " + entry.get_id(), ErrorCode.DUPLICATE_ID);
             }
         }
-        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        seenIds.remove(null);
+        final var pkRows = cache.pkRowsForWriter(dbName, collName, seenIds);
+        final var primaryKeyIndex = pkRows.editable();
         final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, idsOf(entries));
         final var indexedDbEntriesToUpdate = new ArrayList<IndexedDbEntry>();
         for (var i : entries) {
@@ -205,9 +209,8 @@ public final class SaveOperationHelper {
             if (data.has(org.techhouse.config.Globals.PK_FIELD)) {
                 final var id = data.get(org.techhouse.config.Globals.PK_FIELD).asJsonString().getValue();
                 i.set_id(id);
-                final var foundIndexEntry = PkIndexList.positionOf(primaryKeyIndex, id);
-                if (foundIndexEntry >= 0) {
-                    final var foundIndex = primaryKeyIndex.get(foundIndexEntry);
+                final var foundIndex = pkRows.row(id);
+                if (foundIndex != null) {
                     adoptResidentId(i, foundIndex);
                     final var indexedDbEntry = new IndexedDbEntry();
                     indexedDbEntry.setIndex(foundIndex);
@@ -220,12 +223,18 @@ public final class SaveOperationHelper {
                 }
             }
         }
+        final var idsToUpdate = idSetOf(indexedDbEntriesToUpdate);
+        final var entriesToInsert = entries.stream().filter(dbEntry -> !idsToUpdate.contains(dbEntry.get_id()))
+                .toList();
+        final var priors = PriorIndexedValues.ofRows(PriorIndexedValues.fieldsOf(dbName, collName),
+                rowsOf(indexedDbEntriesToUpdate), idsOf(entriesToInsert));
         final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
         if (!indexedDbEntriesToUpdate.isEmpty()) {
             final List<IndexedDbEntry> bulkUpdated;
             try {
-                bulkUpdated = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate, primaryKeyIndex,
-                        updated -> linesById.get(updated.get_id()), cache.pageOccupancy(dbName, collName));
+                bulkUpdated = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate,
+                        pkRows.vacuumRows(), updated -> linesById.get(updated.get_id()),
+                        cache.pageOccupancy(dbName, collName));
             } catch (Exception e) {
                 clearUncommitted(dbName, collName, entries, List.of(), pendingGeneration);
                 cache.userCache().evictPkIndex(dbName, collName);
@@ -233,11 +242,10 @@ public final class SaveOperationHelper {
             }
             updatedIndexEntries.addAll(bulkUpdated);
             applyUpdateSizeDeltas(dbName, collName, bulkUpdated);
-            PkIndexEdits.replaceAll(primaryKeyIndex, rowsOf(bulkUpdated));
+            if (primaryKeyIndex != null) {
+                PkIndexEdits.replaceAll(primaryKeyIndex, rowsOf(bulkUpdated));
+            }
         }
-        final var idsToUpdate = idSetOf(indexedDbEntriesToUpdate);
-        final var entriesToInsert = entries.stream().filter(dbEntry -> !idsToUpdate.contains(dbEntry.get_id()))
-                .toList();
         final var insertedIndexEntries = new ArrayList<IndexedDbEntry>();
         try {
             if (!entriesToInsert.isEmpty()) {
@@ -253,12 +261,14 @@ public final class SaveOperationHelper {
                         DbEntry::getPage, inserted -> linesById.get(inserted.get_id())));
                 addInsertedPageSizes(dbName, collName, insertedIndexEntries);
             }
-            PkIndexEdits.insertAll(primaryKeyIndex, rowsOf(insertedIndexEntries));
+            if (primaryKeyIndex != null) {
+                PkIndexEdits.insertAll(primaryKeyIndex, rowsOf(insertedIndexEntries));
+            }
         } catch (Exception e) {
             final var committedUpdates = toDbEntries(updatedIndexEntries);
             final var committedInserts = toDbEntries(insertedIndexEntries);
-            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts, pendingGeneration,
-                    bulkSaveRequest.isBackgroundFollowOn(), sink, populateCache);
+            publishCommittedWrites(dbName, collName, new CommittedWrites(committedUpdates, committedInserts, priors),
+                    pendingGeneration, bulkSaveRequest.isBackgroundFollowOn(), sink, populateCache);
             final var committed = new ArrayList<>(committedUpdates);
             committed.addAll(committedInserts);
             clearUncommitted(dbName, collName, entries, committed, pendingGeneration);
@@ -266,8 +276,8 @@ public final class SaveOperationHelper {
         }
         final var updatedDbEntries = toDbEntries(updatedIndexEntries);
         final var insertedDbEntries = toDbEntries(insertedIndexEntries);
-        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration,
-                bulkSaveRequest.isBackgroundFollowOn(), sink, populateCache);
+        publishCommittedWrites(dbName, collName, new CommittedWrites(updatedDbEntries, insertedDbEntries, priors),
+                pendingGeneration, bulkSaveRequest.isBackgroundFollowOn(), sink, populateCache);
         cache.signalIfOverBudget();
         if (populateCache) {
             CollectionAccessHelper.recordCollectionAccess(dbName, collName);
@@ -276,6 +286,9 @@ public final class SaveOperationHelper {
     }
 
     private static List<PkIndexEntry> rowsOf(List<IndexedDbEntry> entries) {
+        if (entries.isEmpty()) {
+            return List.of();
+        }
         return entries.stream().map(IndexedDbEntry::getIndex).toList();
     }
 
@@ -299,18 +312,22 @@ public final class SaveOperationHelper {
         }
     }
 
-    private static void publishCommittedWrites(String dbName, String collName, List<DbEntry> updated,
-            List<DbEntry> inserted, long pendingGeneration, boolean followOn, DirtySink sink, boolean populateCache) {
+    private record CommittedWrites(List<DbEntry> updated, List<DbEntry> inserted,
+            Map<String, Map<String, IndexedValue>> priors) {
+    }
+
+    private static void publishCommittedWrites(String dbName, String collName, CommittedWrites writes,
+            long pendingGeneration, boolean followOn, DirtySink sink, boolean populateCache) {
         if (populateCache) {
-            cache.addEntriesToCache(dbName, collName, updated);
-            cache.addEntriesToCache(dbName, collName, inserted);
+            cache.addEntriesToCache(dbName, collName, writes.updated());
+            cache.addEntriesToCache(dbName, collName, writes.inserted());
         } else {
-            for (final var entry : updated) {
+            for (final var entry : writes.updated()) {
                 cache.evictEntry(dbName, collName, entry.get_id());
             }
         }
-        submit(new BulkEntityEvent(dbName, collName, inserted, updated, CollectionIncarnation.current(dbName, collName),
-                pendingGeneration), followOn);
+        submit(new BulkEntityEvent(dbName, collName, writes.inserted(), writes.updated(),
+                CollectionIncarnation.current(dbName, collName), pendingGeneration, writes.priors()), followOn);
         sink.markDirty(dbName, collName);
     }
 
@@ -338,10 +355,10 @@ public final class SaveOperationHelper {
     }
 
     private static SaveResponse relocateWithListensHeld(String dbName, String collName, DbEntry entry,
-            PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex, byte[] encodedLine, boolean followOn,
-            DirtySink sink) throws Exception {
+            PkIndexEntry idxEntry, WriterPkRows pkRows, byte[] encodedLine, boolean followOn, DirtySink sink)
+            throws Exception {
         try (var batch = listenManager.openBatch(sink, List.of(Cache.getCollectionIdentifier(dbName, collName)))) {
-            final var relocatedPkIndexEntry = relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex,
+            final var relocatedPkIndexEntry = relocateOnGrowUpdate(dbName, collName, entry, idxEntry, pkRows,
                     encodedLine, followOn);
             batch.markDirty(dbName, collName);
             CollectionAccessHelper.recordCollectionAccess(dbName, collName);
@@ -354,15 +371,25 @@ public final class SaveOperationHelper {
         if (pageEntry == null) {
             return null;
         }
-        final var liveAfter = pageEntry.getPageSize() - idxEntry.getLength() + lineLength;
-        return PagePlacement.forUpdate(liveAfter, fs.pageFileLength(dbName, collName, idxEntry.getPage()), lineLength,
-                configuration.getMaxPageSize());
+        return PagePlacement.forUpdate(pageEntry.getPageSize(), fs.pageFileLength(dbName, collName, idxEntry.getPage()),
+                lineLength, configuration.getMaxPageSize());
     }
 
     // The caller must already hold the collection write lock.
     public static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
             PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex) throws Exception {
-        return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex, null, false);
+        return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, WriterPkRows.of(primaryKeyIndex), null, false);
+    }
+
+    private static void editRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row, boolean replaces) {
+        if (primaryKeyIndex == null) {
+            return;
+        }
+        if (replaces) {
+            replaceRow(primaryKeyIndex, row);
+        } else {
+            insertRow(primaryKeyIndex, row);
+        }
     }
 
     private static void replaceRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row) {
@@ -375,9 +402,9 @@ public final class SaveOperationHelper {
     }
 
     private static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
-            PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex, byte[] encodedLine, boolean followOn)
-            throws Exception {
+            PkIndexEntry idxEntry, WriterPkRows pkRows, byte[] encodedLine, boolean followOn) throws Exception {
         final var oldEntry = cache.getById(dbName, collName, idxEntry);
+        final var priorFields = PriorIndexedValues.fieldsOf(dbName, collName);
         oldEntry.setPage(idxEntry.getPage());
         oldEntry.setVersion(idxEntry.getVersion());
         final var line = encodedLine != null ? encodedLine : entry.encodeLine();
@@ -387,7 +414,7 @@ public final class SaveOperationHelper {
         final PkIndexEntry relocatedPkIndexEntry;
         try {
             relocatedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
-                    deleteGeneration, () -> fs.relocate(entry, idxEntry, targetPage, line, primaryKeyIndex,
+                    deleteGeneration, () -> fs.relocate(entry, idxEntry, targetPage, line, pkRows.vacuumRows(),
                             cache.pageOccupancy(dbName, collName)));
         } catch (Exception e) {
             pendingIndexWrites.clear(dbName, collName, entry.get_id(), createGeneration);
@@ -395,13 +422,15 @@ public final class SaveOperationHelper {
         }
         cache.updatePageSizeInMemory(dbName, collName, idxEntry.getPage(), -idxEntry.getLength(), -1);
         cache.evictEntry(dbName, collName, entry.get_id());
-        submit(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
+        submit(new EntityEvent(EventType.DELETED, dbName, collName,
+                EntityRef.of(detachedCopy(oldEntry), PriorIndexedValues.of(priorFields, oldEntry)),
                 CollectionIncarnation.current(dbName, collName), deleteGeneration), followOn);
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
                 relocatedPkIndexEntry.getLength());
-        replaceRow(primaryKeyIndex, relocatedPkIndexEntry);
+        editRow(pkRows.editable(), relocatedPkIndexEntry, true);
         cache.addEntryToCache(dbName, collName, entry);
-        submit(new EntityEvent(EventType.CREATED, dbName, collName, entry,
+        submit(new EntityEvent(EventType.CREATED, dbName, collName,
+                EntityRef.of(entry, PriorIndexedValues.of(priorFields, null)),
                 CollectionIncarnation.current(dbName, collName), createGeneration), followOn);
         return relocatedPkIndexEntry;
     }

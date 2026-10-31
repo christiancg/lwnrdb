@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
@@ -39,8 +40,7 @@ final class GroupedBatch {
     }
 
     static void run(String dbName, String collName, List<GroupCommit.GroupedWrite> writes) {
-        if (writes.size() < 2) {
-            writes.forEach(write -> write.serve(write.runAlone()));
+        if (writes.isEmpty()) {
             return;
         }
         try {
@@ -56,25 +56,33 @@ final class GroupedBatch {
 
     private void run() {
         final var responses = new ArrayList<OperationResponse>(writes.size());
-        final boolean durable;
+        final int durableWrites;
         try (var ignored = listenManager.openBatch(List.of(subject))) {
-            durable = applyAndSettle(responses);
+            durableWrites = applyAndSettle(responses);
         }
         for (var index = 0; index < writes.size(); index++) {
             final var write = writes.get(index);
             final var response = responses.get(index);
-            write.serve(durable || response.getStatus() != OperationStatus.OK ? response : write.failure());
+            write.serve(
+                    index < durableWrites || response.getStatus() != OperationStatus.OK ? response : write.failure());
         }
     }
 
-    private boolean applyAndSettle(List<OperationResponse> responses) {
+    private int applyAndSettle(List<OperationResponse> responses) {
         final var commits = new ArrayList<GroupCommit.GroupedCommit>(writes.size());
-        for (final var write : writes) {
-            commits.add(write.prepare(effects));
+        final var stagedBy = new int[writes.size()];
+        for (var index = 0; index < writes.size(); index++) {
+            commits.add(writes.get(index).prepare(effects));
+            stagedBy[index] = effects.stagedCount();
         }
         effects.flushStaging(subject);
+        var durablePrefix = 0;
         for (var index = 0; index < writes.size(); index++) {
             responses.add(writes.get(index).commit(commits.get(index)));
+            if (reopenAfterRewrite()) {
+                durablePrefix = index + 1;
+                effects.markDurablePrefix(stagedBy[index]);
+            }
         }
         final var clustered = clusterConfig.isEnabled();
         final var forcedFirst = clustered && force();
@@ -84,16 +92,27 @@ final class GroupedBatch {
             if (!(clustered ? forcedFirst : force())) {
                 window.fail();
             }
-            final var durable = settle();
-            if (durable) {
-                replicate(responses);
+            if (settle()) {
+                replicate(responses, effects.upsertIds(), effects.deleteVersions(), writes.size());
                 effects.runAfterForce();
-            } else {
-                window.fail();
-                forgetTakenBack();
-                effects.abandon(subject);
+                return writes.size();
             }
-            return durable;
+            window.fail();
+            forgetTakenBack();
+            replicate(responses, effects.durablePrefixUpsertIds(), effects.durablePrefixDeleteVersions(),
+                    durablePrefix);
+            effects.abandon(subject);
+            return durablePrefix;
+        }
+    }
+
+    private boolean reopenAfterRewrite() {
+        try {
+            return fs.reopenWriteGroupIfEnded(dbName, collName);
+        } catch (IOException e) {
+            logger.warning("Could not reopen the write group of " + subject + " after a page rewrite ended it; the"
+                    + " rest of its writes are forced one by one: " + e.getMessage());
+            return false;
         }
     }
 
@@ -115,15 +134,18 @@ final class GroupedBatch {
         }
     }
 
-    private void replicate(List<OperationResponse> responses) {
-        if (!effects.replicates()) {
+    private void replicate(List<OperationResponse> responses, List<String> upsertIds, Map<String, Long> deleteVersions,
+            int replicatedWrites) {
+        if (upsertIds.isEmpty() && deleteVersions.isEmpty()) {
             return;
         }
-        final var outcome = coordinator.replicateGroup(dbName, collName, effects.upsertIds(), effects.deleteVersions());
+        final var outcome = coordinator.replicateGroup(dbName, collName, upsertIds, deleteVersions);
         if (outcome == ReplicationOutcome.NOT_CLUSTERED) {
             return;
         }
-        responses.replaceAll(response -> ClusterWriteHelper.afterGroupReplication(response, outcome));
+        for (var index = 0; index < replicatedWrites; index++) {
+            responses.set(index, ClusterWriteHelper.afterGroupReplication(responses.get(index), outcome));
+        }
     }
 
     private void forgetTakenBack() {
