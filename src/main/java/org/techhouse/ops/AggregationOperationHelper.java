@@ -30,6 +30,8 @@ import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
+import org.techhouse.utils.FieldPath;
+import org.techhouse.utils.FieldPathMemo;
 import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SaltedKey;
 
@@ -205,6 +207,7 @@ public final class AggregationOperationHelper {
         final var writes = JsonUtils.writeTreeOf(operators.stream().map(MapOperator::getFieldName).toList());
         final var writtenRoots = writes.roots();
         final var conditions = new ArrayList<Predicate<JsonObject>>(operators.size());
+        final var paths = new FieldPathMemo();
         for (var operator : operators) {
             conditions.add(MapOperatorHelper.conditionOf(operator, context, writtenRoots));
         }
@@ -213,7 +216,7 @@ public final class AggregationOperationHelper {
             final var budget = new MapResultBudget(context);
             for (var i = 0; i < operators.size(); i++) {
                 mapped = MapOperatorHelper.processOperator(operators.get(i), mapped, context, budget, conditions.get(i),
-                        writtenRoots);
+                        writtenRoots, paths);
             }
             return mapped;
         });
@@ -241,8 +244,10 @@ public final class AggregationOperationHelper {
                 leftEntries, joinCollectionLocalField, transaction, context);
         final var joinedBytes = new HashMap<SaltedKey, Long>();
         final var asWrites = JsonUtils.writeTreeOf(List.of(as));
+        final var localPath = FieldPath.of(joinCollectionLocalField);
+        final var asPath = FieldPath.of(as);
         return leftEntries.stream().map(jsonObject -> {
-            final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
+            final var localValue = localPath.resolve(jsonObject);
             if (localValue != null) {
                 final var key = new SaltedKey(localValue);
                 final var joined = joinedCollection.get(key);
@@ -250,7 +255,7 @@ public final class AggregationOperationHelper {
                     chargeJoinedRow(joinedBytes.computeIfAbsent(key, _ -> serialisedBytes(joined)), context);
                 }
                 final var copy = jsonObject.copyForWrites(asWrites);
-                JsonUtils.setPath(copy, as, joined);
+                asPath.set(copy, joined);
                 return copy;
             }
             return jsonObject;
@@ -276,9 +281,10 @@ public final class AggregationOperationHelper {
         if (resultStream == null && fieldName != null && !fieldName.isBlank()) {
             final var indexValues = IndexHelper.getDistinctIndexValues(dbName, collName, fieldName, context);
             if (indexValues != null) {
+                final var path = FieldPath.of(fieldName);
                 return distinctRows(indexValues.stream().map(indexValue -> {
                     final var json = new JsonObject();
-                    JsonUtils.setPath(json, fieldName, IndexHelper.indexValueToElement(indexValue));
+                    path.set(json, IndexHelper.indexValueToElement(indexValue));
                     return json;
                 }));
             }
@@ -289,12 +295,12 @@ public final class AggregationOperationHelper {
             return resultStream.filter(jsonObject -> seen.add(new RowWithoutId(jsonObject)))
                     .map(jsonObject -> jsonObject.copyWithout(Globals.PK_FIELD));
         } else {
-            return distinctRows(
-                    resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
-                        final var json = new JsonObject();
-                        JsonUtils.setPath(json, fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
-                        return json;
-                    }));
+            final var path = FieldPath.of(fieldName);
+            return distinctRows(resultStream.filter(path::isIn).map(jsonObject -> {
+                final var json = new JsonObject();
+                path.set(json, path.valueIn(jsonObject));
+                return json;
+            }));
         }
     }
 

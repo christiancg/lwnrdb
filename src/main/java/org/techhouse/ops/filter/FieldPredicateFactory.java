@@ -6,9 +6,11 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.CaseFolding;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.JsonUtils;
 
 public final class FieldPredicateFactory {
@@ -22,39 +24,48 @@ public final class FieldPredicateFactory {
     }
 
     public static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
+        final var compiled = operator.getField() == null ? null : FieldPath.of(operator.getField());
+        final var operatorElement = operator.getValue();
         if ((operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN)
-                && operator.getValue() instanceof JsonArray operands) {
+                && operatorElement instanceof JsonArray operands) {
             return membershipTester(operands, InOperands.of(operands, JsonUtils.isPrimaryKeyPath(operator.getField())),
-                    operation == FieldOperatorType.IN);
+                    operation == FieldOperatorType.IN, compiled);
         }
+        final var needle = operation == FieldOperatorType.CONTAINS && operatorElement instanceof JsonString text
+                ? SubstringNeedle.of(text.getValue())
+                : null;
         return (JsonObject toTest, String fieldName) -> {
-            final var toTestElement = JsonUtils.resolvePath(toTest, fieldName);
+            final var path = pathFor(compiled, fieldName);
+            final var toTestElement = path.resolve(toTest);
             if (toTestElement == null) {
                 return false;
             }
-            final var operatorElement = operator.getValue();
             if (operatorElement.isJsonNull()) {
                 return nullOperandMatches(toTestElement, operation);
             }
             if (operatorElement.isJsonPrimitive()) {
-                return primitiveOperandMatches(operatorElement, toTestElement, operation,
-                        JsonUtils.isPrimaryKeyPath(fieldName));
+                return primitiveOperandMatches(operatorElement, toTestElement, operation, path.isPrimaryKey(), needle);
             }
             if (operatorElement.isJsonArray() || operatorElement.isJsonObject()) {
-                return containerOperandMatches(operatorElement, toTestElement, operation,
-                        JsonUtils.isPrimaryKeyPath(fieldName));
+                return containerOperandMatches(operatorElement, toTestElement, operation, path.isPrimaryKey());
             }
             return false;
         };
     }
 
-    private static BiPredicate<JsonObject, String> membershipTester(JsonArray operands, InOperands lookup, boolean in) {
+    private static FieldPath pathFor(FieldPath compiled, String fieldName) {
+        return compiled == null ? FieldPath.of(fieldName) : compiled.reusedFor(fieldName);
+    }
+
+    private static BiPredicate<JsonObject, String> membershipTester(JsonArray operands, InOperands lookup, boolean in,
+            FieldPath compiled) {
         return (JsonObject toTest, String fieldName) -> {
-            final var stored = JsonUtils.resolvePath(toTest, fieldName);
+            final var path = pathFor(compiled, fieldName);
+            final var stored = path.resolve(toTest);
             if (stored == null) {
                 return false;
             }
-            final var exact = JsonUtils.isPrimaryKeyPath(fieldName);
+            final var exact = path.isPrimaryKey();
             final var found = exact == lookup.exact()
                     ? lookup.contains(stored)
                     : containsEquivalent(operands, stored, exact);
@@ -63,7 +74,7 @@ public final class FieldPredicateFactory {
     }
 
     private static boolean primitiveOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
-            FieldOperatorType operation, boolean exactStrings) {
+            FieldOperatorType operation, boolean exactStrings, SubstringNeedle needle) {
         if (operation == FieldOperatorType.CONTAINS && toTestElement.isJsonArray()) {
             return holdsMatchingElement(toTestElement.asJsonArray(), operatorElement);
         }
@@ -87,7 +98,7 @@ public final class FieldPredicateFactory {
         if (!operatorPrimitive.isJsonCustom() && !toTestPrimitive.isJsonCustom() && operatorPrimitive.isJsonString()
                 && toTestPrimitive.isJsonString()) {
             return stringMatches(operatorElement.asJsonString().getValue(), toTestElement.asJsonString().getValue(),
-                    operation, exactStrings);
+                    operation, exactStrings, needle);
         }
         return kindMismatchMatches(operation, exactStrings);
     }
@@ -138,56 +149,17 @@ public final class FieldPredicateFactory {
     }
 
     private static boolean stringMatches(String operand, String stored, FieldOperatorType operation,
-            boolean exactStrings) {
+            boolean exactStrings, SubstringNeedle needle) {
         return switch (operation) {
             case EQUALS -> stringsAreEqual(operand, stored, exactStrings);
             case NOT_EQUALS -> !stringsAreEqual(operand, stored, exactStrings);
-            case CONTAINS -> containsLinear(stored, operand);
+            case CONTAINS -> needle.foundIn(stored);
             case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN -> false;
         };
     }
 
     private static boolean stringsAreEqual(String operand, String stored, boolean exactStrings) {
         return exactStrings ? operand.equals(stored) : CaseFolding.equal(operand, stored);
-    }
-
-    private static boolean containsLinear(String haystack, String needle) {
-        final var needleLength = needle.length();
-        if (needleLength == 0) {
-            return true;
-        }
-        if (needleLength > haystack.length()) {
-            return false;
-        }
-        final var prefix = failureFunction(needle);
-        var matched = 0;
-        for (var i = 0; i < haystack.length(); i++) {
-            while (matched > 0 && haystack.charAt(i) != needle.charAt(matched)) {
-                matched = prefix[matched - 1];
-            }
-            if (haystack.charAt(i) == needle.charAt(matched)) {
-                matched++;
-            }
-            if (matched == needleLength) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static int[] failureFunction(String needle) {
-        final var prefix = new int[needle.length()];
-        var length = 0;
-        for (var i = 1; i < needle.length(); i++) {
-            while (length > 0 && needle.charAt(i) != needle.charAt(length)) {
-                length = prefix[length - 1];
-            }
-            if (needle.charAt(i) == needle.charAt(length)) {
-                length++;
-            }
-            prefix[i] = length;
-        }
-        return prefix;
     }
 
     private static boolean containerOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
@@ -229,7 +201,7 @@ public final class FieldPredicateFactory {
 
     static boolean elementsMatch(JsonBaseElement operand, JsonBaseElement stored, boolean exactStrings) {
         if (operand.isJsonPrimitive() && stored.isJsonPrimitive()) {
-            return primitiveOperandMatches(operand, stored, FieldOperatorType.EQUALS, exactStrings);
+            return primitiveOperandMatches(operand, stored, FieldOperatorType.EQUALS, exactStrings, null);
         }
         if (operand.isJsonArray() && stored.isJsonArray()) {
             return arraysMatch(operand.asJsonArray(), stored.asJsonArray());

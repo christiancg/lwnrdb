@@ -37,6 +37,11 @@ public final class TriggerRunRecords {
     }
 
     public static void insert(List<AdminTriggerRunEntry> entries) throws IOException, InterruptedException {
+        write(entries, List.of());
+    }
+
+    public static void write(List<AdminTriggerRunEntry> entries, List<String> replacedRecordIds)
+            throws IOException, InterruptedException {
         if (entries.isEmpty()) {
             return;
         }
@@ -44,6 +49,6 @@ public final class TriggerRunRecords {
         for (final var entry : entries) {
             lines.put(entry, entry.encodeLine());
         }
-        AdminBatchWrite.writeInChunks(COLL, PK_ROWS, entries, lines::get, List.of());
+        AdminBatchWrite.writeInChunks(COLL, PK_ROWS, entries, lines::get, replacedRecordIds);
     }
 }

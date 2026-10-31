@@ -113,7 +113,7 @@ public class ClientTrackerTest {
 
         clientTracker.updateLastCommandTime(clientId);
 
-        assertNotNull(client.getLastCommandTime());
+        assertTrue(client.hasCommanded());
     }
 
     @Test

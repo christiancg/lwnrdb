@@ -4,13 +4,16 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
+import org.techhouse.cache.Cache;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -62,19 +65,23 @@ public final class StagedTriggerRuns {
     public void submitLanded(Map<EventType, Set<String>> landedIds, String dbName, String collName, String actingUser,
             int depth) {
         final var claimed = new HashMap<EventType, Set<String>>();
+        final var vanished = new ArrayList<String>();
+        final var keptRuns = new ArrayList<KeptRun>();
         for (final var run : runs) {
             final var landedOfType = landedIds.getOrDefault(run.type(), Set.of());
             final var kept = run.ids().stream().filter(landedOfType::contains).toList();
             if (kept.isEmpty()) {
-                TriggerRunLog.discard(run.runId());
+                vanished.add(run.runId());
                 continue;
             }
             claimed.computeIfAbsent(run.type(), _ -> new HashSet<>()).addAll(kept);
             if (kept.size() < run.ids().size()) {
                 narrow(run, kept);
             }
-            submitWithCurrentEntries(run, kept);
+            keptRuns.add(new KeptRun(run, kept));
         }
+        submitWithCurrentEntries(keptRuns, vanished);
+        TriggerRunLog.discardAll(nonNull(vanished));
         submitUnclaimed(landedIds, claimed, dbName, collName, actingUser, depth);
     }
 
@@ -85,29 +92,87 @@ public final class StagedTriggerRuns {
     }
 
     public void discard() {
+        final var runIds = new ArrayList<String>(runs.size());
         for (final var run : runs) {
-            TriggerRunLog.discard(run.runId());
+            runIds.add(run.runId());
+        }
+        TriggerRunLog.discardAll(nonNull(runIds));
+    }
+
+    private static List<String> nonNull(List<String> runIds) {
+        return runIds.stream().filter(Objects::nonNull).toList();
+    }
+
+    private record KeptRun(StagedRun run, List<String> ids) {
+    }
+
+    private static void submitWithCurrentEntries(List<KeptRun> keptRuns, List<String> vanished) {
+        Map<String, Map<String, DbEntry>> current;
+        try {
+            current = currentEntriesOf(keptRuns);
+        } catch (IOException e) {
+            logger.error("Could not read the committed documents to fire the trigger runs of a write; their staged"
+                    + " runs replay at the next startup", e);
+            current = null;
+        }
+        for (final var kept : keptRuns) {
+            final var run = kept.run();
+            if (run.type() != EventType.DELETED && current == null) {
+                continue;
+            }
+            final var entries = run.type() == EventType.DELETED
+                    ? deletedEntriesOf(run, kept.ids())
+                    : presentEntriesOf(current.getOrDefault(collectionOf(run), Map.of()), kept.ids());
+            if (entries.isEmpty()) {
+                vanished.add(run.runId());
+            } else {
+                submit(run, entries);
+            }
         }
     }
 
-    private void submitWithCurrentEntries(StagedRun run, List<String> kept) {
-        if (run.type() == EventType.DELETED) {
-            final var keptIds = Set.copyOf(kept);
-            submit(run, run.entries().stream().filter(entry -> keptIds.contains(entry.get_id())).toList());
-            return;
-        }
-        try {
-            final var entries = TriggerHelper.readEntriesWithRetry(run.dbName(), run.collName(),
-                    new LinkedHashSet<>(kept));
-            if (entries.isEmpty()) {
-                TriggerRunLog.discard(run.runId());
-                return;
+    private static Map<String, Map<String, DbEntry>> currentEntriesOf(List<KeptRun> keptRuns) throws IOException {
+        final var idsByCollection = new LinkedHashMap<String, Set<String>>();
+        final var targets = new HashMap<String, StagedRun>();
+        for (final var kept : keptRuns) {
+            final var run = kept.run();
+            if (run.type() != EventType.DELETED) {
+                final var collection = collectionOf(run);
+                targets.putIfAbsent(collection, run);
+                idsByCollection.computeIfAbsent(collection, _ -> new LinkedHashSet<>()).addAll(kept.ids());
             }
-            submit(run, entries);
-        } catch (IOException e) {
-            logger.error("Could not read the committed documents to fire trigger '" + run.triggerName() + "' on "
-                    + run.dbName() + "|" + run.collName() + "; its staged run replays at the next startup", e);
         }
+        final var current = new HashMap<String, Map<String, DbEntry>>();
+        for (final var collection : idsByCollection.entrySet()) {
+            final var target = targets.get(collection.getKey());
+            final var byId = new HashMap<String, DbEntry>();
+            for (final var entry : TriggerHelper.readEntriesWithRetry(target.dbName(), target.collName(),
+                    collection.getValue())) {
+                byId.put(entry.get_id(), entry);
+            }
+            current.put(collection.getKey(), byId);
+        }
+        return current;
+    }
+
+    private static String collectionOf(StagedRun run) {
+        return Cache.getCollectionIdentifier(run.dbName(), run.collName());
+    }
+
+    private static List<DbEntry> deletedEntriesOf(StagedRun run, List<String> kept) {
+        final var keptIds = Set.copyOf(kept);
+        return run.entries().stream().filter(entry -> keptIds.contains(entry.get_id())).toList();
+    }
+
+    private static List<DbEntry> presentEntriesOf(Map<String, DbEntry> current, List<String> kept) {
+        final var entries = new ArrayList<DbEntry>(kept.size());
+        for (final var id : kept) {
+            final var entry = current.get(id);
+            if (entry != null) {
+                entries.add(entry);
+            }
+        }
+        return entries;
     }
 
     private static void narrow(StagedRun run, List<String> kept) {

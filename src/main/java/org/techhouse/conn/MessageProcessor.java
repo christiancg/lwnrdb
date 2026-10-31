@@ -1,9 +1,11 @@
 package org.techhouse.conn;
 
 import java.io.BufferedOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -22,8 +24,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.Client;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.internal.EncodedJson;
-import org.techhouse.ejson.internal.Utf8Encoder;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ex.RequestTooLargeException;
 import org.techhouse.ioc.IocContainer;
@@ -61,11 +61,12 @@ public class MessageProcessor implements Runnable {
     private final BooleanSupplier shuttingDown;
     private final long acceptedAtNanos = System.nanoTime();
     private boolean everAuthenticated;
+    private boolean pipelined;
     private boolean holdingPreAuthSlot;
     private volatile boolean serving;
     private int unauthenticatedInvalidRequests;
     private HandshakeDeadline.Armed deadline;
-    private UUID unreapableTransaction;
+    private final IdleTransactionReaper reaper;
     private OutboundQueue outbound;
     private ReentrantLock writerLock;
 
@@ -80,6 +81,7 @@ public class MessageProcessor implements Runnable {
         this.remoteHost = hostOf(socket);
         this.preAuthAdmitted = clientId != null && preAuthSlots.acquire(remoteHost);
         this.holdingPreAuthSlot = preAuthAdmitted;
+        this.reaper = new IdleTransactionReaper(clientId, this::remoteAddress);
     }
 
     private static String hostOf(Socket socket) {
@@ -119,6 +121,9 @@ public class MessageProcessor implements Runnable {
         } finally {
             deadline.disarm();
             releasePreAuthSlot();
+            if (outbound != null) {
+                outbound.discard();
+            }
             if (clientId != null) {
                 try {
                     TransactionOperationHelper.cleanupOnDisconnect(clientId);
@@ -143,6 +148,7 @@ public class MessageProcessor implements Runnable {
                 break;
             }
             if (!message.isBlank()) {
+                pipelined = pipelined || reader.hasBufferedInput();
                 close = serveLine(message, nextLineLimitBytes() / Globals.MIN_BYTES_PER_REQUEST_TOKEN);
             }
         }
@@ -159,7 +165,10 @@ public class MessageProcessor implements Runnable {
         if (outbound != null && !outbound.isOpen()) {
             return;
         }
-        if (clientId != null && everAuthenticated()) {
+        if (clientId != null && everAuthenticated() && (e instanceof SocketException || e instanceof EOFException)) {
+            logger.info("The connection from " + remoteAddress() + " dropped: " + e.getClass().getSimpleName() + ": "
+                    + e.getMessage());
+        } else if (clientId != null && everAuthenticated()) {
             logger.error("General error in MessageProcessor", e);
         } else if (!deadline.hasFired()) {
             ConnectionLog.warn(logger, "Dropped an unauthenticated connection from " + remoteAddress() + ": "
@@ -202,8 +211,8 @@ public class MessageProcessor implements Runnable {
             if (!everAuthenticated() && authRemainingMillis() <= 0) {
                 return closeUnauthenticated();
             }
-            if (transactionAgeRemainingMillis() <= 0) {
-                reapTransaction(Client.TransactionReap.MAX_AGE);
+            if (reaper.ageRemainingMillis() <= 0) {
+                reaper.reap(Client.TransactionReap.MAX_AGE);
             }
             final var budget = nextReadBudget();
             try {
@@ -212,11 +221,11 @@ public class MessageProcessor implements Runnable {
                 if (!everAuthenticated()) {
                     return closeUnauthenticated();
                 }
-                reapTransaction(budget.reapReason());
+                reaper.reap(budget.reapReason());
             } catch (RequestTooLargeException tooLarge) {
                 ConnectionLog.warn(logger,
                         "Closed a connection from " + remoteAddress() + ": " + tooLarge.getMessage());
-                enqueue(OutboundQueue.closeFrame(ErrorCode.REQUEST_TOO_LARGE));
+                enqueue(ResponseFrames.close(ErrorCode.REQUEST_TOO_LARGE)).write();
                 return null;
             }
         }
@@ -225,7 +234,7 @@ public class MessageProcessor implements Runnable {
     private RequestLine closeUnauthenticated() {
         ConnectionLog.warn(logger, "Closed a connection from " + remoteAddress() + " that did not authenticate within "
                 + configuration.getAuthTimeoutMs() + " ms");
-        enqueue(OutboundQueue.closeFrame(ErrorCode.AUTHENTICATION_TIMEOUT));
+        enqueue(ResponseFrames.close(ErrorCode.AUTHENTICATION_TIMEOUT)).write();
         return null;
     }
 
@@ -242,28 +251,10 @@ public class MessageProcessor implements Runnable {
         return configuration.getAuthTimeoutMs() - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - acceptedAtNanos);
     }
 
-    private record ReadBudget(long millis, Client.TransactionReap reapReason) {
-    }
-
-    private ReadBudget nextReadBudget() {
-        if (!everAuthenticated()) {
-            return new ReadBudget(authRemainingMillis(), Client.TransactionReap.IDLE);
-        }
-        if (lacksTimedTransaction()) {
-            return new ReadBudget(0L, Client.TransactionReap.IDLE);
-        }
-        final var ageRemaining = transactionAgeRemainingMillis();
-        final var idleTimeout = configuration.getTransactionIdleTimeoutMs();
-        return new ReadBudget(Math.clamp(ageRemaining, 1L, idleTimeout),
-                ageRemaining < idleTimeout ? Client.TransactionReap.MAX_AGE : Client.TransactionReap.IDLE);
-    }
-
-    private long transactionAgeRemainingMillis() {
-        final var maxAge = configuration.longValue(ConfigKey.TRANSACTION_MAX_AGE_MS);
-        if (maxAge == 0 || lacksTimedTransaction()) {
-            return Long.MAX_VALUE;
-        }
-        return maxAge - clientTracker.getActiveTransaction(clientId).ageMillis();
+    private IdleTransactionReaper.ReadBudget nextReadBudget() {
+        return everAuthenticated()
+                ? reaper.nextReadBudget()
+                : new IdleTransactionReaper.ReadBudget(authRemainingMillis(), Client.TransactionReap.IDLE);
     }
 
     private int nextLineLimitBytes() {
@@ -271,38 +262,14 @@ public class MessageProcessor implements Runnable {
         return (int) Math.min(configuration.getMaxRequestSize(), ceiling);
     }
 
-    private boolean lacksTimedTransaction() {
-        final var transaction = clientTracker.getActiveTransaction(clientId);
-        return transaction == null || transaction.getTransactionId().equals(unreapableTransaction)
-                || !TransactionOperationHelper.isReapable(clientId);
-    }
-
-    private void reapTransaction(Client.TransactionReap reason) {
-        if (lacksTimedTransaction()) {
-            return;
-        }
-        final var transactionId = clientTracker.getActiveTransaction(clientId).getTransactionId();
-        if (TransactionOperationHelper.reapIdleTransaction(clientId)) {
-            clientTracker.markTransactionReaped(clientId, reason);
-            logger.info("Rolled back transaction " + transactionId + " of " + remoteAddress() + " after "
-                    + (reason == Client.TransactionReap.MAX_AGE
-                            ? "reaching transactionMaxAgeMs"
-                            : configuration.getTransactionIdleTimeoutMs() + " ms without a request"));
-        } else {
-            unreapableTransaction = transactionId;
-            logger.warning("Could not roll back idle transaction " + transactionId + " of " + remoteAddress()
-                    + "; it stays open and is no longer timed");
-        }
-    }
-
     private String remoteAddress() {
         return String.valueOf(socket.getRemoteSocketAddress());
     }
 
-    private void enqueue(EncodedJson frame) {
+    private OutboundQueue.InlineWrite enqueue(ResponseFrames.Reserved response) {
         writerLock.lock();
         try {
-            outbound.offer(frame);
+            return outbound.offerResponse(response.frame(), response.bytes(), !pipelined);
         } finally {
             writerLock.unlock();
         }
@@ -310,10 +277,11 @@ public class MessageProcessor implements Runnable {
 
     private boolean serveLine(RequestLine message, int maxTokens) {
         var close = false;
+        var write = OutboundQueue.InlineWrite.NONE;
         serving = true;
         inFlightRequests.enter();
         try {
-            EncodedJson response;
+            ResponseFrames.Reserved response;
             UUID deliveredListen = null;
             OperationType requestType = null;
             try {
@@ -327,27 +295,31 @@ public class MessageProcessor implements Runnable {
             } catch (InvalidCommandException exception) {
                 ConnectionLog.warn(logger,
                         "Refused an unparseable request from " + remoteAddress() + ": " + causeMessageOf(exception));
-                response = EncodedJson.of(Utf8Encoder.encode(exception.getMessage()));
+                response = ResponseFrames.encodeText(null, exception.getMessage());
             } catch (RuntimeException exception) {
                 logger.error("Request handling failed unexpectedly", exception);
-                response = OutboundQueue.frameOf(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
+                response = ResponseFrames.encode(requestType,
+                        new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
             } catch (StackOverflowError error) {
                 logger.error("Request handling overflowed the stack", error);
-                response = OutboundQueue.frameOf(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
+                response = ResponseFrames.encode(requestType,
+                        new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
             } catch (OutOfMemoryError error) {
                 logger.error("Request handling ran out of memory, closing the connection", error);
-                response = OutboundQueue.frameOf(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
+                response = ResponseFrames.encode(requestType,
+                        new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
                 close = true;
             }
             clientTracker.updateLastCommandTime(clientId);
             close = close || exhaustedUnauthenticatedInvalidRequests();
-            enqueue(response);
+            write = enqueue(response);
             if (deliveredListen != null) {
                 listenManager.markDelivered(deliveredListen);
             }
         } finally {
             inFlightRequests.exit();
             serving = false;
+            write.write();
         }
         return close;
     }
@@ -383,7 +355,7 @@ public class MessageProcessor implements Runnable {
         final var type = parsedMessage.getType();
         final var validationResult = RequestValidator.validate(parsedMessage);
         if (!validationResult.isValid()) {
-            return new Handled(OutboundQueue.frameOf(
+            return new Handled(ResponseFrames.encode(type,
                     new OperationResponse(type, validationResult.getErrorMessage(), validationResult.getErrorCode())),
                     false, null);
         }
@@ -396,7 +368,8 @@ public class MessageProcessor implements Runnable {
 
     private Handled publicOperation(OperationRequest parsedMessage) {
         final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
-        return new Handled(OutboundQueue.frameOf(responseObj), closesConnection(responseObj), null);
+        return new Handled(ResponseFrames.encode(parsedMessage.getType(), responseObj), closesConnection(responseObj),
+                null);
     }
 
     private Handled authorized(OperationRequest parsedMessage, RequestLine rawMessage, String username) {
@@ -413,7 +386,7 @@ public class MessageProcessor implements Runnable {
     }
 
     private static Handled refusal(OperationType type, ErrorCode code) {
-        return new Handled(OutboundQueue.frameOf(new OperationResponse(type, code)), false, null);
+        return new Handled(ResponseFrames.encode(type, new OperationResponse(type, code)), false, null);
     }
 
     private ErrorCode firstRequestAfterReap(OperationType type) {
@@ -429,7 +402,7 @@ public class MessageProcessor implements Runnable {
                 : ErrorCode.TRANSACTION_IDLE_TIMEOUT;
     }
 
-    private record Handled(EncodedJson response, boolean close, UUID deliveredListen) {
+    private record Handled(ResponseFrames.Reserved response, boolean close, UUID deliveredListen) {
     }
 
     private static boolean closesConnection(OperationResponse responseObj) {
@@ -474,14 +447,14 @@ public class MessageProcessor implements Runnable {
         parsedMessage.setTriggerDepth(0);
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
         if (schemaError != null) {
-            return new Handled(OutboundQueue.frameOf(schemaError), false, null);
+            return new Handled(ResponseFrames.encode(parsedMessage.getType(), schemaError), false, null);
         }
         final var rawJson = clusterConfig.isEnabled() ? withoutTriggerDepth(rawMessage.text(), wireDepth) : null;
         final var inTransaction = clientTracker.getActiveTransaction(clientId) != null;
         final var forwarded = clusterRouter.forward(parsedMessage, rawJson, inTransaction,
                 clientTracker.getAuthenticatedUsername(clientId), clientId);
         if (forwarded != null) {
-            return new Handled(EncodedJson.of(Utf8Encoder.encode(forwarded)), false, null);
+            return new Handled(ResponseFrames.encodeText(parsedMessage.getType(), forwarded), false, null);
         }
         final var backlog = backlogGate.admitClientRequest(parsedMessage.getType(), inTransaction);
         if (backlog != null) {
@@ -489,7 +462,8 @@ public class MessageProcessor implements Runnable {
         }
         final var responseObj = AnalyzeTiming.timed(parsedMessage,
                 () -> operationProcessor.processMessage(parsedMessage, clientId));
-        return new Handled(OutboundQueue.frameOf(responseObj), responseObj.getType() == OperationType.CLOSE_CONNECTION,
+        return new Handled(ResponseFrames.encode(parsedMessage.getType(), responseObj),
+                responseObj.getType() == OperationType.CLOSE_CONNECTION,
                 responseObj instanceof ListenResponse listen ? listen.deliveredListenId() : null);
     }
 }

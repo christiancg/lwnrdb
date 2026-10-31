@@ -68,7 +68,7 @@ final class PageVacuum {
                     maxPageSize) != PagePlacement.VACUUM_THEN_APPEND) {
                 return null;
             }
-            return vacuum(dbName, collName, pageNumber, residentRows, known, null);
+            return vacuumAfterWrite(dbName, collName, pageNumber, residentRows, known, WrittenRows.NONE);
         }
         final var pageRows = PageRows.of(pkIndexStore, residentRows, dbName, collName, pageNumber);
         if (placement == null && stayPlacement(compact, PageRows.liveBytes(pageRows), fileLength, appendedBytes,
@@ -110,36 +110,37 @@ final class PageVacuum {
         return rewrite(dbName, collName, pageNumber, lines -> {
             requireEveryLineNamed(page, lines, pageRows);
             return pageRows;
-        });
+        }, WrittenRows.NONE);
     }
 
-    VacuumedPage vacuum(String dbName, String collName, long pageNumber, List<PkIndexEntry> residentRows,
-            PageOccupancy occupancy, String excludedId) throws IOException {
+    VacuumedPage vacuumAfterWrite(String dbName, String collName, long pageNumber, List<PkIndexEntry> residentRows,
+            PageOccupancy after, WrittenRows written) throws IOException {
         final var page = paths.collectionPage(dbName, collName, pageNumber);
         return rewrite(dbName, collName, pageNumber, lines -> {
-            final var found = lines.isEmpty() ? null : rowsOfLines(lines, residentRows, pageNumber, occupancy);
+            final var rows = PageRows.forLines(pkIndexStore, residentRows, dbName, collName, lines);
+            final var found = lines.isEmpty() ? null : rowsOfLines(lines, rows, pageNumber, after, written);
             if (found != null) {
                 return found;
             }
-            final var pageRows = PageRows.of(pkIndexStore, residentRows, dbName, collName, pageNumber, excludedId);
+            final var pageRows = written.rowsOn(pkIndexStore, residentRows, dbName, collName, pageNumber);
             requireEveryLineNamed(page, lines, pageRows);
             return pageRows;
-        });
-    }
-
-    VacuumedPage vacuumAfterDelete(String dbName, String collName, long pageNumber, List<PkIndexEntry> residentRows,
-            PageOccupancy after, String deletedId) throws IOException {
-        return vacuum(dbName, collName, pageNumber, residentRows, after, deletedId);
+        }, written);
     }
 
     static List<PkIndexEntry> rowsOfLines(List<PageLines.Line> lines, List<PkIndexEntry> residentRows, long pageNumber,
             PageOccupancy occupancy) {
+        return rowsOfLines(lines, residentRows, pageNumber, occupancy, WrittenRows.NONE);
+    }
+
+    static List<PkIndexEntry> rowsOfLines(List<PageLines.Line> lines, List<PkIndexEntry> residentRows, long pageNumber,
+            PageOccupancy occupancy, WrittenRows written) {
         if (occupancy == null || lines.size() != occupancy.rows()) {
             return null;
         }
         final var rows = new ArrayList<PkIndexEntry>(lines.size());
         for (final var line : lines) {
-            final var row = line.id() == null ? null : PageRows.rowOf(residentRows, line.id());
+            final var row = line.id() == null ? null : written.rowOf(residentRows, line.id());
             if (row == null || row.getPage() != pageNumber || row.getPosition() != line.position()
                     || row.getLength() != line.length()) {
                 return null;
@@ -149,8 +150,8 @@ final class PageVacuum {
         return rows;
     }
 
-    private VacuumedPage rewrite(String dbName, String collName, long pageNumber, RowsOfLines verified)
-            throws IOException {
+    private VacuumedPage rewrite(String dbName, String collName, long pageNumber, RowsOfLines verified,
+            WrittenRows written) throws IOException {
         final var page = paths.collectionPage(dbName, collName, pageNumber);
         final var subject = dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
         barrier.settle(dbName, collName);
@@ -178,6 +179,7 @@ final class PageVacuum {
         faultInjector.at(FaultPoint.PAGE_VACUUM_RENAMED, subject);
         final var vacuumed = new VacuumedPage(dbName, collName, pageNumber, moves);
         listener.accept(vacuumed);
+        written.reposition(vacuumed);
         final var moved = movedRows(dbName, collName, pageNumber, pageRows, moves);
         try {
             if (landed) {

@@ -1,8 +1,10 @@
 package org.techhouse.bckg_ops.events;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ops.index.IndexedValue;
 
 public class BulkEntityEvent extends CollectionScopedEvent {
     private final List<EntityRef> inserted;
@@ -20,9 +22,14 @@ public class BulkEntityEvent extends CollectionScopedEvent {
 
     public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries, List<DbEntry> updatedEntries,
             long incarnation, long pendingGeneration) {
+        this(dbName, collName, insertedEntries, updatedEntries, incarnation, pendingGeneration, null);
+    }
+
+    public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries, List<DbEntry> updatedEntries,
+            long incarnation, long pendingGeneration, Map<String, Map<String, IndexedValue>> priorsById) {
         super(EventType.CREATED, dbName, collName, incarnation, pendingGeneration);
-        this.inserted = EntityRef.allOf(insertedEntries);
-        this.updated = EntityRef.allOf(updatedEntries);
+        this.inserted = EntityRef.allOf(insertedEntries, priorsById);
+        this.updated = EntityRef.allOf(updatedEntries, priorsById);
     }
 
     public List<EntityRef> getInserted() {

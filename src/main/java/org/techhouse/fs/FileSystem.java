@@ -339,6 +339,11 @@ public class FileSystem {
         fieldIndexStore.appendIndexLog(dbName, collName, fieldName, typeLabel, changes, survivors);
     }
 
+    public boolean appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, IndexTypeReader foldSource) throws IOException {
+        return fieldIndexStore.appendIndexLogOnly(dbName, collName, fieldName, typeLabel, changes, foldSource);
+    }
+
     public boolean dropIndex(String dbName, String collName, String fieldName) {
         return fieldIndexStore.dropIndex(dbName, collName, fieldName);
     }
@@ -405,6 +410,14 @@ public class FileSystem {
 
     public void openWriteGroup(String dbName, String collName) throws IOException {
         writeAheadLog.openGroup(dbName, collName);
+    }
+
+    public boolean reopenWriteGroupIfEnded(String dbName, String collName) throws IOException {
+        if (writeAheadLog.openGroupOf(dbName, collName) != null) {
+            return false;
+        }
+        writeAheadLog.openGroup(dbName, collName);
+        return true;
     }
 
     public boolean forceWriteGroup(String dbName, String collName) throws IOException {

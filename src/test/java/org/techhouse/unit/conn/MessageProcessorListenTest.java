@@ -20,6 +20,7 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class MessageProcessorListenTest {
+    private static final String PUSH_MARKER = "{\"pushedAfterDelivery\":true}";
 
     @BeforeEach
     void setUp() throws Exception {
@@ -120,15 +121,13 @@ public class MessageProcessorListenTest {
     public void test_the_listen_is_delivered_only_after_its_response_is_queued() throws Exception {
         createListenAdmin("listen_delivery_admin");
         final var out = new ByteArrayOutputStream();
-        final var writtenAtDelivery = new ArrayList<String>();
         final var deliveredIds = new ArrayList<UUID>();
         final var processorRef = new AtomicReference<MessageProcessor>();
         final var recording = new ListenManager() {
             @Override
             public void markDelivered(UUID listenId) {
                 deliveredIds.add(listenId);
-                queuedOutboundOf(processorRef.get()).awaitDrained(3000);
-                writtenAtDelivery.add(out.toString(StandardCharsets.UTF_8));
+                queuedOutboundOf(processorRef.get()).offer(PUSH_MARKER.getBytes(StandardCharsets.UTF_8));
             }
         };
         final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"listen_delivery_admin\",\"password\":\"password123\"}\n"
@@ -150,10 +149,11 @@ public class MessageProcessorListenTest {
         original.unregisterAllForClient(TestUtils.getPrivateField(processor, "clientId", UUID.class));
 
         assertEquals(1, deliveredIds.size(), "only the LISTEN response delivers a listen");
-        final var listenLine = writtenAtDelivery.getFirst().lines().filter(line -> line.contains("listenId"))
-                .findFirst().orElseThrow();
-        assertTrue(listenLine.contains(deliveredIds.getFirst().toString()),
-                "the listen must be delivered after the response naming it was queued");
+        final var lines = out.toString(StandardCharsets.UTF_8).lines().toList();
+        final var listenLine = lines.stream().filter(line -> line.contains("listenId")).findFirst().orElseThrow();
+        assertTrue(listenLine.contains(deliveredIds.getFirst().toString()), listenLine);
+        assertTrue(lines.indexOf(listenLine) < lines.indexOf(PUSH_MARKER),
+                "a push queued once the listen is delivered is written after the response naming it: " + lines);
     }
 
     private static OutboundQueue queuedOutboundOf(MessageProcessor processor) {

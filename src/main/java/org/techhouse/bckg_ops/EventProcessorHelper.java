@@ -12,6 +12,7 @@ import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.bckg_ops.events.IndexPriors;
 import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.bckg_ops.events.UsageProfileFlushEvent;
@@ -210,11 +211,13 @@ public class EventProcessorHelper {
             return;
         }
         final var ids = new LinkedHashSet<String>();
+        final var refs = new ArrayList<EntityRef>(group.size());
         for (final var event : group) {
             ids.add(event.getId());
+            refs.add(event.getEntity());
         }
-        final var indexFailure = indexFailureOf(
-                () -> IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids), lockBudgetMs));
+        final var indexFailure = indexFailureOf(() -> IndexHelper.bulkUpdateIndexes(dbName, collName,
+                new ArrayList<>(ids), lockBudgetMs, IndexPriors.of(refs)));
         bookGroupPages(dbName, collName, group, first.getIncarnation());
         if (indexFailure != null) {
             throw indexFailure;
@@ -283,8 +286,9 @@ public class EventProcessorHelper {
             clearPending(event, event.getUpdated());
             return;
         }
-        final var indexFailure = indexFailureOf(() -> IndexHelper.bulkUpdateIndexes(dbName, collName,
-                idsOf(event.getInserted(), event.getUpdated()), lockBudgetMs));
+        final var indexFailure = indexFailureOf(
+                () -> IndexHelper.bulkUpdateIndexes(dbName, collName, idsOf(event.getInserted(), event.getUpdated()),
+                        lockBudgetMs, IndexPriors.of(event.getInserted(), event.getUpdated())));
         AdminOperationHelper.bookWritePathPages(dbName, collName, event.getInserted(), event.getUpdated(),
                 event.getIncarnation());
         if (indexFailure != null) {
@@ -322,8 +326,8 @@ public class EventProcessorHelper {
             pendingIndexWrites.clear(dbName, collName, id, event.getPendingGeneration());
             return;
         }
-        final var indexFailure = indexFailureOf(
-                () -> IndexHelper.bulkUpdateIndexes(dbName, collName, Collections.singletonList(id), lockBudgetMs));
+        final var indexFailure = indexFailureOf(() -> IndexHelper.bulkUpdateIndexes(dbName, collName,
+                Collections.singletonList(id), lockBudgetMs, IndexPriors.of(List.of(event.getEntity()))));
         AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getEntity(),
                 event.getIncarnation());
         if (indexFailure != null) {

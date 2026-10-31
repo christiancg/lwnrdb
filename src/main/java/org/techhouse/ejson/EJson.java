@@ -202,6 +202,11 @@ public class EJson {
         return schemaValidator.validate(instance, new JsonSchema(schema, sharedBudget));
     }
 
+    public SchemaValidationResult validateInstanceWithout(JsonObject instance, String hiddenProperty, JsonObject schema,
+            SchemaBudget sharedBudget) {
+        return schemaValidator.validate(instance, new JsonSchema(schema, sharedBudget, instance, hiddenProperty));
+    }
+
     public long schemaExpandedNodeCount(JsonObject schema, int limit) {
         return SchemaComplexity.expandedNodeCount(schema, limit);
     }

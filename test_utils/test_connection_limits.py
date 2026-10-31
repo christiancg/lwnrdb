@@ -27,6 +27,14 @@ OUTBOUND_CAP_BYTES = 16 * 1024 * 1024
 OVERFLOW_LOG = "exceeded clientOutboundQueueMaxBytes"
 LISTEN_RETAINED_BYTES = 2 * 1024 * 1024
 LISTEN_PAD_CHARS = 100_000
+BUDGET_COLL = "budget_items"
+BUDGET_DOCS = 60
+BUDGET_DOC_CHARS = 50_000
+BUDGET_NON_READERS = 3
+UNSENT_RESPONSE_BYTES = 10 * 1024 * 1024
+WRITE_STALL_TIMEOUT_S = 2.0
+STALL_LOG = "made no progress for"
+PIPELINED_FINDS = 500
 
 bu.configure(host=HOST, port=PORT)
 
@@ -480,6 +488,95 @@ def test_an_unauthenticated_request_is_answered_401_1_without_validation():
               f"got={frame}")
 
 
+def write_budget_config(work_dir: str):
+    bu.write_config(work_dir, PORT, maxRequestSize="128Kb", maxEntrySize="64Kb",
+                    maxUnsentResponseBytes=f"{UNSENT_RESPONSE_BYTES}",
+                    clientWriteStallTimeoutMs=int(WRITE_STALL_TIMEOUT_S * 1000))
+
+
+def budget_aggregate() -> dict:
+    return {"type": "AGGREGATE", "databaseName": DB, "collectionName": BUDGET_COLL, "aggregationSteps": []}
+
+
+def setup_budget_collection():
+    with Conn.authenticated() as admin:
+        check_status("CREATE_DATABASE for the budget phase",
+                     admin.send({"type": "CREATE_DATABASE", "databaseName": DB}), "OK")
+        check_status("CREATE_COLLECTION for the budget phase",
+                     admin.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": BUDGET_COLL}),
+                     "OK")
+        saved = [admin.send({"type": "SAVE", "databaseName": DB, "collectionName": BUDGET_COLL,
+                             "object": {"_id": f"large-{i}", "blob": chr(ord("a") + i % 26) * BUDGET_DOC_CHARS}})
+                 for i in range(BUDGET_DOCS)]
+        check("Every large document is saved", all(r.get("status") == "OK" for r in saved), f"first={saved[0]}")
+        small = [admin.send({"type": "SAVE", "databaseName": DB, "collectionName": BUDGET_COLL,
+                             "object": {"_id": f"small-{i}", "n": i}}) for i in range(10)]
+        check("Every small document is saved", all(r.get("status") == "OK" for r in small), f"first={small[0]}")
+
+
+def test_unread_large_reads_exhaust_the_response_budget(log_path: str):
+    section("Unread responses past maxUnsentResponseBytes refuse a large read with 503-17, never a write")
+    stalls_before = bu.read_log(log_path).count(STALL_LOG)
+    reader = Conn.authenticated()
+    non_readers = [bu.non_reading_conn() for _ in range(BUDGET_NON_READERS)]
+    try:
+        for conn in non_readers:
+            bu.send_without_reading(conn, budget_aggregate())
+        time.sleep(0.5)
+        refused = reader.send(budget_aggregate())
+        check_code(f"A fourth ~3 MB AGGREGATE behind {BUDGET_NON_READERS} unread ones", refused, "ERROR", "503-17")
+        check("The refusal names the read it refused", refused.get("type") == "AGGREGATE", f"got={refused}")
+        check_status("A small FIND_BY_ID is still answered",
+                     reader.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BUDGET_COLL,
+                                  "_id": "small-1"}), "OK")
+        check_status("A write is still answered",
+                     reader.send({"type": "SAVE", "databaseName": DB, "collectionName": BUDGET_COLL,
+                                  "object": {"_id": "small-written", "n": 1}}), "OK")
+        check("The server gives up on every non-reader once its write stalls past clientWriteStallTimeoutMs",
+              bu.wait_until(lambda: bu.read_log(log_path).count(STALL_LOG) - stalls_before >= BUDGET_NON_READERS,
+                            WRITE_STALL_TIMEOUT_S + 15),
+              f"stall lines={bu.read_log(log_path).count(STALL_LOG) - stalls_before}")
+        closed = [bu.read_until_closed(conn, timeout=15) for conn in non_readers]
+        check("Each non-reader then finds its connection closed", all(closed), f"closed={closed}")
+        answered = reader.send(budget_aggregate())
+        check_status("Once they are gone the same AGGREGATE is answered", answered, "OK")
+        check("It carries every document", len(answered.get("results") or []) == BUDGET_DOCS + 11,
+              f"results={len(answered.get('results') or [])}")
+    finally:
+        for conn in non_readers:
+            conn.close()
+        reader.close()
+
+
+def test_pipelined_small_requests_answer_in_order():
+    section("Pipelined small requests are answered in order")
+    with Conn.authenticated() as conn:
+        lines = [json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BUDGET_COLL,
+                             "_id": f"small-{i % 10}"}) for i in range(PIPELINED_FINDS)]
+        conn.s.sendall(("\n".join(lines) + "\n").encode())
+        answers = [conn._read_response() for _ in range(PIPELINED_FINDS)]
+        in_order = sum(1 for i, answer in enumerate(answers)
+                       if (answer.get("object") or {}).get("_id") == f"small-{i % 10}")
+        check(f"All {PIPELINED_FINDS} answers arrive, each matching its request", in_order == PIPELINED_FINDS,
+              f"in order={in_order}")
+
+
+def run_budget_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-connlimits-budget-")
+    log_path = os.path.join(work_dir, "server.log")
+    write_budget_config(work_dir)
+    print(f"  Budget phase working dir: {work_dir}")
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path, port=PORT)
+        setup_budget_collection()
+        test_unread_large_reads_exhaust_the_response_budget(log_path)
+        test_pipelined_small_requests_answer_in_order()
+    finally:
+        bu.stop_server(proc, port=PORT, wait_for_port=True)
+    return log_path
+
+
 def test_max_connections_admits_exactly_the_limit_under_concurrency():
     section("maxConnections admits exactly the limit under a concurrent burst")
     time.sleep(0.5)
@@ -551,8 +648,9 @@ def main():
         test_outbound_cap_counts_utf8_bytes(log_path)
         test_max_connections_admits_exactly_the_limit_under_concurrency()
     finally:
-        bu.stop_server(proc, port=PORT, wait_for_port=False)
-    bu.summary(on_failure=lambda: bu.dump_log(log_path))
+        bu.stop_server(proc, port=PORT, wait_for_port=True)
+    budget_log_path = run_budget_phase()
+    bu.summary(on_failure=lambda: (bu.dump_log(log_path), bu.dump_log(budget_log_path)))
 
 
 if __name__ == "__main__":

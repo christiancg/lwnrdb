@@ -7,6 +7,7 @@ import tempfile
 import time
 
 import base_utils as bu
+import refused_index_writes
 from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
@@ -551,6 +552,8 @@ def main():
         test_server_still_alive(c)
 
     run_tight_memory_phase()
+
+    refused_index_writes.run_refused_index_phase()
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

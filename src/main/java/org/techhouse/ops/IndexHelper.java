@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -9,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.techhouse.analyze.ReadObserver;
+import org.techhouse.bckg_ops.events.IndexPriors;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -22,7 +24,8 @@ import org.techhouse.ops.index.FieldIndexBatch;
 import org.techhouse.ops.index.IndexBuild;
 import org.techhouse.ops.index.IndexEntryReader;
 import org.techhouse.ops.index.IndexValueCodec;
-import org.techhouse.utils.JsonUtils;
+import org.techhouse.ops.index.IndexedValue;
+import org.techhouse.utils.FieldPath;
 
 public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -82,8 +85,23 @@ public class IndexHelper {
     }
 
     private static List<String> maintainedIndexes(String dbName, String collName) {
-        return cache.getIndexesForCollection(dbName, collName).stream()
-                .filter(fieldName -> !fs.indexMarkers().isMarked(dbName, collName, fieldName)).toList();
+        final var registered = cache.getIndexesForCollection(dbName, collName);
+        final var maintained = new ArrayList<String>(registered.size());
+        for (final var fieldName : registered) {
+            if (!fs.indexMarkers().isMarked(dbName, collName, fieldName)) {
+                maintained.add(fieldName);
+            }
+        }
+        return maintained;
+    }
+
+    private static boolean maintainsNoIndex(String dbName, String collName) {
+        for (final var fieldName : cache.getIndexesForCollection(dbName, collName)) {
+            if (!fs.indexMarkers().isMarked(dbName, collName, fieldName)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void lockCollectionForMaintenance(String dbName, String collName, long budget)
@@ -100,7 +118,12 @@ public class IndexHelper {
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids, long lockBudgetMs)
             throws IOException, InterruptedException {
-        if (ids.isEmpty() || maintainedIndexes(dbName, collName).isEmpty()) {
+        bulkUpdateIndexes(dbName, collName, ids, lockBudgetMs, IndexPriors.NONE);
+    }
+
+    public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids, long lockBudgetMs,
+            IndexPriors priors) throws IOException, InterruptedException {
+        if (ids.isEmpty() || maintainsNoIndex(dbName, collName)) {
             return;
         }
         lockCollectionForMaintenance(dbName, collName, lockBudgetMs);
@@ -110,11 +133,12 @@ public class IndexHelper {
                 return;
             }
             final var byId = new HashMap<String, DbEntry>();
-            for (var doc : cache.getEntriesByIds(dbName, collName, new HashSet<>(ids))) {
+            for (var doc : cache.getEntriesByIds(dbName, collName,
+                    ids.size() == 1 ? Set.of(ids.getFirst()) : new HashSet<>(ids))) {
                 byId.put(doc.get_id(), doc);
             }
             for (var fieldName : existingIndexes) {
-                maintainField(dbName, collName, fieldName, ids, byId);
+                maintainField(dbName, collName, fieldName, ids, byId, priors.forField(fieldName));
             }
         } finally {
             rl.releaseRead(dbName, collName);
@@ -127,14 +151,16 @@ public class IndexHelper {
     }
 
     private static void maintainField(String dbName, String collName, String fieldName, List<String> ids,
-            Map<String, DbEntry> byId) throws IOException, InterruptedException {
+            Map<String, DbEntry> byId, Map<String, List<IndexedValue>> priors)
+            throws IOException, InterruptedException {
         rl.lockIndex(dbName, collName, fieldName);
         var flushed = false;
         try {
-            final var batch = FieldIndexBatch.open(dbName, collName, fieldName, ids);
+            final var batch = FieldIndexBatch.open(dbName, collName, fieldName, ids, priors);
+            final var path = FieldPath.of(fieldName);
             for (var id : ids) {
                 final var doc = byId.get(id);
-                batch.apply(id, doc == null ? null : JsonUtils.getFromPath(doc.getData(), fieldName));
+                batch.apply(id, doc == null ? null : path.valueIn(doc.getData()));
             }
             batch.flush();
             flushed = true;

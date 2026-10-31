@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -20,6 +21,7 @@ final class WalWriteGroup {
     private int records;
     private boolean failed;
     private boolean forced;
+    private FileChannel channel;
 
     private record DeferredBlanks(File page, List<long[]> regions) {
     }
@@ -54,6 +56,66 @@ final class WalWriteGroup {
 
     void markForced() {
         forced = true;
+    }
+
+    void dropChannel() {
+        final var held = channel;
+        channel = null;
+        if (held == null) {
+            return;
+        }
+        try {
+            held.close();
+        } catch (IOException e) {
+            logger.warning("Could not close the write-ahead log channel of a write group: " + e.getMessage());
+        }
+    }
+
+    void append(File log, byte[] header, byte[] payload, int payloadLength, boolean force) throws IOException {
+        if (channel == null) {
+            channel = openAppending(log);
+        }
+        try {
+            appendTo(channel, log, header, payload, payloadLength, force);
+        } catch (IOException | RuntimeException e) {
+            dropChannel();
+            throw e;
+        }
+    }
+
+    void forceLog(File log) throws IOException {
+        if (channel == null) {
+            forceUnheld(log);
+            return;
+        }
+        try {
+            SyncedWrites.content(channel, log.toPath());
+        } catch (IOException | RuntimeException e) {
+            dropChannel();
+            throw e;
+        }
+    }
+
+    static FileChannel openAppending(File log) throws IOException {
+        return FileChannel.open(log.toPath(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    }
+
+    static void appendTo(FileChannel appending, File log, byte[] header, byte[] payload, int payloadLength,
+            boolean force) throws IOException {
+        final var buffers = new ByteBuffer[]{ByteBuffer.wrap(header), ByteBuffer.wrap(payload, 0, payloadLength)};
+        var unwritten = (long) header.length + payloadLength;
+        while (unwritten > 0) {
+            unwritten -= appending.write(buffers);
+        }
+        if (force) {
+            SyncedWrites.content(appending, log.toPath());
+        }
+    }
+
+    static void forceUnheld(File log) throws IOException {
+        try (var writable = FileChannel.open(log.toPath(), StandardOpenOption.WRITE)) {
+            SyncedWrites.content(writable, log.toPath());
+        }
     }
 
     boolean idle() {
@@ -113,6 +175,7 @@ final class WalWriteGroup {
     }
 
     void restartFrom(long logLength) {
+        dropChannel();
         logLengthBefore = logLength;
         lengthsBefore.clear();
         blanks.clear();

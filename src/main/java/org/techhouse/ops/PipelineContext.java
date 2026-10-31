@@ -45,6 +45,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     private long work;
     private long nextCheck = CHECK_EVERY;
     private long resultBytes;
+    private boolean pointHold;
 
     private PipelineContext(long timeoutMs, long maxResultBytes, AnalyzeContext analyze, boolean scriptsAllowed) {
         this.timed = timeoutMs > 0;
@@ -64,6 +65,11 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
 
     public static PipelineContext withoutScripts() {
         return new PipelineContext(0L, Long.MAX_VALUE, null, false);
+    }
+
+    public PipelineContext holdingPoint() {
+        pointHold = true;
+        return this;
     }
 
     public static long configuredMaxResultBytes() {
@@ -96,11 +102,22 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         if (resultStream != null) {
             return resultStream;
         }
+        refuseUnderPointHold();
         return scan(cache.streamCollection(dbName, collName)).map(DbEntry::getData);
     }
 
     public Stream<DbEntry> scan(Stream<DbEntry> entries) {
+        if (pointHold) {
+            entries.close();
+            refuseUnderPointHold();
+        }
         return watch(analyze == null ? entries : entries.peek(_ -> analyze.addScanned(1)));
+    }
+
+    private void refuseUnderPointHold() {
+        if (pointHold) {
+            throw new PointHoldTooNarrow();
+        }
     }
 
     public void chargeResult(long bytes) {

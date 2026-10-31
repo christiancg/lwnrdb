@@ -24,8 +24,8 @@ public final class Connection implements Closeable {
     public static final String STATUS = "status";
     public static final String MESSAGE = "message";
     public static final String ERROR_CODE = "errorCode";
-    private static final Set<String> RETRYABLE = Set.of("503-2", "503-3", "503-4", "503-5", "503-9", "503-10",
-            "503-16");
+    private static final Set<String> RETRYABLE = Set.of("503-2", "503-3", "503-4", "503-5", "503-9", "503-10", "503-16",
+            "503-17");
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     private final Socket socket;

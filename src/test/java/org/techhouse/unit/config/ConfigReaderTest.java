@@ -52,6 +52,7 @@ public class ConfigReaderTest {
         expectedConfig.put("authFailureDelayBaseMs", "250");
         expectedConfig.put("authFailureDelayMaxMs", "30000");
         expectedConfig.put("maxConcurrentPasswordChecks", "0");
+        expectedConfig.put("authVerifierCacheEnabled", "true");
         expectedConfig.put("filePath", "db");
         expectedConfig.put("backgroundProcessingThreads", "10");
         expectedConfig.put("logPath", "logs");
@@ -156,6 +157,8 @@ public class ConfigReaderTest {
         expectedConfig.put("shutdownTimeoutMs", "15000");
         expectedConfig.put("maxRequestSize", "64Mb");
         expectedConfig.put("clientOutboundQueueMaxBytes", "16Mb");
+        expectedConfig.put("maxUnsentResponseBytes", "0");
+        expectedConfig.put("clientWriteStallTimeoutMs", "30000");
         expectedConfig.put("authTimeoutMs", "10000");
         expectedConfig.put("transactionIdleTimeoutMs", "30000");
         expectedConfig.put("triggerRunLogEnabled", "true");

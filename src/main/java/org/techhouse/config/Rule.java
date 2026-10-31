@@ -59,6 +59,16 @@ public record Rule(Function<String, String> check) {
         });
     }
 
+    public static Rule nonNegativeSize() {
+        return new Rule(value -> {
+            try {
+                return SizeParser.parse(value) >= 0 ? null : "must be 0 or a positive size, but was: " + value;
+            } catch (RuntimeException ignored) {
+                return "must be a valid size, but was: " + value;
+            }
+        });
+    }
+
     // -1 disables the cache and 0 means unlimited, so the ordinary positive-size rule cannot apply.
     public static Rule memory() {
         return new Rule(value -> {

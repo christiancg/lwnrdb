@@ -19,7 +19,7 @@ import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.FieldPath;
 
 public final class IndexBuild {
     public static final long BUILDER_BYTES_PER_DOCUMENT_PER_FIELD = 170L;
@@ -147,6 +147,7 @@ public final class IndexBuild {
         private final String dbName;
         private final String collName;
         private final String field;
+        private final FieldPath path;
         private final Map<Class<?>, Map<String, FieldIndexEntry<Object>>> scalars = new LinkedHashMap<>();
         private final Map<IndexKind, Map<String, FieldIndexEntry<Object>>> hashes = new EnumMap<>(IndexKind.class);
 
@@ -154,10 +155,11 @@ public final class IndexBuild {
             this.dbName = dbName;
             this.collName = collName;
             this.field = field;
+            this.path = FieldPath.of(field);
         }
 
         private void add(DbEntry document) {
-            final var indexed = IndexedValue.of(JsonUtils.getFromPath(document.getData(), field));
+            final var indexed = IndexedValue.of(path.valueIn(document.getData()));
             if (indexed == null) {
                 return;
             }

@@ -255,6 +255,7 @@ public class UserCache {
         }
         if (!isCachingDisabled(dbName)) {
             fitWarnings.fieldIndexOutgrows(dbName, collName, indexIdentifier, lowerBound, maxMemoryBytes());
+            sizes.refuseFieldIndex(Cache.getCollectionIdentifier(dbName, collName), indexIdentifier, lowerBound);
         }
         return false;
     }
@@ -270,8 +271,10 @@ public class UserCache {
         if (!shouldCache(dbName, new AdmissionRequest(AccessKind.FIELD_INDEX, dbName, collName,
                 CacheableResource.indexedFieldOf(indexIdentifier), measured))) {
             fitWarnings.fieldIndexOutgrows(dbName, collName, indexIdentifier, measured, maxMemoryBytes());
+            sizes.refuseFieldIndex(collectionIdentifier, indexIdentifier, measured);
             return;
         }
+        sizes.clearRefusedFieldIndex(collectionIdentifier, indexIdentifier);
         fieldIndexMap.compute(collectionIdentifier, (_, existing) -> {
             final var indexes = existing != null ? existing : new ConcurrentHashMap<String, List<FieldIndexEntry<?>>>();
             if (indexes.putIfAbsent(indexIdentifier, copy) == null) {
@@ -405,6 +408,7 @@ public class UserCache {
             return;
         }
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        sizes.clearRefusedFieldIndex(collIdentifier, indexKey);
         fieldIndexMap.computeIfPresent(collIdentifier, (_, indexes) -> {
             indexes.remove(indexKey);
             sizes.forgetFieldIndex(collIdentifier, indexKey);
@@ -416,6 +420,7 @@ public class UserCache {
         evictFieldIndexLookup(dbName, collName, fieldName);
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var prefix = fieldName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        sizes.clearRefusedField(collIdentifier, fieldName);
         fieldIndexMap.computeIfPresent(collIdentifier, (_, indexes) -> {
             indexes.keySet().removeIf(key -> key.equals(fieldName) || key.startsWith(prefix));
             sizes.forgetFieldIndexAllTypes(collIdentifier, fieldName);

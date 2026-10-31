@@ -22,6 +22,7 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.fs.FieldIndexLoader;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.IndexLogChange;
+import org.techhouse.fs.IndexTypeReader;
 import org.techhouse.ioc.IocContainer;
 
 final class FieldIndexSlot {
@@ -39,10 +40,10 @@ final class FieldIndexSlot {
     private final String fileLabel;
     private final Comparator<FieldIndexEntry<Object>> order;
     private final boolean spellingMatters;
-    private final Loader loader;
+    private final IndexTypeReader loader;
     private final Map<String, FieldIndexEntry<Object>> created = new HashMap<>();
-    private final Map<FieldIndexEntry<Object>, Integer> touched = new IdentityHashMap<>();
-    private final Map<FieldIndexEntry<Object>, Boolean> emptied = new IdentityHashMap<>();
+    private Map<FieldIndexEntry<Object>, Integer> touched;
+    private Map<FieldIndexEntry<Object>, Boolean> emptied;
     private Map<String, Map<String, Boolean>> logged;
     private List<FieldIndexEntry<Object>> resident;
     private FieldIndexList shared;
@@ -53,14 +54,10 @@ final class FieldIndexSlot {
     private long idBytesDelta;
     private int changedIds;
     private boolean dirty;
-
-    @FunctionalInterface
-    private interface Loader {
-        List<? extends FieldIndexEntry<?>> load() throws IOException;
-    }
+    private boolean logOnly;
 
     private FieldIndexSlot(String dbName, String collName, String fieldName, String identifier, String fileLabel,
-            Comparator<FieldIndexEntry<Object>> order, boolean spellingMatters, Loader loader) {
+            Comparator<FieldIndexEntry<Object>> order, boolean spellingMatters, IndexTypeReader loader) {
         this.dbName = dbName;
         this.collName = collName;
         this.fieldName = fieldName;
@@ -72,13 +69,13 @@ final class FieldIndexSlot {
     }
 
     static FieldIndexSlot scalar(String dbName, String collName, String fieldName, Class<?> type) {
-        return new FieldIndexSlot(dbName, collName, fieldName, Cache.getIndexIdentifier(fieldName, type),
+        return new FieldIndexSlot(dbName, collName, fieldName, Cache.memoizedIndexIdentifier(fieldName, type),
                 IndexKind.fileLabel(type), cast(FieldIndexLoader.orderFor(type)), hasSpellings(type),
                 () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, type));
     }
 
     static FieldIndexSlot hash(String dbName, String collName, String fieldName, IndexKind kind) {
-        return new FieldIndexSlot(dbName, collName, fieldName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
+        return new FieldIndexSlot(dbName, collName, fieldName, Cache.memoizedHashIndexIdentifier(fieldName, kind),
                 kind.label(), cast(FieldIndexLoader.hashOrder()), true,
                 () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
     }
@@ -96,13 +93,18 @@ final class FieldIndexSlot {
         return identifier;
     }
 
-    boolean attach() throws IOException {
+    boolean attach(boolean mayLogOnly) throws IOException {
         resident = cast(cache.residentFieldIndex(dbName, collName, identifier));
+        if (resident == null && mayLogOnly && cache.isFieldIndexTypeRefused(dbName, collName, identifier)) {
+            logOnly = true;
+            entries = List.of();
+            return false;
+        }
         if (resident != null) {
             entries = resident;
             shared = FieldIndexList.sharingPkIds(resident);
         } else {
-            final var fromDisk = loader.load();
+            final var fromDisk = loader.read();
             onDisk = fromDisk != null;
             if (!onDisk && !fs.indexTypeFileExists(dbName, collName, fieldName, fileLabel)) {
                 cache.rememberFieldIndexTypeAbsent(dbName, collName, identifier);
@@ -120,6 +122,15 @@ final class FieldIndexSlot {
 
     boolean isResident() {
         return resident != null;
+    }
+
+    boolean isLogOnly() {
+        return logOnly;
+    }
+
+    void logChange(String key, String id, boolean present) {
+        log(key, id, present);
+        dirty = true;
     }
 
     long idCount() {
@@ -190,7 +201,7 @@ final class FieldIndexSlot {
             entry = new FieldIndexEntry<>(dbName, collName, value, new IdSet());
             created.put(key, entry);
             if (resident != null) {
-                touched.put(entry, CREATED_IN_BATCH);
+                touched().put(entry, CREATED_IN_BATCH);
             }
         } else {
             touch(entry);
@@ -214,6 +225,9 @@ final class FieldIndexSlot {
             log(FieldIndexEntry.fileKeyOf(entry.getValue()), id, false);
             dirty = true;
             if (entry.getIds().isEmpty()) {
+                if (emptied == null) {
+                    emptied = new IdentityHashMap<>(4);
+                }
                 emptied.put(entry, Boolean.TRUE);
             }
         }
@@ -248,15 +262,29 @@ final class FieldIndexSlot {
         logged.computeIfAbsent(key, _ -> new LinkedHashMap<>()).put(id, present);
     }
 
+    private Map<FieldIndexEntry<Object>, Integer> touched() {
+        if (touched == null) {
+            touched = new IdentityHashMap<>(4);
+        }
+        return touched;
+    }
+
     private void touch(FieldIndexEntry<Object> entry) {
         if (resident != null) {
-            touched.putIfAbsent(entry, entry.getIds().size());
+            touched().putIfAbsent(entry, entry.getIds().size());
         }
     }
 
     boolean write() throws IOException {
         if (!dirty) {
             return false;
+        }
+        if (logOnly) {
+            cache.forgetFieldIndexTypeAbsent(dbName, collName, identifier);
+            if (fs.appendIndexLogOnly(dbName, collName, fieldName, fileLabel, changes(), loader)) {
+                cache.evictFieldIndex(dbName, collName, identifier);
+            }
+            return true;
         }
         applyInPlace();
         cache.forgetFieldIndexTypeAbsent(dbName, collName, identifier);
@@ -282,7 +310,7 @@ final class FieldIndexSlot {
 
     private void applyInPlace() {
         final var removed = Collections.newSetFromMap(new IdentityHashMap<FieldIndexEntry<Object>, Boolean>());
-        for (final var entry : emptied.keySet()) {
+        for (final var entry : emptied == null ? Set.<FieldIndexEntry<Object>>of() : emptied.keySet()) {
             if (entry.getIds().isEmpty()) {
                 removed.add(entry);
             }
@@ -393,6 +421,9 @@ final class FieldIndexSlot {
     }
 
     void publish() {
+        if (logOnly) {
+            return;
+        }
         if (resident == null) {
             admitWhatWasLoaded();
             return;
@@ -411,7 +442,7 @@ final class FieldIndexSlot {
     }
 
     boolean coveredByCache() {
-        return entries.isEmpty() || cache.residentFieldIndex(dbName, collName, identifier) != null;
+        return !logOnly && entries.isEmpty() || cache.residentFieldIndex(dbName, collName, identifier) != null;
     }
 
     private void admitWhatWasLoaded() {
@@ -422,6 +453,9 @@ final class FieldIndexSlot {
 
     private long bytesDelta() {
         var total = idBytesDelta;
+        if (touched == null) {
+            return total;
+        }
         for (final var change : touched.entrySet()) {
             final var entry = change.getKey();
             final int countBefore = change.getValue();

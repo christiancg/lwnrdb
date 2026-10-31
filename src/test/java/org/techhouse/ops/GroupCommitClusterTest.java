@@ -126,7 +126,7 @@ public class GroupCommitClusterTest {
         assertEquals(ReplicationOp.UPSERT, payload.getValue().getOp());
         assertEquals(4, payload.getValue().getDocuments().size());
         assertEquals(4, payload.getValue().getVersions().size());
-        assertEquals(2L, fixture.walForces(), "the group base and one force for the whole group");
+        assertEquals(1L, fixture.walForces(), "the seed logged the group base, so one force for the whole group");
     }
 
     @Test

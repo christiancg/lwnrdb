@@ -11,6 +11,9 @@ public class JsonSchema {
     private final JsonBaseElement root;
     private final Set<RefExpansion> expanding = new HashSet<>();
     private final SchemaBudget budget;
+    private final JsonObject hiddenOwner;
+    private final String hiddenKey;
+    private JsonObject visibleOwner;
 
     public JsonSchema(JsonBaseElement root) {
         this(root, Long.MAX_VALUE);
@@ -21,8 +24,34 @@ public class JsonSchema {
     }
 
     public JsonSchema(JsonBaseElement root, SchemaBudget sharedBudget) {
+        this(root, sharedBudget, null, null);
+    }
+
+    public JsonSchema(JsonBaseElement root, SchemaBudget sharedBudget, JsonObject instance, String hiddenProperty) {
         this.root = root;
         this.budget = sharedBudget;
+        final var hides = instance != null && instance.has(hiddenProperty);
+        this.hiddenOwner = hides ? instance : null;
+        this.hiddenKey = hides ? hiddenProperty : null;
+    }
+
+    String hiddenKeyOf(JsonObject instance) {
+        return instance == hiddenOwner ? hiddenKey : null;
+    }
+
+    JsonBaseElement comparable(JsonBaseElement instance) {
+        if (hiddenOwner == null || instance != hiddenOwner) {
+            return instance;
+        }
+        if (visibleOwner == null) {
+            visibleOwner = new JsonObject();
+            for (final var entry : hiddenOwner.entrySet()) {
+                if (!hiddenKey.equals(entry.getKey())) {
+                    visibleOwner.add(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+        return visibleOwner;
     }
 
     RegexStepBudget budget() {

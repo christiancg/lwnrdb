@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.CollectionIdentifiers;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -360,6 +361,7 @@ public final class AdminPageHelper {
                 releaseAdminPageCollection(dbName, collName);
             }
             locks.removeLock(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+            CollectionIdentifiers.forget(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         }
     }
 

@@ -39,7 +39,6 @@ public class GroupCommitSideEffectsTest {
     private static final String ACTOR = "alice";
     private static final String DRAIN_MARKER = "__drain-marker__";
     private static final String RUNS_WAL = "trigger_runs.wal";
-    private static final long GROUP_BASE_FORCE = 1L;
     private static final long COLD_HOOK_TIMEOUT_MS = 30_000L;
     private static final String SUBJECT = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -153,7 +152,7 @@ public class GroupCommitSideEffectsTest {
         final var responses = fixture.runQueued(saves(fixture, "a", "b", "c", "d", "seed"));
 
         assertTrue(allOk(responses), describe(responses));
-        assertEquals(GROUP_BASE_FORCE + 1L, fixture.walForces());
+        assertEquals(1L, fixture.walForces());
         assertEquals("v-seed", fixture.valueOf("seed"));
     }
 
@@ -165,7 +164,7 @@ public class GroupCommitSideEffectsTest {
                 () -> fixture.save("a", "second"), () -> fixture.save("c", "v")));
 
         assertTrue(allOk(responses), describe(responses));
-        assertEquals(GROUP_BASE_FORCE + 2L, fixture.walForces(), "the second write on a starts the next batch");
+        assertEquals(2L, fixture.walForces(), "the second write on a starts the next batch");
         assertEquals("second", fixture.valueOf("a"));
     }
 
@@ -203,7 +202,7 @@ public class GroupCommitSideEffectsTest {
         final var responses = fixture.runQueued(saves(fixture, "a", "b", "c", "d", "e", "f"));
 
         assertTrue(allOk(responses), describe(responses));
-        assertEquals(GROUP_BASE_FORCE + 1L, fixture.walForces());
+        assertEquals(1L, fixture.walForces());
         assertEquals(1L, fixture.forcesOf(RUNS_WAL), "every staged run of the batch rides one record");
         assertTrue(dispatchedIds().containsAll(Set.of("a", "b", "c", "d", "e", "f")));
     }

@@ -57,7 +57,7 @@ public class AllocationBudgetTest {
     private static final long SAVE_UPDATE_BUDGET = 25_430;
     private static final long INSERT_BUDGET_PER_DOC = 3 * KB;
     private static final long COLD_SCAN_BUDGET_PER_DOC = 3_570;
-    private static final long BATCH_OF_ONE_BUDGET = 8_430;
+    private static final long BATCH_OF_ONE_BUDGET = 3_590;
     private static final long BULK_UPDATE_BUDGET_PER_DOC = 3_630;
     private static final long INDEXED_ID_LOOKUP_BUDGET = 21_510;
     private static final long EQUALS_INDEX_COUNT_BUDGET = 2_735;

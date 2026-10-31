@@ -415,7 +415,12 @@ public final class AdminOperationHelper {
     }
 
     public static void saveTriggerRuns(List<AdminTriggerRunEntry> entries) throws IOException, InterruptedException {
-        TriggerRunRecords.insert(entries);
+        saveTriggerRuns(entries, List.of());
+    }
+
+    public static void saveTriggerRuns(List<AdminTriggerRunEntry> entries, List<String> replacedRecordIds)
+            throws IOException, InterruptedException {
+        TriggerRunRecords.write(entries, replacedRecordIds);
     }
 
     public static List<AdminTriggerRunEntry> readTriggerRuns(List<String> recordIds)

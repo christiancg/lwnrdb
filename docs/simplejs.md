@@ -248,6 +248,13 @@ untrusted pattern or input passes a budget. `RegExp` in scripts passes one that 
 validator passes its per-document evaluation budget (`schemaValidationBudget`, refused with
 `400-23`). The budget throws its caller's own exception through the continuations; the matcher
 holds no state beyond one `exec`, so nothing needs unwinding.
+`RegexMatcher.matches` and `matchEnd` run the same search and charge the same steps without
+building a match result (no capture copies, no `RegexMatch`). The schema validator's `pattern` and
+`patternProperties` use `matches`; `RegExp.prototype.test` uses `matchEnd` when the `exec` it reads
+from the receiver is the built-in one (`RegexExec.builtinTest`), still reading `exec` and
+`lastIndex`, writing `lastIndex` exactly as `exec` would, and charging the two instructions the
+skipped `exec` call would have, so a script's instruction count does not change. A user-defined
+`exec` (own property, subclass or a patched `RegExp.prototype.exec`) is called as before.
 
 Unicode property escapes resolve a name to a `CodePointSet` using `java.util.regex.Pattern` as a
 one-time per-property **oracle** (compiled once, every code point tested, cached) — never as the
@@ -470,9 +477,15 @@ node-wide permit it could not use. The returned `Permit` records which pools it 
 node-wide refusal releases the slices. Triggers and schedules take the two slices as their
 definer (`acquireSlices`), not the node-wide permit: they are already bounded by their own worker
 pools, but without the slices one tenant's automation could hold every interpreter its users'
-scripts compete for. A trigger refused a slice is re-queued after a backoff without consuming an
-attempt (dead-lettered only once `triggerRunRetentionMs` has passed since it fired), so it is
-delayed, never dropped; a scheduled run refused one skips that occurrence. Before hooks stay
+scripts compete for. A trigger whose definer is at a ceiling waits for a slice up to
+`scriptQueueWaitMs` (`acquireSlicesWithin`, one deadline for both slices, giving the user slice back
+if the database one does not come), so `triggerThreads` above `maxConcurrentScriptsPerUser`, or a
+definer running a few procedures, only queues the surplus runs behind the busy ones. Only a wait that
+times out re-queues the run after a backoff without consuming an attempt (dead-lettered only once
+`triggerRunRetentionMs` has passed since it fired), so it is delayed, never dropped, and the INFO line
+saying so is rate-limited; a scheduled run refused one skips that occurrence. A user or database pool
+whose last permit closes, with nobody waiting on it, is removed, so a deleted user or a dropped
+database leaves no pool behind. Before hooks stay
 exempt — they run inline under the write lock, where a refusal would be a failed write. The
 node-wide ceiling on concurrent interpreters is therefore
 `maxConcurrentScripts + triggerThreads + scheduleThreads`, and that sum times
@@ -852,7 +865,11 @@ ops are deleted only after the marker, so a replay always sees the whole transac
 the events are queued only after the marker is gone, so a trigger still never sees a transaction
 that could roll back. A standalone `SAVE`/`BULK_SAVE`/`DELETE` stages its runs under the collection
 lock *before* the write, as `STAGED` records carrying each document's prior version (or "absent").
-If the write lands, the in-process event is queued under that run id; if it is refused or fails, the
+Every run a write stages is written as **one** forced `trigger_runs` record (a document-mode trigger
+on a 1000-document `BULK_SAVE` is one record, not a thousand, and so is a commit's batch of runs,
+which also replaces any record a replay of the same commit left under those run ids); if that record
+cannot be written, the runs are recorded one by one, and a run that still cannot be recorded fires
+without a durable record. If the write lands, the in-process event is queued under that run id; if it is refused or fails, the
 records are discarded; a partially applied `BULK_SAVE` keeps only what committed. A `STAGED` run
 found at startup fires for exactly the documents whose version has changed since it was staged —
 every save stamps a fresh version and a delete removes the document — and is otherwise discarded.
@@ -1054,7 +1071,9 @@ opt-in, since an exploratory client would write a row per keystroke; `BEFORE_HOO
 refusals only). A row carries the run's identity, outcome, attempt number and metrics; `skipped`
 is the outcome no other surface reports — a trigger whose definer was deleted, a schedule whose
 procedure is gone. Rows are written by the background workers in batches, one `BULK_SAVE` per database for
-every run queued together (a batch the owner answers `503-10` retries row by row, any other refusal falls back to
+every run queued together; a run that reaches a worker alone is held for up to 50 ms
+(`Globals.SCRIPT_HISTORY_COALESCE_MS`) so the runs finishing after it share its write, and shutdown writes whatever
+is held at once (a batch the owner answers `503-10` retries row by row, any other refusal falls back to
 row-by-row writes so one bad row drops only itself). At most `scriptRunHistoryMaxQueued` rows wait to be written; a
 run finishing while the queue is full is counted in `historyDropped` and not recorded, so a burst of runs never
 exhausts the heap, and `GET_DATABASE_STATS` reports the backlog as `scripts.historyQueued`. An owner-only sweep, every

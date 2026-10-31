@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+import threading
 import time
 
 import base_utils as bu
@@ -127,6 +128,7 @@ COLL_DISTINCT = "distinct_rows"
 COLL_BUDGET = "result_budget"
 COLL_DELETES = "many_deletes"
 COLL_SHAPES = "shapes"
+COLL_MIXED = "mixed_load"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -892,6 +894,68 @@ def test_aggregation_steps_write_dotted_fields_nested(c):
     check("JOIN asField same.rows nests the joined array", joined == ["n1", "n3"], detail=f"got {row}")
 
 
+def test_nested_paths_and_contains_on_scan_and_index(c):
+    section("FILTER, CONTAINS, GROUP_BY, SORT and DISTINCT on nested paths, scan and index alike")
+    coll = "agg_field_paths"
+    create_coll(c, coll)
+    bulk_save(c, coll, [
+        {"_id": "p1", "a": {"b": {"c": 3}, "s": "xxababx"}, "t": "hello world"},
+        {"_id": "p2", "a": {"b": {"c": 1}, "s": "abaab"}, "t": "say hello"},
+        {"_id": "p3", "a": {"b": {"c": 2}, "s": "aababab"}, "t": "HELLO"},
+        {"_id": "p4", "a": {"b": {"c": 3}, "s": "abab"}, "t": "nothing"},
+        {"_id": "p5", "a": {"b": "scalar"}, "t": "aba"},
+        {"_id": "p6", "a": {"b": [{"c": 3}]}, "t": ""},
+        {"_id": "p7", "t": "hello"},
+    ])
+
+    def ids(pipeline):
+        return ids_of(aggregate(c, coll, pipeline))
+
+    def ordered(pipeline):
+        return [d.get("_id") for d in (aggregate(c, coll, pipeline).get("results") or [])]
+
+    def nested_keys(pipeline):
+        rows = aggregate(c, coll, pipeline).get("results") or []
+        return sorted(((r.get("a") or {}).get("b") or {}).get("c") for r in rows)
+
+    present = filter_step("a.b.c", "GREATER_THAN", 0)
+    queries = {
+        "EQUALS a.b.c": (ids, [filter_step("a.b.c", "EQUALS", 3)], ["p1", "p4"]),
+        "GREATER_THAN a.b.c": (ids, [filter_step("a.b.c", "GREATER_THAN", 1)], ["p1", "p3", "p4"]),
+        "NOT_EQUALS a.b.c skips paths through a scalar, an array or nothing":
+            (ids, [filter_step("a.b.c", "NOT_EQUALS", 3)], ["p2", "p3"]),
+        "IN a.b.c": (ids, [filter_step("a.b.c", "IN", [1, 2])], ["p2", "p3"]),
+        "NOT_IN a.b.c": (ids, [filter_step("a.b.c", "NOT_IN", [1])], ["p1", "p3", "p4"]),
+        "SORT a.b.c descending": (ordered, [present, {"type": "SORT", "fieldName": "a.b.c", "ascending": False}],
+                                  ["p1", "p4", "p3", "p2"]),
+        "SORT a.b.c ascending + LIMIT 2": (ordered, [present, {"type": "SORT", "fieldName": "a.b.c",
+                                                               "ascending": True}, {"type": "LIMIT", "limit": 2}],
+                                           ["p2", "p3"]),
+        "GROUP_BY a.b.c": (nested_keys, [{"type": "GROUP_BY", "fieldName": "a.b.c"}], [1, 2, 3]),
+        "DISTINCT a.b.c": (nested_keys, [{"type": "DISTINCT", "fieldName": "a.b.c"}], [1, 2, 3]),
+    }
+    for name, (run, steps, expected) in queries.items():
+        got = run(steps)
+        check(f"scan: {name}", got == expected, detail=f"expected {expected}, got {got}")
+
+    check("CONTAINS on a nested string field, one operand over many rows",
+          ids([filter_step("a.s", "CONTAINS", "abab")]) == ["p1", "p3", "p4"],
+          detail=f"got {ids([filter_step('a.s', 'CONTAINS', 'abab')])}")
+    check("CONTAINS stays case-sensitive",
+          ids([filter_step("t", "CONTAINS", "hello")]) == ["p1", "p2", "p7"],
+          detail=f"got {ids([filter_step('t', 'CONTAINS', 'hello')])}")
+    check("CONTAINS an empty operand matches every string",
+          ids([filter_step("t", "CONTAINS", "")]) == ["p1", "p2", "p3", "p4", "p5", "p6", "p7"])
+    check("CONTAINS an operand longer than the value matches nothing",
+          ids([filter_step("t", "CONTAINS", "abab")]) == [])
+
+    create_index(c, coll, "a.b.c")
+    wait_for_index(c, coll, "a.b.c")
+    for name, (run, steps, expected) in queries.items():
+        got = run(steps)
+        check(f"index: {name}", got == expected, detail=f"expected {expected}, got {got}")
+
+
 def test_analyze(c):
     section("Explain / Analyze (AGGREGATE analyze=true)")
 
@@ -1134,6 +1198,82 @@ def test_name_case_collisions(c):
     check_status("DROP_DATABASE CaseDb twice is refused", drop_db(c, "CaseDb"), "ERROR")
 
 
+def get_schema(c, coll, db=DB) -> dict:
+    return c.send({"type": "GET_SCHEMA", "databaseName": db, "collectionName": coll})
+
+
+def list_triggers(c, coll, db=DB) -> dict:
+    return c.send({"type": "LIST_TRIGGERS", "databaseName": db, "collectionName": coll})
+
+
+GHOST_ROUNDS = 200
+GHOST_DB = "api_ghost_db_never_created"
+
+
+def check_ghost_answers(c, label, coll):
+    check_code(f"{label}: GET_SCHEMA -> 404-11", get_schema(c, coll), "NOT_FOUND", "404-11")
+    trig = list_triggers(c, coll)
+    check(f"{label}: LIST_TRIGGERS -> OK with no triggers",
+          trig.get("status") == "OK" and trig.get("triggers") == [], f"got {trig}")
+    check_code(f"{label}: SAVE -> 404-11", save(c, coll, {"_id": "a", "v": 1}), "NOT_FOUND", "404-11")
+    check_code(f"{label}: GET_SCHEMA in a missing database -> 404-11",
+               get_schema(c, coll, db=GHOST_DB), "NOT_FOUND", "404-11")
+    check_code(f"{label}: LIST_TRIGGERS in a missing database -> 404-4",
+               list_triggers(c, coll, db=GHOST_DB), "NOT_FOUND", "404-4")
+    check_code(f"{label}: SAVE in a missing database -> 404-11",
+               save(c, coll, {"_id": "a", "v": 1}, db=GHOST_DB), "NOT_FOUND", "404-11")
+
+
+def test_names_that_do_not_exist_answer_as_before(c):
+    section("GET_SCHEMA, LIST_TRIGGERS and SAVE on names that do not exist keep their answers")
+    check_ghost_answers(c, "first ghost", "ghost_0")
+    check_ghost_answers(c, "the same ghost again", "ghost_0")
+
+    wrong = []
+    for i in range(GHOST_ROUNDS):
+        coll = f"ghost_{i}"
+        answers = (get_schema(c, coll).get("errorCode"), list_triggers(c, coll).get("status"),
+                   save(c, coll, {"_id": "a"}).get("errorCode"), get_schema(c, coll, db=GHOST_DB).get("errorCode"),
+                   list_triggers(c, coll, db=GHOST_DB).get("errorCode"),
+                   save(c, coll, {"_id": "a"}, db=GHOST_DB).get("errorCode"))
+        if answers != ("404-11", "OK", "404-11", "404-11", "404-4", "404-11"):
+            wrong.append((coll, answers))
+    check(f"{GHOST_ROUNDS} ghost names each answer exactly as the first", not wrong, f"first wrong: {wrong[:3]}")
+
+    with Conn() as rc:
+        rc.authenticate("api_reader", "api_reader1234")
+        check_code("read-only user: GET_SCHEMA of a ghost -> 404-11", get_schema(rc, "ghost_1"), "NOT_FOUND", "404-11")
+        trig = list_triggers(rc, "ghost_1")
+        check("read-only user: LIST_TRIGGERS of a ghost -> OK, empty",
+              trig.get("status") == "OK" and trig.get("triggers") == [], f"got {trig}")
+        check_code("read-only user: SAVE to a ghost is still refused -> 403-1",
+                   save(rc, "ghost_1", {"_id": "a"}), "FORBIDDEN", "403-1")
+
+    with Conn() as jc:
+        jc.authenticate("api_join_user", "api_join_user1234")
+        check_code("user without database permission: GET_SCHEMA of a ghost -> 403-1",
+                   get_schema(jc, "ghost_1"), "FORBIDDEN", "403-1")
+        check_code("user without database permission: LIST_TRIGGERS of a ghost -> 403-1",
+                   list_triggers(jc, "ghost_1"), "FORBIDDEN", "403-1")
+        check_code("user without database permission: SAVE to a ghost -> 403-1",
+                   save(jc, "ghost_1", {"_id": "a"}), "FORBIDDEN", "403-1")
+
+    reborn = "ghost_2"
+    check_status("CREATE_COLLECTION of a name asked about while it did not exist", create_coll(c, reborn), "OK")
+    check_code("its GET_SCHEMA now answers no schema -> 404-12", get_schema(c, reborn), "NOT_FOUND", "404-12")
+    check_status("SAVE into it", save(c, reborn, {"_id": "a", "v": 1}), "OK")
+    check_field("FIND_BY_ID reads the saved document", find_by_id(c, reborn, "a"), "object.v", 1)
+    schema = {"type": "object", "required": ["_id"]}
+    check_status("SAVE_SCHEMA on it", c.send({"type": "SAVE_SCHEMA", "databaseName": DB,
+                                              "collectionName": reborn, "schema": schema}), "OK")
+    check_field("GET_SCHEMA returns the saved schema", get_schema(c, reborn), "schema", schema)
+    trig = list_triggers(c, reborn)
+    check("LIST_TRIGGERS of it -> OK, empty", trig.get("status") == "OK" and trig.get("triggers") == [], f"got {trig}")
+    check_code("a neighbouring ghost still answers 404-11", get_schema(c, "ghost_3"), "NOT_FOUND", "404-11")
+    check_status("DROP_COLLECTION it", drop_coll(c, reborn), "OK")
+    check_ghost_answers(c, "after the drop", reborn)
+
+
 def test_admin_database_reads_follow_admin_writes(c):
     section("Reads of the admin database follow the admin writes that came after them")
     first, second = "AdminReadFirst", "AdminReadSecond"
@@ -1301,6 +1441,84 @@ def test_a_large_document_round_trips(c):
     check_status("the large document is deleted", delete(c, COLL_CRUD, "large_doc"), "OK")
 
 
+MIXED_DOCS = 12_000
+MIXED_CATS = 40
+MIXED_HOT = 200
+
+
+def mixed_writer(slot: int, rounds: int, last: dict, errors: list) -> None:
+    with Conn() as w:
+        w.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        for version in range(1, rounds + 1):
+            for i in range(slot, MIXED_HOT, 2):
+                doc = {"_id": f"k{i:05d}", "cat": f"c{i % MIXED_CATS}", "n": i, "v": version}
+                if save(w, COLL_MIXED, doc).get("status") != "OK":
+                    errors.append(f"save k{i:05d} v{version}")
+                last[f"k{i:05d}"] = version
+
+
+def mixed_scanner(stop: threading.Event, answers: list) -> None:
+    with Conn() as s:
+        s.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        while not stop.is_set():
+            r = aggregate(s, COLL_MIXED, [{"type": "GROUP_BY", "fieldName": "cat"}, {"type": "COUNT"}])
+            answers.append(bu.dig(r, "results.0.count"))
+
+
+def mixed_point_reads(c) -> list:
+    wrong = []
+    cold = 5000 + (int(time.time() * 1000) % 5000)
+    found = find_by_id(c, COLL_MIXED, f"k{cold:05d}")
+    if bu.dig(found, "object.n") != cold:
+        wrong.append(f"FIND_BY_ID k{cold:05d}: {found}")
+    limited = aggregate(c, COLL_MIXED, [filter_step("cat", "EQUALS", "c7"), {"type": "LIMIT", "limit": 5}])
+    rows = limited.get("results") or []
+    if len(rows) != 5 or len({row["_id"] for row in rows}) != 5 or any(row["cat"] != "c7" for row in rows):
+        wrong.append(f"FILTER+LIMIT: {rows}")
+    counted = aggregate(c, COLL_MIXED, [filter_step("cat", "EQUALS", "c11"), {"type": "COUNT"}])
+    if bu.dig(counted, "results.0.count") != MIXED_DOCS // MIXED_CATS:
+        wrong.append(f"indexed COUNT: {counted}")
+    total = aggregate(c, COLL_MIXED, [{"type": "COUNT"}])
+    if bu.dig(total, "results.0.count") != MIXED_DOCS:
+        wrong.append(f"COUNT: {total}")
+    by_ids = aggregate(c, COLL_MIXED, [filter_step("_id", "IN", ["k00003", "k09999", "missing"])])
+    if sorted(ids_of(by_ids)) != ["k00003", "k09999"]:
+        wrong.append(f"_id IN: {by_ids}")
+    return wrong
+
+
+def test_point_reads_answer_beside_a_long_scan_and_writers(c):
+    section("FIND_BY_ID and index-served reads answer correctly while a GROUP_BY and writers share the collection")
+    create_coll(c, COLL_MIXED)
+    for start in range(0, MIXED_DOCS, 2000):
+        bulk_save(c, COLL_MIXED, [{"_id": f"k{i:05d}", "cat": f"c{i % MIXED_CATS}", "n": i, "v": 0}
+                                  for i in range(start, start + 2000)])
+    check_status("the cat index is created", create_index(c, COLL_MIXED, "cat"), "OK")
+    stop = threading.Event()
+    groups, last, errors = [], {}, []
+    scanner = threading.Thread(target=mixed_scanner, args=(stop, groups))
+    writers = [threading.Thread(target=mixed_writer, args=(slot, 6, last, errors)) for slot in (0, 1)]
+    scanner.start()
+    for writer in writers:
+        writer.start()
+    wrong, rounds = [], 0
+    while any(writer.is_alive() for writer in writers) or rounds < 20:
+        wrong += mixed_point_reads(c)
+        rounds += 1
+    for writer in writers:
+        writer.join()
+    stop.set()
+    scanner.join()
+    check("every point and index-served read answered exactly", wrong == [], detail=f"{len(wrong)} wrong: {wrong[:3]}")
+    check("every write was acknowledged", errors == [], detail=f"{errors[:3]}")
+    check("every GROUP_BY saw each group once", groups != [] and all(count == MIXED_CATS for count in groups),
+          detail=f"{[count for count in groups if count != MIXED_CATS][:5]} of {len(groups)}")
+    stale = [doc_id for doc_id, version in last.items()
+             if bu.dig(find_by_id(c, COLL_MIXED, doc_id), "object.v") != version]
+    check("the last write of each hot document is what FIND_BY_ID reads", stale == [], detail=f"{stale[:5]}")
+    drop_coll(c, COLL_MIXED)
+
+
 def canonical(row):
     return json.dumps(row, sort_keys=True)
 
@@ -1352,6 +1570,7 @@ def main():
         test_database_and_collection_ops,
         test_name_case_collisions,
         test_admin_database_reads_follow_admin_writes,
+        test_names_that_do_not_exist_answer_as_before,
         test_reserved_script_runs_collection,
         test_crud,
         test_top_level_id,
@@ -1368,12 +1587,14 @@ def main():
         test_conjunctions,
         test_aggregation_steps,
         test_aggregation_steps_write_dotted_fields_nested,
+        test_nested_paths_and_contains_on_scan_and_index,
         test_join_then_map_on_a_shared_group_stays_small,
         test_map_remove_of_a_large_group_stays_small,
         test_aggregate_output_over_budget_is_400_36,
         test_deletes_keep_a_large_collection_consistent,
         test_a_request_pipelined_after_a_large_one_is_not_lost,
         test_a_large_document_round_trips,
+        test_point_reads_answer_beside_a_long_scan_and_writers,
         test_distinct_without_field_unchanged,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,

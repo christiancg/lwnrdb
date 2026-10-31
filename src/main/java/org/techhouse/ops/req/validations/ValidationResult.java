@@ -3,6 +3,7 @@ package org.techhouse.ops.req.validations;
 import org.techhouse.ops.ErrorCode;
 
 public final class ValidationResult {
+    private static final ValidationResult OK = new ValidationResult(true, null, null);
     private final boolean valid;
     private final String errorMessage;
     private final ErrorCode errorCode;
@@ -14,7 +15,7 @@ public final class ValidationResult {
     }
 
     public static ValidationResult ok() {
-        return new ValidationResult(true, null, null);
+        return OK;
     }
 
     public static ValidationResult fail(String errorMessage) {

@@ -7,8 +7,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.internal.EncodedJson;
 import org.techhouse.ioc.IocContainer;
@@ -19,7 +21,9 @@ import org.techhouse.ops.resp.OperationResponse;
 public class OutboundQueue {
     public static final Executor VIRTUAL_DRAINER = command -> Thread.ofVirtual().name("lwnrdb-outbound").start(command);
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final ResponseBudget sharedBudget = IocContainer.get(ResponseBudget.class);
     private static final long OVERFLOW_CLOSE_GRACE_MS = 1000L;
+    private static final int WRITE_CHUNK_BYTES = Globals.INLINE_FRAME_MAX_BYTES;
     private static final byte[] LINE_END = System.lineSeparator().getBytes(StandardCharsets.US_ASCII);
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition idle = lock.newCondition();
@@ -29,11 +33,23 @@ public class OutboundQueue {
     private final long maxQueuedBytes;
     private final Executor drainer;
     private final Runnable onOverflow;
+    private final ResponseBudget budget;
     private long queuedBytes;
     private boolean draining;
     private boolean closed;
+    private volatile boolean writing;
+    private volatile long lastProgressNanos;
+    private final AtomicBoolean aborted = new AtomicBoolean();
 
-    private record Frame(EncodedJson head, EncodedJson body, EncodedJson tail) {
+    @FunctionalInterface
+    public interface InlineWrite {
+        InlineWrite NONE = () -> {
+        };
+
+        void write();
+    }
+
+    private record Frame(EncodedJson head, EncodedJson body, EncodedJson tail, long reserved) {
         long queuedLength() {
             return lengthOf(head) + lengthOf(body) + lengthOf(tail) + LINE_END.length;
         }
@@ -45,15 +61,25 @@ public class OutboundQueue {
 
     public OutboundQueue(OutputStream out, Closeable connection, long maxQueuedBytes, Executor drainer,
             Runnable onOverflow) {
+        this(out, connection, maxQueuedBytes, drainer, onOverflow, sharedBudget);
+    }
+
+    public OutboundQueue(OutputStream out, Closeable connection, long maxQueuedBytes, Executor drainer,
+            Runnable onOverflow, ResponseBudget budget) {
         this.out = out;
         this.connection = connection;
         this.maxQueuedBytes = maxQueuedBytes;
         this.drainer = drainer;
         this.onOverflow = onOverflow;
+        this.budget = budget;
     }
 
     public static EncodedJson frameOf(OperationResponse response) {
-        return eJson.toJsonFrame(response, response.estimatedJsonChars());
+        return frameOf(response, response.estimatedJsonChars());
+    }
+
+    public static EncodedJson frameOf(OperationResponse response, int sizeHint) {
+        return eJson.toJsonFrame(response, sizeHint);
     }
 
     public static EncodedJson closeFrame(ErrorCode code) {
@@ -61,21 +87,10 @@ public class OutboundQueue {
     }
 
     public static void sendDirectly(OutputStream out, ErrorCode code) throws IOException {
-        writeFrame(out, new Frame(closeFrame(code), null, null));
-        out.flush();
-    }
-
-    private static void writeFrame(OutputStream out, Frame frame) throws IOException {
-        writeSegment(out, frame.head());
-        writeSegment(out, frame.body());
-        writeSegment(out, frame.tail());
+        final var frame = closeFrame(code);
+        out.write(frame.bytes(), 0, frame.length());
         out.write(LINE_END);
-    }
-
-    private static void writeSegment(OutputStream out, EncodedJson segment) throws IOException {
-        if (segment != null && segment.length() > 0) {
-            out.write(segment.bytes(), 0, segment.length());
-        }
+        out.flush();
     }
 
     public boolean offer(byte[] frame) {
@@ -83,11 +98,27 @@ public class OutboundQueue {
     }
 
     public boolean offer(EncodedJson frame) {
-        return offer(new Frame(frame, null, null));
+        return offer(new Frame(frame, null, null, 0));
     }
 
     public boolean offer(EncodedJson head, EncodedJson body, EncodedJson tail) {
-        return offer(new Frame(head, body, tail));
+        return offer(new Frame(head, body, tail, 0));
+    }
+
+    public InlineWrite offerResponse(EncodedJson response, long reserved, boolean mayWriteInline) {
+        final var frame = new Frame(response, null, null, reserved);
+        lock.lock();
+        try {
+            if (mayWriteInline && !closed && !draining && pending.isEmpty()
+                    && frame.queuedLength() <= Globals.INLINE_FRAME_MAX_BYTES) {
+                draining = true;
+                return () -> writeInline(frame);
+            }
+        } finally {
+            lock.unlock();
+        }
+        offer(frame);
+        return InlineWrite.NONE;
     }
 
     private boolean offer(Frame frame) {
@@ -96,14 +127,15 @@ public class OutboundQueue {
         lock.lock();
         try {
             if (closed) {
+                budget.release(frame.reserved());
                 return false;
             }
             overflowed = queuedBytes > 0 && frame.queuedLength() > maxQueuedBytes - queuedBytes;
             if (overflowed) {
-                pending.clear();
-                queuedBytes = 0;
+                discardPending();
+                budget.release(frame.reserved());
                 closed = true;
-                pending.add(new Frame(closeFrame(ErrorCode.OUTBOUND_BACKLOG), null, null));
+                pending.add(new Frame(closeFrame(ErrorCode.OUTBOUND_BACKLOG), null, null, 0));
             } else {
                 pending.add(frame);
                 queuedBytes += frame.queuedLength();
@@ -152,19 +184,94 @@ public class OutboundQueue {
         }
     }
 
-    private void drain() {
-        var frame = nextFrame();
-        while (frame != null) {
-            try {
-                writeFrame(out, frame);
-                if (nothingPending()) {
-                    out.flush();
-                }
-            } catch (IOException e) {
-                abandon();
-                return;
+    public long stalledForMillis(long nowNanos) {
+        return writing ? TimeUnit.NANOSECONDS.toMillis(nowNanos - lastProgressNanos) : 0L;
+    }
+
+    public boolean abortStalled() {
+        if (aborted.compareAndSet(false, true)) {
+            SocketClosing.closeInBackground(connection);
+            return true;
+        }
+        return false;
+    }
+
+    public void discard() {
+        lock.lock();
+        try {
+            closed = true;
+            discardPending();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void writeInline(Frame frame) {
+        if (writeAndRelease(frame)) {
+            final var next = nextFrame();
+            if (next != null) {
+                drainer.execute(() -> drainFrom(next));
             }
+        }
+    }
+
+    private void drain() {
+        final var first = nextFrame();
+        if (first != null) {
+            drainFrom(first);
+        }
+    }
+
+    private void drainFrom(Frame first) {
+        var frame = first;
+        while (frame != null && writeAndRelease(frame)) {
             frame = nextFrame();
+        }
+    }
+
+    private boolean writeAndRelease(Frame frame) {
+        final var written = writeReleasing(frame);
+        if (!written) {
+            abandon();
+        }
+        return written;
+    }
+
+    private boolean writeReleasing(Frame frame) {
+        try {
+            writeTracked(frame);
+            return true;
+        } catch (IOException e) {
+            return false;
+        } finally {
+            budget.release(frame.reserved());
+        }
+    }
+
+    private void writeTracked(Frame frame) throws IOException {
+        lastProgressNanos = System.nanoTime();
+        writing = true;
+        try {
+            writeChunked(frame.head());
+            writeChunked(frame.body());
+            writeChunked(frame.tail());
+            out.write(LINE_END);
+            if (nothingPending()) {
+                out.flush();
+            }
+        } finally {
+            writing = false;
+        }
+    }
+
+    private void writeChunked(EncodedJson segment) throws IOException {
+        if (segment == null) {
+            return;
+        }
+        final var length = segment.length();
+        for (var offset = 0; offset < length; offset += WRITE_CHUNK_BYTES) {
+            out.write(segment.bytes(), offset, Math.min(WRITE_CHUNK_BYTES, length - offset));
+            lastProgressNanos = System.nanoTime();
         }
     }
 
@@ -214,12 +321,21 @@ public class OutboundQueue {
         }
     }
 
+    private void discardPending() {
+        var reserved = 0L;
+        for (final var frame : pending) {
+            reserved += frame.reserved();
+        }
+        budget.release(reserved);
+        pending.clear();
+        queuedBytes = 0;
+    }
+
     private void abandon() {
         lock.lock();
         try {
             closed = true;
-            pending.clear();
-            queuedBytes = 0;
+            discardPending();
         } finally {
             lock.unlock();
         }

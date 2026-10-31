@@ -338,6 +338,60 @@ def test_set_password_deauthenticates_other_sessions(c):
     delete_user(c, "pw_sess_user")
 
 
+VERIFIER_USER = "verifier_user"
+VERIFIER_PASSWORD = "verifier_pass1"
+VERIFIER_NEW_PASSWORD = "verifier_pass2"
+THROTTLE_DELAY_FLOOR_S = 0.15
+
+
+def authenticate_fresh(username, password):
+    with Conn() as session:
+        started = time.monotonic()
+        response = session.authenticate(username, password)
+        elapsed = time.monotonic() - started
+    return response, elapsed
+
+
+def test_repeated_authentication_and_the_verifier_cache(c):
+    section("A repeated AUTHENTICATE succeeds, and every change to the user stops the old password")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, VERIFIER_USER)
+    check_status(f"CREATE_USER {VERIFIER_USER!r}", create_user(c, VERIFIER_USER, VERIFIER_PASSWORD), "OK")
+    check_status("first AUTHENTICATE", authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "OK")
+    check_status("second AUTHENTICATE with the same password",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "OK")
+
+    check_code("a wrong password after a cached success fails",
+               authenticate_fresh(VERIFIER_USER, "verifier_wrong")[0], "ERROR", "401-3")
+    response, elapsed = authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)
+    check_status("the right password still authenticates afterwards", response, "OK")
+    check("the failure counted toward the throttle (the next attempt paid its delay)",
+          elapsed >= THROTTLE_DELAY_FLOOR_S, f"took {elapsed:.3f}s")
+
+    check_status("admin changes the password", set_password(c, VERIFIER_USER, VERIFIER_NEW_PASSWORD), "OK")
+    check_code("the old password fails after SET_PASSWORD",
+               authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "ERROR", "401-3")
+    check_status("the new password authenticates",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+    check_status("the new password authenticates again",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+
+    check_status(f"DELETE_USER {VERIFIER_USER!r}", delete_user(c, VERIFIER_USER), "OK")
+    check_code("a deleted user cannot log in with its last password",
+               authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "ERROR", "401-3")
+
+    check_status(f"re-CREATE_USER {VERIFIER_USER!r} with the same password",
+                 create_user(c, VERIFIER_USER, VERIFIER_NEW_PASSWORD), "OK")
+    check_status("the re-created user authenticates",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+    check_status("the re-created user authenticates again",
+                 authenticate_fresh(VERIFIER_USER, VERIFIER_NEW_PASSWORD)[0], "OK")
+    check_code("the original password still fails for the re-created user",
+               authenticate_fresh(VERIFIER_USER, VERIFIER_PASSWORD)[0], "ERROR", "401-3")
+    delete_user(c, VERIFIER_USER)
+
+
 def test_unknown_type_with_newline_is_refused_cleanly():
     section("An unknown request type carrying a newline is refused and the connection keeps serving")
 
@@ -1136,6 +1190,9 @@ def main():
 
     with Conn() as c:
         test_set_password_deauthenticates_other_sessions(c)
+
+    with Conn() as c:
+        test_repeated_authentication_and_the_verifier_cache(c)
 
     with Conn() as c:
         test_no_db_permission(c)

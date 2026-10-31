@@ -1,41 +1,32 @@
 package org.techhouse.fs;
 
 import java.io.File;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.config.Globals;
+import org.techhouse.data.NameMemo;
 import org.techhouse.ex.InvalidPathSegmentException;
 
 // Every builder funnels through databaseFolder, making this the only place the reserved logical db
 // name ADMIN_PAGES_DB_NAME is translated to the physical admin/pages subfolder.
 final class FilePaths {
     static final int MAX_REMEMBERED_PREFIXES = 8192;
-    private final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> prefixes = new ConcurrentHashMap<>();
-    private final AtomicInteger rememberedPrefixes = new AtomicInteger();
+    private final NameMemo<String> prefixes = new NameMemo<>(MAX_REMEMBERED_PREFIXES);
     private String dbPath;
 
     void useDbPath(String dbPath) {
         this.dbPath = dbPath;
         prefixes.clear();
-        rememberedPrefixes.set(0);
     }
 
     void forgetCollection(String dbName, String collectionName) {
-        final var inDatabase = prefixes.get(dbName);
-        if (inDatabase != null && inDatabase.remove(collectionName) != null) {
-            rememberedPrefixes.decrementAndGet();
-        }
+        prefixes.forget(dbName, collectionName);
     }
 
     void forgetDatabase(String dbName) {
-        final var inDatabase = prefixes.remove(dbName);
-        if (inDatabase != null) {
-            rememberedPrefixes.addAndGet(-inDatabase.size());
-        }
+        prefixes.forgetAll(dbName);
     }
 
     int rememberedPrefixCount() {
-        return rememberedPrefixes.get();
+        return prefixes.size();
     }
 
     String dbPath() {
@@ -144,20 +135,12 @@ final class FilePaths {
     }
 
     private String collectionPrefix(String dbName, String collectionName) {
-        final var inDatabase = dbName == null ? null : prefixes.get(dbName);
-        final var hit = inDatabase == null || collectionName == null ? null : inDatabase.get(collectionName);
-        return hit != null ? hit : rememberedPrefix(dbName, collectionName);
-    }
-
-    private String rememberedPrefix(String dbName, String collectionName) {
-        final var prefix = collectionFolder(dbName, collectionName).getPath() + Globals.FILE_SEPARATOR + collectionName;
-        if (rememberedPrefixes.get() < MAX_REMEMBERED_PREFIXES) {
-            final var inDatabase = prefixes.computeIfAbsent(dbName, _ -> new ConcurrentHashMap<>());
-            if (inDatabase.putIfAbsent(collectionName, prefix) == null) {
-                rememberedPrefixes.incrementAndGet();
-            }
+        final var hit = prefixes.get(dbName, collectionName);
+        if (hit != null) {
+            return hit;
         }
-        return prefix;
+        final var prefix = collectionFolder(dbName, collectionName).getPath() + Globals.FILE_SEPARATOR + collectionName;
+        return prefixes.remember(dbName, collectionName, prefix);
     }
 
     private static String segment(String name) {

@@ -58,7 +58,7 @@ src/main/java/org/techhouse/ops/OperationProcessor.java 2
 src/main/java/org/techhouse/ops/ReplicatedApplyHelper.java 1
 src/main/java/org/techhouse/ops/SaveOperationHelper.java 7
 src/main/java/org/techhouse/ops/SchemaOperationHelper.java 1
-src/main/java/org/techhouse/ops/SchemaValidationHelper.java 2
+src/main/java/org/techhouse/ops/SchemaValidationHelper.java 1
 src/main/java/org/techhouse/ops/TransactionOperationHelper.java 4
 src/main/java/org/techhouse/ops/TwoPhaseParticipant.java 3
 src/main/java/org/techhouse/ops/Tx2pcLog.java 2

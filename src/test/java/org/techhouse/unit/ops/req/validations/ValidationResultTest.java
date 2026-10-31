@@ -20,4 +20,11 @@ public class ValidationResultTest {
         assertFalse(result.isValid());
         assertEquals("something went wrong", result.getErrorMessage());
     }
+
+    @Test
+    public void ok_is_one_shared_instance() {
+        final var first = ValidationResult.ok();
+        assertSame(first, ValidationResult.ok());
+        assertNull(ValidationResult.ok().getErrorCode());
+    }
 }

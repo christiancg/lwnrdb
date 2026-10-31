@@ -449,9 +449,7 @@ public class OperationProcessor {
     }
 
     private OperationResponse processGetSchema(GetSchemaRequest request) {
-        final var collectionId = Cache.getCollectionIdentifier(request.getDatabaseName(), request.getCollectionName());
-        return OperationLocks.withReadLocks(false, List.of(collectionId), OperationType.GET_SCHEMA,
-                ErrorCode.ERROR_RETRIEVING, () -> SchemaOperationHelper.executeGetSchema(request));
+        return SchemaOperationHelper.processGetSchema(request);
     }
 
 }

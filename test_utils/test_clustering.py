@@ -887,6 +887,32 @@ def test_password_change_deauthenticates_sessions_on_every_node():
     op(port, {"type": "DELETE_USER", "username": username})
 
 
+def test_a_replicated_password_change_stops_the_old_password_on_a_replica():
+    section("A password changed through another node stops a password the replica already accepted")
+
+    username = "cluster_pw_verifier"
+    old_password = "cluster_verifier_old1"
+    new_password = "cluster_verifier_new1"
+    port = nodes[0].client_port
+    replica = nodes[2].client_port
+    op(port, {"type": "DELETE_USER", "username": username})
+    check_status("CREATE_USER via node-0", op(port, {
+        "type": "CREATE_USER", "username": username, "password": old_password, "admin": False,
+        "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}}), "OK")
+    check("the user authenticates on node-2",
+          wait_until(lambda: _authenticates(replica, username, old_password), timeout_s=15.0))
+    check_status("a repeated AUTHENTICATE on node-2 succeeds", as_user(replica, username, old_password), "OK")
+
+    check_status("admin changes the password through node-1", op(nodes[1].client_port, {
+        "type": "SET_PASSWORD", "username": username, "newPassword": new_password}), "OK")
+    check("the new password reaches node-2",
+          wait_until(lambda: _authenticates(replica, username, new_password), timeout_s=15.0))
+    check_code("the old password fails on node-2 once the change replicated",
+               as_user(replica, username, old_password), "ERROR", "401-3")
+    check_status("the new password authenticates again on node-2", as_user(replica, username, new_password), "OK")
+    op(port, {"type": "DELETE_USER", "username": username})
+
+
 def test_a_deleted_users_ownership_is_pruned_on_every_node():
     section("A deleted user stops owning databases on every node, so a recreated name inherits nothing")
 
@@ -3958,6 +3984,7 @@ GROUPS = {
         test_grants_are_pruned_on_every_node,
         test_a_deleted_users_ownership_is_pruned_on_every_node,
         test_password_change_deauthenticates_sessions_on_every_node,
+        test_a_replicated_password_change_stops_the_old_password_on_a_replica,
         test_a_client_cannot_advance_the_write_clock_through_an_incarnation,
         test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates,
         test_forged_peer_frames_are_refused,

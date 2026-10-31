@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.VacuumedPage;
 
@@ -44,6 +45,18 @@ final class PkIndexTier {
             return primaryKeyIndex;
         }
         return snapshotForLockFreeReader(dbName, collName, collectionIdentifier);
+    }
+
+    WriterPkRows forWriter(String dbName, String collName, Collection<String> ids) throws IOException {
+        final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        if (resident(collectionIdentifier) == null && cache.locks().holdsCollectionLock(dbName, collName)
+                && pointScansOnly(dbName, collName, collectionIdentifier)) {
+            final var found = ids.isEmpty()
+                    ? Map.<String, PkIndexEntry>of()
+                    : cache.fs().pkRowsFor(dbName, collName, ids);
+            return WriterPkRows.scanned(found);
+        }
+        return WriterPkRows.of(loadIfNecessary(dbName, collName));
     }
 
     private List<PkIndexEntry> admit(String dbName, String collName, String collectionIdentifier,

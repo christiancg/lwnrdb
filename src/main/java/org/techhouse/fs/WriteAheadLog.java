@@ -2,12 +2,8 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -48,6 +44,14 @@ final class WriteAheadLog {
             this.dbName = dbName;
             this.collName = collName;
         }
+
+        private boolean endGroup() {
+            if (group != null) {
+                group.dropChannel();
+            }
+            group = null;
+            return true;
+        }
     }
 
     WriteAheadLog(FilePaths paths) {
@@ -69,6 +73,9 @@ final class WriteAheadLog {
         if (state.group != null && state.group.failed()) {
             throw new IOException("An earlier write grouped with this one on " + subject(dbName, collName)
                     + " could not be made durable, so the group is refused");
+        }
+        if (state.group != null && state.group.idle()) {
+            state.group.restartFrom(state.knownLength);
         }
         if (state.group != null && !state.groupBaseLogged) {
             logGroupBase(dbName, collName, log, state);
@@ -107,7 +114,7 @@ final class WriteAheadLog {
         final var log = paths.writeAheadLog(dbName, collName);
         final var lock = FileLocks.lockWrite(log);
         try {
-            final var state = stateOf(log, dbName, collName);
+            final var state = knownState(log, dbName, collName);
             if (state.group == null) {
                 state.group = new WalWriteGroup(state.knownLength);
             }
@@ -121,14 +128,14 @@ final class WriteAheadLog {
         final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
         final var walLock = FileLocks.lockWrite(log);
         try {
-            final var state = stateOf(log, dbName, collName);
+            final var state = knownState(log, dbName, collName);
             if (state.group == null) {
                 return true;
             }
             try {
                 return settle(dbName, collName, log, state);
             } finally {
-                state.group = null;
+                state.endGroup();
             }
         } finally {
             walLock.unlock();
@@ -140,7 +147,7 @@ final class WriteAheadLog {
         final var log = paths.writeAheadLog(dbName, collName);
         final var walLock = FileLocks.lockWrite(log);
         try {
-            final var group = stateOf(log, dbName, collName).group;
+            final var group = knownState(log, dbName, collName).group;
             if (group == null || group.forced() || !group.failed() && group.idle()) {
                 return true;
             }
@@ -178,7 +185,7 @@ final class WriteAheadLog {
     private boolean forceOpenGroup(String dbName, String collName, File log, WalWriteGroup group) {
         faultInjector.at(FaultPoint.WAL_GROUP_APPENDED, subject(dbName, collName));
         try {
-            forceLog(log);
+            group.forceLog(log);
         } catch (IOException e) {
             logger.error("Could not force the write-ahead log of " + subject(dbName, collName) + " for a group of "
                     + group.records() + " write(s); the group is taken back and every one of them fails", e);
@@ -203,26 +210,16 @@ final class WriteAheadLog {
         group.restartFrom(state.knownLength);
     }
 
-    private static void forceLog(File log) throws IOException {
-        try (var channel = FileChannel.open(log.toPath(), StandardOpenOption.WRITE)) {
-            SyncedWrites.content(channel, log.toPath());
-        }
-    }
-
     private static void write(File log, LogState state, byte[] header, byte[] payload, int payloadLength, boolean force)
             throws IOException {
         var appended = false;
         try {
-            try (var channel = FileChannel.open(log.toPath(), StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
-                final var buffers = new ByteBuffer[]{ByteBuffer.wrap(header),
-                        ByteBuffer.wrap(payload, 0, payloadLength)};
-                var unwritten = (long) header.length + payloadLength;
-                while (unwritten > 0) {
-                    unwritten -= channel.write(buffers);
+            if (state.group == null) {
+                try (var channel = WalWriteGroup.openAppending(log)) {
+                    WalWriteGroup.appendTo(channel, log, header, payload, payloadLength, force);
                 }
-                if (force) {
-                    SyncedWrites.content(channel, log.toPath());
-                }
+            } else {
+                state.group.append(log, header, payload, payloadLength, force);
             }
             appended = true;
         } finally {
@@ -261,7 +258,7 @@ final class WriteAheadLog {
                     throw new IOException("Could not make the open write group of " + subject(dbName, collName)
                             + " durable before applying its logged writes");
                 }
-                forceLog(log);
+                WalWriteGroup.forceUnheld(log);
                 WalRedo.replay(paths, dbName, collName, WalCodec.decodeAll(Files.readAllBytes(log.toPath())));
                 state.unapplied = false;
                 logger.warning("Applied the logged writes of " + subject(dbName, collName) + " that an earlier write"
@@ -288,7 +285,7 @@ final class WriteAheadLog {
                     throw new IOException("Could not force the open write group of " + subject(dbName, collName)
                             + " before rewriting one of its pages; its writes were taken back");
                 }
-                state.group = null;
+                state.endGroup();
             }
             requireApplied(dbName, collName);
         } finally {
@@ -384,9 +381,7 @@ final class WriteAheadLog {
             final var checkpointFrame = WalCodec
                     .encode(new WalCheckpoint(state.nextSeq, dbName, collName, pkIndex.exists() ? pkIndex.length() : 0L,
                             DocumentPageStore.pageFileLengths(paths, dbName, collName)));
-            final var bytes = pending.isEmpty()
-                    ? checkpointFrame
-                    : concat(checkpointFrame, WalCodec.encodePending(state.nextSeq + 1, pending));
+            final var bytes = WalCodec.withPending(checkpointFrame, state.nextSeq + 1, pending);
             FileLocks.rewriteFileAtomically(log.toPath(), bytes);
             state.nextSeq += pending.isEmpty() ? 1 : 2;
             state.knownLength = bytes.length;
@@ -400,12 +395,6 @@ final class WriteAheadLog {
             walLock.unlock();
             pkLock.unlock();
         }
-    }
-
-    private static byte[] concat(byte[] first, byte[] second) {
-        final var joined = Arrays.copyOf(first, first.length + second.length);
-        System.arraycopy(second, 0, joined, first.length, second.length);
-        return joined;
     }
 
     record WalLogStatus(String dbName, String collName, boolean dirty, boolean grouped, long lastWriteMillis) {
@@ -451,7 +440,12 @@ final class WriteAheadLog {
 
     static void forgetUnder(File folder) {
         final var prefix = folder.getAbsolutePath() + File.separator;
-        states.keySet().removeIf(path -> path.startsWith(prefix));
+        states.entrySet().removeIf(entry -> entry.getKey().startsWith(prefix) && entry.getValue().endGroup());
+    }
+
+    private static LogState knownState(File log, String dbName, String collName) throws IOException {
+        final var known = states.get(log.getAbsolutePath());
+        return known != null ? known : stateOf(log, dbName, collName);
     }
 
     private static LogState stateOf(File log, String dbName, String collName) throws IOException {
@@ -463,6 +457,9 @@ final class WriteAheadLog {
     }
 
     private static void reseed(File log, LogState state) throws IOException {
+        if (state.group != null) {
+            state.group.dropChannel();
+        }
         state.touchedPages.clear();
         state.recordsSinceCheckpoint = 0;
         if (!log.exists()) {

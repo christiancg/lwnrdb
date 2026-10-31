@@ -17,6 +17,10 @@ public final class RegexMatcher {
     private int[] starts;
     private int[] ends;
     private int matchEnd;
+    private final Cont acceptMatch = end -> {
+        matchEnd = end;
+        return true;
+    };
 
     private RegexMatcher(RegexProgram program, String input, RegexStepBudget budget) {
         this.input = input;
@@ -35,20 +39,35 @@ public final class RegexMatcher {
     public static RegexMatch exec(RegexProgram program, String input, int fromIndex, boolean sticky,
             RegexStepBudget budget) {
         final var engine = new RegexMatcher(program, input, budget);
+        final var start = engine.search(fromIndex, sticky);
+        return start < 0 ? null : engine.buildResult(start);
+    }
+
+    public static boolean matches(RegexProgram program, String input, RegexStepBudget budget) {
+        return matchEnd(program, input, 0, false, budget) >= 0;
+    }
+
+    public static int matchEnd(RegexProgram program, String input, int fromIndex, boolean sticky,
+            RegexStepBudget budget) {
+        final var engine = new RegexMatcher(program, input, budget);
+        return engine.search(fromIndex, sticky) < 0 ? -1 : engine.matchEnd;
+    }
+
+    private int search(int fromIndex, boolean sticky) {
         var start = Math.max(fromIndex, 0);
         while (start <= input.length()) {
-            budget.steps(engine.resetSteps);
-            engine.resetCaptures();
-            if (engine.tryMatchAt(start)) {
-                return engine.buildResult(start);
+            budget.steps(resetSteps);
+            resetCaptures();
+            if (tryMatchAt(start)) {
+                return start;
             }
             if (sticky) {
-                return null;
+                return -1;
             }
-            start += engine.unicode && start + 1 < input.length() && Character.isHighSurrogate(input.charAt(start))
+            start += unicode && start + 1 < input.length() && Character.isHighSurrogate(input.charAt(start))
                     && Character.isLowSurrogate(input.charAt(start + 1)) ? 2 : 1;
         }
-        return null;
+        return -1;
     }
 
     private void resetCaptures() {
@@ -59,10 +78,7 @@ public final class RegexMatcher {
 
     private boolean tryMatchAt(int start) {
         starts[0] = start;
-        return match(root, start, 1, end -> {
-            matchEnd = end;
-            return true;
-        });
+        return match(root, start, 1, acceptMatch);
     }
 
     private RegexMatch buildResult(int start) {

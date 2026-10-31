@@ -1,5 +1,6 @@
 package org.techhouse.unit.ops;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -111,7 +112,7 @@ public class CommittedOpTriggersOutcomeTest {
             fire(ops, superseded(TestGlobals.COLL, "fenced-del"));
 
             triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), anyString(), eq(EventType.DELETED),
-                    anyList(), anyString(), anyInt(), anyString()), never());
+                    anyList(), anyString(), anyInt(), anyString(), any()), never());
         }
     }
 
@@ -123,7 +124,7 @@ public class CommittedOpTriggersOutcomeTest {
             fire(ops, Map.of());
 
             triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    eq(EventType.DELETED), anyList(), eq(ACTING_USER), anyInt(), anyString()), times(1));
+                    eq(EventType.DELETED), anyList(), eq(ACTING_USER), anyInt(), anyString(), any()), times(1));
         }
     }
 
@@ -135,7 +136,7 @@ public class CommittedOpTriggersOutcomeTest {
             fire(ops, superseded("otherCollection", "shared-id"));
 
             triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), anyString(), eq(EventType.DELETED),
-                    anyList(), anyString(), anyInt(), anyString()), times(1));
+                    anyList(), anyString(), anyInt(), anyString(), any()), times(1));
         }
     }
 
@@ -147,7 +148,7 @@ public class CommittedOpTriggersOutcomeTest {
             fire(ops, superseded(TestGlobals.COLL, "fenced-save"));
 
             triggers.verify(() -> TriggerHelper.stageCommittedIds(anyString(), anyString(), eq(EventType.CREATED),
-                    anyList(), anyString(), anyInt(), anyString()), never());
+                    anyList(), anyString(), anyInt(), anyString(), any()), never());
         }
     }
 
@@ -158,9 +159,8 @@ public class CommittedOpTriggersOutcomeTest {
         try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             fire(ops, Map.of(keyOf(TestGlobals.COLL, "prefix-save"), ApplyOutcome.ALREADY_APPLIED));
 
-            triggers.verify(
-                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                            eq(EventType.CREATED), eq(List.of("prefix-save")), eq(ACTING_USER), anyInt(), anyString()),
+            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("prefix-save")), eq(ACTING_USER), anyInt(), anyString(), any()),
                     times(1));
         }
     }
@@ -172,9 +172,8 @@ public class CommittedOpTriggersOutcomeTest {
         try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             fire(ops, Map.of());
 
-            triggers.verify(
-                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                            eq(EventType.CREATED), eq(List.of("kept-save")), eq(ACTING_USER), anyInt(), anyString()),
+            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("kept-save")), eq(ACTING_USER), anyInt(), anyString(), any()),
                     times(1));
         }
     }
@@ -186,9 +185,8 @@ public class CommittedOpTriggersOutcomeTest {
         try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             fire(ops, Map.of());
 
-            triggers.verify(
-                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                            eq(EventType.UPDATED), eq(List.of("kept-update")), eq(ACTING_USER), anyInt(), anyString()),
+            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.UPDATED), eq(List.of("kept-update")), eq(ACTING_USER), anyInt(), anyString(), any()),
                     times(1));
         }
     }
@@ -200,9 +198,8 @@ public class CommittedOpTriggersOutcomeTest {
         try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             fire(ops, superseded(TestGlobals.COLL, "bulk-fenced"));
 
-            triggers.verify(
-                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                            eq(EventType.CREATED), eq(List.of("bulk-kept")), eq(ACTING_USER), anyInt(), anyString()),
+            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("bulk-kept")), eq(ACTING_USER), anyInt(), anyString(), any()),
                     times(1));
         }
     }
@@ -215,10 +212,9 @@ public class CommittedOpTriggersOutcomeTest {
             fire(ops, superseded(TestGlobals.COLL, "fenced-del"));
 
             triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), anyString(), eq(EventType.DELETED),
-                    anyList(), anyString(), anyInt(), anyString()), never());
-            triggers.verify(
-                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                            eq(EventType.CREATED), eq(List.of("kept-save")), eq(ACTING_USER), anyInt(), anyString()),
+                    anyList(), anyString(), anyInt(), anyString(), any()), never());
+            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("kept-save")), eq(ACTING_USER), anyInt(), anyString(), any()),
                     times(1));
         }
     }
@@ -231,7 +227,7 @@ public class CommittedOpTriggersOutcomeTest {
             fire(ops, Map.of());
 
             triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), anyString(), eq(EventType.DELETED),
-                    anyList(), eq(ACTING_USER), anyInt(), anyString()), times(1));
+                    anyList(), eq(ACTING_USER), anyInt(), anyString(), any()), times(1));
         }
     }
 
@@ -244,10 +240,12 @@ public class CommittedOpTriggersOutcomeTest {
 
             triggers.verify(
                     () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                            eq(EventType.UPDATED), eq(List.of("dup")), eq(ACTING_USER), anyInt(), anyString()),
+                            eq(EventType.UPDATED), eq(List.of("dup")), eq(ACTING_USER), anyInt(), anyString(), any()),
                     times(1));
-            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    eq(EventType.CREATED), eq(List.of()), eq(ACTING_USER), anyInt(), anyString()), times(1));
+            triggers.verify(
+                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                            eq(EventType.CREATED), eq(List.of()), eq(ACTING_USER), anyInt(), anyString(), any()),
+                    times(1));
         }
     }
 
@@ -258,12 +256,13 @@ public class CommittedOpTriggersOutcomeTest {
         try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             fire(ops, Map.of());
 
+            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("dup-ins")), eq(ACTING_USER), anyInt(), anyString(), any()),
+                    times(1));
             triggers.verify(
                     () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                            eq(EventType.CREATED), eq(List.of("dup-ins")), eq(ACTING_USER), anyInt(), anyString()),
+                            eq(EventType.UPDATED), eq(List.of()), eq(ACTING_USER), anyInt(), anyString(), any()),
                     times(1));
-            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    eq(EventType.UPDATED), eq(List.of()), eq(ACTING_USER), anyInt(), anyString()), times(1));
         }
     }
 
@@ -275,8 +274,8 @@ public class CommittedOpTriggersOutcomeTest {
             fire(ops, Map.of());
 
             triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    eq(EventType.CREATED), eq(List.of("dup-mixed", "other")), eq(ACTING_USER), anyInt(), anyString()),
-                    times(1));
+                    eq(EventType.CREATED), eq(List.of("dup-mixed", "other")), eq(ACTING_USER), anyInt(), anyString(),
+                    any()), times(1));
         }
     }
 
@@ -287,10 +286,14 @@ public class CommittedOpTriggersOutcomeTest {
         try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             fire(ops, Map.of());
 
-            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    eq(EventType.CREATED), eq(List.of("a")), eq(ACTING_USER), anyInt(), anyString()), times(1));
-            triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    eq(EventType.UPDATED), eq(List.of("b")), eq(ACTING_USER), anyInt(), anyString()), times(1));
+            triggers.verify(
+                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                            eq(EventType.CREATED), eq(List.of("a")), eq(ACTING_USER), anyInt(), anyString(), any()),
+                    times(1));
+            triggers.verify(
+                    () -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                            eq(EventType.UPDATED), eq(List.of("b")), eq(ACTING_USER), anyInt(), anyString(), any()),
+                    times(1));
         }
     }
 
@@ -319,12 +322,12 @@ public class CommittedOpTriggersOutcomeTest {
 
     private static void verifyDeletedFired(MockedStatic<TriggerHelper> triggers, String coll, int count) {
         triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(coll), eq(EventType.DELETED),
-                anyList(), anyString(), anyInt(), anyString()), times(count));
+                anyList(), anyString(), anyInt(), anyString(), any()), times(count));
     }
 
     private static void verifyCreatedFor(MockedStatic<TriggerHelper> triggers, List<String> ids) {
         triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                eq(EventType.CREATED), argThat(list -> list.equals(ids)), anyString(), anyInt(), anyString()));
+                eq(EventType.CREATED), argThat(list -> list.equals(ids)), anyString(), anyInt(), anyString(), any()));
     }
 
     @Test
@@ -370,7 +373,7 @@ public class CommittedOpTriggersOutcomeTest {
             verifyDeletedFired(triggers, OTHER_COLL, 1);
             verifyCreatedFor(triggers, List.of("z"));
             triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), eq(TestGlobals.COLL), eq(EventType.DELETED),
-                    anyList(), anyString(), anyInt(), anyString()), never());
+                    anyList(), anyString(), anyInt(), anyString(), any()), never());
         }
     }
 
@@ -382,7 +385,7 @@ public class CommittedOpTriggersOutcomeTest {
             verifyDeletedFired(triggers, TestGlobals.COLL, 1);
             triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(TestGlobals.COLL),
                     eq(EventType.DELETED), argThat(entries -> idsOf(entries).equals(List.of("d1", "d2", "d3"))),
-                    anyString(), anyInt(), anyString()));
+                    anyString(), anyInt(), anyString(), any()));
         }
     }
 
@@ -394,7 +397,7 @@ public class CommittedOpTriggersOutcomeTest {
             verifyDeletedFired(triggers, OTHER_COLL, 1);
             triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(TestGlobals.COLL),
                     eq(EventType.DELETED), argThat(entries -> idsOf(entries).equals(List.of("e1", "e3"))), anyString(),
-                    anyInt(), anyString()));
+                    anyInt(), anyString(), any()));
         }
     }
 

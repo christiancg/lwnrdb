@@ -167,12 +167,17 @@ final class FileLocks {
 
     static List<String> readAllLinesIfExists(File file) throws IOException {
         final var lock = lockRead(file);
+        var absent = false;
         try {
             return decodeLines(Files.readAllBytes(file.toPath()));
         } catch (NoSuchFileException e) {
+            absent = true;
             return null;
         } finally {
             lock.unlock();
+            if (absent) {
+                evictIfUnused(file);
+            }
         }
     }
 

@@ -11,10 +11,12 @@ import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ops.StagedTriggerRuns;
 import org.techhouse.ops.TriggerHelper;
+import org.techhouse.ops.WriteEffects;
 import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 
 public final class CommittedOpTriggers {
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
+    private static final String TRANSACTION_SUBJECT = "transaction ";
 
     private CommittedOpTriggers() {
     }
@@ -43,11 +45,12 @@ public final class CommittedOpTriggers {
                 }
             }
         }
+        final var batch = WriteEffects.batched();
         var staged = StagedTriggerRuns.none();
         for (final var entry : deletes.entrySet()) {
             final var target = entry.getKey();
             staged = StagedTriggerRuns.combine(staged, TriggerHelper.stageCommitted(target.dbName(), target.collName(),
-                    EventType.DELETED, entry.getValue(), actingUser, triggerDepth, txId));
+                    EventType.DELETED, entry.getValue(), actingUser, triggerDepth, txId, batch));
         }
         for (final var entry : saveWrites.entrySet()) {
             final var target = entry.getKey();
@@ -55,10 +58,11 @@ public final class CommittedOpTriggers {
             final var updatedIds = new ArrayList<String>();
             entry.getValue().forEach((id, wasInserted) -> (wasInserted ? createdIds : updatedIds).add(id));
             staged = StagedTriggerRuns.combine(staged, TriggerHelper.stageCommittedIds(target.dbName(),
-                    target.collName(), EventType.CREATED, createdIds, actingUser, triggerDepth, txId));
+                    target.collName(), EventType.CREATED, createdIds, actingUser, triggerDepth, txId, batch));
             staged = StagedTriggerRuns.combine(staged, TriggerHelper.stageCommittedIds(target.dbName(),
-                    target.collName(), EventType.UPDATED, updatedIds, actingUser, triggerDepth, txId));
+                    target.collName(), EventType.UPDATED, updatedIds, actingUser, triggerDepth, txId, batch));
         }
+        batch.flushStaging(TRANSACTION_SUBJECT + txId);
         return staged;
     }
 

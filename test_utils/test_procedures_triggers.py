@@ -35,6 +35,16 @@ GROUPED_COLL = "grouped_hooked"
 GROUPED_AUDIT = "grouped_audit"
 GROUPED_WRITERS = 16
 GROUPED_SAVES_EACH = 10
+BULK_TRIGGERED_COLL = "bulk_triggered"
+BULK_AUDIT = "bulk_audit"
+BULK_TRIGGERED_DOCS = 500
+TX_TRIGGERED_COLL = "tx_triggered"
+TX_AUDIT = "tx_audit"
+TX_TRIGGERED_OPS = 200
+BUSY_TRIGGERED_COLL = "busy_triggered"
+BUSY_AUDIT = "busy_audit"
+BUSY_TRIGGERED_DOCS = 300
+BUSY_CALLERS = 3
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -1814,7 +1824,7 @@ def test_retry_and_dead_letters(conn: Conn):
     dead = await_dead_letters(conn, "retrying")
     check("the exhausted run is dead-lettered", len(dead) == 1, f"runs={dead!r}")
 
-    attempts = await_history(conn, kind="TRIGGER", name="retrying")
+    attempts = await_history_rows(conn, "retrying", 2)
     check("every attempt is recorded", len(attempts) >= 2, f"rows={attempts!r}")
     check("the attempts are numbered",
           sorted({row.get("attempt") for row in attempts}) == [1, 2], f"rows={attempts!r}")
@@ -2043,6 +2053,110 @@ def test_a_burst_of_runs_lands_in_history(conn: Conn):
     check("historyRecorded grew by the burst", scripts.get("historyRecorded", 0) - recorded_before >= 500,
           f"scripts={scripts}")
     check("historyQueued is reported", "historyQueued" in scripts, f"scripts={scripts}")
+
+
+def install_counting_trigger(conn: Conn, coll: str, audit: str, name: str):
+    for target in (coll, audit):
+        check_status(f"create {target}", conn.send(
+            {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": target}), "OK")
+    check_status(f"install the {name} procedure", conn.save_procedure(
+        name, "import db from 'db'; import args from 'args';"
+              " db.save(db.name, '" + audit + "', { doc: args.id, event: args.event }); return 1;"), "OK")
+    check_status(f"install the {name} document trigger",
+                 conn.save_trigger(name, ["CREATED", "UPDATED"], name, coll=coll, mode="document"), "OK")
+
+
+def audit_rows(conn: Conn, audit: str) -> int:
+    return bu.count_of(conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": audit,
+                                  "aggregationSteps": [{"type": "COUNT"}]})) or 0
+
+
+def audited_documents(conn: Conn, audit: str) -> int:
+    return bu.count_of(conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": audit,
+                                  "aggregationSteps": [{"type": "DISTINCT", "fieldName": "doc"},
+                                                       {"type": "COUNT"}]})) or 0
+
+
+def runs_of(conn: Conn, trigger: str) -> list:
+    return [run for run in trigger_runs(conn) if run.get("trigger") == trigger]
+
+
+def check_fired_exactly_once(conn: Conn, audit: str, trigger: str, expected: int, timeout_s: float = 90.0):
+    bu.wait_until(lambda: audit_rows(conn, audit) >= expected and not runs_of(conn, trigger),
+                  timeout_s=timeout_s, interval_s=0.25)
+    time.sleep(1.0)
+    check(f"{expected} runs fired, none twice", audit_rows(conn, audit) == expected,
+          f"{audit_rows(conn, audit)} audit rows for {expected} documents")
+    check("one run per document", audited_documents(conn, audit) == expected,
+          f"{audited_documents(conn, audit)} distinct documents audited")
+    check("LIST_TRIGGER_RUNS drained", not runs_of(conn, trigger), f"left {runs_of(conn, trigger)!r}")
+    dead = [run for run in trigger_runs(conn, "DEAD") if run.get("trigger") == trigger]
+    check("no run was dead-lettered", not dead, f"dead {dead!r}")
+
+
+def bulk_of(prefix: str, count: int, coll: str) -> dict:
+    return {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+            "objects": [{"_id": f"{prefix}{i}", "n": i} for i in range(count)]}
+
+
+def test_a_triggered_bulk_save_fires_one_run_per_document(conn: Conn):
+    section(f"A BULK_SAVE of {BULK_TRIGGERED_DOCS} documents into a document-mode trigger")
+    install_counting_trigger(conn, BULK_TRIGGERED_COLL, BULK_AUDIT, "bulk_auditor")
+    started = time.monotonic()
+    check_status("the bulk save is acknowledged",
+                 conn.send(bulk_of("b", BULK_TRIGGERED_DOCS, BULK_TRIGGERED_COLL)), "OK")
+    elapsed = time.monotonic() - started
+    check("staging its runs did not cost one forced write per document", elapsed < 10.0, f"took {elapsed:.1f}s")
+    check_fired_exactly_once(conn, BULK_AUDIT, "bulk_auditor", BULK_TRIGGERED_DOCS)
+
+
+def test_triggers_drain_while_their_definer_runs_procedures(conn: Conn):
+    section(f"Triggers drain while their definer runs {BUSY_CALLERS} procedures concurrently")
+    install_counting_trigger(conn, BUSY_TRIGGERED_COLL, BUSY_AUDIT, "busy_auditor")
+    check_status("install the busy procedure", conn.save_procedure(
+        "busy_loop", "let s = 0; for (let i = 0; i < 50000; i++) { s += i; } return s;"), "OK")
+    stop = threading.Event()
+    calls = []
+    lock = threading.Lock()
+
+    def caller():
+        with admin_conn() as own:
+            while not stop.is_set():
+                status = own.call("busy_loop").get("status")
+                with lock:
+                    calls.append(status)
+
+    callers = [threading.Thread(target=caller) for _ in range(BUSY_CALLERS)]
+    for thread in callers:
+        thread.start()
+    try:
+        time.sleep(0.5)
+        check_status("the bulk save is acknowledged",
+                     conn.send(bulk_of("busy", BUSY_TRIGGERED_DOCS, BUSY_TRIGGERED_COLL)), "OK")
+        check_fired_exactly_once(conn, BUSY_AUDIT, "busy_auditor", BUSY_TRIGGERED_DOCS)
+    finally:
+        stop.set()
+        for thread in callers:
+            thread.join(60)
+    check("the definer's procedures kept running meanwhile", calls.count("OK") > 0, f"{len(calls)} calls")
+
+
+def arrange_a_triggered_commit_cut_by_a_kill(conn: Conn):
+    section(f"A transaction commit with {TX_TRIGGERED_OPS} triggered ops, then a kill mid-drain")
+    install_counting_trigger(conn, TX_TRIGGERED_COLL, TX_AUDIT, "tx_auditor")
+    check_status("start the transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    for i in range(TX_TRIGGERED_OPS):
+        response = conn.save_doc({"_id": f"t{i}", "n": i}, coll=TX_TRIGGERED_COLL)
+        if response.get("status") != "OK":
+            check_status(f"buffer save t{i}", response, "OK")
+            break
+    check_status("the commit is acknowledged", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    print(f"  {len(runs_of(conn, 'tx_auditor'))} of {TX_TRIGGERED_OPS} runs still pending at the kill")
+
+
+def test_a_triggered_commit_fires_exactly_once_across_a_restart(conn: Conn):
+    section(f"The {TX_TRIGGERED_OPS} runs of the killed commit each fire exactly once")
+    check_fired_exactly_once(conn, TX_AUDIT, "tx_auditor", TX_TRIGGERED_OPS)
 
 
 def test_a_read_only_trigger_consumes_its_run(conn: Conn):
@@ -2355,6 +2469,8 @@ def main():
             test_a_first_run_delivers_the_document_as_it_is_when_it_runs(conn)
             test_stats(conn)
             test_a_burst_of_runs_lands_in_history(conn)
+            test_a_triggered_bulk_save_fires_one_run_per_document(conn)
+            test_triggers_drain_while_their_definer_runs_procedures(conn)
             test_a_read_only_trigger_consumes_its_run(conn)
             test_storage_placement(work_dir)
             test_cascade_deletes(conn, work_dir)
@@ -2392,6 +2508,13 @@ def main():
             test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn)
             test_a_post_commit_error_applies_its_effects_once(conn)
             test_pending_runs_count_the_dead_letters(conn)
+            arrange_a_triggered_commit_cut_by_a_kill(conn)
+        print("\n  Killing the server in the middle of the trigger drain ...")
+        proc.kill()
+        proc.wait(timeout=30)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_a_triggered_commit_fires_exactly_once_across_a_restart(conn)
 
         bu.stop_server(proc)
         proc = None

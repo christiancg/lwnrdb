@@ -25,6 +25,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.RangeIdWalk;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
+import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.JsonUtils;
 
 public final class SortOperatorHelper {
@@ -85,9 +86,10 @@ public final class SortOperatorHelper {
             Comparator<Keyed> comparator, int bound) {
         final var heap = new PriorityQueue<>(comparator.reversed());
         final var seq = new int[]{0};
+        final var path = FieldPath.of(fieldName);
         try (var documents = source) {
             documents.forEach(document -> {
-                final var keyed = new Keyed(document, JsonUtils.getFromPath(document, fieldName), seq[0]++);
+                final var keyed = new Keyed(document, path.valueIn(document), seq[0]++);
                 if (heap.size() < bound) {
                     heap.offer(keyed);
                 } else if (comparator.compare(heap.peek(), keyed) > 0) {
@@ -103,9 +105,9 @@ public final class SortOperatorHelper {
 
     private static Keyed[] decorate(Stream<JsonObject> source, String fieldName) {
         final var decorated = new ArrayList<Keyed>();
+        final var path = FieldPath.of(fieldName);
         try (var documents = source) {
-            documents.forEach(document -> decorated
-                    .add(new Keyed(document, JsonUtils.getFromPath(document, fieldName), decorated.size())));
+            documents.forEach(document -> decorated.add(new Keyed(document, path.valueIn(document), decorated.size())));
         }
         return decorated.toArray(Keyed[]::new);
     }

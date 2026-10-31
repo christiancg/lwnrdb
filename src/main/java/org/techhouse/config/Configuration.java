@@ -98,6 +98,10 @@ public final class Configuration {
         return intValue(ConfigKey.MAX_CONCURRENT_PASSWORD_CHECKS);
     }
 
+    public boolean isAuthVerifierCacheEnabled() {
+        return booleanValue(ConfigKey.AUTH_VERIFIER_CACHE_ENABLED);
+    }
+
     public String getFilePath() {
         return values.get(ConfigKey.FILE_PATH);
     }

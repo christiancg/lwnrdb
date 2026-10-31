@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.TreeMap;
@@ -11,6 +12,7 @@ import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.PkIndexList;
+import org.techhouse.cache.WriterPkRows;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
@@ -42,25 +44,29 @@ public final class DeleteOperationHelper {
         final var dbName = deleteRequest.getDatabaseName();
         final var collName = deleteRequest.getCollectionName();
         final var id = deleteRequest.get_id();
-        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        final var found = PkIndexList.positionOf(primaryKeyIndex, id);
-        if (found < 0) {
+        final var pkRows = cache.pkRowsForWriter(dbName, collName, List.of(id));
+        final var idxEntry = pkRows.row(id);
+        if (idxEntry == null) {
             return new OperationResponse(OperationType.DELETE, "Entry with id " + id + " not found",
                     ErrorCode.ENTRY_NOT_FOUND);
         }
-        final var idxEntry = primaryKeyIndex.get(found);
         final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
         entryToBeDeleted.setPage(idxEntry.getPage());
+        final var deletedRef = EntityRef.of(entryToBeDeleted,
+                PriorIndexedValues.of(PriorIndexedValues.fieldsOf(dbName, collName), entryToBeDeleted));
         final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
         pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entryToBeDeleted.get_id()), pendingGeneration,
                 () -> {
-                    fs.deleteFromCollection(idxEntry, primaryKeyIndex, cache.pageOccupancy(dbName, collName));
+                    fs.deleteFromCollection(idxEntry, pkRows.vacuumRows(), cache.pageOccupancy(dbName, collName));
                     return null;
                 });
         cache.updatePageSizeInMemory(dbName, collName, idxEntry.getPage(), -idxEntry.getLength(), -1);
-        primaryKeyIndex.remove(PkIndexList.positionOf(primaryKeyIndex, id));
+        final var primaryKeyIndex = pkRows.editable();
+        if (primaryKeyIndex != null) {
+            primaryKeyIndex.remove(PkIndexList.positionOf(primaryKeyIndex, id));
+        }
         cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,
+        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, deletedRef,
                 CollectionIncarnation.current(dbName, collName), pendingGeneration));
         sink.markDirty(dbName, collName);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
@@ -69,8 +75,9 @@ public final class DeleteOperationHelper {
 
     public static List<String> executeBulkDelete(String dbName, String collName, List<String> ids, DirtySink sink,
             boolean populateCache) throws Exception {
-        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        final var rows = rowsOf(primaryKeyIndex, ids);
+        final var distinctIds = new LinkedHashSet<>(ids);
+        final var pkRows = cache.pkRowsForWriter(dbName, collName, distinctIds);
+        final var rows = rowsOf(pkRows, distinctIds);
         if (rows.isEmpty()) {
             return List.of();
         }
@@ -78,6 +85,7 @@ public final class DeleteOperationHelper {
         for (final var row : rows) {
             deletedIds.add(row.getValue());
         }
+        final var priors = PriorIndexedValues.ofRows(PriorIndexedValues.fieldsOf(dbName, collName), rows, List.of());
         final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, deletedIds);
         pendingIndexWrites.writeWhilePending(dbName, collName, deletedIds, pendingGeneration,
                 () -> fs.writeBatch(dbName, collName, List.of(), DbEntry::getPage, _ -> null, rows));
@@ -89,16 +97,22 @@ public final class DeleteOperationHelper {
         }
         freed.forEach((page, bytesAndRows) -> cache.updatePageSizeInMemory(dbName, collName, page, -bytesAndRows[0],
                 (int) -bytesAndRows[1]));
-        PkIndexEdits.removeAll(primaryKeyIndex, deletedIds);
+        final var primaryKeyIndex = pkRows.editable();
+        if (primaryKeyIndex != null) {
+            PkIndexEdits.removeAll(primaryKeyIndex, deletedIds);
+        }
         for (final var id : deletedIds) {
             cache.evictEntry(dbName, collName, id);
         }
-        fs.vacuumPagesAfterDelete(dbName, collName, freed.keySet(), primaryKeyIndex,
+        fs.vacuumPagesAfterDelete(dbName, collName, freed.keySet(), pkRows.vacuumRows(),
                 cache.pageOccupancy(dbName, collName));
         final var incarnation = CollectionIncarnation.current(dbName, collName);
         for (final var row : rows) {
-            taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName,
-                    new EntityRef(row.getValue(), row.getPage(), row.getLength(), 0L), incarnation, pendingGeneration));
+            taskManager
+                    .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName,
+                            new EntityRef(row.getValue(), row.getPage(), row.getLength(), 0L,
+                                    priors == null ? null : priors.get(row.getValue())),
+                            incarnation, pendingGeneration));
         }
         sink.markDirty(dbName, collName);
         if (populateCache) {
@@ -107,10 +121,10 @@ public final class DeleteOperationHelper {
         return deletedIds;
     }
 
-    private static List<PkIndexEntry> rowsOf(List<PkIndexEntry> primaryKeyIndex, List<String> ids) {
+    private static List<PkIndexEntry> rowsOf(WriterPkRows pkRows, Collection<String> ids) {
         final var rows = new ArrayList<PkIndexEntry>(ids.size());
-        for (final var id : new LinkedHashSet<>(ids)) {
-            final var row = PkIndexList.rowOf(primaryKeyIndex, id);
+        for (final var id : ids) {
+            final var row = pkRows.row(id);
             if (row != null) {
                 rows.add(row);
             }

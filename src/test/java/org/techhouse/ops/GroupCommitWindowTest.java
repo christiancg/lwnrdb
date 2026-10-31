@@ -102,7 +102,7 @@ public class GroupCommitWindowTest {
         faultInjector.release(FaultPoint.WAL_GROUP_APPENDED);
         assertTrue(group.get(WAIT_MS, TimeUnit.MILLISECONDS).stream()
                 .allMatch(response -> response.getStatus() == OperationStatus.OK));
-        assertEquals(2L, fixture.walForces(), "the interval's group base, then one force for the group");
+        assertEquals(1L, fixture.walForces(), "the seed logged the interval's group base, so one force for the group");
     }
 
     @Test

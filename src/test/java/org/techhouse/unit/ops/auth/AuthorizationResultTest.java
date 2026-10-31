@@ -35,4 +35,11 @@ public class AuthorizationResultTest {
         assertFalse(result.isAllowed());
         assertEquals("", result.getReason());
     }
+
+    @Test
+    public void allow_is_one_shared_instance() {
+        final var first = AuthorizationResult.allow();
+        assertSame(first, AuthorizationResult.allow());
+        assertTrue(AuthorizationResult.allow().isAllowed());
+    }
 }

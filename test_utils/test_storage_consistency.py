@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -2228,28 +2229,25 @@ def test_a_paused_group_force_lets_point_reads_through_and_holds_scans(conn: Con
     for i in range(4):
         check_status(f"seed g{i}", conn.save({"_id": f"g{i}", "v": "old"}, coll=GROUP_FORCE_COLL), "OK")
     subject = f"{DB}|{GROUP_FORCE_COLL}"
-    check_status("park the first writer under the collection lock",
-                 conn.send({"type": "ARM_FAULT", "point": "WRITE_OWNER_PROBED", "action": "PAUSE",
-                            "match": subject}), "OK")
     answers = {}
 
-    def write(doc_id: str):
+    def write(doc_id: str, value: str = "new"):
         with admin_conn() as own:
-            answers[doc_id] = own.save({"_id": doc_id, "v": "new"}, coll=GROUP_FORCE_COLL).get("status")
+            answers[doc_id] = own.save({"_id": doc_id, "v": value}, coll=GROUP_FORCE_COLL).get("status")
 
-    writers = [threading.Thread(target=write, args=("g0",))]
-    writers[0].start()
-    check_status("the first writer is parked", conn.send({"type": "AWAIT_FAULT", "point": "WRITE_OWNER_PROBED",
-                                                          "timeoutMs": 30000}), "OK")
-    for doc_id in ("g1", "g2", "g3"):
-        writers.append(threading.Thread(target=write, args=(doc_id,)))
-        writers[-1].start()
-    time.sleep(0.5)
-    check_status("park the next group at its log force",
-                 conn.send({"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "PAUSE",
-                            "match": subject}), "OK")
-    check_status("release the first writer", conn.send({"type": "RELEASE_FAULT", "point": "WRITE_OWNER_PROBED"}),
-                 "OK")
+    writers = [threading.Thread(target=write, args=(f"g{i}",)) for i in range(4)]
+    with admin_conn() as holder:
+        check_status("a transaction takes the collection lock", holder.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("its buffered write holds it until the rollback",
+                     holder.save({"_id": "lock_holder", "v": "never"}, coll=GROUP_FORCE_COLL), "OK")
+        for writer in writers:
+            writer.start()
+        time.sleep(0.5)
+        check_status("park the group at its log force",
+                     conn.send({"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "PAUSE",
+                                "match": subject}), "OK")
+        check_status("roll back so the queued writers form one group",
+                     holder.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
     check_status("the queued writers formed a group and reached its force",
                  conn.send({"type": "AWAIT_FAULT", "point": "WAL_GROUP_APPENDED", "timeoutMs": 30000}), "OK")
     with admin_conn() as reader:
@@ -2277,6 +2275,22 @@ def test_a_paused_group_force_lets_point_reads_through_and_holds_scans(conn: Con
           f"got {scanned}")
     check("each document holds its grouped value",
           all((conn.find(f"g{i}", coll=GROUP_FORCE_COLL).get("object") or {}).get("v") == "new" for i in range(4)))
+    check_status("park a lone write at its log force",
+                 conn.send({"type": "ARM_FAULT", "point": "WAL_GROUP_APPENDED", "action": "PAUSE",
+                            "match": subject}), "OK")
+    lone = threading.Thread(target=write, args=("g1", "lone"))
+    lone.start()
+    check_status("a lone write forces inside a settle window too",
+                 conn.send({"type": "AWAIT_FAULT", "point": "WAL_GROUP_APPENDED", "timeoutMs": 30000}), "OK")
+    with admin_conn() as reader:
+        started = time.monotonic()
+        found = reader.find("g1", coll=GROUP_FORCE_COLL)
+        check("FIND_BY_ID answers the lone write's value while its force is paused",
+              (found.get("object") or {}).get("v") == "lone", f"got {found}")
+        check("and does not wait for that force", time.monotonic() - started < 5.0)
+    check_status("release the lone write", conn.send({"type": "RELEASE_FAULT", "point": "WAL_GROUP_APPENDED"}), "OK")
+    lone.join(30)
+    check("the lone write was acknowledged", answers.get("g1") == "OK", f"got {answers}")
 
 
 def test_updates_on_a_large_collection_stay_fast(conn: Conn):
@@ -2801,6 +2815,117 @@ def run_checkpoint_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+PLACEMENT_DB = "placement_db"
+PLACEMENT_LARGE_COLL = "large_docs"
+PLACEMENT_LARGE_DOCS = 6
+PLACEMENT_LARGE_PAD_BYTES = 700_000
+PLACEMENT_LARGE_UPDATES = 30
+SMALL_COLL = "small_hot_docs"
+SMALL_DOCS = 20
+SMALL_PAD_BYTES = 1000
+SMALL_DOC_MAX_BYTES = 1100
+SMALL_UPDATES = 3000
+SMALL_KEPT = 2
+DEFAULT_PAGE_BYTES = 2 * 1024 * 1024
+COMPACT_FLOOR_BYTES = 16 * 1024
+
+
+def placement_doc(i: int, version: int, pad_bytes: int) -> dict:
+    return {"_id": f"d{i}", "v": version, "pad": "x" * pad_bytes}
+
+
+def latest_versions(conn: Conn, coll: str, count: int) -> dict:
+    found = {}
+    for i in range(count):
+        response = conn.find(f"d{i}", db=PLACEMENT_DB, coll=coll)
+        if response.get("status") == "OK":
+            found[f"d{i}"] = (response.get("object") or {}).get("v")
+    return found
+
+
+def check_placement_reads(conn: Conn, coll: str, expected: dict, label: str):
+    check(f"{label}: FIND_BY_ID answers the last version of every document",
+          latest_versions(conn, coll, PLACEMENT_LARGE_DOCS if coll == PLACEMENT_LARGE_COLL else SMALL_DOCS) == expected)
+    scanned = sorted(bu.ids_of(conn.aggregate(coll, FULL_SCAN, db=PLACEMENT_DB)))
+    check(f"{label}: a full scan lists every document once", scanned == sorted(expected), f"scan={scanned}")
+    check(f"{label}: the index-only COUNT agrees", conn.count(coll, [], db=PLACEMENT_DB) == len(expected))
+
+
+def test_large_document_updates_keep_every_page_within_max_page_size(conn: Conn, work_dir: str) -> dict:
+    section(f"{PLACEMENT_LARGE_UPDATES} updates of {PLACEMENT_LARGE_DOCS} documents of {PLACEMENT_LARGE_PAD_BYTES // 1000} KB keep every page file"
+            f" within maxPageSize")
+    check_status("create the placement database", conn.send({"type": "CREATE_DATABASE",
+                                                              "databaseName": PLACEMENT_DB}), "OK")
+    check_status("create the large-document collection", conn.create_coll(PLACEMENT_LARGE_COLL, db=PLACEMENT_DB), "OK")
+    expected = {}
+    refused = []
+    for round_number in range(PLACEMENT_LARGE_DOCS + PLACEMENT_LARGE_UPDATES):
+        i = round_number % PLACEMENT_LARGE_DOCS
+        response = conn.save(placement_doc(i, round_number, PLACEMENT_LARGE_PAD_BYTES), db=PLACEMENT_DB, coll=PLACEMENT_LARGE_COLL)
+        if response.get("status") == "OK":
+            expected[f"d{i}"] = round_number
+        else:
+            refused.append((round_number, response.get("message")))
+    check("every large write was acknowledged", not refused, f"refused: {refused[:3]}")
+    pages = page_bytes(work_dir, PLACEMENT_LARGE_COLL, db=PLACEMENT_DB)
+    check(f"no page file grew past maxPageSize ({DEFAULT_PAGE_BYTES} bytes)",
+          all(length <= DEFAULT_PAGE_BYTES for length in pages.values()), f"pages={pages}")
+    check_placement_reads(conn, PLACEMENT_LARGE_COLL, expected, "large documents")
+    return expected
+
+
+def test_a_small_hot_collection_converges_on_disk(conn: Conn, work_dir: str) -> dict:
+    section(f"{SMALL_UPDATES} updates of a {SMALL_DOCS}-document collection keep its pages within twice its live"
+            f" bytes plus the {COMPACT_FLOOR_BYTES // 1024} KB floor")
+    check_status("create the small hot collection", conn.create_coll(SMALL_COLL, db=PLACEMENT_DB), "OK")
+    expected = {}
+    refused = []
+    rng = random.Random(28)
+    for round_number in range(SMALL_UPDATES):
+        i = round_number if round_number < SMALL_DOCS else rng.randrange(SMALL_DOCS)
+        response = conn.save(placement_doc(i, round_number, SMALL_PAD_BYTES), db=PLACEMENT_DB, coll=SMALL_COLL)
+        if response.get("status") == "OK":
+            expected[f"d{i}"] = round_number
+        else:
+            refused.append(round_number)
+    check("every small write was acknowledged", not refused, f"refused: {refused[:5]}")
+    on_disk = sum(page_bytes(work_dir, SMALL_COLL, db=PLACEMENT_DB).values())
+    bound = 2 * SMALL_DOCS * SMALL_DOC_MAX_BYTES + COMPACT_FLOOR_BYTES
+    check(f"the page files hold {on_disk} bytes, within {bound}", on_disk <= bound)
+    check_placement_reads(conn, SMALL_COLL, expected, "small hot collection")
+    deleted = [f"d{i}" for i in range(SMALL_KEPT, SMALL_DOCS)]
+    refused = [doc_id for doc_id in deleted if conn.send({
+        "type": "DELETE", "databaseName": PLACEMENT_DB, "collectionName": SMALL_COLL, "_id": doc_id
+    }).get("status") != "OK"]
+    check(f"deleting {len(deleted)} of {SMALL_DOCS} documents is acknowledged", not refused, f"refused: {refused}")
+    kept = {doc_id: version for doc_id, version in expected.items() if doc_id not in deleted}
+    on_disk = sum(page_bytes(work_dir, SMALL_COLL, db=PLACEMENT_DB).values())
+    bound = SMALL_KEPT * SMALL_DOC_MAX_BYTES + COMPACT_FLOOR_BYTES + SMALL_DOC_MAX_BYTES
+    check(f"after the deletes the page files hold {on_disk} bytes, within {bound}", on_disk <= bound)
+    check_placement_reads(conn, SMALL_COLL, kept, "after the deletes")
+    return kept
+
+
+def run_page_placement_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-placement-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, maxMemory="256mb")
+    proc = bu.start_server(work_dir, log_path, xmx="1g")
+    try:
+        with admin_conn() as conn:
+            large = test_large_document_updates_keep_every_page_within_max_page_size(conn, work_dir)
+            small = test_a_small_hot_collection_converges_on_disk(conn, work_dir)
+        bu.stop_server(proc)
+        proc = bu.start_server(work_dir, log_path, xmx="1g")
+        section("Large and small placement collections read back after a restart")
+        with admin_conn() as conn:
+            check_placement_reads(conn, PLACEMENT_LARGE_COLL, large, "large documents after a restart")
+            check_placement_reads(conn, SMALL_COLL, small, "small hot collection after a restart")
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -2995,6 +3120,7 @@ def main():
         run_bounded_shutdown_phase()
         run_reindex_kill_phase()
         run_checkpoint_phase()
+        run_page_placement_phase()
     finally:
         bu.stop_server(proc)
 

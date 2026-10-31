@@ -117,4 +117,7 @@ public final class Globals {
     public static final int WAL_IDLE_CHECKPOINT_MAX_LOGS = 16;
     public static final long WAL_IDLE_CHECKPOINT_SCAN_MS = 1000L;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
+    public static final int INLINE_FRAME_MAX_BYTES = 16 * 1024;
+    public static final long RESPONSE_BUDGET_FLOOR_BYTES = 64L * 1024;
+    public static final long SCRIPT_HISTORY_COALESCE_MS = 50L;
 }
