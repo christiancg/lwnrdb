@@ -230,11 +230,18 @@ public class OutboundQueue {
     }
 
     private boolean writeAndRelease(Frame frame) {
+        final var written = writeReleasing(frame);
+        if (!written) {
+            abandon();
+        }
+        return written;
+    }
+
+    private boolean writeReleasing(Frame frame) {
         try {
             writeTracked(frame);
             return true;
         } catch (IOException e) {
-            abandon();
             return false;
         } finally {
             budget.release(frame.reserved());

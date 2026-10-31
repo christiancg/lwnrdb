@@ -14,6 +14,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.conn.ResponseBudget;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.test.Await;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -41,6 +42,8 @@ public class MessageProcessorResponseBudgetTest {
         assertOk(connection.exchange("{\"type\":\"SAVE\"," + TARGET + ",\"object\":{\"_id\":\"large\",\"blob\":\""
                 + "l".repeat(LARGE_FIELD_CHARS) + "\"}}"));
         assertOk(connection.exchange("{\"type\":\"SAVE\"," + TARGET + ",\"object\":{\"_id\":\"small\"}}"));
+        assertTrue(Await.until(() -> budget.unsentBytes() == 0, 10_000),
+                "a connection of this JVM still holds " + budget.unsentBytes() + " response bytes");
     }
 
     @AfterEach
@@ -72,7 +75,6 @@ public class MessageProcessorResponseBudgetTest {
 
     @Test
     public void aLargeReadPastTheBudgetIsAnswered503_17AndCanBeRetried() throws Exception {
-        final var before = budget.unsentBytes();
         exhaustTheBudget();
 
         final var refused = connection.exchange(findById("large"));
@@ -83,7 +85,7 @@ public class MessageProcessorResponseBudgetTest {
         budget.release(heldByTest);
         heldByTest = 0;
         assertOk(connection.exchange(findById("large")));
-        assertTrue(eventually(() -> budget.unsentBytes() == before), "every written response gave its bytes back");
+        assertTrue(eventually(() -> budget.unsentBytes() == 0), "every written response gave its bytes back");
     }
 
     @Test
@@ -108,15 +110,14 @@ public class MessageProcessorResponseBudgetTest {
 
     @Test
     public void unreadResponsesHoldTheirBytesUntilTheConnectionEnds() throws Exception {
-        final var before = budget.unsentBytes();
         connection.stallResponses();
         connection.send(findById("large"));
         assertTrue(connection.awaitBlockedWriter());
-        assertTrue(budget.unsentBytes() - before > LARGE_FIELD_CHARS, "the unread response stays reserved");
+        assertTrue(budget.unsentBytes() > LARGE_FIELD_CHARS, "the unread response stays reserved");
 
         connection.close();
 
-        assertTrue(eventually(() -> budget.unsentBytes() == before), "the closed connection released its bytes");
+        assertTrue(eventually(() -> budget.unsentBytes() == 0), "the closed connection released its bytes");
     }
 
     @SuppressWarnings("BusyWait")
