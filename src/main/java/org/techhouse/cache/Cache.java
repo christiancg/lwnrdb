@@ -170,8 +170,8 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return IndexFileReads.fromFile(userCache, dbName, collName, fieldName, type);
     }
 
-    public boolean loadsFieldIndexTransiently(String dbName, String collName, String fieldName) {
-        return IndexFileReads.loadsTransiently(userCache, dbName, collName, fieldName);
+    public boolean reloadsLargeFieldIndex(String dbName, String collName, String fieldName) {
+        return IndexFileReads.reloadsLargeIndex(userCache, dbName, collName, fieldName);
     }
 
     public OptionalLong countEqualsAny(String dbName, String collName, String fieldName, List<?> values)

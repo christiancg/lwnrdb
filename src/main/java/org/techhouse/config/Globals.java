@@ -131,4 +131,5 @@ public final class Globals {
     public static final int REPAIR_PASS_CHUNK = 4096;
     public static final long WAL_BACKGROUND_CHECKPOINT_LOCK_WAIT_MS = 1000L;
     public static final long REFUSAL_MIN_SPACING_MS = 1000L;
+    public static final long TRANSIENT_SORT_WALK_MAX_INDEX_BYTES = 1024L * 1024L;
 }

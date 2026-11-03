@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
+import org.techhouse.config.Globals;
 import org.techhouse.data.IndexKind;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.IndexFileLookup;
@@ -34,26 +35,26 @@ final class IndexFileReads {
         return !cache.displacesColderIndexes(dbName, collName, indexIdentifier);
     }
 
-    static boolean loadsTransiently(UserCache userCache, String dbName, String collName, String fieldName) {
+    static boolean reloadsLargeIndex(UserCache userCache, String dbName, String collName, String fieldName) {
         for (final var type : IndexKind.scalarIndexClasses()) {
             final var identifier = Cache.memoizedIndexIdentifier(fieldName, type);
             if (userCache.residentFieldIndex(dbName, collName, identifier) == null
                     && !cache.isFieldIndexTypeAbsent(dbName, collName, identifier)
-                    && loadsTransiently(userCache, dbName, collName, fieldName, type, identifier)) {
+                    && reloadsLargeIndex(userCache, dbName, collName, fieldName, type, identifier)) {
                 return true;
             }
         }
         return false;
     }
 
-    private static boolean loadsTransiently(UserCache userCache, String dbName, String collName, String fieldName,
+    private static boolean reloadsLargeIndex(UserCache userCache, String dbName, String collName, String fieldName,
             Class<?> type, String identifier) {
-        if (cache.isFieldIndexTypeRefused(dbName, collName, identifier)) {
-            return true;
-        }
         final var bytes = fs.indexFileBytes(dbName, collName, fieldName, IndexKind.fileLabel(type));
-        return bytes > 0 && !userCache.loadsAdmitted(dbName, collName, AccessKind.FIELD_INDEX,
-                CacheSizeEstimator.estimateFieldIndexSizeFromFileBytes(bytes));
+        if (bytes <= Globals.TRANSIENT_SORT_WALK_MAX_INDEX_BYTES) {
+            return false;
+        }
+        return cache.isFieldIndexTypeRefused(dbName, collName, identifier) || !userCache.loadsAdmitted(dbName, collName,
+                AccessKind.FIELD_INDEX, CacheSizeEstimator.estimateFieldIndexSizeFromFileBytes(bytes));
     }
 
     static boolean typeExists(UserCache userCache, String dbName, String collName, String fieldName, Class<?> type)

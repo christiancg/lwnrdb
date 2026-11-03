@@ -54,7 +54,7 @@ final class IndexOrderTopK {
         if (!(steps.getFirst() instanceof FilterAggregationStep filter) || !walkable(filter.getOperator())
                 || JsonUtils.isPrimaryKeyPath(sortField) || !locks.holdsCollectionLock(dbName, collName)
                 || cache.hasNoIndex(dbName, collName, sortField)
-                || cache.loadsFieldIndexTransiently(dbName, collName, sortField)
+                || cache.reloadsLargeFieldIndex(dbName, collName, sortField)
                 || !PendingWriteReconciler.pendingIds(dbName, collName).isEmpty()) {
             return null;
         }

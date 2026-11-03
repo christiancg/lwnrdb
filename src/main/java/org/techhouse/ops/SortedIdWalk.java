@@ -47,7 +47,7 @@ final class SortedIdWalk implements Iterator<String> {
         if (declined || ids.size() < requested) {
             return false;
         }
-        if (cache.loadsFieldIndexTransiently(dbName, collName, fieldName)) {
+        if (cache.reloadsLargeFieldIndex(dbName, collName, fieldName)) {
             declined = true;
             return false;
         }
