@@ -56,8 +56,8 @@ public final class TriggerRunResolution {
 
     private static boolean resolveRun(String runId, String decision) {
         try {
-            final var chunks = byRun().get(runId);
-            if (chunks == null) {
+            final var chunks = AdminOperationHelper.readTriggerRuns(TriggerRunLog.recordIdsFor(runId));
+            if (chunks.isEmpty()) {
                 return false;
             }
             if (ResolveTriggerRunRequest.DECISION_DISCARD.equals(decision)) {

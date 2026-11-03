@@ -2,10 +2,15 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.io.File;
 import java.io.IOException;
@@ -13,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +27,7 @@ import org.techhouse.cache.WholeLoads;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -82,12 +89,40 @@ public class PipelinePinnedPkTest {
         }
     }
 
+    private static List<PkIndexEntry> pinAfterPointScans(PipelineContext context) throws IOException {
+        for (var fetch = 0; fetch < PipelineContext.POINT_SCANS_BEFORE_PIN; fetch++) {
+            assertNull(context.pinnedPkIndex(DB, COLL), "a refused pk is point-scanned for the first fetches");
+        }
+        return context.pinnedPkIndex(DB, COLL);
+    }
+
+    @Test
+    void refusedPkIsNotPinnedAndRowsAreScanned() throws Exception {
+        tinyCache();
+        final var userCache = IocContainer.get(UserCache.class);
+        final var fs = IocContainer.get(FileSystem.class);
+        final var spied = spy(fs);
+        TestUtils.setPrivateField(userCache, "fs", spied);
+        locks.lockRead(DB, COLL);
+        try (var context = context()) {
+            final var found = userCache.getEntriesByIds(DB, COLL, Set.of("doc-1", "doc-7"), context::pinnedPkIndex);
+            assertEquals(Set.of("doc-1", "doc-7"),
+                    found.stream().map(DbEntry::get_id).collect(java.util.stream.Collectors.toSet()));
+            assertEquals(0, wholeLoads().pinned(), "nothing is pinned for a pk served by point scans");
+        } finally {
+            locks.releaseRead(DB, COLL);
+            TestUtils.setPrivateField(userCache, "fs", fs);
+        }
+        verify(spied, never()).readWholePkIndexFile(DB, COLL);
+        verify(spied, times(1)).pkRowsFor(eq(DB), eq(COLL), anyCollection());
+    }
+
     @Test
     void aLockHolderLoadsOncePerPipeline() throws Exception {
         tinyCache();
         locks.lockRead(DB, COLL);
         try (var context = context()) {
-            final var first = context.pinnedPkIndex(DB, COLL);
+            final var first = pinAfterPointScans(context);
             assertNotNull(first);
             assertEquals(200, first.size());
             assertSame(first, context.pinnedPkIndex(DB, COLL), "a transient list is pinned for the pipeline");
@@ -120,13 +155,11 @@ public class PipelinePinnedPkTest {
             for (var pipeline = 0; pipeline < permits; pipeline++) {
                 final var context = context();
                 contexts.add(context);
-                assertNotNull(context.pinnedPkIndex(DB, COLL));
+                pinAfterPointScans(context);
             }
             assertEquals(permits - 1, wholeLoads().pinned());
             assertEquals(1, wholeLoads().availablePermits(), "one permit stays free for loads");
-            final var unpinned = contexts.getLast();
-            assertNotSame(unpinned.pinnedPkIndex(DB, COLL), unpinned.pinnedPkIndex(DB, COLL),
-                    "a pipeline that found no free pin loads per call");
+            assertNull(contexts.getLast().pinnedPkIndex(DB, COLL), "a pipeline that found no free pin point-scans");
         } finally {
             contexts.forEach(PipelineContext::close);
             locks.releaseRead(DB, COLL);

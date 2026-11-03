@@ -153,22 +153,26 @@ final class PageVacuum {
     private VacuumedPage rewrite(String dbName, String collName, long pageNumber, RowsOfLines verified,
             WrittenRows written) throws IOException {
         final var page = paths.collectionPage(dbName, collName, pageNumber);
-        final var subject = dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
         barrier.settle(dbName, collName);
         final var bytes = Files.readAllBytes(page.toPath());
         final var lines = PageLines.recordsOf(bytes, 0L);
         final var pageRows = verified.rowsOf(lines);
-        final var begun = barrier.begin(dbName, collName, pageNumber, bytes.length);
-        faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, subject);
         if (lines.isEmpty() && pageRows.isEmpty()) {
+            final var begun = barrier.begin(dbName, collName, pageNumber, bytes.length);
+            faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, dbName, collName);
             return truncate(begun, page);
         }
-        final var intent = journal.begin(dbName, collName, List.of(new WriteIntent.Vacuum(pageNumber)));
+        final var alongside = new ForceGroup();
+        final var intent = journal.begin(dbName, collName, List.of(new WriteIntent.Vacuum(pageNumber)), alongside);
         final var temp = paths.vacuumFile(dbName, collName, pageNumber);
         final var moves = new LinkedHashMap<String, VacuumedPage.Move>();
         final long lengthAfter;
+        final WalRewriteBarrier.Begun begun;
         try {
             lengthAfter = writeLiveRecords(temp, bytes, lines, moves);
+            alongside.add(temp.toPath());
+            begun = barrier.begin(dbName, collName, pageNumber, bytes.length, alongside);
+            faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, dbName, collName);
             FileLocks.moveIntoPlaceUnsynced(temp.toPath(), page.toPath());
         } catch (IOException e) {
             Files.deleteIfExists(temp.toPath());
@@ -176,7 +180,7 @@ final class PageVacuum {
             throw e;
         }
         final var landed = barrier.landed(begun, page.toPath().toAbsolutePath().getParent());
-        faultInjector.at(FaultPoint.PAGE_VACUUM_RENAMED, subject);
+        faultInjector.at(FaultPoint.PAGE_VACUUM_RENAMED, dbName, collName);
         final var vacuumed = new VacuumedPage(dbName, collName, pageNumber, moves);
         listener.accept(vacuumed);
         written.reposition(vacuumed);
@@ -233,8 +237,8 @@ final class PageVacuum {
 
     private static long writeLiveRecords(File temp, byte[] bytes, List<PageLines.Line> lines,
             LinkedHashMap<String, VacuumedPage.Move> moves) throws IOException {
-        OwnerOnly.ensureOwnerOnlyFile(temp.toPath());
-        try (var stream = new FileOutputStream(temp); var out = new BufferedOutputStream(stream, Globals.BUFFER_SIZE)) {
+        OwnerOnly.ensureOwnerOnlyFileMovedLater(temp.toPath());
+        try (var out = new BufferedOutputStream(new FileOutputStream(temp), Globals.BUFFER_SIZE)) {
             var next = 0L;
             for (final var line : lines) {
                 out.write(bytes, (int) line.position(), line.length());
@@ -244,7 +248,6 @@ final class PageVacuum {
                 next += line.length();
             }
             out.flush();
-            SyncedWrites.content(stream.getChannel(), temp.toPath());
             return next;
         }
     }

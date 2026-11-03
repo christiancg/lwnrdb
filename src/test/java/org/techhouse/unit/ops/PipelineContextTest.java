@@ -6,7 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.IntStream;
@@ -14,12 +19,15 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.HeldRows;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.PipelineContext;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -172,6 +180,50 @@ public class PipelineContextTest {
                     () -> context.callableFor("export default (doc) => {"));
             assertEquals("SyntaxError", error.getErrorName());
         }
+    }
+
+    @Test
+    public void chargeHeldSharesTheResultBudget() {
+        try (var context = PipelineContext.of(0L, 10L, null)) {
+            context.chargeHeld(6);
+            context.chargeResult(4);
+            final var refused = assertThrows(AggregateLimitException.class, () -> context.chargeHeld(1));
+            assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE, refused.getErrorCode());
+        }
+    }
+
+    @Test
+    public void heldRowsSamplesAfterSixtyFour() {
+        final var context = mock(PipelineContext.class);
+        final var held = new HeldRows(context);
+        final var huge = document();
+        huge.add("blob", new JsonString("h".repeat(100_000)));
+        final var medium = document();
+        medium.add("blob", new JsonString("m".repeat(1_000)));
+        final var small = document();
+        final var rows = new ArrayList<JsonObject>();
+        rows.add(huge);
+        while (rows.size() < 200) {
+            rows.add(rows.size() == 127 ? medium : small);
+        }
+        rows.forEach(held::hold);
+        final var charged = ArgumentCaptor.forClass(Long.class);
+        verify(context, times(200)).chargeHeld(charged.capture());
+        final var charges = charged.getAllValues();
+        final var hugeBytes = HeldRows.bytesOf(huge);
+        final var smallBytes = HeldRows.bytesOf(small);
+        final var mediumBytes = HeldRows.bytesOf(medium);
+        assertEquals(hugeBytes, charges.getFirst());
+        for (var i = 1; i < HeldRows.EXACT_ROWS; i++) {
+            assertEquals(smallBytes, charges.get(i));
+        }
+        final var exactTotal = hugeBytes + (HeldRows.EXACT_ROWS - 1) * smallBytes;
+        assertEquals(Math.ceilDiv(exactTotal, HeldRows.EXACT_ROWS), charges.get(HeldRows.EXACT_ROWS));
+        assertEquals(Math.ceilDiv(exactTotal, HeldRows.EXACT_ROWS), charges.get(126));
+        assertEquals(mediumBytes, charges.get(127));
+        assertEquals(Math.ceilDiv(exactTotal + mediumBytes, HeldRows.EXACT_ROWS + 1), charges.get(128));
+        assertEquals(smallBytes, charges.get(191));
+        assertTrue(charges.stream().mapToLong(Long::longValue).sum() >= exactTotal + mediumBytes + 135 * smallBytes);
     }
 
     @Test

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 
@@ -71,6 +72,14 @@ public enum IndexKind {
             case JsonCustom<?> custom -> CustomTypeFactory.getCustomTypes().get(custom.getCustomTypeName());
             default -> throw new IllegalStateException("Unexpected value: " + value);
         };
+    }
+
+    public static boolean keysCandidatesOnly(Class<?> valueClass) {
+        return valueClass == JsonVector.class;
+    }
+
+    public static boolean valueKeysCandidatesOnly(Object value) {
+        return value instanceof JsonVector;
     }
 
     public static String fileLabel(Class<?> valueClass) {

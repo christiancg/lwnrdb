@@ -1,6 +1,7 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.util.List;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
@@ -16,6 +18,8 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.test.TestGlobals;
+import org.techhouse.utils.JsonUtils;
 
 public class FilterArrayObjectOperandTest extends FilterResolutionSupport {
     private static final String ARRAY_FIELD = "tags";
@@ -91,5 +95,28 @@ public class FilterArrayObjectOperandTest extends FilterResolutionSupport {
         insert("reordered", OBJECT_FIELD, reordered);
         insert("subset", OBJECT_FIELD, subset);
         assertEquals(List.of("reordered"), ids(filter(FieldOperatorType.EQUALS, OBJECT_FIELD, operand)));
+    }
+
+    @Test
+    public void test_short_hash_keys_still_match() throws IOException, InterruptedException {
+        final var reversed = arrayOf(new JsonString("b"), new JsonString("a"));
+        insert("same", ARRAY_FIELD, arrayOperand());
+        insert("reversed", ARRAY_FIELD, reversed);
+        insert("other", ARRAY_FIELD, arrayOf(new JsonNumber(1)));
+        indexField(ARRAY_FIELD);
+
+        final var hashes = cache.getHashIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, ARRAY_FIELD,
+                IndexKind.ARRAY);
+        assertEquals(3, hashes.size());
+        for (final var entry : hashes) {
+            assertEquals(JsonUtils.HASH_KEY_LENGTH, entry.getValue().length());
+            assertTrue(entry.getValue().matches("[0-9a-v]+"), entry.getValue());
+        }
+        assertEquals(JsonUtils.hashElement(arrayOperand()), JsonUtils.hashElement(arrayOperand()));
+        assertEquals(List.of("same"), arrayFilter(FieldOperatorType.EQUALS));
+        assertEquals(List.of("other", "reversed"), arrayFilter(FieldOperatorType.NOT_EQUALS));
+        assertEquals(List.of("reversed", "same"),
+                ids(filter(FieldOperatorType.IN, ARRAY_FIELD, arrayOf(arrayOperand(), reversed))));
+        assertEquals(1, countOf(filter(FieldOperatorType.EQUALS, ARRAY_FIELD, arrayOperand())));
     }
 }

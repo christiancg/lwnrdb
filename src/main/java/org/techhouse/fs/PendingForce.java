@@ -6,7 +6,7 @@ import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class PendingForce {
-    static final PendingForce NONE = new PendingForce();
+    public static final PendingForce NONE = new PendingForce();
 
     private final AtomicReference<IOException> failure = new AtomicReference<>();
     private Thread forcing;

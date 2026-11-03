@@ -80,6 +80,10 @@ public record Rule(Function<String, String> check) {
         });
     }
 
+    public static Rule orAuto(Rule rule) {
+        return new Rule(value -> HeapShares.isAuto(value) ? null : rule.check().apply(value));
+    }
+
     public static Rule bindAddress() {
         return new Rule(value -> {
             final var trimmed = value == null ? "" : value.trim();

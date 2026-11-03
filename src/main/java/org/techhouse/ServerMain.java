@@ -124,6 +124,7 @@ public class ServerMain {
         memoryManagement.startSweepThread();
         scriptRunHistory.startSweep();
         writeStallWatchdog.start();
+        StartupWarnings.warnIfMaxMemoryClamped();
         StartupWarnings.warnIfXmxExceedsMaxMemory();
         StartupWarnings.warnIfCachesExceedHeap();
         StartupWarnings.warnIfCollectionsOutgrowMaxMemory();

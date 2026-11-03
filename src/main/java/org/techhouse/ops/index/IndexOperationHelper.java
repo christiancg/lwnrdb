@@ -6,8 +6,7 @@ import java.util.List;
 import java.util.Set;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
-import org.techhouse.config.ConfigKey;
-import org.techhouse.config.Configuration;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.PkRebuildRefusedException;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
@@ -15,10 +14,8 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.PkRebuild;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.IndexHelper;
-import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
@@ -33,46 +30,16 @@ import org.techhouse.ops.resp.ReindexResponse;
 // which stops a save landing mid-build from being skipped as "not a known index".
 public final class IndexOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static FileSystem fs = IocContainer.get(FileSystem.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
-    private static final Configuration configuration = Configuration.getInstance();
 
     private IndexOperationHelper() {
     }
 
     public static OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
-        final var dbName = createIndexRequest.getDatabaseName();
-        final var collName = createIndexRequest.getCollectionName();
-        final var fieldName = createIndexRequest.getFieldName();
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_INDEX,
-                ErrorCode.ERROR_CREATING_INDEX, () -> {
-                    final var readinessError = CollectionReadinessGuard.check(OperationType.CREATE_INDEX, dbName,
-                            collName);
-                    if (readinessError != null) {
-                        return readinessError;
-                    }
-                    if (!cache.hasNoIndex(dbName, collName, fieldName)) {
-                        return OperationResponse.ok(OperationType.CREATE_INDEX,
-                                "Index already exists for field: " + fieldName);
-                    }
-                    final var colliding = OnDiskNameRegistry.collidingIndexField(dbName, collName, fieldName);
-                    if (colliding != null) {
-                        return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.NAME_COLLIDES_ON_DISK,
-                                colliding);
-                    }
-                    final var maxIndexes = configuration.intValue(ConfigKey.MAX_INDEXES_PER_COLLECTION);
-                    if (cache.getIndexesForCollection(dbName, collName).size() >= maxIndexes) {
-                        return new OperationResponse(OperationType.CREATE_INDEX,
-                                ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION.getDefaultMessage() + " (" + maxIndexes + ")",
-                                ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION);
-                    }
-                    fs.indexMarkers().mark(dbName, collName, fieldName);
-                    IndexHelper.createIndex(dbName, collName, fieldName);
-                    AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
-                    fs.indexMarkers().clear(dbName, collName, fieldName);
-                    return OperationResponse.ok(OperationType.CREATE_INDEX, "Created index for field: " + fieldName);
-                });
+        return IndexCreation.process(createIndexRequest);
     }
 
     public static OperationResponse processDropIndex(DropIndexRequest dropIndexRequest) {
@@ -130,6 +97,7 @@ public final class IndexOperationHelper {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         final PkRebuild rebuild;
+        cache.userCache().evictCollection(dbName, collName);
         try {
             rebuild = fs.planPkRebuild(dbName, collName);
         } catch (PkRebuildRefusedException refused) {
@@ -158,7 +126,8 @@ public final class IndexOperationHelper {
             return;
         }
         if (!rebuild.appeared().isEmpty()) {
-            PageOccupancyReconciler.scheduleIndexMaintenanceFor(dbName, collName, rebuild.appeared());
+            PageOccupancyReconciler.scheduleIndexRepairOf(dbName, collName,
+                    rebuild.appeared().stream().map(PkIndexEntry::getValue).toList());
         }
         PageOccupancyReconciler.scheduleIndexCleanupFor(rebuild.vanished());
     }

@@ -65,6 +65,10 @@ final class PkIndexTier {
         if (admitted != null) {
             return admitted;
         }
+        final var displaced = cache.sizes().refusedPk(collectionIdentifier);
+        if (displaced != null && displaced.displaced() && crowdsFieldIndexes(displaced.bytes())) {
+            return fromDisk;
+        }
         final var rows = fromDisk.size();
         final var minimumEntryBytes = CacheSizeEstimator.minimumPkEntryBytes();
         if (!cache.admissionFeasible(AccessKind.PK_INDEX, rows * minimumEntryBytes)) {
@@ -90,7 +94,12 @@ final class PkIndexTier {
 
     private void refuse(String dbName, String collName, String collectionIdentifier, long bytesPerEntry, long rows) {
         cache.sizes().refusePk(collectionIdentifier, bytesPerEntry, rows);
-        cache.fitWarnings().pkIndexOutgrows(dbName, collName, bytesPerEntry * rows, cache.maxMemoryBytes());
+        cache.fitWarnings().pkIndexRefused(dbName, collName, bytesPerEntry * rows, cache.maxMemoryBytes(),
+                cache.footprintBytes());
+    }
+
+    private boolean crowdsFieldIndexes(long bytes) {
+        return !cache.admissionFeasible(AccessKind.FIELD_INDEX, bytes);
     }
 
     private List<PkIndexEntry> snapshotForLockFreeReader(String dbName, String collName, String collectionIdentifier)
@@ -205,6 +214,11 @@ final class PkIndexTier {
         return resident instanceof PkIndexList list ? list.publishedSize() : resident.size();
     }
 
+    boolean pointScansOnly(String dbName, String collName) {
+        return resident(Cache.getCollectionIdentifier(dbName, collName)) == null
+                && pointScansOnly(dbName, collName, Cache.getCollectionIdentifier(dbName, collName));
+    }
+
     private boolean pointScansOnly(String dbName, String collName, String collectionIdentifier) {
         if (UserCache.isReservedDatabase(dbName)) {
             return false;
@@ -214,7 +228,8 @@ final class PkIndexTier {
         }
         final var refused = cache.sizes().refusedPk(collectionIdentifier);
         if (refused != null) {
-            return !cache.admissionFeasible(AccessKind.PK_INDEX, refused.bytes());
+            return !cache.admissionFeasible(AccessKind.PK_INDEX, refused.bytes())
+                    || refused.displaced() && crowdsFieldIndexes(refused.bytes());
         }
         final var rows = cache.fs().trustedLiveRows(dbName, collName);
         final var minimumEntryBytes = CacheSizeEstimator.minimumPkEntryBytes();

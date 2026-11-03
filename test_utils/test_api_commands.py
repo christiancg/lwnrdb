@@ -1063,6 +1063,47 @@ def test_index_ops(c):
     drop_coll(c, "idx_coll")
 
 
+def create_indexes(c, coll, fields, db=DB) -> dict:
+    return c.send({"type": "CREATE_INDEX", "databaseName": db, "collectionName": coll, "fieldNames": fields})
+
+
+def registered_indexes(c, coll, db=DB) -> list:
+    stats = c.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("databases", [])
+    return sorted(index for d in stats if d.get("name") == db for coll_stats in d.get("collections", [])
+                  if coll_stats.get("name") == coll for index in coll_stats.get("indexes") or [])
+
+
+def test_create_index_field_names(c):
+    section("CREATE_INDEX with fieldNames builds several indexes in one request")
+    create_coll(c, "multi_idx")
+    bulk_save(c, "multi_idx", [{"_id": f"p{i}", "sku": f"s{i}", "color": ("red", "blue", "green")[i % 3],
+                                "price": i} for i in range(40)])
+    check_status("CREATE_INDEX fieldName color still works", create_index(c, "multi_idx", "color"), "OK")
+    reply = create_indexes(c, "multi_idx", ["color", "sku", "price"])
+    check_status("CREATE_INDEX fieldNames [color, sku, price]", reply, "OK")
+    check("the already registered color is skipped, not rebuilt",
+          "already existed for field: color" in (reply.get("message") or ""), reply.get("message"))
+    check("all three fields are registered", registered_indexes(c, "multi_idx") == ["color", "price", "sku"],
+          str(registered_indexes(c, "multi_idx")))
+    for field, operator, value in (("sku", "EQUALS", "s7"), ("price", "GREATER_THAN", 30), ("color", "EQUALS", "blue")):
+        indexed = sorted(ids_of(aggregate(c, "multi_idx", [filter_step(field, operator, value)])))
+        scanned = sorted(ids_of(aggregate(c, "multi_idx", [{"type": "SKIP", "skip": 0},
+                                                           filter_step(field, operator, value)])))
+        check(f"{field} {operator} answers like the scan", indexed == scanned and len(indexed) > 0, str(indexed))
+    analyzed = analyze(c, "multi_idx", [filter_step("sku", "EQUALS", "s3")])
+    check("a field built by the multi-field request is used by the planner",
+          "sku" in (analyzed.get("analyzeResult") or {}).get("indexesUsed", []), str(analyzed.get("analyzeResult")))
+    check_code("an empty fieldNames -> 400-1", create_indexes(c, "multi_idx", []), "ERROR", "400-1")
+    check_code("one invalid name refuses the whole request -> 400-1",
+               create_indexes(c, "multi_idx", ["tier", "a b"]), "ERROR", "400-1")
+    check_code("a case-colliding pair refuses the whole request -> 409-11",
+               create_indexes(c, "multi_idx", ["tier", "TIER"]), "ERROR", "409-11")
+    check("neither refused request built tier", "tier" not in registered_indexes(c, "multi_idx"))
+    check_status("CREATE_INDEX fieldNames of registered fields stays idempotent",
+                 create_indexes(c, "multi_idx", ["sku", "price"]), "OK")
+    drop_coll(c, "multi_idx")
+
+
 def test_flows(c):
     section("Multi-operation flows (save -> update -> verify)")
 
@@ -1295,6 +1336,41 @@ def test_admin_database_reads_follow_admin_writes(c):
     check("a scan of admin/databases no longer lists it", first not in listed and second in listed,
           f"listed={sorted(listed)}")
     check_status(f"DROP_DATABASE {second}", drop_db(c, second), "OK")
+
+
+def usage_rows_of(c, db, coll=None):
+    steps = [filter_step("dbName", "EQUALS", db)]
+    if coll is not None:
+        steps.append(filter_step("collName", "EQUALS", coll))
+    response = aggregate(c, "collection_usage", steps, db="admin")
+    if response.get("errorCode") == "404-3":
+        return []
+    if response.get("status") != "OK":
+        raise RuntimeError(f"collection_usage read failed: {response}")
+    return response.get("results") or []
+
+
+def test_a_dropped_collections_usage_rows_go_with_it(c):
+    section("A drop deletes the dropped collection's or database's admin/collection_usage rows")
+    db, kept, dropped = "UsageDropDb", "usage_kept", "usage_dropped"
+    check_status(f"CREATE_DATABASE {db}", create_db(c, db), "OK")
+    for coll in (kept, dropped):
+        check_status(f"CREATE_COLLECTION {coll}", create_coll(c, coll, db=db), "OK")
+        check_status(f"SAVE into {coll}", save(c, coll, {"_id": "u1", "v": 1}, db=db), "OK")
+        check_status(f"FIND_BY_ID in {coll}", find_by_id(c, coll, "u1", db=db), "OK")
+    flushed = bu.wait_until(lambda: usage_rows_of(c, db, kept) and usage_rows_of(c, db, dropped), 20)
+    check("the usage flush wrote a row for each collection", bool(flushed))
+
+    check_status(f"DROP_COLLECTION {dropped}", drop_coll(c, dropped, db=db), "OK")
+    check("no usage row of the dropped collection is left", usage_rows_of(c, db, dropped) == [],
+          f"rows={usage_rows_of(c, db, dropped)}")
+    check("the other collection keeps its usage rows", usage_rows_of(c, db, kept) != [])
+
+    check_status(f"DROP_DATABASE {db}", drop_db(c, db), "OK")
+    check("no usage row of the dropped database is left", usage_rows_of(c, db) == [],
+          f"rows={usage_rows_of(c, db)}")
+    check("a later usage flush does not bring them back",
+          bu.holds_throughout(lambda: usage_rows_of(c, db) == [], 6))
 
 
 def test_join_then_map_on_a_shared_group_stays_small(c):
@@ -1570,6 +1646,7 @@ def main():
         test_database_and_collection_ops,
         test_name_case_collisions,
         test_admin_database_reads_follow_admin_writes,
+        test_a_dropped_collections_usage_rows_go_with_it,
         test_names_that_do_not_exist_answer_as_before,
         test_reserved_script_runs_collection,
         test_crud,
@@ -1602,6 +1679,7 @@ def main():
         test_analyze,
         test_empty_collection_aggregate,
         test_index_ops,
+        test_create_index_field_names,
         test_flows,
         test_operation_permissions,
         test_fault_operations_are_disabled_by_default,

@@ -62,11 +62,10 @@ public final class AdminRecordMerge {
                 hybridClock.observe(record.version());
                 final var local = AdminRecords.current(record.key(), tombstones);
                 if (!record.outranks(local)) {
+                    keepSuperseded(record, local, tombstones);
                     continue;
                 }
-                final var applied = record.isTombstone()
-                        ? remove(record, live, tombstones)
-                        : install(record, live, tombstones);
+                final var applied = record.isTombstone() ? remove(record, live) : install(record, live, tombstones);
                 complete &= applied;
                 changed |= applied;
             } catch (InterruptedException interrupted) {
@@ -137,10 +136,10 @@ public final class AdminRecordMerge {
         if (sibling != null) {
             final var siblingRecord = AdminRecords.live(sibling);
             if (siblingRecord != null && !record.outranks(siblingRecord)) {
-                bury(key, siblingRecord.version(), tombstones);
+                bury(key, siblingRecord.version());
                 return true;
             }
-            if (!remove(AdminRecord.tombstone(sibling, record.version()), live, tombstones)) {
+            if (!remove(AdminRecord.tombstone(sibling, record.version()), live)) {
                 return false;
             }
         }
@@ -152,6 +151,19 @@ public final class AdminRecordMerge {
         };
     }
 
+    private static void keepSuperseded(AdminRecord record, AdminRecord local, Map<String, Long> tombstones) {
+        if (!record.isTombstone() || local == null || local.isTombstone()
+                || tombstones.getOrDefault(record.key().id(), 0L) >= record.version()) {
+            return;
+        }
+        try {
+            bury(record.key(), record.version());
+        } catch (IOException failure) {
+            logger.warning("Could not record the superseded admin tombstone " + record.key().id()
+                    + "; the next round offers it again: " + failure.getMessage());
+        }
+    }
+
     private static AdminRecordKey caseVariantOf(AdminRecordKey key) {
         return switch (key.kind()) {
             case DATABASE -> DatabaseRecordApplier.caseVariantOf(key.dbName());
@@ -160,9 +172,8 @@ public final class AdminRecordMerge {
         };
     }
 
-    private static void bury(AdminRecordKey key, long version, Map<String, Long> tombstones) throws IOException {
+    private static void bury(AdminRecordKey key, long version) throws IOException {
         AdminStamp.tombstoneAt(key, version);
-        tombstones.put(key.id(), version);
     }
 
     private static boolean installUser(AdminRecord record) throws IOException, InterruptedException {
@@ -176,7 +187,7 @@ public final class AdminRecordMerge {
         return true;
     }
 
-    private static boolean remove(AdminRecord record, boolean live, Map<String, Long> tombstones) throws Exception {
+    private static boolean remove(AdminRecord record, boolean live) throws Exception {
         final var key = record.key();
         final var removed = switch (key.kind()) {
             case DATABASE -> DatabaseRecordApplier.remove(key.dbName(), live);
@@ -185,7 +196,7 @@ public final class AdminRecordMerge {
             case SCHEMA, TRIGGERS, PROCEDURE, SCHEDULE -> DefinitionRecordApplier.remove(key);
         };
         if (removed) {
-            bury(key, record.version(), tombstones);
+            bury(key, record.version());
         }
         return removed;
     }

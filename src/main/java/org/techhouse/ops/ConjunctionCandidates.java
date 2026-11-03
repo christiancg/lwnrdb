@@ -46,8 +46,9 @@ final class ConjunctionCandidates {
             case SCRIPT -> null;
         };
         return switch (operator.getConjunctionType()) {
-            case AND -> intersection(legSets(operator, dbName, collName, context, filterLeg, false), context);
-            case OR, XOR -> unionOfEvery(legSets(operator, dbName, collName, context, filterLeg, true), context);
+            case AND ->
+                intersection(SelectiveLegs.sets(operator, dbName, collName, context, filterLeg::resolve), context);
+            case OR, XOR -> unionOfEvery(legSets(operator, dbName, collName, context, filterLeg), context);
             case NOR, NAND -> null;
         };
     }
@@ -55,7 +56,7 @@ final class ConjunctionCandidates {
     static Set<String> exactAndIds(ConjunctionOperator operator, String dbName, String collName,
             PipelineContext context) throws IOException {
         final LegResolver exactLeg = leg -> FilterOperatorHelper.resolveIdsViaIndex(leg, dbName, collName, context);
-        final var sets = legSets(operator, dbName, collName, context, exactLeg, true);
+        final var sets = legSets(operator, dbName, collName, context, exactLeg);
         return sets.contains(null) ? null : intersection(sets, context);
     }
 
@@ -100,7 +101,7 @@ final class ConjunctionCandidates {
     }
 
     private static List<Set<String>> legSets(ConjunctionOperator operator, String dbName, String collName,
-            PipelineContext context, LegResolver resolver, boolean keepUnresolved) throws IOException {
+            PipelineContext context, LegResolver resolver) throws IOException {
         final var sets = new ArrayList<Set<String>>();
         final var rangesByField = new LinkedHashMap<String, List<FieldOperator>>();
         final var mergesRanges = operator.getConjunctionType() == ConjunctionOperatorType.AND;
@@ -109,22 +110,16 @@ final class ConjunctionCandidates {
                 rangesByField.computeIfAbsent(field.getField(), _ -> new ArrayList<>()).add(field);
                 continue;
             }
-            addResolved(sets, resolver.resolve(leg), keepUnresolved);
+            sets.add(resolver.resolve(leg));
         }
         for (final Map.Entry<String, List<FieldOperator>> range : rangesByField.entrySet()) {
             final var bounds = RangeBounds.fromLeaves(range.getKey(), range.getValue());
-            addResolved(sets, rangeMatchingIds(bounds, range.getValue(), dbName, collName, context), keepUnresolved);
+            sets.add(rangeMatchingIds(bounds, range.getValue(), dbName, collName, context));
         }
         return sets;
     }
 
-    private static void addResolved(List<Set<String>> sets, Set<String> ids, boolean keepUnresolved) {
-        if (ids != null || keepUnresolved) {
-            sets.add(ids);
-        }
-    }
-
-    private static boolean isMergeableRange(FieldOperator leaf) {
+    static boolean isMergeableRange(FieldOperator leaf) {
         return RangeBounds.isNumericRange(leaf) && !JsonUtils.isPrimaryKeyPath(leaf.getField());
     }
 

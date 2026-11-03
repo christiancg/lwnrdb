@@ -3,7 +3,6 @@ package org.techhouse.ops.index;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,6 +16,7 @@ import org.techhouse.data.IdSet;
 import org.techhouse.data.IndexKind;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
+import org.techhouse.fs.FieldIndexLoader;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.FieldPath;
@@ -177,14 +177,18 @@ public final class IndexBuild {
         private void write() throws InterruptedException {
             final var scalarEntries = new LinkedHashMap<Class<?>, List<FieldIndexEntry<?>>>();
             for (final var type : scalars.entrySet()) {
-                scalarEntries.put(type.getKey(), new ArrayList<>(type.getValue().values()));
+                final var entries = new ArrayList<>(type.getValue().values());
+                entries.sort(cast(FieldIndexLoader.orderFor(type.getKey())));
+                scalarEntries.put(type.getKey(), cast(entries));
             }
             rl.lockIndex(dbName, collName, field);
             try {
                 fs.dropIndex(dbName, collName, field);
                 fs.writeIndexFile(dbName, collName, field, scalarEntries);
                 for (final var kind : hashes.entrySet()) {
-                    fs.writeHashIndexFile(dbName, collName, field, kind.getKey(), cast(kind.getValue().values()));
+                    final List<FieldIndexEntry<String>> entries = cast(new ArrayList<>(kind.getValue().values()));
+                    entries.sort(FieldIndexLoader.hashOrder());
+                    fs.writeHashIndexFile(dbName, collName, field, kind.getKey(), entries);
                 }
                 cache.evictFieldIndexAllTypes(dbName, collName, field);
             } finally {
@@ -194,9 +198,9 @@ public final class IndexBuild {
             hashes.clear();
         }
 
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        private static List<FieldIndexEntry<String>> cast(Collection<FieldIndexEntry<Object>> entries) {
-            return new ArrayList(entries);
+        @SuppressWarnings("unchecked")
+        private static <T> T cast(Object value) {
+            return (T) value;
         }
     }
 }

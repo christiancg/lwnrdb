@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -103,6 +104,31 @@ public class CacheFitWarningsTest {
             logWriter.verifyNoInteractions();
             warnings.pkIndexOutgrows(DB, COLL, 201L, 200L);
             assertLoggedTimes(logWriter, PK_WARNING, 1);
+        }
+    }
+
+    @Test
+    public void aTypeCrowdedOutByOtherResidentsIsWarnedAboutOncePerHour() {
+        final var clock = new AtomicLong();
+        final var warnings = new CacheFitWarnings(clock::get);
+        final var crowded = "No room in maxMemory for the field index status|String of " + DB + "|" + COLL;
+        final var crowdedPk = "No room in maxMemory for the primary-key index of " + DB + "|" + COLL;
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            warnings.fieldIndexRefused(DB, COLL, "status|String", 150L, 200L, 120L);
+            warnings.fieldIndexRefused(DB, COLL, "status|String", 150L, 200L, 120L);
+            warnings.pkIndexRefused(DB, COLL, 150L, 200L, 120L);
+            assertLoggedTimes(logWriter, crowded + ": it needs about 150 bytes and 80 are free", 1);
+            assertLoggedTimes(logWriter, crowdedPk, 1);
+
+            clock.addAndGet(CacheFitWarnings.CROWDED_OUT_INTERVAL_NANOS);
+            warnings.fieldIndexRefused(DB, COLL, "status|String", 150L, 200L, 120L);
+            assertLoggedTimes(logWriter, crowded, 2);
+
+            warnings.forgetCollection(Cache.getCollectionIdentifier(DB, COLL));
+            warnings.fieldIndexRefused(DB, COLL, "status|String", 150L, 200L, 120L);
+            warnings.fieldIndexRefused(DB, COLL, "status|String", 250L, 200L, 120L);
+            assertLoggedTimes(logWriter, crowded, 3);
+            assertLoggedTimes(logWriter, FIELD_WARNING, 1);
         }
     }
 }

@@ -143,7 +143,7 @@ final class WalPlan {
 
     private void fire(FaultPoint point) {
         if (point != null) {
-            faultInjector.at(point, WriteAheadLog.subject(dbName, collName));
+            faultInjector.at(point, dbName, collName);
         }
     }
 

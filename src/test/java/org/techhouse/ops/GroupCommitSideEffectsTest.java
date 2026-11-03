@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
@@ -37,7 +36,6 @@ import org.techhouse.test.TriggerTestSupport;
 
 public class GroupCommitSideEffectsTest {
     private static final String ACTOR = "alice";
-    private static final String DRAIN_MARKER = "__drain-marker__";
     private static final String RUNS_WAL = "trigger_runs.wal";
     private static final long COLD_HOOK_TIMEOUT_MS = 30_000L;
     private static final String SUBJECT = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
@@ -108,19 +106,13 @@ public class GroupCommitSideEffectsTest {
         return writes;
     }
 
-    private Set<String> dispatchedIds() throws InterruptedException {
-        final var drained = new CountDownLatch(1);
-        triggerExecutor.stop();
-        triggerExecutor.start(event -> {
-            if (DRAIN_MARKER.equals(event.getTriggerName())) {
-                drained.countDown();
-            } else {
-                dispatched.add(event);
-            }
-        });
-        triggerExecutor.submit(new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, DRAIN_MARKER,
-                "audit", false, List.of(), ACTOR, 0));
-        assertTrue(drained.await(5, TimeUnit.SECONDS), "the drain marker was never dispatched");
+    private void awaitDispatches() {
+        assertTrue(triggerExecutor.drain(GroupCommitFixture.WAIT_MS), "the trigger queue never drained");
+        triggerExecutor.start(dispatched::add);
+    }
+
+    private Set<String> dispatchedIds() {
+        awaitDispatches();
         final var ids = new TreeSet<String>();
         for (final var event : dispatched) {
             event.getEntries().stream().map(DbEntry::get_id).forEach(ids::add);
@@ -231,6 +223,7 @@ public class GroupCommitSideEffectsTest {
         installAfterTrigger();
         assertTrue(allOk(fixture.runQueued(saves(fixture, "base1", "base2"))), "logs the group base");
         TriggerTestSupport.consumeAllPendingRuns();
+        awaitDispatches();
         dispatched.clear();
         recorder.failingFor(GroupCommitFixture.WAL);
 

@@ -2,8 +2,11 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.techhouse.test.ClusterTestHarness.node;
 
+import java.nio.file.Files;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,10 +16,19 @@ import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PendingForce;
+import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -140,5 +152,65 @@ public class ClusterCoordinatorTest {
         assertEquals(ReplicationOutcome.NOT_CLUSTERED, coordinator.replicateAdminRecords(List.of()));
         assertEquals(ReplicationOutcome.NOT_CLUSTERED,
                 coordinator.broadcastReindex(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null)));
+    }
+
+    private void saveDocuments() {
+        final var processor = IocContainer.get(OperationProcessor.class);
+        for (final var id : List.of("a", "b", "c", "d", "e")) {
+            final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            final var object = new JsonObject();
+            object.addProperty(Globals.PK_FIELD, id);
+            request.setObject(object);
+            request.set_id(id);
+            assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+        }
+    }
+
+    private static long tombstoneForces(RecordingForcer recorder) {
+        return recorder.forcedNames().stream()
+                .filter(name -> name.contains(Globals.TOMBSTONE_FILE_NAME) && !name.endsWith(".repair")).count();
+    }
+
+    @Test
+    public void test_delete_batch_appends_tombstones_once_deferred() throws Exception {
+        TestUtils.standardInitialSetup();
+        TestUtils.createTestDatabaseAndCollection();
+        final var harness = new ClusterTestHarness();
+        harness.enableAlone();
+        final var fs = IocContainer.get(FileSystem.class);
+        final var locks = IocContainer.get(ResourceLocking.class);
+        try (var recorder = RecordingForcer.install(true)) {
+            saveDocuments();
+            recorder.clear();
+            locks.lock(TestGlobals.DB, TestGlobals.COLL);
+            try {
+                final var batch = coordinator.reserveDelete(TestGlobals.DB, TestGlobals.COLL,
+                        List.of("a", "absent", "b", "c"));
+                batch.awaitTombstones();
+                assertEquals(1L, tombstoneForces(recorder), recorder.forcedNames().toString());
+
+                recorder.clear();
+                fs.openWriteGroup(TestGlobals.DB, TestGlobals.COLL);
+                final var first = coordinator.reserveDelete(TestGlobals.DB, TestGlobals.COLL, List.of("d"));
+                final var second = coordinator.reserveDelete(TestGlobals.DB, TestGlobals.COLL, List.of("e"));
+                assertSame(PendingForce.NONE, first.tombstonesForced());
+                assertSame(PendingForce.NONE, second.tombstonesForced());
+                assertEquals(0L, tombstoneForces(recorder), "a group's tombstones wait for the group's force");
+                assertTrue(fs.forceWriteGroup(TestGlobals.DB, TestGlobals.COLL));
+                assertEquals(1L, tombstoneForces(recorder), recorder.forcedNames().toString());
+                assertTrue(fs.settleWriteGroup(TestGlobals.DB, TestGlobals.COLL));
+            } finally {
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            }
+            final var lines = Files.readAllLines(java.nio.file.Path.of(TestGlobals.PATH, TestGlobals.DB,
+                    TestGlobals.COLL, TestGlobals.COLL + "-" + Globals.TOMBSTONE_FILE_NAME + ".idx"));
+            assertEquals(5, lines.size(), String.valueOf(lines));
+            assertEquals(java.util.Set.of("a", "b", "c", "d", "e"),
+                    fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).keySet());
+        } finally {
+            harness.disable();
+            TestUtils.releaseAllLocks();
+            TestUtils.standardTearDown();
+        }
     }
 }

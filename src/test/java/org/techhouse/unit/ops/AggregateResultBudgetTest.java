@@ -23,6 +23,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.listen.ListenProcessorThread;
 import org.techhouse.listen.ListenRegistration;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.HeldRows;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.AggregateRequest;
@@ -115,23 +116,29 @@ public class AggregateResultBudgetTest {
         capAt("1Mb");
         final var refused = run(aggregate(firstRows(50) + "," + joinOnK()));
         assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE.getCode(), refused.getErrorCode(), refused.getMessage());
-        capAt("4Mb");
+        capAt("8Mb");
         final var answered = run(aggregate(firstRows(50) + "," + joinOnK()));
         assertEquals(OperationStatus.OK, answered.getStatus(), answered.getMessage());
     }
 
     @Test
-    public void rowCountIsChargedOneBytePerRow() throws Exception {
-        capAt("199");
+    public void resultRowsAreChargedTheirModelledHeap() throws Exception {
+        final var rows = ((AggregateResponse) run(aggregate(""))).getResults();
+        assertEquals(LEFT_DOCUMENTS, rows.size());
+        var modelled = 0L;
+        for (final var row : rows) {
+            modelled += HeldRows.bytesOf(row);
+        }
+        capAt(String.valueOf(modelled * 9 / 10));
         final var refused = run(aggregate(""));
         assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE.getCode(), refused.getErrorCode(), refused.getMessage());
-        capAt("200");
+        capAt(String.valueOf(modelled * 11 / 10));
         assertEquals(OperationStatus.OK, run(aggregate("")).getStatus());
     }
 
     @Test
     public void budgetIsPerRequest() throws Exception {
-        capAt("1Mb");
+        capAt("2Mb");
         for (var i = 0; i < 2; i++) {
             final var response = run(aggregate(concatOf(3_000)));
             assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
@@ -142,7 +149,7 @@ public class AggregateResultBudgetTest {
     public void indexOnlyCountIsNotAffected() throws Exception {
         assertEquals(OperationStatus.OK,
                 run(write("CREATE_INDEX", TestGlobals.COLL, "\"fieldName\":\"n\"")).getStatus());
-        capAt("1");
+        capAt("1Kb");
         final var response = run(aggregate(firstRows(150) + ",{\"type\":\"COUNT\"}"));
         assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
         final var results = ((AggregateResponse) response).getResults();

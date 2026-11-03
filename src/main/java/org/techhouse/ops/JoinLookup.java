@@ -6,10 +6,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -31,7 +29,9 @@ final class JoinLookup {
             throws IOException {
         final var localValues = new SaltedElementSet();
         final var localPath = FieldPath.of(localField);
+        final var heldLeft = new HeldRows(context);
         for (var left : leftEntries) {
+            heldLeft.hold(left);
             final var localValue = localPath.resolve(left);
             if (localValue != null) {
                 localValues.add(localValue);
@@ -54,14 +54,13 @@ final class JoinLookup {
                     OverlayRead.withBuffered(overlay, fetchMatches(dbName, joinCollectionName, matchingIds, context)),
                     remoteField, context);
         }
-        if (overlay != null && !overlay.isEmpty()) {
-            return groupByRemoteField(
-                    OverlayRead.reconcile(overlay, context.source(null, dbName, joinCollectionName), _ -> true),
-                    remoteField, context);
+        if (localValues.isEmpty()) {
+            return Map.of();
         }
-        final var joinCollectionMap = cache.getWholeCollection(dbName, joinCollectionName);
-        context.scanned(joinCollectionMap.size());
-        return groupByRemoteField(joinCollectionMap.values().stream().map(DbEntry::getData), remoteField, context);
+        final var committed = context.source(null, dbName, joinCollectionName);
+        return groupByRemoteField(overlay != null && !overlay.isEmpty()
+                ? OverlayRead.reconcile(overlay, committed, _ -> true)
+                : committed, remoteField, localValues, context);
     }
 
     private static List<JsonObject> fetchMatches(String dbName, String joinCollectionName, Set<String> matchingIds,
@@ -95,13 +94,22 @@ final class JoinLookup {
     }
 
     private static Map<SaltedKey, JsonArray> groupByRemoteField(Stream<JsonObject> documents, String remoteField,
-            PipelineContext context) {
+            SaltedElementSet localValues, PipelineContext context) {
         final var remotePath = FieldPath.of(remoteField);
+        final var matched = new HashMap<SaltedKey, List<JsonObject>>();
+        final var held = new HeldRows(context);
         try (var remoteDocuments = context.watch(documents)) {
-            return remoteDocuments.filter(remotePath::isIn)
-                    .collect(Collectors.groupingBy(jsonObject -> new SaltedKey(remotePath.valueIn(jsonObject)),
-                            HashMap::new, Collectors.collectingAndThen(Collectors.toList(),
-                                    rows -> GroupByOperatorHelper.inIdOrder(rows, context))));
+            remoteDocuments.forEach(document -> {
+                final var remoteValue = remotePath.resolve(document);
+                final var key = remoteValue == null ? null : new SaltedKey(remoteValue);
+                if (key != null && localValues.containsKey(key)) {
+                    held.hold(document);
+                    matched.computeIfAbsent(key, _ -> new ArrayList<>()).add(document);
+                }
+            });
         }
+        final var lookup = new HashMap<SaltedKey, JsonArray>();
+        matched.forEach((key, rows) -> lookup.put(key, GroupByOperatorHelper.inIdOrder(rows, context)));
+        return lookup;
     }
 }

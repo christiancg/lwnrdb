@@ -1,9 +1,7 @@
 package org.techhouse.client;
 
-import java.io.BufferedReader;
 import java.io.Closeable;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -24,18 +22,19 @@ public final class Connection implements Closeable {
     public static final String STATUS = "status";
     public static final String MESSAGE = "message";
     public static final String ERROR_CODE = "errorCode";
+    public static final int HELD_REPLY_BYTES = 64 * 1024;
     private static final Set<String> RETRYABLE = Set.of("503-2", "503-3", "503-4", "503-5", "503-9", "503-10", "503-16",
             "503-17");
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     private final Socket socket;
-    private final BufferedReader reader;
+    private final ReplyReader reader;
     private final OutputStream output;
     private final Duration backoffStep;
 
     public Connection(Socket socket, Duration backoffStep) throws IOException {
         this.socket = socket;
-        this.reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+        this.reader = new ReplyReader(socket.getInputStream());
         this.output = socket.getOutputStream();
         this.backoffStep = backoffStep;
     }
@@ -103,10 +102,14 @@ public final class Connection implements Closeable {
     }
 
     public JsonObject sendLine(String line) {
-        final var payload = (line.replace('\r', ' ').replace('\n', ' ') + "\n").getBytes(StandardCharsets.UTF_8);
+        return parseReply(sendRawLine(line));
+    }
+
+    public String sendRawLine(String line) {
+        final var payload = payloadOf(line);
         var attempt = 1;
         var reply = exchange(payload);
-        while (attempt < MAX_ATTEMPTS && isRetryable(reply)) {
+        while (attempt < MAX_ATTEMPTS && isRetryable(ReplyHeader.of(reply).errorCode())) {
             pause(attempt);
             attempt++;
             reply = exchange(payload);
@@ -114,24 +117,62 @@ public final class Connection implements Closeable {
         return reply;
     }
 
-    private static boolean isRetryable(JsonObject reply) {
-        final var errorCode = errorCodeOf(reply);
+    public ReplyHeader relayLine(String line, OutputStream sink) {
+        final var payload = payloadOf(line);
+        var attempt = 1;
+        while (true) {
+            final var held = new HeldOutput(sink, HELD_REPLY_BYTES);
+            final var header = new ReplyHeader();
+            try {
+                send(payload);
+                if (reader.endsBeforeNextLine(held, header)) {
+                    throw closedByServer();
+                }
+                if (held.spilled() || attempt >= MAX_ATTEMPTS || !isRetryable(header.errorCode())) {
+                    held.release();
+                    return header;
+                }
+            } catch (IOException e) {
+                throw failed(e);
+            }
+            pause(attempt);
+            attempt++;
+        }
+    }
+
+    private static byte[] payloadOf(String line) {
+        return (line.replace('\r', ' ').replace('\n', ' ') + "\n").getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static boolean isRetryable(String errorCode) {
         return errorCode != null && RETRYABLE.contains(errorCode);
     }
 
-    private JsonObject exchange(byte[] payload) {
+    private String exchange(byte[] payload) {
         final String raw;
         try {
-            output.write(payload);
-            output.flush();
+            send(payload);
             raw = reader.readLine();
         } catch (IOException e) {
-            throw new ClientException("the connection to the server failed: " + e, ClientException.UNREACHABLE, e);
+            throw failed(e);
         }
         if (raw == null) {
-            throw new ClientException("the server closed the connection", ClientException.UNREACHABLE);
+            throw closedByServer();
         }
-        return parseReply(raw);
+        return raw;
+    }
+
+    private void send(byte[] payload) throws IOException {
+        output.write(payload);
+        output.flush();
+    }
+
+    private static ClientException failed(IOException e) {
+        return new ClientException("the connection to the server failed: " + e, ClientException.UNREACHABLE, e);
+    }
+
+    private static ClientException closedByServer() {
+        return new ClientException("the server closed the connection", ClientException.UNREACHABLE);
     }
 
     private void pause(int attempt) {

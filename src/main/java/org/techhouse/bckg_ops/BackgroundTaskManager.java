@@ -4,13 +4,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.bckg_ops.events.WalCheckpointEvent;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
 public class BackgroundTaskManager {
     private final Logger logger = Logger.logFor(BackgroundTaskManager.class);
     private final Configuration configuration = Configuration.getInstance();
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final BackgroundLanes lanes = new BackgroundLanes(configuration.getBackgroundProcessingThreads());
     private final AtomicInteger inFlight = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
@@ -43,6 +47,7 @@ public class BackgroundTaskManager {
 
     public synchronized void startBackgroundWorkers() {
         draining = false;
+        fs.onCheckpointRequest(() -> submitMaintenance(new WalCheckpointEvent()));
         final var threadCount = configuration.getBackgroundProcessingThreads();
         workerCount.set(threadCount);
         parked.set(0);

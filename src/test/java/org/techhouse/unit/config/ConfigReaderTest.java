@@ -69,7 +69,7 @@ public class ConfigReaderTest {
         expectedConfig.put("schemaPatternCacheMaxBytes", "32Mb");
         expectedConfig.put("defaultAdminUsername", "admin");
         expectedConfig.put("defaultAdminPassword", "");
-        expectedConfig.put("maxMemory", "512mb");
+        expectedConfig.put("maxMemory", "auto");
         expectedConfig.put("transactionLockTimeoutMs", "5000");
         expectedConfig.put("tlsEnabled", "false");
         expectedConfig.put("tlsKeystorePath", "certs/lwnrdb.p12");
@@ -132,7 +132,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptRunHistoryIncludeLogs", "false");
         expectedConfig.put("scriptRunHistoryMaxErrorChars", "2000");
         expectedConfig.put("scriptRunHistoryMaxQueued", "10000");
-        expectedConfig.put("scriptRunHistoryMaxRows", "0");
+        expectedConfig.put("scriptRunHistoryMaxRows", "100000");
         expectedConfig.put("scriptRunHistorySweepMs", "3600000");
         expectedConfig.put("scriptFetchEnabled", "true");
         expectedConfig.put("scriptFetchAllowlist", "*");
@@ -167,6 +167,7 @@ public class ConfigReaderTest {
         expectedConfig.put("triggerRetryBackoffMs", "1000");
         expectedConfig.put("triggerRetryMaxBackoffMs", "60000");
         expectedConfig.put("triggerDeadLetterRetentionMs", "604800000");
+        expectedConfig.put("triggerDeadLetterMaxRuns", "10000");
         expectedConfig.put("beforeHookInstructionBudget", "200000");
         expectedConfig.put("beforeHookTimeoutMs", "200");
         expectedConfig.put("schedulesEnabled", "true");
@@ -292,7 +293,7 @@ public class ConfigReaderTest {
         expectedConfig.put("maxFilterOperands", "10000");
         expectedConfig.put("maxVectorDimensions", "16384");
         expectedConfig.put("aggregateTimeoutMs", "300000");
-        expectedConfig.put("aggregateMaxResultBytes", "256Mb");
+        expectedConfig.put("aggregateMaxResultBytes", "auto");
         expectedConfig.put("indexScanFallbackPercent", "25");
         expectedConfig.put("backgroundQueueMaxEvents", "200000");
         expectedConfig.put("backgroundBacklogWaitMs", "5000");

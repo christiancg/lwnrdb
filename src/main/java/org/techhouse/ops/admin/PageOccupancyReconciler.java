@@ -8,14 +8,12 @@ import java.util.Map;
 import java.util.Set;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.bckg_ops.events.IndexRepairEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
-import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -48,7 +46,7 @@ public final class PageOccupancyReconciler {
     }
 
     public static void scheduleIndexCleanupFor(List<PkIndexEntry> completedDeletes) {
-        final var byCollection = new LinkedHashMap<String, List<DbEntry>>();
+        final var byCollection = new LinkedHashMap<String, List<PkIndexEntry>>();
         for (final var deleted : completedDeletes) {
             final var dbName = deleted.getDatabaseName();
             final var collName = deleted.getCollectionName();
@@ -56,11 +54,11 @@ public final class PageOccupancyReconciler {
                 continue;
             }
             byCollection.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
-                    .add(stubOf(deleted));
+                    .add(deleted);
         }
-        for (final var entries : byCollection.values()) {
-            final var first = entries.getFirst();
-            scheduleIndexMaintenanceFor(first.getDatabaseName(), first.getCollectionName(), entries);
+        for (final var rows : byCollection.values()) {
+            final var first = rows.getFirst();
+            scheduleIndexRepairOf(first.getDatabaseName(), first.getCollectionName(), idsOf(rows));
         }
     }
 
@@ -88,25 +86,28 @@ public final class PageOccupancyReconciler {
         for (final var collection : replayed) {
             final var dbName = collection.dbName();
             final var collName = collection.collName();
+            final var ids = idsOf(collection.rows());
             if (cache.getAdminCollectionEntry(dbName, collName) == null) {
-                pendingIndexWrites.clear(dbName, collName, idsOf(collection.rows()), collection.generation());
+                pendingIndexWrites.clear(dbName, collName, ids, collection.generation());
                 continue;
             }
-            submitUpdates(dbName, collName, collection.rows().stream().map(PageOccupancyReconciler::stubOf).toList(),
-                    collection.generation());
+            submitRepair(dbName, collName, ids, collection.generation());
         }
+    }
+
+    public static void scheduleIndexRepairOf(String dbName, String collName, List<String> ids) {
+        if (!ids.isEmpty()) {
+            submitRepair(dbName, collName, ids, pendingIndexWrites.markRecovered(dbName, collName, ids));
+        }
+    }
+
+    private static void submitRepair(String dbName, String collName, List<String> ids, long generation) {
+        taskManager.submitMaintenance(new IndexRepairEvent(dbName, collName, ids,
+                CollectionIncarnation.current(dbName, collName), generation));
     }
 
     private static List<String> idsOf(List<PkIndexEntry> rows) {
         return rows.stream().map(PkIndexEntry::getValue).toList();
-    }
-
-    private static DbEntry stubOf(PkIndexEntry row) {
-        final var data = new JsonObject();
-        data.addProperty(Globals.PK_FIELD, row.getValue());
-        final var entry = DbEntry.fromJsonObject(row.getDatabaseName(), row.getCollectionName(), data);
-        entry.setPage(row.getPage());
-        return entry;
     }
 
     private static boolean isAdminDatabase(String dbName) {
@@ -201,7 +202,7 @@ public final class PageOccupancyReconciler {
         }
         final var adopted = fs.adoptOrphanedRecords(session);
         if (!adopted.isEmpty()) {
-            scheduleIndexMaintenanceFor(dbName, collName, adopted);
+            scheduleIndexRepairOf(dbName, collName, adopted.stream().map(DbEntry::get_id).toList());
         }
         final var pages = fs.pageFileLengths(dbName, collName).keySet();
         final var occupancy = occupancyByPage(session.rows());
@@ -233,20 +234,6 @@ public final class PageOccupancyReconciler {
             }
         }
         AdminPageHelper.replacePageEntries(dbName, collName, corrected);
-    }
-
-    public static void scheduleIndexMaintenanceFor(String dbName, String collName, List<DbEntry> adopted) {
-        submitUpdates(dbName, collName, adopted,
-                pendingIndexWrites.markRecovered(dbName, collName, adopted.stream().map(DbEntry::get_id).toList()));
-    }
-
-    private static void submitUpdates(String dbName, String collName, List<DbEntry> entries, long generation) {
-        final var incarnation = CollectionIncarnation.current(dbName, collName);
-        for (final var entry : entries) {
-            entry.setPreviousByteSize(entry.byteSize());
-            taskManager.submitBackgroundTask(
-                    new EntityEvent(EventType.UPDATED, dbName, collName, entry, incarnation, generation));
-        }
     }
 
     private static Map<Long, AdminPageEntry> rowsByPage(List<AdminPageEntry> rows) {

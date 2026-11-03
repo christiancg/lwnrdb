@@ -884,7 +884,10 @@ whose record is already gone. Such a run is recorded as an error and **never re-
 re-running it would apply the effects a second time. A retryable failure
 (a script error or a commit failure) increments `attempts` and re-queues after a doubling
 backoff up to `triggerMaxAttempts`, after which the record is marked `DEAD` with its payload and
-last error kept, for `triggerDeadLetterRetentionMs` from the moment it died. A run — the first
+last error kept, for `triggerDeadLetterRetentionMs` from the moment it died, and at most
+`triggerDeadLetterMaxRuns` dead runs per database (10,000 by default, `0` for no cap): dead-lettering
+one more past the cap, or the periodic sweep, deletes that database's oldest dead runs beyond it in one
+admin write, logged once until the database drops back under the cap. A run — the first
 attempt as much as a retry — re-reads its documents when it *runs*, not when it was fired or
 scheduled, so it sees any write made while it waited; if they are gone the run is consumed and
 recorded as skipped, and if the read
@@ -1077,8 +1080,8 @@ is held at once (a batch the owner answers `503-10` retries row by row, any othe
 row-by-row writes so one bad row drops only itself). At most `scriptRunHistoryMaxQueued` rows wait to be written; a
 run finishing while the queue is full is counted in `historyDropped` and not recorded, so a burst of runs never
 exhausts the heap, and `GET_DATABASE_STATS` reports the backlog as `scripts.historyQueued`. An owner-only sweep, every
-`scriptRunHistorySweepMs` (hourly by default), applies the retention and, with `scriptRunHistoryMaxRows` above `0`,
-deletes the oldest rows (by `startedAt`) beyond that cap; it deletes in bulk, page by page, 1024 rows per
+`scriptRunHistorySweepMs` (hourly by default), applies the retention and, with `scriptRunHistoryMaxRows` above `0`
+(100,000 by default), deletes the oldest rows (by `startedAt`) beyond that cap; it deletes in bulk, page by page, 1024 rows per
 write-ahead-log record.
 
 Script-controlled text in a row (`errorName`, `errorMessage`, each `stack` and `logs` line) that is
@@ -1130,7 +1133,7 @@ influence any of them.
 | Caching | `procedureCacheSize` and `procedureCacheMaxBytes` (compiled procedures and parsed ad-hoc scripts, bounded by entries and by estimated heap; compiled outside the cache lock), `metadataCacheMaxBytes`, `metadataCacheMaxEntries` |
 | Procedures | `maxProceduresPerDatabase` |
 | Locale | `scriptTimeZone` (UTC), `scriptLocale` (en-US) |
-| Triggers | `triggerThreads`, `triggerQueueSize`, `triggerQueueMaxBytes`, `triggerMaxPerCollection`, `triggerTimeoutMs`, `triggerMaxDepth`, `triggerRunLogEnabled`, `triggerRunRetentionMs`, `triggerMaxAttempts`, `triggerRetryBackoffMs`, `triggerRetryMaxBackoffMs`, `triggerDeadLetterRetentionMs` |
+| Triggers | `triggerThreads`, `triggerQueueSize`, `triggerQueueMaxBytes`, `triggerMaxPerCollection`, `triggerTimeoutMs`, `triggerMaxDepth`, `triggerRunLogEnabled`, `triggerRunRetentionMs`, `triggerMaxAttempts`, `triggerRetryBackoffMs`, `triggerRetryMaxBackoffMs`, `triggerDeadLetterRetentionMs`, `triggerDeadLetterMaxRuns` |
 | Metadata caches | `metadataCacheMaxBytes` (procedure sources, schemas, schedule definitions), `metadataCacheMaxEntries` (trigger lists, negative lookups) |
 | Before hooks | `beforeHookInstructionBudget`, `beforeHookTimeoutMs` |
 | Schedules | `scheduleThreads`, `scheduleQueueSize`, `scheduleTickMs`, `scheduleRefreshMs`, `scheduleTimeoutMs`, `scheduleMaxPerDatabase`, `scheduleMaxTotalPerUser`, `scheduleMinIntervalMs` |

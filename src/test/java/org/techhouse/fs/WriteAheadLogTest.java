@@ -123,7 +123,7 @@ public class WriteAheadLogTest {
         WriteAheadLog.guardWith(new CheckpointGuard() {
             @Override
             public boolean holdsIndexWork(String dbName, String collName) {
-                return false;
+                return true;
             }
 
             @Override

@@ -176,6 +176,10 @@ final class WalWriteGroup {
 
     void restartFrom(long logLength) {
         dropChannel();
+        rebase(logLength);
+    }
+
+    void rebase(long logLength) {
         logLengthBefore = logLength;
         lengthsBefore.clear();
         blanks.clear();

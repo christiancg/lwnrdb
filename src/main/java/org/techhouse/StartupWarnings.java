@@ -9,7 +9,7 @@ import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
-import org.techhouse.config.SizeParser;
+import org.techhouse.config.HeapShares;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.ioc.IocContainer;
@@ -73,7 +73,7 @@ public final class StartupWarnings {
             }
         }
         for (final var key : SIZE_LIMITS_OFF_AT_ZERO) {
-            if (SizeParser.parse(config.stringValue(key)) == 0L) {
+            if (config.sizeValue(key) == 0L) {
                 off.add(key.key());
             }
         }
@@ -181,13 +181,26 @@ public final class StartupWarnings {
         final var xmx = Runtime.getRuntime().maxMemory();
         final var metadataCap = config.getMetadataCacheMaxBytes();
         final var userCap = config.isCachingDisabled() || config.isCacheUnlimited() ? 0L : config.getMaxMemoryBytes();
-        final var scriptCap = scriptBudgetBytes();
+        final var scriptCap = config.isScriptsEnabled() ? config.getScriptMaxMemoryBytes() : 0L;
         final var total = userCap + metadataCap + scriptCap;
         if (total > xmx) {
             logger.warning("The configured memory budgets total " + total + " bytes (maxMemory " + userCap
-                    + " + metadataCacheMaxBytes " + metadataCap + " + concurrent script budgets " + scriptCap
+                    + " + metadataCacheMaxBytes " + metadataCap + " + one script budget " + scriptCap
                     + ") but JVM -Xmx is only " + xmx
                     + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
+        }
+    }
+
+    public static void warnIfMaxMemoryClamped() {
+        final var configured = config.stringValue(ConfigKey.MAX_MEMORY);
+        if (HeapShares.clampsMaxMemory(configured)) {
+            logger.warning("maxMemory=" + configured.trim() + " is more than "
+                    + Math.round(Globals.MAX_MEMORY_HEAP_CEILING * 100) + "% of the JVM heap ("
+                    + Runtime.getRuntime().maxMemory() + " bytes), so the cache is capped at "
+                    + config.getMaxMemoryBytes()
+                    + " bytes: the collector, scan pages and requests need the rest. Raise -Xmx, lower maxMemory, or"
+                    + " set maxMemory=auto to take " + Math.round(Globals.AUTO_MAX_MEMORY_HEAP_FRACTION * 100)
+                    + "% of the heap.");
         }
     }
 
@@ -221,15 +234,6 @@ public final class StartupWarnings {
         return documents;
     }
 
-    private static long scriptBudgetBytes() {
-        if (!config.isScriptsEnabled()) {
-            return 0L;
-        }
-        final var interpreters = (long) config.getMaxConcurrentScripts() + config.getTriggerThreads()
-                + config.getScheduleThreads();
-        return interpreters * config.getScriptMaxMemoryBytes();
-    }
-
     public static void warnIfNamesShareAnOnDiskKey() {
         for (final var group : OnDiskNameRegistry.groupedByOnDiskKey()) {
             logger.warning("These names share one on-disk path and collide on a case-insensitive filesystem: "
@@ -247,7 +251,8 @@ public final class StartupWarnings {
     }
 
     public static void warnIfXmxExceedsMaxMemory() {
-        if (config.isCachingDisabled() || config.isCacheUnlimited()) {
+        if (config.isCachingDisabled() || config.isCacheUnlimited()
+                || HeapShares.isAuto(config.stringValue(ConfigKey.MAX_MEMORY))) {
             return;
         }
         final var xmx = Runtime.getRuntime().maxMemory();

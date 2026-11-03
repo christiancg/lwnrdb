@@ -5,12 +5,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import org.techhouse.cluster.admin.AdminRecordMerge;
 import org.techhouse.cluster.admin.AdminRecords;
+import org.techhouse.cluster.admin.AdminTombstoneDigest;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.AdminStamp;
 
 public class AdminAntiEntropyService implements MembershipListener {
     private final Logger logger = Logger.logFor(AdminAntiEntropyService.class);
@@ -115,8 +117,28 @@ public class AdminAntiEntropyService implements MembershipListener {
         return new AdminSnapshotPayload(AdminRecords.all());
     }
 
+    public AdminSnapshotPayload buildSnapshot(AdminSnapshotPayload request) throws IOException {
+        if (request == null) {
+            return buildSnapshot();
+        }
+        return new AdminSnapshotPayload(
+                AdminRecords.snapshotFor(request.getTombstoneBucketCount(), request.getTombstoneBuckets()));
+    }
+
+    private AdminSnapshotPayload tombstoneDigest() {
+        try {
+            final var digest = AdminTombstoneDigest.of(AdminStamp.tombstones());
+            return AdminSnapshotPayload.request(digest.bucketCount(), digest.summaries());
+        } catch (IOException unreadable) {
+            logger.warning("Asking for every admin tombstone this round: the local ones could not be read: "
+                    + unreadable.getMessage());
+            return null;
+        }
+    }
+
     private AdminSnapshotPayload requestSnapshot(NodeAddress address) {
         final var message = PeerRequest.message(ClusterMessageType.ADMIN_SNAPSHOT);
+        message.setAdminSnapshot(tombstoneDigest());
         try {
             final var response = pool.request(address, message, clusterConfig.replicationAckTimeoutMs());
             if (response.getType() == ClusterMessageType.ADMIN_SNAPSHOT_ACK) {

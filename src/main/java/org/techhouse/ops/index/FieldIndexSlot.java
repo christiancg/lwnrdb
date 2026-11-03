@@ -16,6 +16,7 @@ import org.techhouse.cache.CacheSizeEstimator;
 import org.techhouse.cache.ChunkedList;
 import org.techhouse.cache.FieldIndexList;
 import org.techhouse.cache.FieldIndexLookup;
+import org.techhouse.cache.IndexIdCounts;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IdSet;
 import org.techhouse.data.IndexKind;
@@ -23,6 +24,7 @@ import org.techhouse.fs.FieldIndexLoader;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.IndexLogChange;
 import org.techhouse.fs.IndexTypeReader;
+import org.techhouse.fs.PendingFold;
 import org.techhouse.ioc.IocContainer;
 
 final class FieldIndexSlot {
@@ -55,6 +57,9 @@ final class FieldIndexSlot {
     private int changedIds;
     private boolean dirty;
     private boolean logOnly;
+    private PendingFold fold;
+    private long idsAdded;
+    private long idsRemoved;
 
     private FieldIndexSlot(String dbName, String collName, String fieldName, String identifier, String fileLabel,
             Comparator<FieldIndexEntry<Object>> order, boolean spellingMatters, IndexTypeReader loader) {
@@ -68,16 +73,22 @@ final class FieldIndexSlot {
         this.loader = loader;
     }
 
-    static FieldIndexSlot scalar(String dbName, String collName, String fieldName, Class<?> type) {
-        return new FieldIndexSlot(dbName, collName, fieldName, Cache.memoizedIndexIdentifier(fieldName, type),
-                IndexKind.fileLabel(type), cast(FieldIndexLoader.orderFor(type)), hasSpellings(type),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, type));
+    static FieldIndexSlot scalar(String dbName, String collName, String fieldName, Class<?> type, HeldTypeLists held) {
+        final var identifier = Cache.memoizedIndexIdentifier(fieldName, type);
+        final var label = IndexKind.fileLabel(type);
+        return new FieldIndexSlot(dbName, collName, fieldName, identifier, label, cast(FieldIndexLoader.orderFor(type)),
+                hasSpellings(type),
+                HeldTypeLists.reading(held, identifier, () -> fs.indexTypeStamp(dbName, collName, fieldName, label),
+                        () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, type)));
     }
 
-    static FieldIndexSlot hash(String dbName, String collName, String fieldName, IndexKind kind) {
-        return new FieldIndexSlot(dbName, collName, fieldName, Cache.memoizedHashIndexIdentifier(fieldName, kind),
-                kind.label(), cast(FieldIndexLoader.hashOrder()), true,
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
+    static FieldIndexSlot hash(String dbName, String collName, String fieldName, IndexKind kind, HeldTypeLists held) {
+        final var identifier = Cache.memoizedHashIndexIdentifier(fieldName, kind);
+        return new FieldIndexSlot(dbName, collName, fieldName, identifier, kind.label(),
+                cast(FieldIndexLoader.hashOrder()), true,
+                HeldTypeLists.reading(held, identifier,
+                        () -> fs.indexTypeStamp(dbName, collName, fieldName, kind.label()),
+                        () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind)));
     }
 
     private static boolean hasSpellings(Class<?> type) {
@@ -126,6 +137,14 @@ final class FieldIndexSlot {
 
     boolean isLogOnly() {
         return logOnly;
+    }
+
+    long idsAdded() {
+        return logOnly && dirty ? IndexIdCounts.UNKNOWN : idsAdded;
+    }
+
+    long idsRemoved() {
+        return logOnly && dirty ? IndexIdCounts.UNKNOWN : idsRemoved;
     }
 
     void logChange(String key, String id, boolean present) {
@@ -207,8 +226,11 @@ final class FieldIndexSlot {
             touch(entry);
         }
         final var canonical = shared == null ? null : cache.canonicalPkId(dbName, collName, id);
-        if (entry.getIds().add(canonical != null ? canonical : id) && resident != null) {
-            charge(id, canonical != null, 1);
+        if (entry.getIds().add(canonical != null ? canonical : id)) {
+            idsAdded++;
+            if (resident != null) {
+                charge(id, canonical != null, 1);
+            }
         }
         log(key, id, true);
         dirty = true;
@@ -219,6 +241,7 @@ final class FieldIndexSlot {
         touch(entry);
         final var wasShared = shared != null && heldTheCanonicalId(entry, id);
         if (entry.getIds().remove(id)) {
+            idsRemoved++;
             if (resident != null) {
                 charge(id, wasShared, -1);
             }
@@ -281,15 +304,18 @@ final class FieldIndexSlot {
         }
         if (logOnly) {
             cache.forgetFieldIndexTypeAbsent(dbName, collName, identifier);
-            if (fs.appendIndexLogOnly(dbName, collName, fieldName, fileLabel, changes(), loader)) {
-                cache.evictFieldIndex(dbName, collName, identifier);
-            }
+            fold = fs.appendIndexLogOnly(dbName, collName, fieldName, fileLabel, changes(), loader);
             return true;
         }
         applyInPlace();
         cache.forgetFieldIndexTypeAbsent(dbName, collName, identifier);
-        fs.appendIndexLog(dbName, collName, fieldName, fileLabel, changes(), entries);
+        fold = fs.appendIndexLog(dbName, collName, fieldName, fileLabel, changes(), entries,
+                resident == null && cache.isFieldIndexTypeRefused(dbName, collName, identifier));
         return true;
+    }
+
+    PendingFold fold() {
+        return fold;
     }
 
     private List<IndexLogChange> changes() {

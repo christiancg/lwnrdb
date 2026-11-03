@@ -20,6 +20,7 @@ import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.OutcomeMarkers;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.TwoPhaseParticipant;
@@ -72,8 +73,19 @@ public class Tx2pcRecovery implements MembershipListener {
         if (!clusterConfig.isEnabled() || clusterConfig.antiEntropyIntervalMs() <= 0) {
             return;
         }
+        rememberOutcomeMarkers();
         final var interval = clusterConfig.antiEntropyIntervalMs();
         recoveryThread.scheduleWithFixedDelay(this::sweep, interval, interval, TimeUnit.MILLISECONDS);
+    }
+
+    private void rememberOutcomeMarkers() {
+        try {
+            OutcomeMarkers.rebuild();
+        } catch (Exception e) {
+            restoreInterruptFrom(e);
+            logger.warning("Failed to read the transaction outcome markers at startup; the recovery sweep reads them"
+                    + " instead: " + e.getMessage());
+        }
     }
 
     public void stop() {
@@ -127,8 +139,7 @@ public class Tx2pcRecovery implements MembershipListener {
         try {
             recover();
             Tx2pcLog.garbageCollectOutcomes(clusterConfig.tombstoneRetentionMs());
-            TriggerRunRecovery.warnAboutStrandedRuns();
-            TriggerRunRecovery.garbageCollect();
+            TriggerRunRecovery.sweep();
             reapAbandonedSessions();
             warnLongInDoubt();
         } catch (Throwable failure) {

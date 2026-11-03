@@ -86,7 +86,7 @@ public final class Globals {
     public static final int KEY_TABLE_PIN_HITS = 8;
     public static final int SHAPE_TABLE_SLOTS = 1024;
     public static final int SHAPE_TABLE_MAX_PINNED = 256;
-    public static final int SHAPE_TABLE_MAX_KEYS = 32;
+    public static final int SHAPE_TABLE_MAX_KEYS = 64;
     public static final long MAX_REQUEST_SIZE_CEILING = 1_073_741_824L;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
@@ -113,11 +113,23 @@ public final class Globals {
     public static final long PAGE_ROWS_WRITE_BACK_MS = 1000L;
     public static final long BACKGROUND_STEAL_AFTER_MS = 50L;
     public static final long TRANSACTION_OP_RECORD_BYTES = 4L * 1024 * 1024;
-    public static final int WAL_CHECKPOINT_PARALLELISM = 8;
+    public static final int WAL_CHECKPOINT_PARALLELISM = 32;
     public static final int WAL_IDLE_CHECKPOINT_MAX_LOGS = 16;
     public static final long WAL_IDLE_CHECKPOINT_SCAN_MS = 1000L;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
     public static final int INLINE_FRAME_MAX_BYTES = 16 * 1024;
     public static final long RESPONSE_BUDGET_FLOOR_BYTES = 64L * 1024;
     public static final long SCRIPT_HISTORY_COALESCE_MS = 50L;
+    public static final double AUTO_MAX_MEMORY_HEAP_FRACTION = 0.40;
+    public static final double MAX_MEMORY_HEAP_CEILING = 0.60;
+    public static final double AUTO_AGGREGATE_RESULT_HEAP_FRACTION = 0.25;
+    public static final double TRANSIENT_LOAD_HEAP_FRACTION = 0.25;
+    public static final int SAME_TIER_EVICTION_RATIO = 4;
+    public static final int REFUSED_INDEX_FOLD_DIVISOR = 8;
+    public static final int WAL_SYNC_CHECKPOINT_FACTOR = 2;
+    public static final List<Integer> LAZY_CANDIDATE_CHUNKS = List.of(256, 1024, 4096, 16384);
+    public static final int REPAIR_PASS_CHUNK = 4096;
+    public static final long WAL_BACKGROUND_CHECKPOINT_LOCK_WAIT_MS = 1000L;
+    public static final long REFUSAL_MIN_SPACING_MS = 1000L;
+    public static final long TRANSIENT_SORT_WALK_MAX_INDEX_BYTES = 1024L * 1024L;
 }

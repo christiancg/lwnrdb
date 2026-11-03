@@ -2,6 +2,7 @@ package org.techhouse.unit.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.client.Requests;
 import org.techhouse.ejson.EJson;
@@ -51,8 +52,10 @@ public class RequestsTest {
                 json(Requests.createCollection("shop", "orders")));
         assertEquals("{\"type\":\"GET_SCHEMA\",\"databaseName\":\"shop\",\"collectionName\":\"orders\"}",
                 json(Requests.getSchema("shop", "orders")));
-        assertEquals("{\"type\":\"CREATE_INDEX\",\"databaseName\":\"shop\",\"collectionName\":\"orders\","
-                + "\"fieldName\":\"customer\"}", json(Requests.createIndex("shop", "orders", "customer")));
+        assertEquals(
+                "{\"type\":\"CREATE_INDEX\",\"databaseName\":\"shop\",\"collectionName\":\"orders\","
+                        + "\"fieldNames\":[\"customer\",\"total\"]}",
+                json(Requests.createIndexes("shop", "orders", List.of("customer", "total"))));
         assertEquals(
                 "{\"type\":\"SAVE_SCHEMA\",\"databaseName\":\"shop\",\"collectionName\":\"orders\","
                         + "\"schema\":{\"type\":\"object\"}}",

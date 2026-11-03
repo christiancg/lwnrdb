@@ -47,7 +47,7 @@ public final class Configuration {
     }
 
     public long sizeValue(ConfigKey key) {
-        return (long) resolved.computeIfAbsent(key, k -> SizeParser.parse(values.get(k)));
+        return (long) resolved.computeIfAbsent(key, k -> HeapShares.sizeOf(k, values.get(k)));
     }
 
     public boolean booleanValue(ConfigKey key) {

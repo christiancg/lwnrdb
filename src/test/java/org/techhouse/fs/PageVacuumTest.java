@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -312,5 +313,30 @@ public class PageVacuumTest {
         assertEquals(20L, moved.getPosition());
         assertEquals(80L, replaced.getPosition(), "a row no longer at the move's origin is left alone");
         assertEquals(90L, elsewhere.getPosition(), "a row on another page is left alone");
+    }
+
+    @Test
+    public void vacuumUsesAtMostFourSerialForces() throws Exception {
+        rf.vacuum.vacuum(DB, COLL, 0, pageRows());
+        rf.replacer.delete(rf.fx.indexed("c"));
+        final var caller = Thread.currentThread();
+        final var serial = new CopyOnWriteArrayList<String>();
+        final var all = new CopyOnWriteArrayList<String>();
+        try (var ignored = RecordingForcer.install(true)) {
+            TestUtils.setPrivateStaticField(SyncedWrites.class, "forcer", (Forcer) (_, path) -> {
+                all.add(String.valueOf(path.getFileName()));
+                if (Thread.currentThread() == caller) {
+                    serial.add(String.valueOf(path.getFileName()));
+                }
+            });
+
+            rf.vacuum.vacuum(DB, COLL, 0, pageRows());
+        }
+
+        assertTrue(serial.size() <= 4, "serial forces: " + serial + " of " + all);
+        assertEquals(Set.of(COLL + "-0.dat", COLL + ".intents", COLL + "-0.vacuum"), Set.copyOf(all.subList(0, 3)),
+                "the page, the intent and the temp file are forced together first");
+        assertTrue(rf.fx.everyRowReadsItsOwnRecord());
+        assertEquals(StorageFixture.record("a", "old-a") + StorageFixture.record("d", "old-d"), rf.fx.firstPageText());
     }
 }

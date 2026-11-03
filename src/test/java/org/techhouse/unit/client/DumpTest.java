@@ -115,12 +115,13 @@ public class DumpTest {
     public void test_emits_requests_in_restore_order() throws IOException {
         assertEquals(ClientException.OK, dump());
 
-        assertEquals(List.of("CREATE_DATABASE shop", "CREATE_COLLECTION shop.orders", "BULK_SAVE shop.orders",
-                "CREATE_COLLECTION shop.empty", "SAVE_SCHEMA shop.orders", "CREATE_INDEX shop.orders",
-                "CREATE_INDEX shop.orders", "SAVE_PROCEDURE shop.unused", "SAVE_PROCEDURE shop.helper",
-                "SAVE_PROCEDURE shop.total", "SAVE_TRIGGER shop.audit", "SAVE_TRIGGER shop.notify",
-                "SAVE_SCHEDULE shop.nightly", "CREATE_DATABASE crm", "CREATE_COLLECTION crm.leads",
-                "BULK_SAVE crm.leads"), summaries(emitted()));
+        assertEquals(
+                List.of("CREATE_DATABASE shop", "CREATE_COLLECTION shop.orders", "BULK_SAVE shop.orders",
+                        "CREATE_COLLECTION shop.empty", "SAVE_SCHEMA shop.orders", "CREATE_INDEX shop.orders",
+                        "SAVE_PROCEDURE shop.unused", "SAVE_PROCEDURE shop.helper", "SAVE_PROCEDURE shop.total",
+                        "SAVE_TRIGGER shop.audit", "SAVE_TRIGGER shop.notify", "SAVE_SCHEDULE shop.nightly",
+                        "CREATE_DATABASE crm", "CREATE_COLLECTION crm.leads", "BULK_SAVE crm.leads"),
+                summaries(emitted()));
         assertTrue(errors().contains("shop.orders: 2500 documents"), errors());
         assertTrue(errors().contains("shop.empty: 0 documents"), errors());
     }
@@ -158,7 +159,7 @@ public class DumpTest {
                 .map(request -> request.get("aggregationSteps").asJsonArray().get(0).asJsonObject().get("skip")
                         .asJsonNumber().getValue().intValue())
                 .toList();
-        assertEquals(List.of(0, Dump.PAGE_SIZE, 2 * Dump.PAGE_SIZE, 2500), pages);
+        assertEquals(List.of(0, Dump.PAGE_SIZE, 2500), pages);
         assertEquals(2500, documentsIn(emitted()));
     }
 
@@ -332,11 +333,9 @@ public class DumpTest {
         dump("--collections", "shop.orders");
 
         final var summaries = summaries(emitted());
-        assertEquals(
-                List.of("CREATE_DATABASE shop", "CREATE_COLLECTION shop.orders", "BULK_SAVE shop.orders",
-                        "SAVE_SCHEMA shop.orders", "CREATE_INDEX shop.orders", "CREATE_INDEX shop.orders",
-                        "SAVE_PROCEDURE shop.helper", "SAVE_PROCEDURE shop.total", "SAVE_TRIGGER shop.audit"),
-                summaries);
+        assertEquals(List.of("CREATE_DATABASE shop", "CREATE_COLLECTION shop.orders", "BULK_SAVE shop.orders",
+                "SAVE_SCHEMA shop.orders", "CREATE_INDEX shop.orders", "SAVE_PROCEDURE shop.helper",
+                "SAVE_PROCEDURE shop.total", "SAVE_TRIGGER shop.audit"), summaries);
     }
 
     @Test
@@ -388,6 +387,42 @@ public class DumpTest {
         final var error = assertThrows(ClientException.class, () -> dump("--collections", "shop.script_runs"));
 
         assertEquals(ClientException.FAILED, error.exitCode());
+    }
+
+    @Test
+    public void test_page_limit_adapts_to_bytes() throws IOException {
+        source = new FakeSource().database("shop", "big").documents("shop", "big", 1500, 10_000);
+
+        assertEquals(ClientException.OK, dump());
+
+        final var limits = server.requests().stream()
+                .filter(request -> "AGGREGATE".equals(Connection.stringOf(request, "type")))
+                .map(request -> request.get("aggregationSteps").asJsonArray().get(1).asJsonObject().get("limit")
+                        .asJsonNumber().getValue().intValue())
+                .toList();
+        assertEquals(List.of(Dump.PAGE_SIZE, 418, 418, 418), limits);
+        assertEquals(1500, documentsIn(emitted()));
+    }
+
+    @Test
+    public void test_next_page_size_is_bounded() {
+        assertEquals(Dump.MAX_PAGE_SIZE, Dump.nextPageSize(100, 100));
+        assertEquals(1, Dump.nextPageSize(64L * 1024 * 1024, 1));
+        assertEquals(Dump.MAX_PAGE_SIZE, Dump.nextPageSize(0, 0));
+        assertEquals(Dump.PAGE_TARGET_BYTES / 4096, Dump.nextPageSize(4096L * 10, 10));
+    }
+
+    @Test
+    public void test_multi_field_create_index_emitted() throws IOException {
+        dump("--databases", "shop");
+
+        final var createIndexes = emitted().stream()
+                .filter(request -> "CREATE_INDEX".equals(Connection.stringOf(request, "type"))).toList();
+        assertEquals(1, createIndexes.size());
+        final var request = createIndexes.getFirst();
+        assertFalse(request.has("fieldName"));
+        assertEquals(List.of("customer", "total"), request.get("fieldNames").asJsonArray().asList().stream()
+                .map(name -> name.asJsonString().getValue()).toList());
     }
 
     @Test

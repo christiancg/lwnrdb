@@ -9,7 +9,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
+import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
@@ -24,19 +28,33 @@ public final class WholeLoads {
         T run() throws IOException;
     }
 
+    public static final long MAX_BYTE_WAIT_NANOS = TimeUnit.SECONDS.toNanos(30);
     private static final Object LEADER_INTERRUPTED = new Object();
 
     private final Supplier<FileSystem> fileSystem;
     private final Semaphore transientPermits;
     private final int maxPins;
+    private final long byteBudget;
+    private final long maxByteWaitNanos;
+    private final ReentrantLock reservations = new ReentrantLock();
+    private final Condition released = reservations.newCondition();
     private final Map<String, CompletableFuture<Object>> inFlight = new ConcurrentHashMap<>();
+    private long reservedBytes;
     private int pins;
 
     public WholeLoads(Supplier<FileSystem> fileSystem, int transientLoadPermits) {
+        this(fileSystem, transientLoadPermits,
+                (long) (Runtime.getRuntime().maxMemory() * Globals.TRANSIENT_LOAD_HEAP_FRACTION), MAX_BYTE_WAIT_NANOS);
+    }
+
+    public WholeLoads(Supplier<FileSystem> fileSystem, int transientLoadPermits, long byteBudget,
+            long maxByteWaitNanos) {
         this.fileSystem = fileSystem;
         final var permits = Math.max(1, transientLoadPermits);
         this.transientPermits = new Semaphore(permits, true);
         this.maxPins = permits - 1;
+        this.byteBudget = byteBudget;
+        this.maxByteWaitNanos = maxByteWaitNanos;
     }
 
     public synchronized boolean tryPin() {
@@ -63,13 +81,15 @@ public final class WholeLoads {
         final Load<List<PkIndexEntry>> load = () -> {
             final var estimate = CacheSizeEstimator
                     .estimatePkIndexSizeFromFileBytes(fs().pkIndexFileBytes(dbName, collName));
-            return run(admission.admits(estimate), () -> fs().readWholePkIndexFile(dbName, collName));
+            return run(admission.admits(estimate), estimate, () -> fs().readWholePkIndexFile(dbName, collName));
         };
         return lockHeld ? once("pk|" + Cache.getCollectionIdentifier(dbName, collName), load) : load.run();
     }
 
     public List<PkIndexEntry> transientPkIndex(String dbName, String collName) throws IOException {
-        return run(false, () -> fs().readWholePkIndexFile(dbName, collName));
+        final var estimate = CacheSizeEstimator
+                .estimatePkIndexSizeFromFileBytes(fs().pkIndexFileBytes(dbName, collName));
+        return run(false, estimate, () -> fs().readWholePkIndexFile(dbName, collName));
     }
 
     public <T> List<FieldIndexEntry<T>> fieldIndex(String dbName, String collName, String fieldName, Class<T> indexType,
@@ -78,7 +98,8 @@ public final class WholeLoads {
                 + Cache.getIndexIdentifier(fieldName, indexType);
         return once(key, () -> {
             final var bytes = fs().indexFileBytes(dbName, collName, fieldName, IndexKind.fileLabel(indexType));
-            return run(admission.admits(CacheSizeEstimator.estimateFieldIndexSizeFromFileBytes(bytes)),
+            final var estimate = CacheSizeEstimator.estimateFieldIndexSizeFromFileBytes(bytes);
+            return run(admission.admits(estimate), estimate,
                     () -> fs().readWholeFieldIndexFiles(dbName, collName, fieldName, indexType));
         });
     }
@@ -89,7 +110,8 @@ public final class WholeLoads {
                 + Cache.getHashIndexIdentifier(fieldName, kind.label());
         return once(key, () -> {
             final var bytes = fs().indexFileBytes(dbName, collName, fieldName, kind.label());
-            return run(admission.admits(CacheSizeEstimator.estimateFieldIndexSizeFromFileBytes(bytes)),
+            final var estimate = CacheSizeEstimator.estimateFieldIndexSizeFromFileBytes(bytes);
+            return run(admission.admits(estimate), estimate,
                     () -> fs().readWholeHashIndexFile(dbName, collName, fieldName, kind));
         });
     }
@@ -159,7 +181,7 @@ public final class WholeLoads {
         };
     }
 
-    private <T> T run(boolean admissible, Load<T> load) throws IOException {
+    private <T> T run(boolean admissible, long estimatedBytes, Load<T> load) throws IOException {
         if (admissible) {
             return load.run();
         }
@@ -170,9 +192,51 @@ public final class WholeLoads {
             throw new InterruptedIOException("Interrupted while waiting for a transient load permit");
         }
         try {
-            return load.run();
+            final var reserved = reserve(estimatedBytes);
+            try {
+                return load.run();
+            } finally {
+                unreserve(reserved);
+            }
         } finally {
             transientPermits.release();
+        }
+    }
+
+    private long reserve(long estimatedBytes) throws InterruptedIOException {
+        final var bytes = Math.max(0L, estimatedBytes);
+        reservations.lock();
+        try {
+            var left = maxByteWaitNanos;
+            while (reservedBytes > 0L && reservedBytes + bytes > byteBudget && left > 0L) {
+                left = released.awaitNanos(left);
+            }
+            reservedBytes += bytes;
+            return bytes;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new InterruptedIOException("Interrupted while waiting for room for a transient load");
+        } finally {
+            reservations.unlock();
+        }
+    }
+
+    private void unreserve(long bytes) {
+        reservations.lock();
+        try {
+            reservedBytes -= bytes;
+            released.signalAll();
+        } finally {
+            reservations.unlock();
+        }
+    }
+
+    public long reservedBytes() {
+        reservations.lock();
+        try {
+            return reservedBytes;
+        } finally {
+            reservations.unlock();
         }
     }
 }

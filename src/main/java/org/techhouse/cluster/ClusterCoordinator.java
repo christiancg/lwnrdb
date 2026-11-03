@@ -20,6 +20,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PendingForce;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.CollectionIncarnation;
@@ -28,9 +29,17 @@ import org.techhouse.ops.tx.VersionedApply;
 import org.techhouse.ops.tx.VersionedApply.ApplyOutcome;
 
 public class ClusterCoordinator {
-    public record DeleteReservation(boolean ownerLost, Long version) {
+    public record DeleteReservation(boolean ownerLost, Long version, PendingForce tombstonesForced) {
         private static final DeleteReservation NOT_CLUSTERED = new DeleteReservation(false, null);
         private static final DeleteReservation OWNER_LOST = new DeleteReservation(true, null);
+
+        public DeleteReservation(boolean ownerLost, Long version) {
+            this(ownerLost, version, PendingForce.NONE);
+        }
+
+        public void awaitTombstones() throws IOException {
+            tombstonesForced.await();
+        }
     }
 
     private final Logger logger = Logger.logFor(ClusterCoordinator.class);
@@ -84,14 +93,16 @@ public class ClusterCoordinator {
             return DeleteReservation.NOT_CLUSTERED;
         }
         final var version = hybridClock.next();
-        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        final var rows = cache.pkRowsForWriter(dbName, collName, ids);
+        final var held = new ArrayList<String>(ids.size());
         for (final var id : ids) {
-            if (Collections.binarySearch(primaryKeyIndex, id) >= 0) {
-                fs.tombstones().append(dbName, collName, id, version);
+            if (rows.row(id) != null) {
+                held.add(id);
             }
         }
+        final var forced = fs.tombstones().reserve(dbName, collName, held, version);
         faultInjector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, Cache.getCollectionIdentifier(dbName, collName));
-        return new DeleteReservation(false, version);
+        return new DeleteReservation(false, version, forced);
     }
 
     public void retractDelete(String dbName, String collName, List<String> ids, Long reservedVersion)

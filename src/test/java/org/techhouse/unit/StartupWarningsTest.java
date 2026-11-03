@@ -31,6 +31,7 @@ public class StartupWarningsTest {
     private String origFetchEnabled;
     private String origAllowlist;
     private String origMaxMemory;
+    private String origMetadataCacheMaxBytes;
     private String origScriptsEnabled;
     private String origFaultInjection;
     private String origSyncWrites;
@@ -45,6 +46,7 @@ public class StartupWarningsTest {
         origFetchEnabled = String.valueOf(config.isScriptFetchEnabled());
         origAllowlist = String.join(",", config.getScriptFetchAllowlist());
         origMaxMemory = String.valueOf(config.getMaxMemoryBytes());
+        origMetadataCacheMaxBytes = String.valueOf(config.getMetadataCacheMaxBytes());
         origScriptsEnabled = String.valueOf(config.isScriptsEnabled());
         origFaultInjection = String.valueOf(config.isFaultInjectionEnabled());
         origSyncWrites = String.valueOf(config.isSyncWrites());
@@ -60,6 +62,7 @@ public class StartupWarningsTest {
         TestUtils.setPrivateField(config, "scriptFetchEnabled", origFetchEnabled);
         TestUtils.setPrivateField(config, "scriptFetchAllowlist", origAllowlist);
         TestUtils.setPrivateField(config, "maxMemory", origMaxMemory);
+        TestUtils.setPrivateField(config, "metadataCacheMaxBytes", origMetadataCacheMaxBytes);
         TestUtils.setPrivateField(config, "scriptsEnabled", origScriptsEnabled);
         TestUtils.setPrivateField(config, "faultInjectionEnabled", origFaultInjection);
         TestUtils.setPrivateField(config, "syncWrites", origSyncWrites);
@@ -116,6 +119,7 @@ public class StartupWarningsTest {
     @Test
     public void test_budgets_totalling_more_than_the_heap_are_warned_about() throws Exception {
         TestUtils.setPrivateField(config, "maxMemory", "1024Gb");
+        TestUtils.setPrivateField(config, "metadataCacheMaxBytes", "1024Gb");
         TestUtils.setPrivateField(config, "scriptsEnabled", "false");
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.warnIfCachesExceedHeap();
@@ -130,6 +134,15 @@ public class StartupWarningsTest {
             StartupWarnings.warnIfXmxExceedsMaxMemory();
             assertLogged(logWriter, "more than 2x the configured maxMemory");
             assertLogged(logWriter, "keep maxMemory around half of -Xmx");
+        }
+    }
+
+    @Test
+    public void test_an_auto_cache_skips_the_xmx_comparison() throws Exception {
+        TestUtils.setPrivateField(config, "maxMemory", "auto");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfXmxExceedsMaxMemory();
+            logWriter.verifyNoInteractions();
         }
     }
 

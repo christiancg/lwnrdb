@@ -185,8 +185,9 @@ public final class DatabaseOperationHelper {
             if (dbEntry == null) {
                 return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
             }
-            return locks.withRetiringCollectionLocks(dbName, dbEntry.getCollections(), remainingUntil(deadline),
-                    () -> deleteDatabaseUnderLocks(dbName, grantRewrite));
+            final var collNames = dbEntry.getCollections();
+            return locks.withRetiringCollectionLocks(dbName, collNames, remainingUntil(deadline),
+                    () -> deleteDatabaseUnderLocks(dbName, collNames, remainingUntil(deadline), grantRewrite));
         } catch (CollectionBusyException busy) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
         } catch (InterruptedException exception) {
@@ -203,9 +204,10 @@ public final class DatabaseOperationHelper {
         }
     }
 
-    private static OperationResponse deleteDatabaseUnderLocks(String dbName, GrantRewrite grantRewrite)
-            throws Exception {
-        if (!fs.deleteDatabase(dbName)) {
+    private static OperationResponse deleteDatabaseUnderLocks(String dbName, List<String> collNames,
+            long fieldLockBudget, GrantRewrite grantRewrite) throws Exception {
+        if (!FieldIndexDropFence.holdingFieldIndexLocks(dbName, collNames, fieldLockBudget,
+                () -> fs.deleteDatabase(dbName))) {
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         }
         DroppedCollections.forgetDatabase(dbName);

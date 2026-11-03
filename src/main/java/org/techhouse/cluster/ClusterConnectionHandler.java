@@ -227,7 +227,7 @@ public class ClusterConnectionHandler implements Runnable {
             case CANCEL_SCRIPT -> handleCancelScript(request);
             case LIST_TRIGGER_RUNS -> handleListTriggerRuns(request);
             case RESOLVE_TRIGGER_RUN -> handleResolveTriggerRun(request);
-            case ADMIN_SNAPSHOT -> handleAdminSnapshot();
+            case ADMIN_SNAPSHOT -> handleAdminSnapshot(request);
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
             default -> {
@@ -279,9 +279,10 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    private ClusterMessage handleAdminSnapshot() {
+    private ClusterMessage handleAdminSnapshot(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.ADMIN_SNAPSHOT_ACK, "Failed to build admin snapshot",
-                response -> response.setAdminSnapshot(adminAntiEntropyService.buildSnapshot()));
+                response -> response
+                        .setAdminSnapshot(adminAntiEntropyService.buildSnapshot(request.getAdminSnapshot())));
     }
 
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {

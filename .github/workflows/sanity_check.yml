@@ -211,7 +211,7 @@ jobs:
       - name: Start server
         if: ${{ matrix.start_server }}
         run: |
-          sed -i "s/^maxMemory=.*/maxMemory=${{ matrix.max_memory }}/" lwnrdb.cfg
+          echo "maxMemory=${{ matrix.max_memory }}" >> lwnrdb.cfg
           java -Xmx${{ matrix.xmx }} -jar target/lwnrdb.jar > server.log 2>&1 &
           echo $! > server.pid
           for _ in $(seq 1 150); do

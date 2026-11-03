@@ -1,5 +1,6 @@
 package org.techhouse.client;
 
+import java.util.List;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -91,9 +92,13 @@ public final class Requests {
         return request;
     }
 
-    public static JsonObject createIndex(String database, String collection, String field) {
+    public static JsonObject createIndexes(String database, String collection, List<String> fields) {
         final var request = onCollection("CREATE_INDEX", database, collection);
-        request.add("fieldName", new JsonString(field));
+        final var names = new JsonArray();
+        for (final var field : fields) {
+            names.add(new JsonString(field));
+        }
+        request.add("fieldNames", names);
         return request;
     }
 

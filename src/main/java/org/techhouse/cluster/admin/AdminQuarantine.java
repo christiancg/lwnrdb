@@ -16,8 +16,13 @@ import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.DroppedCollections;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.admin.CollectionIncarnation;
+import org.techhouse.ops.admin.FieldIndexDropFence;
 
 final class AdminQuarantine {
+    private enum MoveAside {
+        MOVED, LEFT, BUSY
+    }
+
     private final Logger logger = Logger.logFor(AdminQuarantine.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -27,18 +32,35 @@ final class AdminQuarantine {
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
 
-    void quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation) throws Exception {
+    boolean quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation, long waitMillis)
+            throws Exception {
         final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
         if (localEntry == null || snapshotIncarnation == 0 || localEntry.getIncarnation() == 0
                 || localEntry.getIncarnation() >= snapshotIncarnation) {
-            return;
+            return true;
         }
         final var stale = localEntry.getIncarnation();
-        final var moved = unregisterAndMoveAside(dbName, collName, stale);
+        final var moved = fencedUnregisterAndMoveAside(dbName, collName, stale, waitMillis);
+        if (moved == MoveAside.BUSY) {
+            return false;
+        }
         logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
                 + ": its documents belong to incarnation " + stale + ", which was dropped, and the cluster has since"
                 + " re-created the name as incarnation " + snapshotIncarnation + ". They were " + movedOrLeft(moved)
                 + " and the collection is now empty here.");
+        return true;
+    }
+
+    private MoveAside fencedUnregisterAndMoveAside(String dbName, String collName, long incarnation, long waitMillis)
+            throws Exception {
+        try {
+            return FieldIndexDropFence.holdingFieldIndexLocks(dbName, List.of(collName), waitMillis,
+                    () -> unregisterAndMoveAside(dbName, collName, incarnation) ? MoveAside.MOVED : MoveAside.LEFT);
+        } catch (CollectionBusyException busy) {
+            logger.warning("Skipping the quarantine of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + ": "
+                    + busy.getMessage() + ". The next round retries it.");
+            return MoveAside.BUSY;
+        }
     }
 
     private boolean unregisterAndMoveAside(String dbName, String collName, long incarnation) throws Exception {
@@ -54,6 +76,10 @@ final class AdminQuarantine {
 
     private static String movedOrLeft(boolean moved) {
         return moved ? "moved aside on disk" : "left on disk";
+    }
+
+    private static String movedOrLeft(MoveAside moved) {
+        return movedOrLeft(moved == MoveAside.MOVED);
     }
 
     boolean dropCollection(String dbName, String collName, long waitMillis) throws Exception {
@@ -77,7 +103,11 @@ final class AdminQuarantine {
             return false;
         }
         try {
-            final var moved = unregisterAndMoveAside(dbName, collName, CollectionIncarnation.current(dbName, collName));
+            final var moved = fencedUnregisterAndMoveAside(dbName, collName,
+                    CollectionIncarnation.current(dbName, collName), waitMillis);
+            if (moved == MoveAside.BUSY) {
+                return false;
+            }
             logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
                     + ": the cluster dropped it while this node held it. Its documents were " + movedOrLeft(moved)
                     + " and it no longer serves reads or writes until an operator reinstates or removes it.");
@@ -106,24 +136,27 @@ final class AdminQuarantine {
         final var dbEntry = cache.getAdminDbEntry(dbName);
         final var collNames = dbEntry != null ? dbEntry.getCollections() : List.<String>of();
         try {
-            return locks.withRetiringCollectionLocks(dbName, collNames, waitMillis, () -> {
-                AdminOperationHelper.deleteDatabaseEntry(dbName);
-                listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
-                final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
-                DroppedCollections.forgetDatabase(dbName);
-                compiledProcedures.invalidateDatabase(dbName);
-                scheduleRegistry.removeDatabase(dbName);
-                triggerExecutor.discardQueuedFor(dbName, null);
-                TriggerRunLog.discardAllFor(dbName, null);
-                logger.warning("Quarantined database " + dbName + ": the cluster dropped it while this node held it."
-                        + " Its documents were " + movedOrLeft(moved) + " and it no longer serves reads or writes"
-                        + " until an operator reinstates or removes it.");
-                return true;
-            });
+            return locks.withRetiringCollectionLocks(dbName, collNames, waitMillis, () -> FieldIndexDropFence
+                    .holdingFieldIndexLocks(dbName, collNames, waitMillis, () -> quarantineDatabaseUnderLocks(dbName)));
         } catch (CollectionBusyException busy) {
             logger.warning("Skipping the quarantine of database " + dbName + ": " + busy.getMessage()
                     + ". The next round retries it.");
             return false;
         }
+    }
+
+    private boolean quarantineDatabaseUnderLocks(String dbName) throws Exception {
+        AdminOperationHelper.deleteDatabaseEntry(dbName);
+        listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
+        final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
+        DroppedCollections.forgetDatabase(dbName);
+        compiledProcedures.invalidateDatabase(dbName);
+        scheduleRegistry.removeDatabase(dbName);
+        triggerExecutor.discardQueuedFor(dbName, null);
+        TriggerRunLog.discardAllFor(dbName, null);
+        logger.warning("Quarantined database " + dbName + ": the cluster dropped it while this node held it."
+                + " Its documents were " + movedOrLeft(moved) + " and it no longer serves reads or writes"
+                + " until an operator reinstates or removes it.");
+        return true;
     }
 }

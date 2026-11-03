@@ -86,7 +86,11 @@ public class ListenManager implements DirtySink {
                 new AtomicReference<>(initialHash), new AtomicBoolean(false), username, retainedBytes, group.id());
         registrations.put(listenId, registration);
         for (var key : keys) {
-            collectionToListens.computeIfAbsent(key, _ -> ConcurrentHashMap.newKeySet()).add(listenId);
+            collectionToListens.compute(key, (_, listenIds) -> {
+                final var attached = listenIds == null ? ConcurrentHashMap.<UUID>newKeySet() : listenIds;
+                attached.add(listenId);
+                return attached;
+            });
         }
         return listenId;
     }
@@ -162,11 +166,19 @@ public class ListenManager implements DirtySink {
 
     private void detachKeys(ListenRegistration registration) {
         for (var key : registration.collectionKeys()) {
-            final var listenIds = collectionToListens.get(key);
-            if (listenIds != null) {
+            collectionToListens.computeIfPresent(key, (_, listenIds) -> {
                 listenIds.remove(registration.listenId());
-            }
+                return listenIds.isEmpty() ? null : listenIds;
+            });
         }
+    }
+
+    public void forgetCollection(String dbName, String collName) {
+        applyTracker.forget(keyOf(dbName, collName));
+    }
+
+    public void forgetDatabase(String dbName) {
+        applyTracker.forgetPrefix(dbName + "|");
     }
 
     public void unregisterAllForClient(UUID clientId) {

@@ -13,6 +13,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.TombstoneStore;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -150,6 +151,7 @@ public final class DatabaseStatsHelper {
             userCacheBytes += r.estimatedSizeBytes();
         }
         memory.addProperty("userCacheBytes", userCacheBytes);
+        memory.addProperty("residentTombstoneBytes", TombstoneStore.residentBytes());
         memory.addProperty("maxMemoryBytes", configuration.getMaxMemoryBytes());
         memory.addProperty("cachingDisabled", configuration.isCachingDisabled());
         memory.addProperty("cacheUnlimited", configuration.isCacheUnlimited());

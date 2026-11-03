@@ -43,6 +43,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final ScanOrderMemo scanOrder = new ScanOrderMemo();
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private final AbsentIndexTypes absentIndexTypes = new AbsentIndexTypes();
+    private final IndexIdCounts idCounts = IocContainer.get(IndexIdCounts.class);
     private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
             .get(org.techhouse.concurrency.ResourceLocking.class);
 
@@ -165,6 +166,19 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return IndexLookupResolver.countEquals(userCache, dbName, collName, fieldName, value);
     }
 
+    public boolean answersFromIndexFile(String dbName, String collName, String fieldName, Class<?> type) {
+        return IndexFileReads.fromFile(userCache, dbName, collName, fieldName, type);
+    }
+
+    public boolean reloadsLargeFieldIndex(String dbName, String collName, String fieldName) {
+        return IndexFileReads.reloadsLargeIndex(userCache, dbName, collName, fieldName);
+    }
+
+    public OptionalLong countEqualsAny(String dbName, String collName, String fieldName, List<?> values)
+            throws IOException {
+        return IndexLookupResolver.countEqualsAny(userCache, dbName, collName, fieldName, values);
+    }
+
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
         return userCache.getEntriesByIds(dbName, collName, ids);
     }
@@ -182,6 +196,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public void evictDatabase(String dbName) {
         CollectionIdentifiers.forgetDatabase(dbName);
         absentIndexTypes.forgetDatabase(dbName);
+        idCounts.forgetDatabase(dbName);
         userCache.evictDatabase(dbName);
         adminCache.removeCollectionSchemasForDatabase(dbName);
         adminCache.removeProceduresForDatabase(dbName);
@@ -191,6 +206,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public void evictCollection(String dbName, String collName) {
         absentIndexTypes.forgetCollection(getCollectionIdentifier(dbName, collName));
+        idCounts.forgetCollection(dbName, collName);
         CollectionIdentifiers.forget(dbName, collName);
         userCache.evictCollection(dbName, collName);
         adminCache.removeCollectionSchema(dbName, collName);
@@ -200,6 +216,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     @Override
     public void evictFieldIndex(String dbName, String collName, String indexIdentifier) {
         absentIndexTypes.forget(getCollectionIdentifier(dbName, collName), indexIdentifier);
+        idCounts.forget(dbName, collName, indexIdentifier);
         userCache.evictFieldIndex(dbName, collName, indexIdentifier);
     }
 
@@ -207,6 +224,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
         INDEX_IDENTIFIERS.remove(fieldName);
         absentIndexTypes.forgetField(getCollectionIdentifier(dbName, collName), fieldName);
+        idCounts.forgetField(dbName, collName, fieldName);
         userCache.evictFieldIndexAllTypes(dbName, collName, fieldName);
     }
 
@@ -224,6 +242,24 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public WriterPkRows pkRowsForWriter(String dbName, String collName, Collection<String> ids) throws IOException {
         return userCache.pkTier().forWriter(dbName, collName, ids);
+    }
+
+    public boolean displacesColderIndexes(String dbName, String collName, String indexIdentifier) {
+        final var bytes = userCache.sizes().refusedFieldIndexBytes(getCollectionIdentifier(dbName, collName),
+                indexIdentifier);
+        if (bytes == null || userCache.isCachingDisabled(dbName)) {
+            return false;
+        }
+        final var request = AdmissionRequest.forFieldIndex(dbName, collName, indexIdentifier, bytes);
+        if (userCache.admission().makeRoomInTier(request, userCache.maxMemoryBytes())) {
+            return true;
+        }
+        userCache.admission().recordRefusal(request);
+        return false;
+    }
+
+    public boolean pkServedByPointScans(String dbName, String collName) {
+        return userCache.pkTier().pointScansOnly(dbName, collName);
     }
 
     public boolean isFieldIndexTypeRefused(String dbName, String collName, String indexIdentifier) {
@@ -303,7 +339,13 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         if (sortedPages == null || !locks.holdsCollectionLock(dbName, collName)) {
             return streamCollectionFromDisk(dbName, collName).skip(skip);
         }
-        final var plan = PageSkip.plan(sortedPages, userCache.getPkIndexAndLoadIfNecessary(dbName, collName), skip);
+        final var trusted = fs.trustedLiveRows(dbName, collName);
+        final var plan = trusted.isPresent() && !PageSkip.countsMatch(sortedPages, trusted.getAsLong())
+                ? null
+                : PageSkip.plan(sortedPages, skip);
+        if (plan == null) {
+            return streamCollectionFromDisk(dbName, collName).skip(skip);
+        }
         final var scan = new ScanAdmission(plan.pages(), false, pageReader(dbName, collName), memoryManagement, null);
         return StreamSupport.stream(scan, false).skip(plan.remainder());
     }

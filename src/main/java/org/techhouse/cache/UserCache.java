@@ -80,6 +80,10 @@ public class UserCache {
         return pkTier;
     }
 
+    AdmissionEviction admission() {
+        return admission;
+    }
+
     long maxMemoryBytes() {
         return configuration.getMaxMemoryBytes();
     }
@@ -250,14 +254,23 @@ public class UserCache {
 
     private boolean fieldIndexMayFit(String dbName, String collName, String indexIdentifier, int entries) {
         final var lowerBound = CacheSizeEstimator.minimumFieldIndexBytes(entries);
-        if (admissionFeasible(AccessKind.FIELD_INDEX, lowerBound)) {
+        final var request = AdmissionRequest.forFieldIndex(dbName, collName, indexIdentifier, lowerBound);
+        if (admissionFeasible(AccessKind.FIELD_INDEX, lowerBound)
+                || !isCachingDisabled(dbName) && admission.makeRoomInTier(request, maxMemoryBytes())) {
             return true;
         }
         if (!isCachingDisabled(dbName)) {
-            fitWarnings.fieldIndexOutgrows(dbName, collName, indexIdentifier, lowerBound, maxMemoryBytes());
-            sizes.refuseFieldIndex(Cache.getCollectionIdentifier(dbName, collName), indexIdentifier, lowerBound);
+            refuseFieldIndex(request, indexIdentifier);
         }
         return false;
+    }
+
+    private void refuseFieldIndex(AdmissionRequest request, String indexIdentifier) {
+        fitWarnings.fieldIndexRefused(request.dbName(), request.collName(), indexIdentifier, request.bytes(),
+                maxMemoryBytes(), footprintBytes());
+        sizes.refuseFieldIndex(Cache.getCollectionIdentifier(request.dbName(), request.collName()), indexIdentifier,
+                request.bytes());
+        admission.recordRefusal(request);
     }
 
     private void admitFieldIndex(String dbName, String collName, String indexIdentifier,
@@ -267,13 +280,14 @@ public class UserCache {
         }
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         SharedIdLists.share(pkIndexMap.get(collectionIdentifier), copy);
-        final var measured = CacheSizeEstimator.estimateFieldIndexSize(copy);
-        if (!shouldCache(dbName, new AdmissionRequest(AccessKind.FIELD_INDEX, dbName, collName,
-                CacheableResource.indexedFieldOf(indexIdentifier), measured))) {
-            fitWarnings.fieldIndexOutgrows(dbName, collName, indexIdentifier, measured, maxMemoryBytes());
-            sizes.refuseFieldIndex(collectionIdentifier, indexIdentifier, measured);
+        final var request = AdmissionRequest.forFieldIndex(dbName, collName, indexIdentifier,
+                CacheSizeEstimator.estimateFieldIndexSize(copy));
+        if (!shouldCache(dbName, request)
+                && !(admission.makeRoomInTier(request, maxMemoryBytes()) && shouldCache(dbName, request))) {
+            refuseFieldIndex(request, indexIdentifier);
             return;
         }
+        final var measured = request.bytes();
         sizes.clearRefusedFieldIndex(collectionIdentifier, indexIdentifier);
         fieldIndexMap.compute(collectionIdentifier, (_, existing) -> {
             final var indexes = existing != null ? existing : new ConcurrentHashMap<String, List<FieldIndexEntry<?>>>();

@@ -1,8 +1,6 @@
 package org.techhouse.cache;
 
-import java.util.Arrays;
 import java.util.List;
-import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 
 final class PageSkip {
@@ -12,24 +10,32 @@ final class PageSkip {
     private PageSkip() {
     }
 
-    static Plan plan(List<AdminPageEntry> sortedPages, List<PkIndexEntry> pk, long skip) {
-        final var pageNumbers = new long[sortedPages.size()];
-        for (var i = 0; i < pageNumbers.length; i++) {
-            pageNumbers[i] = sortedPages.get(i).getPage();
-        }
-        final var live = new int[pageNumbers.length];
-        for (final var row : pk) {
-            final var at = Arrays.binarySearch(pageNumbers, row.getPage());
-            if (at >= 0) {
-                live[at]++;
-            }
-        }
+    static boolean countsMatch(List<AdminPageEntry> sortedPages, long liveRows) {
+        return liveRows == totalOf(sortedPages);
+    }
+
+    static Plan plan(List<AdminPageEntry> sortedPages, long skip) {
         var remaining = skip;
         var first = 0;
-        while (first < live.length && remaining >= live[first]) {
-            remaining -= live[first];
+        while (first < sortedPages.size()) {
+            final var live = sortedPages.get(first).getEntryCount();
+            if (live < 0) {
+                return null;
+            }
+            if (remaining < live) {
+                break;
+            }
+            remaining -= live;
             first++;
         }
         return new Plan(sortedPages.subList(first, sortedPages.size()), remaining);
+    }
+
+    private static long totalOf(List<AdminPageEntry> sortedPages) {
+        var total = 0L;
+        for (final var page : sortedPages) {
+            total += page.getEntryCount();
+        }
+        return total;
     }
 }

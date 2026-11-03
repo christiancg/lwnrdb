@@ -1,34 +1,35 @@
 package org.techhouse.fs;
 
-import java.util.Map;
-import java.util.function.BiConsumer;
-
 public final class TombstoneView {
-    private final Map<String, Long> versions;
+    @FunctionalInterface
+    public interface Visitor {
+        void visit(String id, long version);
+    }
+
+    private final ResidentTombstones resident;
     private final long oldest;
     private final long highest;
 
-    TombstoneView(Map<String, Long> versions, long oldest, long highest) {
-        this.versions = versions;
+    TombstoneView(ResidentTombstones resident, long oldest, long highest) {
+        this.resident = resident;
         this.oldest = oldest;
         this.highest = highest;
     }
 
     public long versionOf(String id) {
-        final var version = versions.get(id);
-        return version == null ? 0L : version;
+        return resident.versionOf(id);
     }
 
-    public void forEach(BiConsumer<String, Long> action) {
-        versions.forEach(action);
+    public void forEach(Visitor visitor) {
+        resident.forEach(visitor::visit);
     }
 
     public int size() {
-        return versions.size();
+        return resident.size();
     }
 
     public boolean isEmpty() {
-        return versions.isEmpty();
+        return resident.size() == 0;
     }
 
     public long oldest() {

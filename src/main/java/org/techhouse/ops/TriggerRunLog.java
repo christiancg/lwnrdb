@@ -259,14 +259,19 @@ public final class TriggerRunLog {
         if (runId == null || !isEnabled()) {
             return;
         }
+        String dbName = null;
         try {
             for (final var entry : AdminOperationHelper.readTriggerRuns(recordIdsFor(runId))) {
                 entry.markAttempt(status, attempts, error, nextAttemptAt);
                 AdminOperationHelper.saveTriggerRun(entry);
+                dbName = entry.getDbName();
             }
         } catch (Exception e) {
             logger.warning(
                     "Failed to record attempt " + attempts + " of trigger run '" + runId + "': " + e.getMessage());
+        }
+        if (status == TriggerRunStatus.DEAD) {
+            TriggerDeadLetterCap.afterDeadLetter(dbName);
         }
     }
 
@@ -284,9 +289,9 @@ public final class TriggerRunLog {
         final var deadCutoff = now - deadLetterRetentionMs;
         final var ownNodeIds = ownNodeIds();
         final var stale = new ArrayList<String>();
-        for (final var entry : pending()) {
-            if (isStranded(entry, ownNodeIds, cutoff, deadCutoff)) {
-                stale.add(entry.get_id());
+        for (final var run : TriggerRunIndex.current()) {
+            if (isStranded(run, ownNodeIds, cutoff, deadCutoff)) {
+                stale.add(run.recordId());
             }
         }
         if (stale.isEmpty()) {
@@ -299,9 +304,9 @@ public final class TriggerRunLog {
     public static void discardAllFor(String dbName, String collName) {
         try {
             final var dropped = new ArrayList<String>();
-            for (final var entry : pending()) {
-                if (dbName.equals(entry.getDbName()) && (collName == null || collName.equals(entry.getCollName()))) {
-                    dropped.add(entry.get_id());
+            for (final var run : TriggerRunIndex.current()) {
+                if (dbName.equals(run.dbName()) && (collName == null || collName.equals(run.collName()))) {
+                    dropped.add(run.recordId());
                 }
             }
             if (!dropped.isEmpty()) {
@@ -316,16 +321,12 @@ public final class TriggerRunLog {
         }
     }
 
-    private static boolean isStranded(AdminTriggerRunEntry entry, Set<String> ownNodeIds, long cutoff,
+    private static boolean isStranded(TriggerRunIndex.Summary run, Set<String> ownNodeIds, long cutoff,
             long deadCutoff) {
-        if (entry.getStatus() == TriggerRunStatus.DEAD) {
-            return diedAt(entry) < deadCutoff;
+        if (run.isDead()) {
+            return run.diedAt() < deadCutoff;
         }
-        return !ownNodeIds.contains(entry.getNodeId()) && entry.getFiredAt() < cutoff;
-    }
-
-    private static long diedAt(AdminTriggerRunEntry entry) {
-        return Math.max(entry.getFiredAt(), entry.getLastErrorAt());
+        return !ownNodeIds.contains(run.nodeId()) && run.firedAt() < cutoff;
     }
 
     public static Set<String> ownNodeIds() {

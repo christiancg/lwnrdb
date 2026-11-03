@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -260,7 +261,7 @@ public class FieldIndexOneEntryPerIdTest {
         final var spied = spy(realFs);
         TestUtils.setPrivateStaticField(Class.forName(SLOT_CLASS), "fs", spied);
         doThrow(new IOException("disk full")).when(spied).appendIndexLog(anyString(), anyString(), anyString(),
-                eq("String"), any(), any());
+                eq("String"), any(), any(), anyBoolean());
         final var generation = pending.mark(TestGlobals.DB, TestGlobals.COLL, "f1");
         try {
             assertThrows(IOException.class,

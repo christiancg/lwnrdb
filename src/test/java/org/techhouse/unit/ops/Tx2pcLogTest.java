@@ -5,17 +5,23 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.techhouse.cache.AdminCache;
 import org.techhouse.config.Globals;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.OutcomeMarkers;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.SaveRequest;
@@ -113,6 +119,57 @@ public class Tx2pcLogTest {
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(dtxId));
         Tx2pcLog.garbageCollectOutcomes(-1000L);
         assertFalse(Tx2pcLog.outcomeDtxIds().contains(dtxId));
+    }
+
+    @Test
+    public void outcomeGcReadsNoMarkerUntilExpired() throws Exception {
+        final var dtxIds = List.of("dddd0001-0000-0000-0000-000000000000", "dddd0002-0000-0000-0000-000000000000",
+                "dddd0003-0000-0000-0000-000000000000");
+        for (final var dtxId : dtxIds) {
+            Tx2pcLog.recordOutcome(dtxId, true, null);
+        }
+        final var inDoubt = "dddd0004-0000-0000-0000-000000000000";
+        Tx2pcLog.recordOutcome(inDoubt, true, null);
+        Tx2pcLog.recordParticipantPrepared(inDoubt, "127.0.0.1:9000", List.of("127.0.0.1:9000"), List.of("db|c"));
+
+        try (var admin = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
+            Tx2pcLog.garbageCollectOutcomes(Long.MAX_VALUE / 2);
+            admin.verify(() -> AdminOperationHelper.deleteTransactionOps(Mockito.anyList()), Mockito.never());
+
+            Tx2pcLog.garbageCollectOutcomes(-1000L);
+
+            admin.verify(() -> AdminOperationHelper.readTransactionOps(Mockito.anyList()), Mockito.never());
+            admin.verify(() -> AdminOperationHelper.deleteTransactionOps(Mockito.anyList()), Mockito.times(1));
+        }
+        assertEquals(List.of(inDoubt), Tx2pcLog.outcomeDtxIds(),
+                "a marker whose slice is still prepared here is never collected");
+        Tx2pcLog.deleteParticipantMarker(inDoubt);
+    }
+
+    @Test
+    public void outcomeMarkersRebuiltAtStartup() throws Exception {
+        final var dtxIds = new ArrayList<String>();
+        for (var index = 0; index < 5; index++) {
+            dtxIds.add(UUID.randomUUID().toString());
+            Tx2pcLog.recordOutcome(dtxIds.getLast(), index % 2 == 0, null);
+        }
+        final var reloaded = new ConcurrentHashMap<String, PkIndexEntry>();
+        for (final var row : IocContainer.get(FileSystem.class).readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME)) {
+            reloaded.put(row.getValue(), row);
+        }
+        TestUtils.setPrivateField(IocContainer.get(AdminCache.class), "transactionsPkIndex", reloaded);
+
+        try (var admin = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
+            assertEquals(5, OutcomeMarkers.rebuild());
+            admin.verify(() -> AdminOperationHelper.readTransactionOps(Mockito.anyList()), Mockito.times(1));
+
+            Tx2pcLog.garbageCollectOutcomes(60_000L);
+            Tx2pcLog.garbageCollectOutcomes(-1000L);
+
+            admin.verify(() -> AdminOperationHelper.readTransactionOps(Mockito.anyList()), Mockito.times(1));
+        }
+        assertTrue(Tx2pcLog.outcomeDtxIds().isEmpty());
     }
 
     @Test

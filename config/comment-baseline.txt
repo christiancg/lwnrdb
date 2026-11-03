@@ -34,7 +34,6 @@ src/main/java/org/techhouse/data/admin/AdminUserEntry.java 2
 src/main/java/org/techhouse/ejson/custom_types/CustomTypeFactory.java 1
 src/main/java/org/techhouse/ejson/custom_types/GeoDistanceComparator.java 1
 src/main/java/org/techhouse/ejson/custom_types/JsonGeo.java 2
-src/main/java/org/techhouse/ejson/custom_types/JsonVector.java 1
 src/main/java/org/techhouse/ejson/internal/JsonStrings.java 2
 src/main/java/org/techhouse/ejson/internal/NumberFormatter.java 2
 src/main/java/org/techhouse/ejson/internal/ReflectionUtils.java 4

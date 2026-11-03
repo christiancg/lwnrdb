@@ -414,6 +414,83 @@ def test_non_admin_dump_and_restore(cwd: str):
           nobody.stderr.decode())
 
 
+MULTI = "client_multi"
+PRODUCTS = "products"
+BIG = "big_rows"
+BIG_ROWS = 400
+BIG_ROW_BYTES = 100_000
+SMALL_CLIENT_HEAP = "-Xmx32m"
+
+
+def registered_indexes(port: int, db: str, coll: str) -> list:
+    stats = send(port, {"type": "GET_DATABASE_STATS"}).get("stats", {}).get("databases", [])
+    return sorted(index for d in stats if d.get("name") == db for c in d.get("collections", [])
+                  if c.get("name") == coll for index in c.get("indexes") or [])
+
+
+def test_dump_restore_multi_field_index_round_trip(cwd: str):
+    section("Dump and restore of several indexes as one CREATE_INDEX")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {MULTI}", c.send({"type": "CREATE_DATABASE", "databaseName": MULTI}), "OK")
+        check_status(f"create {MULTI}.{PRODUCTS}", c.send({"type": "CREATE_COLLECTION", "databaseName": MULTI,
+                                                           "collectionName": PRODUCTS}), "OK")
+        check_status("save products", c.send({"type": "BULK_SAVE", "databaseName": MULTI, "collectionName": PRODUCTS,
+                                              "objects": [{"_id": f"p{i}", "sku": f"s{i}", "color": f"c{i % 4}",
+                                                           "price": i, "tags": [f"t{i % 3}"]} for i in range(300)]}),
+                     "OK")
+        check_status("index four fields with one request", c.send({
+            "type": "CREATE_INDEX", "databaseName": MULTI, "collectionName": PRODUCTS,
+            "fieldNames": ["sku", "color", "price", "tags"]}), "OK")
+    dumped = client(cwd, "--dump", "--databases", MULTI)
+    check("--dump of the database exits 0", dumped.returncode == 0, dumped.stderr.decode())
+    create_index_lines = [json.loads(line) for line in dumped.stdout.decode().splitlines()
+                          if json.loads(line).get("type") == "CREATE_INDEX"]
+    check("the dump holds one CREATE_INDEX for the collection", len(create_index_lines) == 1, str(create_index_lines))
+    check("naming every indexed field", create_index_lines and sorted(create_index_lines[0].get("fieldNames") or [])
+          == ["color", "price", "sku", "tags"], str(create_index_lines))
+    restored = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("--restore exits 0", restored.returncode == 0, restored.stderr.decode())
+    check("the target registers the same indexes",
+          registered_indexes(TARGET_PORT, MULTI, PRODUCTS) == registered_indexes(SOURCE_PORT, MULTI, PRODUCTS)
+          == ["color", "price", "sku", "tags"], str(registered_indexes(TARGET_PORT, MULTI, PRODUCTS)))
+    for field, value in (("color", "c2"), ("tags", ["t1"])):
+        query = {"type": "AGGREGATE", "databaseName": MULTI, "collectionName": PRODUCTS,
+                 "aggregationSteps": [bu.filter_step(field, "EQUALS", value)], "analyze": True}
+        target = send(TARGET_PORT, query)
+        check(f"the restored {field} index answers like the source",
+              bu.ids_of(target) == bu.ids_of(send(SOURCE_PORT, query)) and bool(bu.ids_of(target))
+              and field in (target.get("analyzeResult") or {}).get("indexesUsed", []),
+              str(target.get("analyzeResult")))
+    again = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("restoring it again is idempotent", again.returncode == 0, again.stderr.decode())
+    for port in (SOURCE_PORT, TARGET_PORT):
+        send(port, {"type": "DROP_DATABASE", "databaseName": MULTI})
+
+
+def test_exec_large_result_small_client_heap(cwd: str):
+    section("--exec relays a large result through a small client heap")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {CRM}.{BIG}", c.send({"type": "CREATE_COLLECTION", "databaseName": CRM,
+                                                     "collectionName": BIG}), "OK")
+        for start in range(0, BIG_ROWS, 40):
+            check_status(f"save big rows {start}..", c.send({
+                "type": "BULK_SAVE", "databaseName": CRM, "collectionName": BIG,
+                "objects": [{"_id": f"b{i:04d}", "body": f"{i}:" + "b" * BIG_ROW_BYTES}
+                            for i in range(start, start + 40)]}), "OK")
+    request = json.dumps({"type": "AGGREGATE", "databaseName": CRM, "collectionName": BIG, "aggregationSteps": []})
+    command = ["java", SMALL_CLIENT_HEAP, "-jar", bu.JAR_PATH, "--exec", request, "--port", str(SOURCE_PORT),
+               "--password", bu.PASSWORD]
+    result = subprocess.run(command, capture_output=True, cwd=cwd, timeout=CLIENT_TIMEOUT_S)
+    check(f"--exec with {SMALL_CLIENT_HEAP} exits 0", result.returncode == 0, result.stderr.decode()[-500:])
+    lines = result.stdout.decode().splitlines()
+    check("it prints one line", len(lines) == 1, f"{len(lines)} lines")
+    reply = json.loads(lines[0]) if len(lines) == 1 else {}
+    check(f"holding all {BIG_ROWS} rows (about {BIG_ROWS * BIG_ROW_BYTES // 1_000_000} MB)",
+          reply.get("status") == "OK" and len(reply.get("results") or []) == BIG_ROWS,
+          f"{len(result.stdout)} bytes")
+    send(SOURCE_PORT, {"type": "DROP_COLLECTION", "databaseName": CRM, "collectionName": BIG})
+
+
 def test_hygiene(cwd: str, plain_dump: bytes):
     section("Hygiene")
     check("the client working directory stays empty", os.listdir(cwd) == [], str(os.listdir(cwd)))
@@ -465,6 +542,8 @@ def main():
         test_restore_one_database(client_dir)
         test_restore_one_collection_into_a_live_server(client_dir)
         test_non_admin_dump_and_restore(client_dir)
+        test_dump_restore_multi_field_index_round_trip(client_dir)
+        test_exec_large_result_small_client_heap(client_dir)
         test_hygiene(client_dir, plain_dump)
         bu.stop_server(source, port=SOURCE_PORT)
         source = None
