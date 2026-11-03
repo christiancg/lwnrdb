@@ -141,6 +141,16 @@ def without_attempted_deletes(case: KillCase) -> dict:
     return {key: value for key, value in all_acknowledged(case).items() if key not in gone}
 
 
+def without_attempted_deletes_but_the_last(case: KillCase) -> dict:
+    attempted = case.observed.get("attempted", [])
+    gone = set(attempted[:-1])
+    return {key: value for key, value in all_acknowledged(case).items() if key not in gone}
+
+
+def checkpointed_by_the_writer_or_the_background(writer_paused: Callable, background_paused: Callable):
+    return lambda case: [writer_paused(case), background_paused(case)]
+
+
 def cases() -> list:
     vacuum = KillCase("intent_vacuum_renamed", "PAGE_VACUUM_RENAMED", PRE_WRITE_VACUUM_DOCS, None,
                       last_acknowledged_k1, intents_while_paused=1, logged_while_paused=False)
@@ -148,17 +158,20 @@ def cases() -> list:
     post_update_vacuum = KillCase("intent_post_update_vacuum_renamed", "PAGE_VACUUM_RENAMED", 4, None,
                                   last_attempted_k1, intents_while_paused=1)
     post_update_vacuum.write = churn_k1_until_paused(post_update_vacuum)
-    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None, last_attempted_k1,
+    checkpoint = KillCase("wal_checkpoint_forced", "WAL_CHECKPOINT_FORCED", 4, None,
+                          checkpointed_by_the_writer_or_the_background(last_attempted_k1, last_acknowledged_k1),
                           logged_while_paused=False)
     checkpoint.write = churn_k1_until_paused(checkpoint)
     delete_vacuum = KillCase("intent_delete_vacuum_renamed", "PAGE_VACUUM_RENAMED", DELETE_VACUUM_DOCS, None,
                              without_attempted_deletes, intents_while_paused=1, logged_while_paused=False)
     delete_vacuum.write = delete_until_paused(delete_vacuum)
     delete_checkpoint = KillCase("wal_delete_checkpoint_forced", "WAL_CHECKPOINT_FORCED", DELETE_CHECKPOINT_DOCS,
-                                 None, without_attempted_deletes, intents_while_paused={0, 1},
-                                 logged_while_paused=False)
+                                 None, checkpointed_by_the_writer_or_the_background(
+                                     without_attempted_deletes, without_attempted_deletes_but_the_last),
+                                 intents_while_paused={0, 1}, logged_while_paused=False)
     delete_checkpoint.write = delete_until_paused(delete_checkpoint)
-    rewrite_begun = KillCase("wal_rewrite_begun", "WAL_REWRITE_BEGUN", 4, None, last_attempted_k1)
+    rewrite_begun = KillCase("wal_rewrite_begun", "WAL_REWRITE_BEGUN", 4, None, last_attempted_k1,
+                             intents_while_paused=1)
     rewrite_begun.write = churn_k1_until_paused(rewrite_begun)
     return [
         [KillCase("wal_update_logged", "PAGE_COPY_APPENDED", KILLED_DOCS, update_k1("unacknowledged"),
@@ -402,11 +415,13 @@ def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: s
                 test_a_killed_triggered_group_audits_each_landed_write_once(conn, case)
             continue
         section(f"A write killed at {case.point} in {case.coll} recovers to what its write-ahead log committed")
-        expected = case.expected(case)
-        ids = sorted({f"k{i}" for i in range(case.seed_docs)} | set(expected))
+        outcomes = case.expected(case)
+        outcomes = outcomes if isinstance(outcomes, list) else [outcomes]
+        ids = sorted({f"k{i}" for i in range(case.seed_docs)}.union(*outcomes))
         found = values_by_id(conn, case.coll, ids)
+        expected = next((outcome for outcome in outcomes if outcome == found), outcomes[0])
         check("FIND_BY_ID answers exactly the committed values", found == expected,
-              f"expected {expected} got {found}")
+              f"expected {' or '.join(map(str, outcomes))} got {found}")
         check("a full scan lists exactly the same documents", scanned_ids(conn, case.coll) == sorted(expected),
               f"scan={scanned_ids(conn, case.coll)}")
         check("the index-only COUNT agrees", pk_count(conn, case.coll) == len(expected))

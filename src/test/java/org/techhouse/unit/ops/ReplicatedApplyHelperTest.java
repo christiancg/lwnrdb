@@ -5,8 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
@@ -20,6 +26,8 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
@@ -276,5 +284,61 @@ public class ReplicatedApplyHelperTest {
         request.set_id("evicted");
         final var found = (org.techhouse.ops.resp.FindByIdResponse) processor.processMessage(request);
         assertEquals(2, found.object.get("v").asJsonNumber().getValue().intValue());
+    }
+
+    private static List<JsonObject> batch(int value) {
+        final var documents = new ArrayList<JsonObject>();
+        for (var i = 0; i < 20; i++) {
+            final var document = doc("batch-" + i);
+            document.addProperty("v", value);
+            documents.add(document);
+        }
+        return documents;
+    }
+
+    private int storedValue(String id) {
+        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id(id);
+        final var found = (org.techhouse.ops.resp.FindByIdResponse) processor.processMessage(request);
+        return found.object.get("v").asJsonNumber().getValue().intValue();
+    }
+
+    @Test
+    public void batchResolvesVersionsWithOnePkPassWhenRefused() throws Exception {
+        final var versions = new ArrayList<String>();
+        final var newer = new ArrayList<String>();
+        for (var i = 0; i < 20; i++) {
+            versions.add("70");
+            newer.add(i < 10 ? "69" : "71");
+        }
+        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                ReplicationOp.UPSERT, batch(1), null, versions), TestGlobals.APPLY_BUDGET_MS));
+        final var configuration = Configuration.getInstance();
+        final var savedMaxMemory = TestUtils.getPrivateField(configuration, "maxMemoryBytes", Long.class);
+        final var userCache = IocContainer.get(Cache.class).userCache();
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var fs = IocContainer.get(FileSystem.class);
+        final var spied = spy(fs);
+        TestUtils.setPrivateField(configuration, "maxMemoryBytes", 1024L);
+        try {
+            userCache.evictPkIndex(TestGlobals.DB, TestGlobals.COLL);
+            locks.lockRead(TestGlobals.DB, TestGlobals.COLL);
+            try {
+                userCache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL);
+            } finally {
+                locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+            }
+            TestUtils.setPrivateField(userCache, "fs", spied);
+            assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                    ReplicationOp.UPSERT, batch(2), null, newer), TestGlobals.APPLY_BUDGET_MS));
+        } finally {
+            TestUtils.setPrivateField(userCache, "fs", fs);
+            TestUtils.setPrivateField(configuration, "maxMemoryBytes", savedMaxMemory);
+        }
+
+        verify(spied, never()).readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        verify(spied, atMost(2)).pkRowsFor(eq(TestGlobals.DB), eq(TestGlobals.COLL), anyCollection());
+        assertEquals(1, storedValue("batch-3"), "an older replicated version never overwrites a newer one");
+        assertEquals(2, storedValue("batch-13"));
     }
 }

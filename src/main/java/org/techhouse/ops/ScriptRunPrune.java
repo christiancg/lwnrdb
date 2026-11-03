@@ -97,6 +97,7 @@ public final class ScriptRunPrune {
             throw e;
         }
         deleted[0] = removed.size();
+        reservation.awaitTombstones();
         if (!removed.isEmpty()) {
             clusterCoordinator.replicateDelete(dbName, collName, removed, reservation.version());
         }

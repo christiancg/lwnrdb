@@ -140,14 +140,40 @@ public final class DataRequestValidator {
         if (!base.isValid()) {
             return base;
         }
-        if (request.getFieldName() == null || request.getFieldName().isBlank()) {
-            return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName");
+        final var fieldNames = request.getFieldNames();
+        if (fieldNames == null) {
+            if (request.getFieldName() == null || request.getFieldName().isBlank()) {
+                return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName or fieldNames");
+            }
+            return validateCreateIndexField(request.getFieldName());
         }
-        final var charset = NameValidations.validateIndexFieldName(request.getFieldName());
+        if (fieldNames.isEmpty()) {
+            return ValidationResult.fail("CREATE_INDEX fieldNames must not be empty");
+        }
+        if (request.getFieldName() != null) {
+            final var single = validateCreateIndexField(request.getFieldName());
+            if (!single.isValid()) {
+                return single;
+            }
+        }
+        for (final var fieldName : fieldNames) {
+            final var field = validateCreateIndexField(fieldName);
+            if (!field.isValid()) {
+                return field;
+            }
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateCreateIndexField(String fieldName) {
+        if (fieldName == null || fieldName.isBlank()) {
+            return ValidationResult.fail("CREATE_INDEX field names must not be blank");
+        }
+        final var charset = NameValidations.validateIndexFieldName(fieldName);
         if (!charset.isValid()) {
             return charset;
         }
-        return validateIndexFieldNotReserved("CREATE_INDEX", request.getFieldName());
+        return validateIndexFieldNotReserved("CREATE_INDEX", fieldName);
     }
 
     private static ValidationResult validateIndexFieldNotReserved(String operation, String fieldName) {

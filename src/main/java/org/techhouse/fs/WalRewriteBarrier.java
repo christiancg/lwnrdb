@@ -20,7 +20,11 @@ final class WalRewriteBarrier {
     }
 
     Begun begin(String dbName, String collName, long page, long lengthBefore) throws IOException {
-        return new Begun(dbName, collName, page, wal.beginRewrite(dbName, collName, page, lengthBefore));
+        return begin(dbName, collName, page, lengthBefore, new ForceGroup());
+    }
+
+    Begun begin(String dbName, String collName, long page, long lengthBefore, ForceGroup alongside) throws IOException {
+        return new Begun(dbName, collName, page, wal.beginRewrite(dbName, collName, page, lengthBefore, alongside));
     }
 
     boolean landed(Begun begun, Path folder) {

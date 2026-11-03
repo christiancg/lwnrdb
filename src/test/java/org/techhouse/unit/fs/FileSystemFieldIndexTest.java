@@ -97,7 +97,7 @@ public class FileSystemFieldIndexTest extends FileSystemTestBase {
         fs.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, Map.of(Double.class,
                 List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, 123.0, new HashSet<>(Set.of("a"))))));
 
-        fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number", List.of(), List.of());
+        fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, fieldName, "Number", List.of(), List.of(), false);
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");

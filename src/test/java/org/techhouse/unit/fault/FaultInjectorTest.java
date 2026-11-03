@@ -64,6 +64,20 @@ public class FaultInjectorTest {
     }
 
     @Test
+    public void test_a_collection_subject_is_built_only_while_enabled_and_matches_its_spelled_out_form()
+            throws Exception {
+        injector.arm(FaultPoint.WAL_APPENDED, FaultAction.HALT, SUBJECT);
+        injector.at(FaultPoint.WAL_APPENDED, "db", "other");
+        assertTrue(halts.isEmpty());
+        TestUtils.setPrivateField(injector, "enabled", false);
+        injector.at(FaultPoint.WAL_APPENDED, "db", "coll");
+        assertTrue(halts.isEmpty(), "a disabled injector builds no subject and fires nothing");
+        TestUtils.setPrivateField(injector, "enabled", true);
+        injector.at(FaultPoint.WAL_APPENDED, "db", "coll");
+        assertEquals(List.of(137), halts);
+    }
+
+    @Test
     public void test_an_unarmed_point_passes_through() {
         injector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, SUBJECT);
         assertFalse(injector.dropsAt(FaultPoint.PEER_REPLY, "COMMIT_TX"));

@@ -36,6 +36,9 @@ DROP_DB = "mem_drops"
 DROP_ROUNDS = 3
 DROP_COLLECTIONS = int(os.environ.get("MEM_TEST_DROP_COLLECTIONS", "500"))
 DROP_GROWTH_LIMIT = 0.02
+REFUSED_INDEX_COLL = "refused_index"
+REFUSED_INDEX_DOCS = int(os.environ.get("MEM_TEST_REFUSED_INDEX_DOCS", "40000"))
+REFUSED_INDEX_MAX_CAP = 64 * 1024 * 1024
 DROP_TRACKED_CLASSES = ("java.util.concurrent.locks.ReentrantReadWriteLock",
                         "java.util.concurrent.ConcurrentLinkedQueue", "org.techhouse.cache.UsageCounter")
 
@@ -269,6 +272,193 @@ def cache_stays_bounded_during_bulk_load(c: Conn, cap_bytes):
     c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": SAMPLED_LOAD_COLL})
 
 
+DISPLACE_COLL = "displace"
+DISPLACE_DOCS = int(os.environ.get("MEM_TEST_DISPLACE_DOCS", "11000"))
+DISPLACE_HOT_PAD = 48
+DISPLACE_HOT_QUERIES = 40
+REFUSED_PK_COLL = "refused_pk"
+REFUSED_PK_DOCS = int(os.environ.get("MEM_TEST_REFUSED_PK_DOCS", "60000"))
+
+
+def cache_bytes(c):
+    return snapshot(c).get("memory", {}).get("userCacheBytes", 0)
+
+
+def bulk_load(c, coll, docs):
+    loaded = True
+    for start in range(0, len(docs), BULK_BATCH_SIZE):
+        r = c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                    "objects": docs[start:start + BULK_BATCH_SIZE]}, timeout=120)
+        loaded = loaded and r.get("status") == "OK"
+    return loaded
+
+
+def indexed_ids(c, coll, steps, scan=False, analyze=False):
+    pipeline = ([{"type": "SKIP", "skip": 0}] if scan else []) + steps
+    r = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "aggregationSteps": pipeline,
+                "analyze": analyze}, timeout=120)
+    return sorted(row.get("_id") for row in r.get("results") or []), r
+
+
+def test_hot_index_displaces_cold_index(c: Conn, cap_bytes):
+    section(f"A hot field index displaces a colder one ({DISPLACE_DOCS} docs, two unique-valued indexes)")
+    if cap_bytes <= 0:
+        warn("cap is 0 or unlimited — same-tier displacement skipped")
+        return
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DISPLACE_COLL})
+    docs = [{"_id": f"dp_{i:06d}", "cold": f"c-{i:06d}", "hot": f"h-{i:06d}-" + "x" * DISPLACE_HOT_PAD}
+            for i in range(DISPLACE_DOCS)]
+    check(f"{DISPLACE_DOCS} docs loaded into {DISPLACE_COLL}", bulk_load(c, DISPLACE_COLL, docs))
+    for fld in ("cold", "hot"):
+        r = c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": DISPLACE_COLL,
+                    "fieldName": fld}, timeout=120)
+        check(f"CREATE_INDEX {DISPLACE_COLL}.{fld}", r.get("status") == "OK", detail=str(r))
+    time.sleep(2)
+    for i in range(3):
+        indexed_ids(c, DISPLACE_COLL, [bu.filter_step("cold", "EQUALS", f"c-{i:06d}")])
+    time.sleep(1)
+    with_cold = cache_bytes(c)
+    answered = True
+    for _ in range(DISPLACE_HOT_QUERIES):
+        n = random.randrange(DISPLACE_DOCS)
+        ids, _ = indexed_ids(c, DISPLACE_COLL, [bu.filter_step("hot", "EQUALS", docs[n]["hot"])])
+        answered = answered and ids == [docs[n]["_id"]]
+        time.sleep(0.12)
+    time.sleep(1)
+    with_hot = cache_bytes(c)
+    value = docs[7]["hot"]
+    scanned, _ = indexed_ids(c, DISPLACE_COLL, [bu.filter_step("hot", "EQUALS", value)], scan=True)
+    indexed, _ = indexed_ids(c, DISPLACE_COLL, [bu.filter_step("hot", "EQUALS", value)])
+    check("every hot EQUALS answered its one document, and the index matches the scan",
+          answered and scanned == indexed == [docs[7]["_id"]])
+    print(f"  cache with the cold index {with_cold/1024/1024:.2f}MB, after the hot queries "
+          f"{with_hot/1024/1024:.2f}MB, cap {cap_bytes/1024/1024:.2f}MB")
+    before_drop = cache_bytes(c)
+    r = c.send({"type": "DROP_INDEX", "databaseName": DB, "collectionName": DISPLACE_COLL, "fieldName": "hot"})
+    freed = before_drop - cache_bytes(c)
+    resident = r.get("status") == "OK" and freed >= DISPLACE_DOCS * DISPLACE_HOT_PAD
+    check(f"dropping the hot index frees its resident list ({freed/1024:.0f}KB >= "
+          f"{DISPLACE_DOCS * DISPLACE_HOT_PAD // 1024}KB): it replaced the colder one", resident,
+          detail="a field index used far more than a resident one displaces it" if resident
+          else f"THE HOT INDEX NEVER BECAME RESIDENT ({r})")
+    check(f"userCacheBytes stays within the cap ({with_hot/1024/1024:.2f}MB)",
+          with_hot <= cap_bytes * CACHE_CAP_TOLERANCE)
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": DISPLACE_COLL})
+
+
+def test_refused_pk_filter_limit_point_scans(c: Conn, cap_bytes):
+    section(f"Indexed FILTER + LIMIT on a collection whose pk does not fit ({REFUSED_PK_DOCS} docs)")
+    if cap_bytes <= 0:
+        warn("cap is 0 or unlimited — refused pk FILTER + LIMIT skipped")
+        return
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REFUSED_PK_COLL})
+    docs = [{"_id": f"rp_{i:07d}", "category": f"cat{i % 50}", "n": i} for i in range(REFUSED_PK_DOCS)]
+    check(f"{REFUSED_PK_DOCS} docs loaded into {REFUSED_PK_COLL}", bulk_load(c, REFUSED_PK_COLL, docs))
+    for fld in ("category", "n"):
+        r = c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REFUSED_PK_COLL,
+                    "fieldName": fld}, timeout=120)
+        check(f"CREATE_INDEX {REFUSED_PK_COLL}.{fld}", r.get("status") == "OK", detail=str(r))
+    time.sleep(2)
+    steps = [bu.filter_step("category", "EQUALS", "cat7"), {"type": "LIMIT", "limit": 5}]
+    everything = set(indexed_ids(c, REFUSED_PK_COLL, [bu.filter_step("category", "EQUALS", "cat7")],
+                                 scan=True)[0])
+    timings = []
+    answers = True
+    scanned = None
+    for _ in range(20):
+        started = time.perf_counter()
+        ids, response = indexed_ids(c, REFUSED_PK_COLL, steps, analyze=True)
+        timings.append((time.perf_counter() - started) * 1000)
+        answers = answers and len(set(ids)) == 5 and set(ids) <= everything
+        scanned = (response.get("analyzeResult") or {}).get("documentsScanned")
+    timings.sort()
+    check(f"every FILTER + LIMIT 5 answers 5 distinct matching rows ({len(everything)} match)", answers)
+    check(f"it reads only the rows it returns (documentsScanned={scanned})", scanned is not None and scanned <= 5)
+    print(f"  FILTER + LIMIT 5 p50={timings[len(timings) // 2]:.1f}ms max={timings[-1]:.1f}ms "
+          f"with a refused pk")
+    top, response = indexed_ids(c, REFUSED_PK_COLL, [bu.filter_step("n", "GREATER_THAN", 1000),
+                                                     {"type": "SORT", "fieldName": "n", "ascending": True},
+                                                     {"type": "LIMIT", "limit": 5}], analyze=True)
+    check("range + SORT + LIMIT 5 answers the five smallest matches in order",
+          [row.get("_id") for row in response.get("results") or []] == [f"rp_{i:07d}" for i in range(1001, 1006)],
+          detail=str(top))
+    check(f"userCacheBytes stays within the cap ({cache_bytes(c)/1024/1024:.2f}MB)",
+          cache_bytes(c) <= cap_bytes * CACHE_CAP_TOLERANCE)
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": REFUSED_PK_COLL})
+
+
+def refused_aggregate(c, steps, analyze=False):
+    request = {"type": "AGGREGATE", "databaseName": DB, "collectionName": REFUSED_INDEX_COLL,
+               "aggregationSteps": steps}
+    if analyze:
+        request["analyze"] = True
+    return c.send(request, timeout=120)
+
+
+def refused_email(i: int) -> str:
+    return f"user{i:06d}@example.com"
+
+
+def test_refused_index_answers_from_file(c: Conn, cap_bytes):
+    section(f"Refused index: {REFUSED_INDEX_DOCS} unique emails and numbers that cannot fit the cache, "
+            "answered from the index file and compared with the scan")
+    if cap_bytes <= 0 or cap_bytes > REFUSED_INDEX_MAX_CAP:
+        warn("cap is unlimited, disabled or larger than 64MB — the refused-index case needs a small cap; skipped")
+        return
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REFUSED_INDEX_COLL})
+    loaded = True
+    for start in range(0, REFUSED_INDEX_DOCS, 1000):
+        batch = [{"_id": f"ref_{i:06d}", "email": refused_email(i), "n": i, "bucket": i % 50}
+                 for i in range(start, min(start + 1000, REFUSED_INDEX_DOCS))]
+        r = c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": REFUSED_INDEX_COLL,
+                    "objects": batch}, timeout=120)
+        loaded = loaded and r.get("status") == "OK"
+    check(f"{REFUSED_INDEX_DOCS} docs loaded into {REFUSED_INDEX_COLL}", loaded)
+    for fld in ("email", "n"):
+        r = c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REFUSED_INDEX_COLL,
+                    "fieldName": fld}, timeout=120)
+        check(f"CREATE_INDEX {REFUSED_INDEX_COLL}.{fld}", r.get("status") == "OK", detail=str(r))
+    check("the sweep brings the bulk load's resident pk rows back under the cap before the queries",
+          bu.wait_until(lambda: cache_bytes(c) <= cap_bytes, timeout_s=15.0),
+          detail=f"{cache_bytes(c)} bytes against a {cap_bytes} byte cap")
+    last = REFUSED_INDEX_DOCS - 1
+    probes = [
+        ("EQUALS email", bu.filter_step("email", "EQUALS", refused_email(123)), 1),
+        ("EQUALS email in another case", bu.filter_step("email", "EQUALS", refused_email(456).upper()), 1),
+        ("EQUALS an absent email", bu.filter_step("email", "EQUALS", "nobody@example.com"), 0),
+        ("IN three emails", bu.filter_step("email", "IN", [refused_email(1), refused_email(last),
+                                                          refused_email(7).upper()]), 3),
+        ("EQUALS n", bu.filter_step("n", "EQUALS", 777), 1),
+        ("n >= last - 24", bu.filter_step("n", "GREATER_THAN_EQUALS", last - 24), 25),
+        ("n < 10", bu.filter_step("n", "SMALLER_THAN", 10), 10),
+        ("NOT_IN all but one email", bu.filter_step("email", "NOT_IN", [refused_email(2)]), REFUSED_INDEX_DOCS - 1),
+    ]
+    for label, step, expected in probes:
+        refused_aggregate(c, [step], analyze=True)
+        indexed = refused_aggregate(c, [step], analyze=True)
+        scanned = refused_aggregate(c, [{"type": "SKIP", "skip": 0}, step])
+        check(f"{label}: index answer == scan answer ({expected} rows)",
+              indexed.get("status") in ("OK", "NO_RESULTS") and bu.ids_of(indexed) == bu.ids_of(scanned)
+              and len(bu.ids_of(indexed)) == expected,
+              detail=f"index {len(bu.ids_of(indexed))} rows, scan {len(bu.ids_of(scanned))} rows")
+        analysis = indexed.get("analyzeResult") or {}
+        if expected <= 25:
+            check(f"{label}: served by the index, reading only the {expected} matching documents",
+                  analysis.get("documentsScanned") == expected and step["operator"]["field"] in (
+                      analysis.get("indexesUsed") or []), detail=str(analysis))
+        counted = refused_aggregate(c, [step, {"type": "COUNT"}])
+        check(f"{label}: index-only COUNT == {expected}", bu.count_of(counted) == expected, detail=str(counted))
+    limited = refused_aggregate(c, [bu.filter_step("email", "EQUALS", refused_email(99)), {"type": "LIMIT", "limit": 1}],
+                                analyze=True)
+    check("[FILTER email, LIMIT 1] answers its one row from the index",
+          bu.ids_of(limited) == ["ref_000099"]
+          and (limited.get("analyzeResult") or {}).get("documentsScanned") == 1, detail=str(limited.get("analyzeResult")))
+    used = snapshot(c).get("memory", {}).get("userCacheBytes", 0)
+    check(f"userCacheBytes stays within cap*{CACHE_CAP_TOLERANCE} after the refused-index queries",
+          used <= cap_bytes * CACHE_CAP_TOLERANCE, detail=f"{used} bytes against a {cap_bytes} byte cap")
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": REFUSED_INDEX_COLL})
+
+
 def setup(c):
     c.send({"type": "DROP_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
@@ -480,8 +670,11 @@ def main():
     cap_bytes = s.get("memory", {}).get("maxMemoryBytes", 0)
     print(f"  configured cap = {cap_bytes/1024/1024:.0f}MB")
 
+    test_hot_index_displaces_cold_index(c, cap_bytes)
+    test_refused_pk_filter_limit_point_scans(c, cap_bytes)
     accounting_accuracy(c, pid)
     cache_stays_bounded_during_bulk_load(c, cap_bytes)
+    test_refused_index_answers_from_file(c, cap_bytes)
     dropped_collections_release_memory(c, pid)
 
     rss_samples, cache_samples, heap_samples = [], [], []

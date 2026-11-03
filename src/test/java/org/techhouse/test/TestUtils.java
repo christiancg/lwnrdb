@@ -35,7 +35,6 @@ import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.SizeParser;
 import org.techhouse.config.ValueType;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.OutboundQueue;
@@ -207,7 +206,7 @@ public class TestUtils {
             return Integer.valueOf(raw.trim());
         }
         if (fieldType == long.class || fieldType == Long.class) {
-            return key.type() == ValueType.SIZE ? SizeParser.parse(raw) : Long.parseLong(raw.trim());
+            return key.type() == ValueType.SIZE ? configuration.sizeValue(key) : Long.parseLong(raw.trim());
         }
         if (fieldType == boolean.class || fieldType == Boolean.class) {
             return Boolean.valueOf(raw.trim());

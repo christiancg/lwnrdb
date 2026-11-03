@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.Set;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.internal.JsonStrings;
@@ -117,6 +118,9 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     }
 
     public static String indexKeyOf(Object indexedValue) {
+        if (indexedValue instanceof JsonVector vector) {
+            return vector.indexKey();
+        }
         if (indexedValue instanceof JsonCustom<?> jc) {
             return jc.getValue();
         }
@@ -152,7 +156,13 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line,
             Class<T> tClass) {
         final var separatorIdx = line.indexOf(Globals.ID_SEPARATOR);
-        final var strValue = unescapeIndexToken(line.substring(0, separatorIdx));
+        return new FieldIndexEntry<>(databaseName, collectionName,
+                parseIndexValue(line.substring(0, separatorIdx), tClass),
+                parseIds(line, separatorIdx + Globals.ID_SEPARATOR.length()));
+    }
+
+    public static <T> T parseIndexValue(String escapedKey, Class<T> tClass) {
+        final var strValue = unescapeIndexToken(escapedKey);
         Object value;
         if (Number.class.isAssignableFrom(tClass)) {
             value = parseFiniteIndexedNumber(strValue);
@@ -160,11 +170,12 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
             value = Boolean.parseBoolean(strValue);
         } else if (tClass == String.class) {
             value = strValue;
+        } else if (tClass == JsonVector.class) {
+            value = JsonVector.ofIndexKey(strValue);
         } else {
             value = CustomTypeFactory.getCustomTypeInstance(strValue);
         }
-        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value),
-                parseIds(line, separatorIdx + Globals.ID_SEPARATOR.length()));
+        return tClass.cast(value);
     }
 
     private static double parseFiniteIndexedNumber(String strValue) {

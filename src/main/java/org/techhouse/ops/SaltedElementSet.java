@@ -20,6 +20,10 @@ final class SaltedElementSet extends AbstractSet<JsonBaseElement> {
         return candidate instanceof JsonBaseElement element && keys.contains(new SaltedKey(element));
     }
 
+    boolean containsKey(SaltedKey key) {
+        return keys.contains(key);
+    }
+
     @Override
     @SuppressWarnings("NullableProblems")
     public Iterator<JsonBaseElement> iterator() {

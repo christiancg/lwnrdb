@@ -33,6 +33,7 @@ import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
@@ -207,6 +208,29 @@ public class GroupCommitClusterTest {
         assertFalse(tombstones.containsKey("seed"), String.valueOf(tombstones));
         assertFalse(tombstones.containsKey("other"));
         assertEquals("v0", fixture.valueOf("seed"));
+    }
+
+    @Test
+    public void test_a_failed_tombstone_force_takes_the_group_back() throws Exception {
+        assertEquals(OperationStatus.OK, fixture.save("other", "v").getStatus());
+        assertTrue(
+                fixture.runQueued(GroupCommitFixture.times(2, number -> fixture.save("base" + number, "v"))).stream()
+                        .allMatch(response -> response.getStatus() == OperationStatus.OK),
+                "keeps the page from emptying");
+        clearInvocations(replicator);
+        recorder.failingFor(Globals.TOMBSTONE_FILE_NAME + ".idx");
+
+        final var responses = fixture.runQueued(List.of(() -> fixture.delete("seed"), () -> fixture.delete("other")));
+        recorder.failingFor(null);
+
+        final var deleting = ErrorCode.ERROR_DELETING.getCode();
+        assertEquals(List.of(deleting, deleting), codes(responses));
+        final var tombstones = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
+        assertFalse(tombstones.containsKey("seed"), String.valueOf(tombstones));
+        assertFalse(tombstones.containsKey("other"));
+        assertEquals("v0", fixture.valueOf("seed"));
+        assertEquals("v", fixture.valueOf("other"));
+        verify(replicator, never()).broadcast(any());
     }
 
     @Test

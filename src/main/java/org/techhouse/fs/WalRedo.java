@@ -60,8 +60,13 @@ final class WalRedo {
         }
         new WriteAheadLog(paths).track(dbName, collName);
         if (!records.isEmpty()) {
-            logger.warning("Replayed " + records.size() + " logged write(s) of " + dbName
-                    + Globals.COLL_IDENTIFIER_SEPARATOR + collName + " from its write-ahead log");
+            final var message = "Replayed " + records.size() + " logged write(s) of " + dbName
+                    + Globals.COLL_IDENTIFIER_SEPARATOR + collName + " from its write-ahead log";
+            if (WalCheckpoints.replayedAtStartup(dbName)) {
+                logger.info(message);
+            } else {
+                logger.warning(message);
+            }
         }
         return withPendingIds(dbName, collName, writtenIds(dbName, collName, records), decoded.pendingIds());
     }

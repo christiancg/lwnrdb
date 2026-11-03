@@ -25,7 +25,7 @@ final class WalCheckpoints {
     void atShutdown(long deadline) {
         final var dirty = new ArrayList<WriteAheadLog.WalLogStatus>();
         for (final var status : writeAheadLog.statusesUnder(root())) {
-            if (status.dirty()) {
+            if (status.dirty() && !replayedAtStartup(status.dbName())) {
                 dirty.add(status);
             }
         }
@@ -103,6 +103,33 @@ final class WalCheckpoints {
             }
         }
         return checkpointed;
+    }
+
+    int requested(CollectionTryLock collectionLocks) {
+        var checkpointed = 0;
+        for (final var request : WalCheckpointRequests.takeAll()) {
+            final var dbName = request.dbName();
+            final var collName = request.collName();
+            if (!paths.collectionFolder(dbName, collName).isDirectory() || !collectionLocks.tryLock(dbName, collName)) {
+                continue;
+            }
+            try {
+                if (writeAheadLog.checkpointRequested(dbName, collName)) {
+                    checkpointed++;
+                }
+            } catch (IOException e) {
+                logger.error("Could not checkpoint the full write-ahead log of "
+                        + WriteAheadLog.subject(dbName, collName) + " in the background; it keeps its records and"
+                        + " the next write past its size retries", e);
+            } finally {
+                collectionLocks.unlock(dbName, collName);
+            }
+        }
+        return checkpointed;
+    }
+
+    static boolean replayedAtStartup(String dbName) {
+        return Globals.ADMIN_PAGES_DB_NAME.equals(dbName);
     }
 
     private String root() {

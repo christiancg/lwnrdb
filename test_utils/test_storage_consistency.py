@@ -2754,6 +2754,82 @@ def run_reindex_kill_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+PENDING_DB = "pending_frame_db"
+PENDING_COLL = "pending_docs"
+PENDING_DOCS = 2000
+PENDING_CATEGORIES = 7
+PENDING_FRAME = b"I"
+CHECKPOINT_FRAME = b"C"
+
+
+def pending_frames(work_dir: str) -> int:
+    path = os.path.join(work_dir, "db", PENDING_DB, PENDING_COLL, f"{PENDING_COLL}.wal")
+    if not os.path.isfile(path):
+        return 0
+    with open(path, "rb") as fp:
+        data = fp.read()
+    at, frames = 0, 0
+    while at + bu.WAL_HEADER_BYTES <= len(data) and data[at:at + 1] == b"W":
+        kind = data[at + 1:at + 2]
+        length = int.from_bytes(data[at + 10:at + 14], "big")
+        if at + bu.WAL_HEADER_BYTES + length > len(data):
+            break
+        frames = 0 if kind == CHECKPOINT_FRAME else frames + (1 if kind == PENDING_FRAME else 0)
+        at += bu.WAL_HEADER_BYTES + length
+    return frames
+
+
+def pending_index_agrees_with_scan(conn: Conn) -> bool:
+    step = bu.filter_step("cat", "EQUALS", "c3")
+    expected = len([i for i in range(PENDING_DOCS) if i % PENDING_CATEGORIES == 3])
+    indexed = conn.count(PENDING_COLL, [step], db=PENDING_DB)
+    scanned = conn.count(PENDING_COLL, [{"type": "SKIP", "skip": 0}, step], db=PENDING_DB)
+    return indexed == scanned == expected
+
+
+def test_restart_after_pending_frame_is_clean(work_dir: str, log_path: str):
+    section("a PENDING frame whose ids are resolved is dropped by the clean stop, so later restarts repair nothing")
+    folder = os.path.join(work_dir, "db", PENDING_DB, PENDING_COLL)
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            check_status("the pending-frame database is created",
+                         conn.send({"type": "CREATE_DATABASE", "databaseName": PENDING_DB}), "OK")
+            check_status("its collection is created", conn.create_coll(PENDING_COLL, db=PENDING_DB), "OK")
+            check_status("its collection is indexed", conn.create_index("cat", coll=PENDING_COLL, db=PENDING_DB), "OK")
+            objects = [{"_id": f"p{i}", "cat": f"c{i % PENDING_CATEGORIES}"} for i in range(PENDING_DOCS)]
+            check_status("one BULK_SAVE fills the log past twice its checkpoint size",
+                         conn.send({"type": "BULK_SAVE", "databaseName": PENDING_DB, "collectionName": PENDING_COLL,
+                                    "objects": objects}), "OK")
+            check("the checkpoint after the BULK_SAVE logged its still-pending ids", pending_frames(work_dir) == 1,
+                  f"{pending_frames(work_dir)} frame(s)")
+            bu.wait_until(lambda: pending_index_agrees_with_scan(conn), timeout_s=15, interval_s=0.2)
+            check("the index work of the BULK_SAVE finished before the stop", pending_index_agrees_with_scan(conn))
+    finally:
+        bu.stop_server(proc)
+    check("the clean stop rewrote the log without the resolved frame", pending_frames(work_dir) == 0,
+          f"{pending_frames(work_dir)} frame(s)")
+    for restart in (1, 2):
+        proc = bu.start_server(work_dir, log_path)
+        try:
+            with admin_conn() as conn:
+                check(f"restart {restart}: the index answers exactly like a scan", pending_index_agrees_with_scan(conn))
+        finally:
+            bu.stop_server(proc)
+        check(f"restart {restart} leaves a log with no PENDING frame and no record to replay",
+              pending_frames(work_dir) == 0 and bu.logged_writes(folder) == 0,
+              f"{pending_frames(work_dir)} frame(s), {bu.logged_writes(folder)} record(s)")
+
+
+def run_pending_frame_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-pending-frame-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, walCheckpointBytes=WAL_CHECKPOINT_BYTES,
+                    walIdleCheckpointMs=60000)
+    test_restart_after_pending_frame_is_clean(work_dir, log_path)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 CHECKPOINT_DB = "checkpoint_db"
 IDLE_CHECKPOINT_MS = 1000
 
@@ -2921,6 +2997,106 @@ def run_page_placement_phase():
         with admin_conn() as conn:
             check_placement_reads(conn, PLACEMENT_LARGE_COLL, large, "large documents after a restart")
             check_placement_reads(conn, SMALL_COLL, small, "small hot collection after a restart")
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+REPAIR_DB = "repair_db"
+REPAIR_COLL = "bulk_killed"
+REPAIR_FIELDS = ("cat", "n")
+REPAIR_BULK = 500
+REPAIR_STREAM_S = 4.0
+REPAIR_DEADLINE_S = 90.0
+REPAIRED_LINE = f"Repaired the field indexes of {REPAIR_DB}|{REPAIR_COLL} for "
+
+
+def stream_bulk_saves_until_killed(proc) -> int:
+    acknowledged = [0]
+    stop = threading.Event()
+
+    def stream():
+        try:
+            with admin_conn() as writer:
+                start = 0
+                while not stop.is_set():
+                    response = writer.send({"type": "BULK_SAVE", "databaseName": REPAIR_DB,
+                                            "collectionName": REPAIR_COLL,
+                                            "objects": [{"_id": f"b{i:07d}", "cat": f"c{i % 37}", "n": i % 101}
+                                                        for i in range(start, start + REPAIR_BULK)]})
+                    if response.get("status") != "OK":
+                        return
+                    acknowledged[0] = start + REPAIR_BULK
+                    start += REPAIR_BULK
+        except OSError:
+            return
+
+    writer_thread = threading.Thread(target=stream, daemon=True)
+    writer_thread.start()
+    time.sleep(REPAIR_STREAM_S)
+    proc.kill()
+    proc.wait(timeout=30)
+    stop.set()
+    writer_thread.join(timeout=30)
+    return acknowledged[0]
+
+
+def wait_for_the_repair(conn: Conn, log_path: str, offset: int, started: float) -> float:
+    while time.monotonic() - started < REPAIR_DEADLINE_S:
+        background = conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("background", {})
+        idle = background.get("maintenance", 1) == 0 and background.get("pending", 1) == 0
+        if idle and REPAIRED_LINE in bu.read_log(log_path)[offset:]:
+            return time.monotonic() - started
+        time.sleep(0.2)
+    return -1.0
+
+
+def test_kill_during_bulk_repairs_each_index_once(work_dir: str, log_path: str, acknowledged: int):
+    section(f"a kill -9 inside a BULK_SAVE stream is repaired by one pass per collection within "
+            f"{REPAIR_DEADLINE_S:.0f}s, and every index answers like a scan")
+    check(f"the stream acknowledged documents before the kill ({acknowledged})", acknowledged > 0)
+    offset = len(bu.read_log(log_path))
+    started = time.monotonic()
+    proc = bu.start_server(work_dir, log_path, xmx="1g")
+    with admin_conn() as conn:
+        elapsed = wait_for_the_repair(conn, log_path, offset, started)
+        check(f"the repair finished within {REPAIR_DEADLINE_S:.0f}s of the restart", elapsed >= 0,
+              "no repair line, or background work still queued")
+        restarted_log = bu.read_log(log_path)[offset:]
+        repaired = [line for line in restarted_log.splitlines() if REPAIRED_LINE in line]
+        print(f"    (restart to repaired: {elapsed:.1f}s; {repaired[-1] if repaired else 'no repair line'})")
+        passes = len(repaired)
+        check("the replayed ids were repaired by exactly one pass", passes == 1, f"{passes} passes")
+        stored = conn.count(REPAIR_COLL, FULL_SCAN, db=REPAIR_DB)
+        check(f"every acknowledged document survived ({stored} >= {acknowledged})", stored >= acknowledged)
+        mismatched = []
+        for field, values in (("cat", ("c0", "c5", "c36")), ("n", (0, 7, 100))):
+            for value in values:
+                equals = [bu.filter_step(field, "EQUALS", value)]
+                by_index = sorted(conn.ids(REPAIR_COLL, equals, db=REPAIR_DB))
+                by_scan = sorted(conn.ids(REPAIR_COLL, FULL_SCAN + equals, db=REPAIR_DB))
+                counted = conn.count(REPAIR_COLL, equals, db=REPAIR_DB)
+                if by_index != by_scan or not by_scan or counted != len(by_scan):
+                    mismatched.append((field, value, len(by_index), len(by_scan), counted))
+        check("every index answers and counts exactly what a scan answers", not mismatched, str(mismatched))
+    return proc
+
+
+def run_kill_during_bulk_repair_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-bulk-repair-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, maxMemory="64mb")
+    print(f"\n  Starting server on {HOST}:{PORT} for a kill -9 inside a BULK_SAVE stream ...")
+    proc = bu.start_server(work_dir, log_path, xmx="1g")
+    try:
+        with admin_conn() as conn:
+            check_status("create the repair database",
+                         conn.send({"type": "CREATE_DATABASE", "databaseName": REPAIR_DB}), "OK")
+            check_status("create the repair collection", conn.create_coll(REPAIR_COLL, db=REPAIR_DB), "OK")
+            for field in REPAIR_FIELDS:
+                check_status(f"index {field}", conn.create_index(field, coll=REPAIR_COLL, db=REPAIR_DB), "OK")
+        acknowledged = stream_bulk_saves_until_killed(proc)
+        proc = test_kill_during_bulk_repairs_each_index_once(work_dir, log_path, acknowledged)
     finally:
         bu.stop_server(proc)
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -3119,8 +3295,10 @@ def main():
         run_backlog_phase()
         run_bounded_shutdown_phase()
         run_reindex_kill_phase()
+        run_pending_frame_phase()
         run_checkpoint_phase()
         run_page_placement_phase()
+        run_kill_during_bulk_repair_phase()
     finally:
         bu.stop_server(proc)
 

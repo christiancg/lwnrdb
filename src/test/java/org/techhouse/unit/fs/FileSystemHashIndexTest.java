@@ -29,7 +29,8 @@ public class FileSystemHashIndexTest extends FileSystemTestBase {
         assertNotNull(index);
         assertEquals(1, index.size());
 
-        fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT.label(), List.of(), List.of());
+        fs.appendIndexLog(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT.label(), List.of(), List.of(),
+                false);
         assertNull(fs.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT));
     }
 

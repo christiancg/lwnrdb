@@ -40,6 +40,18 @@ public final class SearchUtils {
         return idCountOf(entries, equalRun(entries, value));
     }
 
+    public static <T> long idCount(List<FieldIndexEntry<T>> entries) {
+        return idCountOf(entries, 0, entries.size());
+    }
+
+    public static <T> long countAnyOf(List<FieldIndexEntry<T>> entries, List<T> operands) {
+        var count = 0L;
+        for (final var run : membershipRuns(entries, operands)) {
+            count += idCountOf(entries, run[0], run[1]);
+        }
+        return count;
+    }
+
     private static <T> long idCountOf(List<FieldIndexEntry<T>> entries, int[] slice) {
         return slice == null ? 0L : idCountOf(entries, slice[0], slice[1]);
     }
@@ -202,22 +214,35 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> findingMembership(List<FieldIndexEntry<T>> entries, List<T> value, boolean present) {
-        final var matched = new HashSet<String>();
-        for (final var run : membershipRuns(entries, value)) {
-            matched.addAll(toIdSet(entries, run[0], run[1]));
-        }
+        final var runs = membershipRuns(entries, value);
         if (present) {
+            final var matched = new HashSet<String>();
+            for (final var run : runs) {
+                addIds(matched, entries, run[0], run[1]);
+            }
             return matched;
         }
-        final var ids = new HashSet<String>();
-        for (final var entry : entries) {
-            for (final var id : entry.getIds()) {
-                if (!matched.contains(id)) {
-                    ids.add(id);
-                }
+        var matchedIds = 0L;
+        for (final var run : runs) {
+            matchedIds += idCountOf(entries, run[0], run[1]);
+        }
+        final var complement = HashSet
+                .<String>newHashSet(Math.clamp(idCount(entries) - matchedIds, 0, Integer.MAX_VALUE));
+        var from = 0;
+        for (final var run : runs) {
+            addIds(complement, entries, from, run[0]);
+            from = run[1];
+        }
+        addIds(complement, entries, from, entries.size());
+        return complement;
+    }
+
+    private static <T> void addIds(Set<String> ids, List<FieldIndexEntry<T>> entries, int from, int to) {
+        if (from < to) {
+            for (final var entry : entries.subList(from, to)) {
+                ids.addAll(entry.getIds());
             }
         }
-        return ids;
     }
 
     private static <T> Set<String> findingContains(List<FieldIndexEntry<T>> entries, T value) {

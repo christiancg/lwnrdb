@@ -6,7 +6,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cache.UsageCounter;
@@ -100,32 +99,75 @@ public final class AdminUsageHelper {
         final var threshold = System.currentTimeMillis() - maxAgeMillis;
         lockUsageCollection();
         try {
-            final var pkIndexes = new ArrayList<>(cache.getCollectionUsagePkIndexes().values());
-            for (var pk : pkIndexes) {
-                final DbEntry entry;
-                try {
-                    entry = fs.getById(pk);
-                } catch (Exception ex) {
-                    throw new IOException("Failed to read collection usage entry " + pk.getValue(), ex);
-                }
-                if (entry == null)
-                    continue;
-                final var data = entry.getData();
-                data.addProperty(Globals.PK_FIELD, entry.get_id());
-                final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
-                if (usage.getLastAccessMillis() < threshold) {
-                    usage.setPreviousByteSize(pk.getLength());
-                    usage.setPage(pk.getPage());
-                    fs.deleteFromCollection(pk);
-                    cache.removePkIndexCollectionUsage(pk.getValue());
+            final var rows = new ArrayList<>(cache.getCollectionUsagePkIndexes().values());
+            for (var from = 0; from < rows.size(); from += USAGE_ROWS_PER_RECORD) {
+                final var expired = expiredAmong(
+                        rows.subList(from, Math.min(rows.size(), from + USAGE_ROWS_PER_RECORD)), threshold);
+                deleteRows(expired.stream().map(DbEntry::get_id).toList());
+                for (final var usage : expired) {
                     memoryManagement.clearCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
                             usage.getIndexKey());
-                    AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.DELETED,
-                            List.of(usage));
                 }
             }
         } finally {
             releaseUsageCollection();
         }
+    }
+
+    private static List<AdminCollectionUsageEntry> expiredAmong(List<PkIndexEntry> rows, long threshold)
+            throws IOException {
+        final List<DbEntry> entries;
+        try {
+            entries = fs.getByIndexEntries(rows);
+        } catch (IOException | RuntimeException ex) {
+            throw new IOException("Failed to read " + rows.size() + " collection usage entries", ex);
+        }
+        final var expired = new ArrayList<AdminCollectionUsageEntry>();
+        for (final var entry : entries) {
+            if (entry == null) {
+                continue;
+            }
+            final var data = entry.getData();
+            data.addProperty(Globals.PK_FIELD, entry.get_id());
+            final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
+            if (usage.getLastAccessMillis() < threshold) {
+                expired.add(usage);
+            }
+        }
+        return expired;
+    }
+
+    public static void deleteUsageOfCollection(String dbName, String collName)
+            throws IOException, InterruptedException {
+        deleteUsageWithPrefix(AdminCollectionUsageEntry.buildId(dbName, collName, ""));
+    }
+
+    public static void deleteUsageOfDatabase(String dbName) throws IOException, InterruptedException {
+        deleteUsageWithPrefix(dbName + Globals.COLL_IDENTIFIER_SEPARATOR);
+    }
+
+    private static void deleteUsageWithPrefix(String prefix) throws IOException, InterruptedException {
+        lockUsageCollection();
+        try {
+            final var ids = new ArrayList<String>();
+            for (final var id : cache.getCollectionUsagePkIndexes().keySet()) {
+                if (id.startsWith(prefix)) {
+                    ids.add(id);
+                }
+            }
+            for (var from = 0; from < ids.size(); from += USAGE_ROWS_PER_RECORD) {
+                deleteRows(ids.subList(from, Math.min(ids.size(), from + USAGE_ROWS_PER_RECORD)));
+            }
+        } finally {
+            releaseUsageCollection();
+        }
+    }
+
+    private static void deleteRows(List<String> ids) throws IOException, InterruptedException {
+        if (ids.isEmpty()) {
+            return;
+        }
+        AdminBatchWrite.write(Globals.ADMIN_COLLECTION_USAGE_NAME, USAGE_ROWS, List.of(),
+                AdminCollectionUsageEntry::encodeLine, List.copyOf(ids));
     }
 }

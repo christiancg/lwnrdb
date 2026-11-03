@@ -1,7 +1,6 @@
 package org.techhouse.ops.admin;
 
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.Map;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.HybridClock;
@@ -36,7 +35,7 @@ public final class AdminStamp {
     }
 
     public static Map<String, Long> tombstones() throws IOException {
-        return clusterConfig.isEnabled() ? fs.tombstones().readAdmin() : new HashMap<>();
+        return clusterConfig.isEnabled() ? fs.tombstones().readAdmin() : Map.of();
     }
 
     public static long versionOf(JsonObject stored) {

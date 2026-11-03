@@ -67,7 +67,14 @@ public final class ClusterWriteHelper {
 
     public static DeleteReservation reserveDelete(String dbName, String collName, String id)
             throws java.io.IOException {
-        return coordinator.reserveDelete(dbName, collName, List.of(id));
+        final var reservation = coordinator.reserveDelete(dbName, collName, List.of(id));
+        try {
+            reservation.awaitTombstones();
+        } catch (java.io.IOException e) {
+            coordinator.retractDelete(dbName, collName, List.of(id), reservation.version());
+            throw e;
+        }
+        return reservation;
     }
 
     public static OperationResponse deleteOrRetract(DeleteRequest request, Long reservedVersion) throws Exception {

@@ -38,53 +38,70 @@ final class FieldIndexStore {
         writeEntries(paths.indexFile(dbName, collName, fieldName, kind.label()), entries);
     }
 
-    boolean appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
-            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors) throws IOException {
+    PendingFold appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors, int foldDivisor)
+            throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
         if (indexFile == null) {
-            return false;
+            return null;
         }
         final var logFile = FilePaths.logFileOf(indexFile);
         final var lock = FileLocks.lockWrite(indexFile);
         try {
-            if (survivors.isEmpty() || FieldIndexLog.append(indexFile, logFile, changes)) {
+            if (survivors.isEmpty()) {
                 replaceType(indexFile, logFile, survivors);
-                return true;
+                return null;
             }
-            return false;
+            if (!FieldIndexLog.append(indexFile, logFile, changes, foldDivisor)) {
+                return null;
+            }
+            return PendingFold.ofSurvivors(dbName, collName, fieldName, typeLabel, indexFile, survivors);
         } finally {
             lock.unlock();
         }
     }
 
-    boolean appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
+    PendingFold appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
             List<IndexLogChange> changes, IndexTypeReader foldSource) throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
         if (indexFile == null) {
-            return false;
+            return null;
         }
-        final var logFile = FilePaths.logFileOf(indexFile);
         final var lock = FileLocks.lockWrite(indexFile);
         try {
-            if (!FieldIndexLog.append(indexFile, logFile, changes)) {
-                return false;
+            if (!FieldIndexLog.append(indexFile, FilePaths.logFileOf(indexFile), changes,
+                    Globals.REFUSED_INDEX_FOLD_DIVISOR)) {
+                return null;
             }
-            final var folded = foldSource.read();
-            if (folded == null) {
-                throw new IOException("The " + typeLabel + " index of " + dbName + "|" + collName + "." + fieldName
-                        + " could not be read to fold its log, so its changes stay logged;"
-                        + " run REINDEX on the collection to rebuild it");
-            }
-            replaceType(indexFile, logFile, folded);
-            return folded.isEmpty();
+            return PendingFold.ofSource(dbName, collName, fieldName, typeLabel, indexFile, foldSource);
         } finally {
             lock.unlock();
         }
+    }
+
+    PendingFold.Outcome fold(PendingFold fold) throws IOException {
+        final var lock = FileLocks.lockWrite(fold.indexFile());
+        try {
+            if (!fold.stillCurrent()) {
+                return PendingFold.Outcome.SKIPPED;
+            }
+            final var entries = fold.entries();
+            replaceType(fold.indexFile(), fold.logFile(), entries);
+            return entries.isEmpty() ? PendingFold.Outcome.EMPTIED : PendingFold.Outcome.FOLDED;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    long stampOf(String dbName, String collName, String fieldName, String typeLabel) {
+        final var indexFile = paths.indexFile(dbName, collName, fieldName, typeLabel);
+        return indexFile == null ? 0L : FieldIndexLog.stampOf(indexFile);
     }
 
     static void replaceType(File indexFile, File logFile, List<? extends FieldIndexEntry<?>> entries)
             throws IOException {
         PageTails.forget(logFile);
+        FieldIndexLog.restamp(indexFile);
         if (entries.isEmpty()) {
             deleteIndexFile(indexFile);
             deleteIndexFile(logFile);
@@ -110,6 +127,7 @@ final class FieldIndexStore {
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {
+                    FieldIndexLog.restamp(baseOf(index));
                     PageTails.forget(index);
                     deleted.add(index.delete());
                     FileLocks.evictIfUnused(index);
@@ -119,6 +137,16 @@ final class FieldIndexStore {
             }
         }
         return false;
+    }
+
+    private static File baseOf(File typeFile) {
+        final var name = typeFile.getName();
+        if (!name.endsWith(Globals.INDEX_LOG_FILE_EXTENSION)) {
+            return typeFile;
+        }
+        return new File(typeFile.getParentFile(),
+                name.substring(0, name.length() - Globals.INDEX_LOG_FILE_EXTENSION.length())
+                        + Globals.INDEX_FILE_EXTENSION);
     }
 
     private static boolean namesOneTypeOfThisField(String fileName, String prefix) {
@@ -147,6 +175,7 @@ final class FieldIndexStore {
                     out.write(EMPTY_FILE);
                 }
             });
+            FieldIndexLog.restamp(indexFile);
             PageTails.forget(FilePaths.logFileOf(indexFile));
             if (Files.deleteIfExists(FilePaths.logFileOf(indexFile).toPath())) {
                 syncFolderOf(indexFile);

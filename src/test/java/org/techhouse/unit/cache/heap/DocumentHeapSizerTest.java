@@ -63,7 +63,7 @@ public class DocumentHeapSizerTest {
 
     @AfterEach
     public void restoreTheRegistry() throws Exception {
-        CustomTypeFactory.getCustomTypes().clear();
+        CustomTypeFactory.getCustomTypes().values().removeIf(type -> type == LocaleType.class);
         CustomTypeFactory.getCustomTypes().putAll(registeredBefore);
         sharedPinCount().addAndGet(pinnedBefore);
     }

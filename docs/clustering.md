@@ -119,7 +119,12 @@ A document write (`SAVE`/`BULK_SAVE`/`DELETE`) is coordinated by the owner:
    normal execute path. Concurrent single-document `SAVE`s and `DELETE`s on one owner share
    one group commit, exactly as standalone: one log force for the whole group, taken under
    the exclusive lock. Each writer still re-checks ownership and reserves its own delete
-   tombstone; a group whose force fails is taken back and retracts those tombstones.
+   tombstone, but the tombstone line is appended unforced: the group forces the collection's
+   tombstone file once, on a virtual thread beside its log force, and waits for both before it
+   replicates or answers. A group whose log force or tombstone force fails is taken back and
+   retracts those tombstones. A delete outside a group (a trigger-fired or background one) waits
+   for its own tombstone force before it deletes, and the history prune appends one chunk's
+   tombstones in one write and forces them beside its bulk delete.
 3. **Replicate.** Still holding the lock, the owner re-reads the committed document(s) and
    broadcasts a `REPLICATE` to all ALIVE peers in parallel, waiting for a **majority** to
    ack within `replicationAckTimeoutMs`. A group ships once, after its force: one
@@ -451,7 +456,12 @@ version minted from the write clock (`HybridClock`), the same clock document wri
 A write stamps the record above the version it replaces (`AdminStamp.over`). A delete leaves a
 **permanent tombstone** in `cluster/admin-tombstones.idx`, minted from the clock; admin
 tombstones are never collected, because there are few of them and a collected one is exactly
-what would let a stale node resurrect a dropped database. The bootstrap admin is written at
+what would let a stale node resurrect a dropped database. They are deduplicated instead: the file is
+read once and held in memory as the highest version per key (`fs/ResidentAdminTombstones`,
+revalidated by the file's size and modification time), and once it holds twice as many lines as keys
+it is rewritten atomically with one line per key, keeping the highest version of a name dropped more
+than once. Disk and memory grow with the number of distinct dropped names, not with the number of
+drops. The bootstrap admin is written at
 version `1`, so any real change outranks it. A standalone node writes no admin tombstones.
 
 **Applying a record** (`AdminRecordMerge`) is the same on a live `REPLICATE_ADMIN` and on an
@@ -740,7 +750,12 @@ delete.
 
 A reachable, correctly-answering node can reach the same state without any partition. `reserveDelete`
 appends the tombstone **before** the document is removed — deliberately, so a crash between the two
-leaves the delete recorded rather than lost — and nothing removes it if `executeDelete` then throws.
+leaves the delete recorded rather than lost. It appends every id of its batch that the node holds in one
+write (the pk check reads only those ids, `Cache.pkRowsForWriter`), and the force of that write runs
+beside the delete's own log force rather than ahead of it, so a crash before both forces landed may keep
+the delete and lose the tombstone; no client was answered then, and the peers still holding the document
+bring it back. A delete that throws or answers an error retracts the tombstone it reserved, but a crash
+cannot.
 The node is left holding a live document and a newer tombstone for the same id. That self-heals on the
 next sweep, because `reconcile` folds this node's own tombstones into its winner map before contacting
 any peer and its delete branch fires on `localLive.containsKey(id)` regardless of where the winner came
@@ -835,7 +850,15 @@ its oldest tombstone is past `tombstoneRetentionMs` (default 24h) or it holds mo
 many lines as ids — and left alone otherwise, so a converged round rewrites nothing: duplicates
 collapse to the highest version per id and expired tombstones are dropped. Each collection's
 tombstones are held in memory once read (`fs/TombstoneStore`), revalidated by the file's size and
-modification time on every access. Retention must comfortably exceed the longest expected node downtime,
+modification time on every access. The resident form is compact (`fs/ResidentTombstones`): sorted,
+immutable chunks of up to 1,024 tombstones, each chunk one byte array of the ids, one `int[]` of their
+end offsets and one `long[]` of their versions, looked up by binary search, plus a small unsorted
+buffer of the tombstones appended since the last merge. The buffer is merged into the chunks once it
+outgrows `max(1024, size / 64)` entries and on every tombstone GC that finds nothing to collect; a
+merge rebuilds only the chunks it touches and publishes the new layers with one volatile write, so
+readers never lock. That is about 12 bytes per tombstone plus its id (25 bytes for a 13-character id,
+against ~110 for the map it replaced), and `GET_DATABASE_STATS` reports the total as
+`memory.residentTombstoneBytes`; it sits outside `maxMemory`, like every resident metadata structure. Retention must comfortably exceed the longest expected node downtime,
 otherwise a delete could be collected before a still-down replica has converged on it and
 would be resurrected on rejoin. Owner cache warm-up on handoff is deliberately lazy.
 
@@ -848,8 +871,18 @@ carries its own version (see *Admin and DDL replication*), admin anti-entropy is
 per-record merge the live path runs, applied to everything a peer holds.
 
 On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService` asks
-each live peer for its `ADMIN_SNAPSHOT` — every live admin record and every admin tombstone it
-holds — and merges it with `live=false`. A record that outranks the local one is installed, a
+each live peer for its `ADMIN_SNAPSHOT` — every live admin record, and the admin tombstones the two
+nodes disagree on — and merges it with `live=false`. The request carries a digest of the requester's
+own tombstones (`cluster/admin/AdminTombstoneDigest`): the keys are bucketed by id hash
+(`DigestHash.bucket`, `B = DigestHash.bucketCountFor(tombstones)`), and each bucket is summarised as
+`count:hex(wrapping sum of DigestHash.entryHash(idHash, version, 0, true))`, an order-independent hash.
+The peer builds the same summaries over its own tombstones and ships the tombstones of the buckets
+that differ, so a converged cluster exchanges no tombstone at all. A request without a valid digest
+(no bucket list, a bucket count that is not a power of two up to 4096, or a list of the wrong length)
+gets every tombstone, as before. A tombstone superseded by a newer live record of the same key travels
+too, next to that record, and a node that receives one it lacks records it without touching the live
+record (`AdminRecordMerge.keepSuperseded`): it changes nothing the merge decides, and without it a
+bucket holding a tombstone only some nodes saw would differ, and ship, forever. A record that outranks the local one is installed, a
 tombstone that outranks it removes the local record by **quarantine** (the folder is renamed
 aside as `<coll>.quarantined-<incarnation>-<ts>` or `<db>.quarantined-<ts>`, never deleted), and
 everything else is left alone. Merging is idempotent and order-free, so two nodes holding
@@ -1009,7 +1042,7 @@ cluster listener has its own caps, described above.
 | `REPLICATE_ADMIN` | `adminSnapshot`: the `{key, version, body}` admin records an op touched (`body` absent for a tombstone) | admin/DDL replication by record-shipping |
 | `REINDEX_BROADCAST` | `forwardBody` (the `REINDEX` request, `primaryKey` included) | a cluster-wide index rebuild |
 | `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted, length}` digest and its summary, or pulled documents | document anti-entropy |
-| `ADMIN_SNAPSHOT` | `adminSnapshot`: every admin record and admin tombstone the node holds | admin/DDL anti-entropy |
+| `ADMIN_SNAPSHOT` | request: `adminSnapshot.tombstoneBucketCount` and `tombstoneBuckets`, the requester's tombstone digest; reply: `adminSnapshot.records`, every live admin record plus the admin tombstones of the buckets that differ | admin/DDL anti-entropy |
 | `FORWARD_TX_REQUEST` | `forwardBody`, `txSessionId`, `txId` (reply reuses `FORWARD_RESPONSE`) | a forwarded transaction operation |
 | `REPLICATE_TX` | `txReplication`: per-collection entries | a committed transaction's atomic batch |
 | `PREPARE_TX` / `COMMIT_TX` / `ABORT_TX` | `txId`, `txParticipants` | 2PC control |

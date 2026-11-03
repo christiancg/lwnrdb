@@ -39,6 +39,10 @@ final class OwnerOnly {
         }
     }
 
+    static void ensureOwnerOnlyFileMovedLater(Path file) {
+        warnIfDefault(OwnerOnlyFiles.ensureOwnerOnlyFile(file), file);
+    }
+
     static boolean createNewOwnerOnlyFile(Path file) throws IOException {
         final var creation = OwnerOnlyFiles.createNewOwnerOnlyFile(file);
         warnIfDefault(creation, file);

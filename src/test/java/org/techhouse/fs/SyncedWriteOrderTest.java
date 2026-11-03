@@ -156,11 +156,14 @@ public class SyncedWriteOrderTest {
 
         rf.vacuum.vacuumIfNeeded(DB, COLL, 0, 10, PagePlacement.VACUUM_THEN_APPEND, null);
 
-        assertEquals(List.of(PAGE, WAL, INTENTS, COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, WAL),
-                filesOnly(recorder.forcedNames()),
-                "the page is forced before REWRITE_BEGIN, the temp file before the rename, and the log once more"
-                        + " for REWRITE_END and the moved rows; page 1, pk.idx and a log rewrite are never forced");
-        assertInOrder(recorder.forcedNames(), COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, COLL, WAL);
+        final var files = filesOnly(recorder.forcedNames());
+        assertEquals(Set.of(PAGE, INTENTS, COLL + "-0" + Globals.VACUUM_FILE_EXTENSION),
+                Set.copyOf(files.subList(0, 3)),
+                "the page, the intent and the temp file are forced together before REWRITE_BEGIN");
+        assertEquals(List.of(WAL, WAL), files.subList(3, files.size()),
+                "the log is forced for REWRITE_BEGIN and once more for REWRITE_END and the moved rows; page 1,"
+                        + " pk.idx and a log rewrite are never forced");
+        assertInOrder(recorder.forcedNames(), COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, WAL, COLL, WAL);
     }
 
     @Test
@@ -206,7 +209,8 @@ public class SyncedWriteOrderTest {
 
         rf.vacuum.vacuumIfNeeded(DB, COLL, 0, 10, PagePlacement.VACUUM_THEN_APPEND, null);
 
-        assertInOrder(recorder.forcedNames(), INTENTS, COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, COLL);
+        assertInOrder(recorder.forcedNames(), INTENTS, COLL);
+        assertInOrder(recorder.forcedNames(), COLL + "-0" + Globals.VACUUM_FILE_EXTENSION, COLL);
     }
 
     @Test

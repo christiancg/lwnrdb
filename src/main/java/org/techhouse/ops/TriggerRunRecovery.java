@@ -3,10 +3,10 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
@@ -38,8 +38,12 @@ public final class TriggerRunRecovery {
                 ownedByReplay.addAll(consumedBySlice(txId));
             }
             final var startup = new HashSet<String>();
-            for (final var entry : TriggerRunLog.pending()) {
-                (fenced.contains(entry.getTxId()) ? ownedByReplay : startup).add(entry.getRunId());
+            for (final var run : TriggerRunIndex.current()) {
+                if (fenced.contains(run.txId())) {
+                    ownedByReplay.add(run.runId());
+                } else if (!run.isDead()) {
+                    startup.add(run.runId());
+                }
             }
             startup.removeAll(ownedByReplay);
             return startup;
@@ -79,8 +83,11 @@ public final class TriggerRunRecovery {
         }
         var requeued = 0;
         try {
-            for (final var chunks : groupByRun(TriggerRunLog.pending(), TriggerRunLog.ownNodeIds(), runIds).values()) {
-                if (requeue(chunks)) {
+            final var ownNodeIds = TriggerRunLog.ownNodeIds();
+            for (final var runId : new TreeSet<>(runIds)) {
+                final var chunks = ownLiveChunks(
+                        AdminOperationHelper.readTriggerRuns(TriggerRunLog.recordIdsFor(runId)), ownNodeIds);
+                if (!chunks.isEmpty() && requeue(chunks)) {
                     requeued++;
                 }
             }
@@ -147,12 +154,12 @@ public final class TriggerRunRecovery {
             var stranded = 0;
             var dead = 0;
             long oldest = 0L;
-            for (final var entry : TriggerRunLog.pending()) {
-                if (entry.getStatus() == TriggerRunStatus.DEAD) {
+            for (final var run : TriggerRunIndex.current()) {
+                if (run.isDead()) {
                     dead++;
                     continue;
                 }
-                final var age = now - entry.getFiredAt();
+                final var age = now - run.firedAt();
                 if (age > threshold) {
                     stranded++;
                     oldest = Math.max(oldest, age);
@@ -175,6 +182,21 @@ public final class TriggerRunRecovery {
     public static void sweep() {
         warnAboutStrandedRuns();
         garbageCollect();
+        capDeadLetters();
+    }
+
+    public static void capDeadLetters() {
+        if (!TriggerRunLog.isEnabled()) {
+            return;
+        }
+        try {
+            TriggerDeadLetterCap.enforce(null);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.warning("Interrupted while capping the dead-lettered trigger runs");
+        } catch (Exception e) {
+            logger.warning("Failed to cap the dead-lettered trigger runs: " + e.getMessage());
+        }
     }
 
     public static void garbageCollect() {
@@ -189,17 +211,14 @@ public final class TriggerRunRecovery {
         }
     }
 
-    private static LinkedHashMap<String, List<AdminTriggerRunEntry>> groupByRun(List<AdminTriggerRunEntry> pending,
-            Set<String> ownNodeIds, Set<String> runIds) {
-        final var byRun = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
-        for (final var entry : pending) {
-            if (!runIds.contains(entry.getRunId()) || !ownNodeIds.contains(entry.getNodeId())
-                    || entry.getStatus() == TriggerRunStatus.DEAD) {
-                continue;
+    private static List<AdminTriggerRunEntry> ownLiveChunks(List<AdminTriggerRunEntry> chunks, Set<String> ownNodeIds) {
+        final var live = new ArrayList<AdminTriggerRunEntry>(chunks.size());
+        for (final var chunk : chunks) {
+            if (ownNodeIds.contains(chunk.getNodeId()) && chunk.getStatus() != TriggerRunStatus.DEAD) {
+                live.add(chunk);
             }
-            byRun.computeIfAbsent(entry.getRunId(), _ -> new ArrayList<>()).add(entry);
         }
-        return byRun;
+        return live;
     }
 
     static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks) throws Exception {

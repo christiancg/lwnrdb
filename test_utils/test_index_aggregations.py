@@ -44,6 +44,9 @@ GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
 WIDE_AND = "idxagg_wide_and"
 CHUNKED_COUNT = "idxagg_chunked_count"
 CHUNKED_COUNT_DOCS = 3000
+NOT_IN_COLL = "idxagg_not_in"
+GROUP_BY_SCAN_ROWS = 4096
+NOT_IN_DOCS = 6000
 WIDE_AND_DOCS = int(os.environ.get("INDEX_TEST_WIDE_AND_DOCS", "20000"))
 WIDE_AND_CHILDREN = 2000
 COLLIDING_STRINGS = "idxagg_colliding_strings"
@@ -2247,6 +2250,51 @@ def range_top_k_disagreements(c, coll, queries):
     return wrong
 
 
+def analyzed(c, coll, steps) -> dict:
+    return c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "aggregationSteps": steps,
+                   "analyze": True})
+
+
+def scanned_documents(r: dict):
+    return (r.get("analyzeResult") or {}).get("documentsScanned")
+
+
+def test_not_in_matches_scan(c):
+    section("NOT_IN and NOT_EQUALS: a selective complement reads only its rows, a broad one scans, both match the scan")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": NOT_IN_COLL})
+    bulk_load(c, NOT_IN_COLL, ({"_id": f"ni{i:05d}", "c": i % 100,
+                                "h": None if i % 37 == 0 else i % 100} for i in range(NOT_IN_DOCS)))
+    build_index(c, NOT_IN_COLL, "c", "h")
+    most = list(range(90))
+    selective = [bu.filter_step("c", "NOT_IN", most)]
+    expected_rows = NOT_IN_DOCS // 10
+    served = bu.wait_until(lambda: scanned_documents(analyzed(c, NOT_IN_COLL, selective)) == expected_rows, 20)
+    check(f"NOT_IN of 90 of 100 values reads only the {expected_rows} documents it returns", bool(served),
+          detail=str(analyzed(c, NOT_IN_COLL, selective).get("analyzeResult")))
+    broad = [bu.filter_step("c", "NOT_IN", [1, 2, 3])]
+    check(f"a broad NOT_IN reads the collection once instead of fetching {NOT_IN_DOCS - 180} ids",
+          scanned_documents(analyzed(c, NOT_IN_COLL, broad)) == NOT_IN_DOCS,
+          detail=str(analyzed(c, NOT_IN_COLL, broad).get("analyzeResult")))
+    queries = [
+        ("selective NOT_IN on a covered field", selective),
+        ("broad NOT_IN on a covered field", broad),
+        ("NOT_EQUALS on a covered field", [bu.filter_step("c", "NOT_EQUALS", 5)]),
+        ("NOT_IN of a value of another kind", [bu.filter_step("c", "NOT_IN", ["5"])]),
+        ("selective NOT_IN on a field holding nulls", [bu.filter_step("h", "NOT_IN", most)]),
+        ("NOT_EQUALS null on a field holding nulls", [bu.filter_step("h", "NOT_EQUALS", None)]),
+    ]
+    for label, steps in queries:
+        answer, scan = index_matches_scan(c, NOT_IN_COLL, steps)
+        check(f"{label} answers what the forced scan answers ({len(scan)} rows)", answer == scan,
+              detail=f"rows={len(answer)} vs {len(scan)}")
+        check(f"{label}: COUNT agrees", agg_count(c, NOT_IN_COLL, steps) == len(scan),
+              detail=f"count={agg_count(c, NOT_IN_COLL, steps)} vs {len(scan)}")
+    check("NOT_EQUALS 5 answers what NOT_IN [5] answers",
+          agg_ids(c, NOT_IN_COLL, [bu.filter_step("c", "NOT_EQUALS", 5)])
+          == agg_ids(c, NOT_IN_COLL, [bu.filter_step("c", "NOT_IN", [5])]))
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": NOT_IN_COLL})
+
+
 def test_range_top_k_agrees_with_the_scan(c):
     section("A numeric range followed by SORT on its field and LIMIT answers exactly what the scan answers")
     queries = []
@@ -2377,8 +2425,9 @@ def check_colliding_groups(c: Conn, coll, values, label):
           f"{COLLIDING_BUDGET_S:.0f}s", built_in < COLLIDING_BUDGET_S)
     group_by = [{"type": "GROUP_BY", "fieldName": "k"}]
     agg(c, coll, [{"type": "SKIP", "skip": 0}, {"type": "COUNT"}])
-    if caching_disabled(c):
-        check(f"{label}: GROUP_BY stays on the scan while caching is disabled", not index_used(c, coll, group_by))
+    if caching_disabled(c) or len(values) >= GROUP_BY_SCAN_ROWS:
+        check(f"{label}: GROUP_BY over {len(values)} documents stays on the scan, cached or not",
+              not index_used(c, coll, group_by))
     else:
         check(f"{label}: GROUP_BY uses the index", index_used(c, coll, group_by))
     started = time.perf_counter()
@@ -2461,6 +2510,119 @@ def test_join_by_index_with_many_distinct_values(c: Conn):
     check(f"every local value with a remote match joined ({matched} of {MANY_VALUES})", matched >= MANY_VALUES * 0.9)
     for coll in (MANY_LEFT, MANY_RIGHT):
         c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
+LAZY = "idxagg_lazy"
+LAZY_DOCS = int(os.environ.get("INDEX_TEST_LAZY_DOCS", "20000"))
+LAZY_CATEGORIES = 10
+LAZY_FIRST_CHUNK = 256
+
+
+def lazy_eq(field, value) -> dict:
+    return {"fieldOperatorType": "EQUALS", "field": field, "value": value}
+
+
+def lazy_and(*legs) -> dict:
+    return {"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": list(legs)}}
+
+
+def lazy_sort(ascending=True) -> dict:
+    return {"type": "SORT", "fieldName": "ts", "ascending": ascending}
+
+
+def lazy_ids(c, steps) -> list:
+    return [row.get("_id") for row in (agg(c, LAZY, steps).get("results") or [])]
+
+
+def lazy_window(skip, limit) -> list:
+    return ([{"type": "SKIP", "skip": skip}] if skip else []) + [{"type": "LIMIT", "limit": limit}]
+
+
+def setup_lazy_sources(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": LAZY})
+    bulk_load(c, LAZY, ({"_id": f"z{i:06d}", "cat": f"c{i % LAZY_CATEGORIES}", "region": f"r{i % 7}",
+                         "ts": (i * 7919) % LAZY_DOCS} for i in range(LAZY_DOCS)))
+    build_index(c, LAZY, "cat", "ts")
+    wait_for_background()
+
+
+def test_filter_map_limit_reads_one_chunk(c):
+    section("A source FILTER followed by row-wise steps and a LIMIT fetches one chunk of its candidates")
+    category = bu.filter_step("cat", "EQUALS", "c3")
+    matches = set(agg_ids(c, LAZY, forced_scan([category])))
+    twice = {"type": "MAP", "operators": [{"fieldName": "twice", "operator": {"type": "MULTIPLY",
+                                                                              "operands": ["ts", 2]}}]}
+    both = lazy_and(lazy_eq("cat", "c3"), lazy_eq("region", "r2"))
+    both_matches = set(agg_ids(c, LAZY, forced_scan([both])))
+    for label, steps, expected in (
+            ("FILTER, MAP, LIMIT 20", [category, twice, {"type": "LIMIT", "limit": 20}], matches),
+            ("FILTER AND(cat, unindexed region), LIMIT 20", [both, {"type": "LIMIT", "limit": 20}], both_matches),
+            ("FILTER cat, FILTER region, LIMIT 20",
+             [category, bu.filter_step("region", "EQUALS", "r2"), {"type": "LIMIT", "limit": 20}], both_matches),
+            ("FILTER AND, MAP, LIMIT 20", [both, twice, {"type": "LIMIT", "limit": 20}], both_matches)):
+        rows = agg(c, LAZY, steps).get("results") or []
+        ids = [row.get("_id") for row in rows]
+        check(f"{label} answers 20 distinct matching rows", len(set(ids)) == 20 and set(ids) <= expected,
+              detail=f"got {ids[:5]}")
+        read = documents_scanned(c, LAZY, steps)
+        check(f"{label} reads at most one chunk of the {len(matches)} candidates (read {read})",
+              read is not None and read <= LAZY_FIRST_CHUNK)
+
+
+def test_filter_other_field_sort_limit(c):
+    section("FILTER on one field + SORT on another indexed field + LIMIT walks the sort index in order")
+    shapes = (("cat", [bu.filter_step("cat", "EQUALS", "c3")]),
+              ("cat and region", [lazy_and(lazy_eq("cat", "c4"), lazy_eq("region", "r1"))]),
+              ("keyset cat and ts > half", [lazy_and(lazy_eq("cat", "c5"), {
+                  "fieldOperatorType": "GREATER_THAN", "field": "ts", "value": LAZY_DOCS // 2})]))
+    for label, source in shapes:
+        for ascending in (True, False):
+            for skip in (0, 40):
+                steps = source + [lazy_sort(ascending)] + lazy_window(skip, 20)
+                name = f"{label}, ascending={ascending}, skip={skip}"
+                indexed = lazy_ids(c, steps)
+                check(f"{name}: answers the scan's rows in the scan's order",
+                      len(indexed) == 20 and indexed == lazy_ids(c, forced_scan(steps)),
+                      detail=f"index={indexed[:4]}")
+                read = documents_scanned(c, LAZY, steps)
+                check(f"{name}: reads far fewer than the {LAZY_DOCS // LAZY_CATEGORIES} matches (read {read})",
+                      read is not None and read <= LAZY_DOCS // LAZY_CATEGORIES // 2)
+    exact = [bu.filter_step("cat", "EQUALS", "c3"), lazy_sort(False), {"type": "LIMIT", "limit": 20}]
+    read = documents_scanned(c, LAZY, exact)
+    check(f"an indexed equality + SORT desc + LIMIT 20 fetches only its 20 rows (read {read})", read == 20)
+
+
+def test_deep_skip_reads_page_only(c):
+    section("Deep pagination over an index drops the skipped ids before fetching")
+    deep = [lazy_sort(True)] + lazy_window(LAZY_DOCS // 2, 20)
+    check("SORT ts, SKIP half, LIMIT 20 answers what the scan answers",
+          lazy_ids(c, deep) == lazy_ids(c, forced_scan(deep)))
+    read = documents_scanned(c, LAZY, deep)
+    check(f"SORT ts, SKIP half, LIMIT 20 reads only its 20 rows (read {read})", read == 20)
+    category = bu.filter_step("cat", "EQUALS", "c3")
+    matches = set(agg_ids(c, LAZY, forced_scan([category])))
+    head_steps = [category, {"type": "LIMIT", "limit": 2000}]
+    window = [category] + lazy_window(1980, 20)
+    head = lazy_ids(c, head_steps)
+    rows = lazy_ids(c, window)
+    check("FILTER cat, SKIP 1980, LIMIT 20 answers 20 distinct matching rows",
+          len(set(rows)) == 20 and set(rows) <= matches, detail=f"got {rows[:4]}")
+    check("FILTER cat, SKIP 1980, LIMIT 20 answers the same window as the head of its walk",
+          rows == head[1980:2000])
+    read = documents_scanned(c, LAZY, window)
+    check(f"FILTER cat, SKIP 1980, LIMIT 20 reads only its 20 rows (read {read})", read == 20)
+    past = [category] + lazy_window(LAZY_DOCS, 20)
+    check("a SKIP past every match answers nothing", agg_ids(c, LAZY, past) == [])
+    check("a SKIP past every match reads nothing", documents_scanned(c, LAZY, past) == 0)
+
+
+def lazy_sources_suite(c):
+    section(f"Lazy index sources over {LAZY_DOCS} documents")
+    setup_lazy_sources(c)
+    test_filter_map_limit_reads_one_chunk(c)
+    test_filter_other_field_sort_limit(c)
+    test_deep_skip_reads_page_only(c)
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": LAZY})
 
 
 def main():
@@ -2570,6 +2732,10 @@ def main():
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_not_in_matches_scan(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_a_range_count_across_index_chunks_matches_the_scan(c)
 
     with Conn() as c:
@@ -2587,6 +2753,10 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         limits_suite(c)
+
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        lazy_sources_suite(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

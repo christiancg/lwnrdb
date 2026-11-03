@@ -8,6 +8,7 @@ import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -138,7 +139,8 @@ public final class CollectionOperationHelper {
             if (isNotRegistered(dbName, collName)) {
                 return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
             }
-            final var result = fs.deleteCollectionFiles(dbName, collName);
+            final var result = FieldIndexDropFence.holdingFieldIndexLocks(dbName, List.of(collName), lockBudget,
+                    () -> fs.deleteCollectionFiles(dbName, collName));
             if (result) {
                 DroppedCollections.forgetCollection(dbName, collName);
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
@@ -151,6 +153,8 @@ public final class CollectionOperationHelper {
                 return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
+        } catch (CollectionBusyException busy) {
+            return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
         } catch (Exception e) {
             logger.error(
                     OperationType.DROP_COLLECTION + " failed with " + ErrorCode.ERROR_DROPPING_COLLECTION.getCode(), e);

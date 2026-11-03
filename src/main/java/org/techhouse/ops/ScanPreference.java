@@ -1,14 +1,16 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.RangeBounds;
@@ -47,21 +49,52 @@ final class ScanPreference {
     }
 
     static boolean indexFetchNotWorthIt(String dbName, String collName) {
-        return percent() < ALWAYS_INDEX && cache.pkIndexSize(dbName, collName) >= MIN_ROWS
-                && !cache.holdsWholeCollection(dbName, collName);
+        return groupByPrefersScan(dbName, collName) && !cache.holdsWholeCollection(dbName, collName);
+    }
+
+    static boolean groupByPrefersScan(String dbName, String collName) {
+        return percent() < ALWAYS_INDEX && cache.pkIndexSize(dbName, collName) >= MIN_ROWS;
     }
 
     private static OptionalLong countedMatches(FieldOperator operator, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
-        if (operator.getFieldOperatorType() == FieldOperatorType.EQUALS) {
-            final var value = CountOperatorHelper.scalarOperand(operator.getValue());
-            return value == null ? OptionalLong.empty() : cache.countEquals(dbName, collName, fieldName, value);
+        return switch (operator.getFieldOperatorType()) {
+            case EQUALS -> {
+                final var value = CountOperatorHelper.scalarOperand(operator.getValue());
+                yield value == null ? OptionalLong.empty() : cache.countEquals(dbName, collName, fieldName, value);
+            }
+            case NOT_EQUALS -> complementOf(scalarOperands(List.of(operator.getValue())), dbName, collName, fieldName);
+            case NOT_IN -> operator.getValue() instanceof JsonArray operands
+                    ? complementOf(scalarOperands(operands.asList()), dbName, collName, fieldName)
+                    : OptionalLong.empty();
+            default -> RangeBounds.isNumericRange(operator)
+                    ? cache.countInRange(dbName, collName, RangeBounds.fromLeaves(fieldName, List.of(operator)))
+                    : OptionalLong.empty();
+        };
+    }
+
+    private static List<Object> scalarOperands(List<JsonBaseElement> operands) {
+        final var values = new ArrayList<>(operands.size());
+        for (final var operand : operands) {
+            final var value = CountOperatorHelper.scalarOperand(operand);
+            if (value == null) {
+                return null;
+            }
+            values.add(value);
         }
-        if (RangeBounds.isNumericRange(operator)) {
-            return cache.countInRange(dbName, collName, RangeBounds.fromLeaves(fieldName, List.of(operator)));
+        return values.isEmpty() ? null : values;
+    }
+
+    private static OptionalLong complementOf(List<Object> operands, String dbName, String collName, String fieldName)
+            throws IOException {
+        if (operands == null) {
+            return OptionalLong.empty();
         }
-        return OptionalLong.empty();
+        final var matched = cache.countEqualsAny(dbName, collName, fieldName, operands);
+        return matched.isEmpty()
+                ? matched
+                : OptionalLong.of(Math.max(0L, cache.pkIndexSize(dbName, collName) - matched.getAsLong()));
     }
 
     private static int percent() {

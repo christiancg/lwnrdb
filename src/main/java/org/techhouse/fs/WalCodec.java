@@ -29,7 +29,8 @@ final class WalCodec {
     private static final int RECORD_BYTES_HINT = 256;
 
     record Decoded(WalCheckpoint checkpoint, List<WalRecord> records, int framesSinceCheckpoint, long lastSeq,
-            long cleanLength, long groupBase, List<String> pendingIds, Map<Long, Rewrite> rewrites) {
+            long cleanLength, long groupBase, List<String> pendingIds, boolean pendingLogged,
+            Map<Long, Rewrite> rewrites) {
     }
 
     record Rewrite(long beginSeq, long lengthBefore, long lengthAfter) {
@@ -206,6 +207,7 @@ final class WalCodec {
         var cleanLength = 0L;
         var groupBase = NO_GROUP_BASE;
         List<String> pendingIds = List.of();
+        var pendingLogged = false;
         final var rewrites = new HashMap<Long, Rewrite>();
         while (buffer.remaining() >= HEADER_BYTES) {
             final var start = buffer.position();
@@ -231,6 +233,7 @@ final class WalCodec {
                         framesSinceCheckpoint = -1;
                         groupBase = NO_GROUP_BASE;
                         pendingIds = List.of();
+                        pendingLogged = false;
                         rewrites.clear();
                         yield true;
                     }
@@ -242,6 +245,7 @@ final class WalCodec {
                     }
                     case PENDING -> {
                         pendingIds = decodePending(payload);
+                        pendingLogged = true;
                         yield true;
                     }
                     case GROUP_BASE -> {
@@ -273,7 +277,7 @@ final class WalCodec {
             cleanLength = buffer.position();
         }
         return new Decoded(checkpoint, List.copyOf(records), framesSinceCheckpoint, lastSeq, cleanLength, groupBase,
-                pendingIds, Map.copyOf(rewrites));
+                pendingIds, pendingLogged, Map.copyOf(rewrites));
     }
 
     private static void endRewrite(Map<Long, Rewrite> rewrites, ByteBuffer frame) {

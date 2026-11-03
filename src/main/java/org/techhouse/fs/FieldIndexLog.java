@@ -21,6 +21,8 @@ final class FieldIndexLog {
     private static final Logger logger = Logger.logFor(FieldIndexLog.class);
     private static final Map<String, Map<String, Long>> unforced = new ConcurrentHashMap<>();
     private static final AtomicLong appends = new AtomicLong();
+    private static final Map<String, Long> stamps = new ConcurrentHashMap<>();
+    private static final AtomicLong stampClock = new AtomicLong();
     private static final String ADD = "+";
     private static final String REMOVE = "-";
     private static final int PREFIX_LENGTH = ADD.length() + Globals.ID_SEPARATOR.length();
@@ -57,13 +59,26 @@ final class FieldIndexLog {
     static void forgetUnder(File folder) {
         final var prefix = folder.getAbsolutePath();
         unforced.keySet().removeIf(path -> path.equals(prefix) || path.startsWith(prefix + File.separator));
+        stamps.keySet().removeIf(path -> path.startsWith(prefix + File.separator));
+    }
+
+    static long stampOf(File base) {
+        return stamps.getOrDefault(base.getAbsolutePath(), 0L);
+    }
+
+    static void restamp(File base) {
+        stamps.put(base.getAbsolutePath(), stampClock.incrementAndGet());
     }
 
     enum Replayed {
         CLEAN, ABSENT, UNRECOGNISED
     }
 
-    static boolean append(File base, File log, List<IndexLogChange> changes) throws IOException {
+    static void append(File base, File log, List<IndexLogChange> changes) throws IOException {
+        append(base, log, changes, 1);
+    }
+
+    static boolean append(File base, File log, List<IndexLogChange> changes, int foldDivisor) throws IOException {
         final var content = encode(changes);
         final var knownLength = PageTails.knownTerminatedLength(log);
         var logBytes = knownLength;
@@ -82,6 +97,7 @@ final class FieldIndexLog {
                     content.writeTo(out);
                 }
                 appended = true;
+                restamp(base);
                 rememberUnforced(log);
                 PageTails.appendedWholeLines(log);
                 logBytes += content.size();
@@ -93,7 +109,7 @@ final class FieldIndexLog {
         } else if (knownLength < 0) {
             logBytes = log.length();
         }
-        return logBytes >= Math.max(base.length(), Globals.FIELD_INDEX_LOG_MIN_BYTES);
+        return logBytes >= Math.max(base.length() / foldDivisor, Globals.FIELD_INDEX_LOG_MIN_BYTES);
     }
 
     private static ByteArrayOutputStream encode(List<IndexLogChange> changes) throws IOException {

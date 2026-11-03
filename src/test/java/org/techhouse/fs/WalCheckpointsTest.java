@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.config.Globals;
 import org.techhouse.test.TestUtils;
 
 public class WalCheckpointsTest {
@@ -88,6 +89,20 @@ public class WalCheckpointsTest {
         for (final var fixture : fixtures) {
             assertEquals(0, records(fixture), fixture.fx.collName + " kept its records");
         }
+    }
+
+    @Test
+    public void test_page_row_logs_are_left_for_the_startup_replay_at_shutdown() throws Exception {
+        final var user = collection("user");
+        final var rows = new ReplacerFixture(tmp, Globals.ADMIN_PAGES_DB_NAME, "mydb_rows");
+        rows.fx.seed(0, "a", "b");
+        final var rowsLog = rows.fx.paths.writeAheadLog(Globals.ADMIN_PAGES_DB_NAME, "mydb_rows");
+
+        checkpoints().atShutdown(Long.MAX_VALUE);
+
+        assertEquals(0, records(user));
+        assertEquals(2, WalCodec.decodeAll(Files.readAllBytes(rowsLog.toPath())).records().size(),
+                "the startup replay restores page rows, so the stop does not wait for their checkpoint");
     }
 
     @Test

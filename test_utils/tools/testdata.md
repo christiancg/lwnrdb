@@ -243,9 +243,12 @@ larger than `maxEntrySize` (a key shared by a few thousand remote documents), in
 
 A pipeline that builds more than `aggregateMaxResultBytes` (256 MB) in total → `400-36`: the strings and `SCRIPT`
 values its `MAP`s add (a few hundred distinct script sources each returning a large string count together), each
-`JOIN` row's joined array (once per row, even when rows share one array) and one byte per result row. For
-example 300 documents each given a 1 MB `CONCAT`, or a `JOIN` that attaches the same 1 MB group to every row of a large
-collection:
+`JOIN` row's joined array (once per row, even when rows share one array), the modelled heap of the documents a
+`GROUP_BY`, an unbounded `SORT`, a `JOIN` (both sides) or a `DISTINCT` holds while it works, and the modelled heap of
+every result row (the first 64 rows of a step measured exactly, then every 64th, the rest charged the running
+average). For example 300 documents each given a 1 MB `CONCAT`, a `JOIN` that attaches the same 1 MB group to every
+row of a large collection, or a `GROUP_BY` over a collection whose documents take more than the budget (a
+`GROUP_BY` followed directly by `COUNT` holds only the distinct values and still answers):
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "orders", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "big", "operator": {"type": "CONCAT", "operands": ["blob", "blob"]}}]}]}
@@ -1081,6 +1084,31 @@ An index on a collection that does not exist → `404-11`, rather than an `OK` f
 
 ```json
 {"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "noSuchCollection", "fieldName": "aNumber"}
+```
+
+Several indexes in one request: `fieldNames` builds every listed field that is not indexed yet in one pass over the
+collection, skipping (not rebuilding) the ones already indexed; the message names both groups. `fieldName` may be sent
+beside it, and their union is indexed.
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": ["aString", "aNumber", "aBoolean"]}
+```
+
+An empty `fieldNames` → `400-1`
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": []}
+```
+
+One invalid name refuses the whole request before anything is built → `400-1` (and a pair of names that differ only by
+case → `409-11`, building neither)
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": ["aDatetime", "a b"]}
+```
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": ["aTime", "ATIME"]}
 ```
 
 Drop index

@@ -10,7 +10,7 @@ import org.techhouse.config.Globals;
 final class PageHoles {
     private static final byte HOLE = ' ';
     private static final int TERMINATOR_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8).length;
-    private static final int BLANK_CHUNK = 8192;
+    private static final int BLANK_CHUNK = 64 * 1024;
     private static final byte[] SPACES = spaces();
 
     private PageHoles() {

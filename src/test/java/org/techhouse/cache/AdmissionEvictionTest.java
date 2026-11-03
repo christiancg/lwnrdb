@@ -3,17 +3,24 @@ package org.techhouse.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +34,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 
@@ -256,5 +264,199 @@ public class AdmissionEvictionTest {
             writer.join(5_000L);
         }
         assertTrue(cache.shouldCache(DB, new AdmissionRequest(AccessKind.FIELD_INDEX, DB, "target", FIELD, 0L)));
+    }
+
+    private static final String HOT_KEY = Cache.getIndexIdentifier("rank", String.class);
+
+    private void accesses(AccessKind kind, String collName, String field, int times) {
+        for (var access = 0; access < times; access++) {
+            usage.recordAccess(kind, DB, collName, field);
+        }
+    }
+
+    private long coldIndex(String collName) {
+        CacheResidents.residentFieldIndex(cache, Cache.getCollectionIdentifier(DB, collName),
+                Cache.getIndexIdentifier(FIELD, String.class), fieldRows(collName, 20));
+        return cache.footprintBytes();
+    }
+
+    private boolean admitHot(List<FieldIndexEntry<?>> rows) throws InterruptedException {
+        read("hot", () -> cache.admitMaintainedFieldIndex(DB, "hot", HOT_KEY, rows));
+        return cache.residentFieldIndex(DB, "hot", HOT_KEY) != null;
+    }
+
+    private void nextQuery() {
+        clock.addAndGet(RefusalHistory.MIN_SPACING_NANOS);
+    }
+
+    private boolean coldResident(String collName) {
+        return cache.residentFieldIndex(DB, collName, Cache.getIndexIdentifier(FIELD, String.class)) != null;
+    }
+
+    @Test
+    public void hotFieldIndexEvictsColderFieldIndexPastRatio() throws Exception {
+        final var cold = coldIndex("cold");
+        final var hot = fieldRows("hot", 20);
+        maxMemory(cold + CacheSizeEstimator.estimateFieldIndexSize(hot) - 1);
+        accesses(AccessKind.FIELD_INDEX, "hot", "rank", 8);
+        accesses(AccessKind.FIELD_INDEX, "cold", FIELD, 2);
+
+        assertFalse(admitHot(hot));
+        nextQuery();
+        assertFalse(admitHot(hot));
+        nextQuery();
+        assertTrue(admitHot(hot), "a requester refused twice and used 4x more displaces the colder index");
+
+        assertFalse(coldResident("cold"));
+        assertTrue(cache.footprintBytes() <= cold + CacheSizeEstimator.estimateFieldIndexSize(hot) - 1);
+    }
+
+    @Test
+    public void equalUsageNeverEvictsSameTier() throws Exception {
+        final var cold = coldIndex("cold");
+        final var hot = fieldRows("hot", 20);
+        maxMemory(cold + CacheSizeEstimator.estimateFieldIndexSize(hot) - 1);
+        accesses(AccessKind.FIELD_INDEX, "hot", "rank", 5);
+        accesses(AccessKind.FIELD_INDEX, "cold", FIELD, 5);
+
+        for (var attempt = 0; attempt < 6; attempt++) {
+            clock.addAndGet(AdmissionEviction.BACKOFF_NANOS);
+            assertFalse(admitHot(hot), "below the ratio the two indexes never displace each other");
+        }
+        assertTrue(coldResident("cold"));
+    }
+
+    @Test
+    public void requesterRefusedOnceDoesNotEvict() throws Exception {
+        final var cold = coldIndex("cold");
+        final var hot = fieldRows("hot", 20);
+        maxMemory(cold + CacheSizeEstimator.estimateFieldIndexSize(hot) - 1);
+        accesses(AccessKind.FIELD_INDEX, "hot", "rank", 100);
+
+        assertFalse(admitHot(hot));
+        nextQuery();
+        assertFalse(admitHot(hot), "one earlier refusal is not enough");
+        assertTrue(coldResident("cold"));
+        clock.addAndGet(RefusalHistory.WINDOW_NANOS + 1);
+        assertFalse(admitHot(hot), "refusals older than a minute do not count");
+        nextQuery();
+        assertFalse(admitHot(hot));
+        assertTrue(coldResident("cold"));
+        verify(usage, never()).lastAccessFor(any());
+
+        nextQuery();
+        assertTrue(admitHot(hot));
+        assertFalse(coldResident("cold"));
+    }
+
+    @Test
+    public void pkEvictedForHotFieldIndexIsMarkedRefusedAndPointScanned() throws Exception {
+        final var fs = mock(FileSystem.class);
+        final var rows = pkRows("other", 40);
+        when(fs.trustedLiveRows(DB, "other")).thenReturn(OptionalLong.of(rows.size()));
+        when(fs.readWholePkIndexFile(DB, "other")).thenReturn(rows);
+        when(fs.pkRowsFor(anyString(), anyString(), anyCollection())).thenReturn(Map.of("row-0001", rows.get(1)));
+        TestUtils.setPrivateField(cache, "fs", fs);
+        final var otherId = Cache.getCollectionIdentifier(DB, "other");
+        CacheResidents.residentPk(cache, otherId, rows);
+        final var pkBytes = cache.footprintBytes();
+        final var hot = fieldRows("hot", 20);
+        maxMemory(pkBytes + CacheSizeEstimator.estimateFieldIndexSize(hot) - 1);
+        accesses(AccessKind.FIELD_INDEX, "hot", "rank", 8);
+        accesses(AccessKind.PK_INDEX, "other", null, 1);
+
+        assertFalse(admitHot(hot));
+        nextQuery();
+        assertFalse(admitHot(hot));
+        nextQuery();
+        assertTrue(admitHot(hot));
+
+        assertFalse(cache.pkIndexes().containsKey(otherId));
+        assertTrue(cache.sizes().refusedPk(otherId).displaced());
+        locks.lockRead(DB, "other");
+        try {
+            assertEquals("row-0001", cache.pkRowFor(DB, "other", "row-0001").getValue());
+            assertFalse(cache.isResidentPkIndex(DB, "other", cache.getPkIndexAndLoadIfNecessary(DB, "other")),
+                    "a displaced pk is not re-admitted by evicting the index that displaced it");
+        } finally {
+            locks.releaseRead(DB, "other");
+        }
+        verify(fs).pkRowsFor(DB, "other", List.of("row-0001"));
+        assertNotNull(cache.residentFieldIndex(DB, "hot", HOT_KEY));
+
+        cache.evictFieldIndex(DB, "hot", HOT_KEY);
+        residentDocuments("filler", 30);
+        read("other", () -> {
+            try {
+                cache.getPkIndexAndLoadIfNecessary(DB, "other");
+            } catch (java.io.IOException e) {
+                throw new AssertionError(e);
+            }
+        });
+        assertTrue(cache.pkIndexes().containsKey(otherId), "once only documents hold its room the pk returns");
+        assertFalse(holdsDocuments("filler"));
+        assertNull(cache.sizes().refusedPk(otherId));
+    }
+
+    @Test
+    public void ownFieldAndLockedIndexAreNeverVictims() throws Exception {
+        final var ownOtherType = Cache.getIndexIdentifier("rank", Double.class);
+        CacheResidents.residentFieldIndex(cache, Cache.getCollectionIdentifier(DB, "hot"), ownOtherType,
+                fieldRows("hot", 20));
+        final var both = coldIndex("busy");
+        final var hot = fieldRows("hot", 20);
+        maxMemory(both + CacheSizeEstimator.estimateFieldIndexSize(hot) - 1);
+        accesses(AccessKind.FIELD_INDEX, "hot", "rank", 1000);
+        final var held = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var indexer = Thread.ofPlatform().start(() -> {
+            try {
+                locks.lockIndex(DB, "busy", FIELD);
+                held.countDown();
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                locks.releaseIndex(DB, "busy", FIELD);
+            }
+        });
+        assertTrue(held.await(5, TimeUnit.SECONDS));
+        try {
+            for (var attempt = 0; attempt < 4; attempt++) {
+                clock.addAndGet(AdmissionEviction.BACKOFF_NANOS);
+                assertFalse(admitHot(hot));
+            }
+        } finally {
+            release.countDown();
+            indexer.join(5_000L);
+        }
+
+        assertNotNull(cache.residentFieldIndex(DB, "hot", ownOtherType), "the requester's own field stays");
+        assertTrue(coldResident("busy"), "an index another thread holds stays");
+    }
+
+    @Test
+    public void aRefusedTypeServedElsewhereDisplacesAColderIndexOnlyOnceRefusedRepeatedly() throws Exception {
+        final var facade = IocContainer.get(Cache.class);
+        final var shared = TestUtils.getPrivateField(facade, "userCache", UserCache.class);
+        final var cold = coldIndex("cold");
+        final var hotBytes = CacheSizeEstimator.estimateFieldIndexSize(fieldRows("hot", 20));
+        maxMemory(cold + hotBytes - 1);
+        accesses(AccessKind.FIELD_INDEX, "hot", "rank", 8);
+        TestUtils.setPrivateField(facade, "userCache", cache);
+        try {
+            assertFalse(facade.displacesColderIndexes(DB, "hot", HOT_KEY), "a type never refused has nothing to do");
+            cache.sizes().refuseFieldIndex(Cache.getCollectionIdentifier(DB, "hot"), HOT_KEY, hotBytes);
+            assertFalse(facade.displacesColderIndexes(DB, "hot", HOT_KEY));
+            assertFalse(facade.displacesColderIndexes(DB, "hot", HOT_KEY), "one query reading twice is one refusal");
+            nextQuery();
+            assertFalse(facade.displacesColderIndexes(DB, "hot", HOT_KEY));
+            assertTrue(coldResident("cold"));
+            nextQuery();
+            assertTrue(facade.displacesColderIndexes(DB, "hot", HOT_KEY));
+            assertFalse(coldResident("cold"), "the third refusal made room for the hot type's load");
+        } finally {
+            TestUtils.setPrivateField(facade, "userCache", shared);
+        }
     }
 }

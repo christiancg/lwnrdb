@@ -86,7 +86,10 @@ final class CollectionRecordApplier {
         if (incarnation != 0) {
             hybridClock.observe(incarnation);
         }
-        quarantine.quarantineStaleIncarnation(dbName, collName, incarnation);
+        if (!quarantine.quarantineStaleIncarnation(dbName, collName, incarnation,
+                clusterConfig.replicationAckTimeoutMs())) {
+            return false;
+        }
         if (!LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)) {
             return false;
         }

@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongFunction;
@@ -27,8 +28,8 @@ public class FileSystem {
     private final Configuration configuration = Configuration.getInstance();
     private final FilePaths paths = new FilePaths();
     private final IndexMarkers indexMarkers = new IndexMarkers(paths);
-    private final TombstoneStore tombstones = new TombstoneStore(paths);
     private final MetadataFiles metadataFiles = new MetadataFiles(paths);
+    private final IndexFiles indexFiles = new IndexFiles(paths);
     private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
@@ -42,6 +43,7 @@ public class FileSystem {
             writeIntentJournal);
     private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
     private final WriteAheadLog writeAheadLog = new WriteAheadLog(paths);
+    private final TombstoneStore tombstones = new TombstoneStore(paths, writeAheadLog);
     private final WalCheckpoints walCheckpoints = new WalCheckpoints(paths, writeAheadLog);
 
     public void onVacuum(Consumer<VacuumedPage> listener) {
@@ -157,6 +159,10 @@ public class FileSystem {
 
     public MetadataFiles metadataFiles() {
         return metadataFiles;
+    }
+
+    public IndexFiles indexFiles() {
+        return indexFiles;
     }
 
     public IndexMarkers indexMarkers() {
@@ -334,14 +340,24 @@ public class FileSystem {
         return indexFile != null && (indexFile.exists() || FilePaths.logFileOf(indexFile).exists());
     }
 
-    public void appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
-            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors) throws IOException {
-        fieldIndexStore.appendIndexLog(dbName, collName, fieldName, typeLabel, changes, survivors);
+    public PendingFold appendIndexLog(String dbName, String collName, String fieldName, String typeLabel,
+            List<IndexLogChange> changes, List<? extends FieldIndexEntry<?>> survivors, boolean refused)
+            throws IOException {
+        return fieldIndexStore.appendIndexLog(dbName, collName, fieldName, typeLabel, changes, survivors,
+                refused ? Globals.REFUSED_INDEX_FOLD_DIVISOR : 1);
     }
 
-    public boolean appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
+    public PendingFold appendIndexLogOnly(String dbName, String collName, String fieldName, String typeLabel,
             List<IndexLogChange> changes, IndexTypeReader foldSource) throws IOException {
         return fieldIndexStore.appendIndexLogOnly(dbName, collName, fieldName, typeLabel, changes, foldSource);
+    }
+
+    public PendingFold.Outcome fold(PendingFold fold) throws IOException {
+        return fieldIndexStore.fold(fold);
+    }
+
+    public long indexTypeStamp(String dbName, String collName, String fieldName, String typeLabel) {
+        return fieldIndexStore.stampOf(dbName, collName, fieldName, typeLabel);
     }
 
     public boolean dropIndex(String dbName, String collName, String fieldName) {
@@ -408,6 +424,14 @@ public class FileSystem {
         return walCheckpoints.idle(idleMillis, maxLogs, collectionLocks);
     }
 
+    public void onCheckpointRequest(BooleanSupplier submit) {
+        WalCheckpointRequests.listenWith(submit);
+    }
+
+    public void checkpointRequestedWriteAheadLogs(CollectionTryLock collectionLocks) {
+        walCheckpoints.requested(collectionLocks);
+    }
+
     public void openWriteGroup(String dbName, String collName) throws IOException {
         writeAheadLog.openGroup(dbName, collName);
     }
@@ -421,7 +445,8 @@ public class FileSystem {
     }
 
     public boolean forceWriteGroup(String dbName, String collName) throws IOException {
-        return writeAheadLog.forceGroup(dbName, collName);
+        final var deleteTombstones = tombstones.startGroupForce(dbName, collName);
+        return tombstones.forcedBeside(deleteTombstones, writeAheadLog.forceGroup(dbName, collName), dbName, collName);
     }
 
     public boolean settleWriteGroup(String dbName, String collName) throws IOException {
@@ -459,5 +484,4 @@ public class FileSystem {
     public long pageFileCount(String dbName, String collName) throws IOException {
         return documentPageStore.pageFileCount(dbName, collName);
     }
-
 }

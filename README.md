@@ -192,7 +192,7 @@ Read operations accept an optional `"dirtyRead": true` (default `false`); see [C
 #### `AGGREGATE`
 Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
 Also accepts an optional top-level `"analyze": true` (default `false`); see [Explain / Analyze](#explain--analyze).
-A pipeline is stopped with `408-6` once it has run for `aggregateTimeoutMs` (default `300000`, `0` = no limit). An `IN`/`NOT_IN` list or a `within` polygon may hold at most `maxFilterOperands` (default `10000`) operands, refused with `400-27` past it; the same limit caps the operands of one conjunction (`AND`/`OR`/…), the total operator nodes of one `FILTER` step, and the operators plus mid-operator operands of one `MAP` step. A `MAP` `fieldName` may nest at most 128 levels. One output row of a `JOIN` may carry a joined array of at most `maxEntrySize` bytes, refused with `400-28` past it (the same refusal whether the remote field is indexed or scanned). The whole pipeline may build at most `aggregateMaxResultBytes` (default `256Mb`): the strings every `MAP` adds through `CONCAT` and string `CAST`s, the values its `SCRIPT` mid-operators add (measured as their JSON text), each `JOIN` row's joined array (counted once per row, even when rows share it) and one byte per result row are totalled per request, and past it the pipeline stops with `400-36`. A `LISTEN` re-run is held to the same budget. `GROUP_BY`, `DISTINCT` and `JOIN` key their lookups on a hash seeded per process, and so do the index reads and the `CREATE_INDEX` build behind them, so values that collide under Java's string hash cannot pile into one bucket.
+A pipeline is stopped with `408-6` once it has run for `aggregateTimeoutMs` (default `300000`, `0` = no limit). An `IN`/`NOT_IN` list or a `within` polygon may hold at most `maxFilterOperands` (default `10000`) operands, refused with `400-27` past it; the same limit caps the operands of one conjunction (`AND`/`OR`/…), the total operator nodes of one `FILTER` step, and the operators plus mid-operator operands of one `MAP` step. A `MAP` `fieldName` may nest at most 128 levels. One output row of a `JOIN` may carry a joined array of at most `maxEntrySize` bytes, refused with `400-28` past it (the same refusal whether the remote field is indexed or scanned). The whole pipeline may build at most `aggregateMaxResultBytes` (default `auto`, a quarter of the JVM's max heap): the strings every `MAP` adds through `CONCAT` and string `CAST`s, the values its `SCRIPT` mid-operators add (measured as their JSON text), each `JOIN` row's joined array (counted once per row, even when rows share it), the modelled heap of every document a step holds while it works (the rows a `GROUP_BY`, an unbounded `SORT`, a `JOIN`'s two sides and `DISTINCT`'s seen values keep) and the modelled heap of every result row are totalled per request, and past it the pipeline stops with `400-36` instead of running the server out of heap. The heap of the first 64 rows of a step is measured exactly, then every 64th row is measured and the others are charged the running average. A `LISTEN` re-run and a read inside a transaction are held to the same budget. A `GROUP_BY` followed directly by `COUNT` only counts the distinct values (from the index when the field has one), without holding the documents. A `JOIN` on an unindexed remote field streams the remote collection and keeps only the documents whose value one of the local rows names. `GROUP_BY`, `DISTINCT` and `JOIN` key their lookups on a hash seeded per process, and so do the index reads and the `CREATE_INDEX` build behind them, so values that collide under Java's string hash cannot pile into one bucket.
 
 ```json
 {
@@ -227,7 +227,7 @@ A field name a step *writes* follows the same dotted-path rule every step uses t
 **Result order.** A pipeline that ends in `SORT` — or whose last order-determining step is a `SORT` — is fully ordered. Otherwise the order in which documents are enumerated is unspecified, so a `LIMIT` or `SKIP` used as the pipeline's source returns an unspecified subset, exactly as a SQL `LIMIT` without an `ORDER BY` does. `REDUCE` is the exception, because its *value* and not just its row order depends on the enumeration: when `REDUCE` is the pipeline's source it folds in a defined order (by page, then by `_id`), so a non-commutative fold answers the same before and after a restart or an eviction. Put a `SORT` in front of `REDUCE` to choose a different order. After any other preceding step (`FILTER`, `MAP`, `JOIN`, `GROUP_BY`, `DISTINCT`, …) it folds by `_id`, and rows that have no `_id` — `GROUP_BY` and `DISTINCT` output — follow in a canonical order of their content, so the fold answers the same whether a step was resolved through an index or a scan. The arrays a step builds are ordered too: a `GROUP_BY` group and a `JOIN`'s `asField` list their documents by `_id`, so the same query answers identically whether it was resolved through an index or a full scan.
 
 `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` use a single-field index when one exists on the step's field and the step is the first step in the pipeline; otherwise they fall back to a full scan. These steps use only the scalar/custom/null indexes, so documents whose indexed field holds a JSON object or array are not represented in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results (see [Memory management → Streaming reads](#memory-management)). 
-Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`).
+Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`). A value is keyed by the first 128 bits of the SHA-256 of its canonical form, written as 26 lowercase base32 characters; every hit is re-tested against the stored document.
 
 A collection may also carry a single JSON Schema stored alongside its data files as `{collection}-schema.json` (see [Schema validation](#schema-validation)). Ordering/containment operators (`GREATER_THAN*`, `SMALLER_THAN*`, `CONTAINS`) and the reconstructing steps above cannot use these hash indexes because a hash cannot be ordered or turned back into a value.
 
@@ -326,7 +326,7 @@ The **vector type** (`#vector(v0,v1,...,vn)`, a dense vector of numbers) provide
 }}
 ```
 
-Vector values are stored and read through ordinary `SAVE`/`FIND_BY_ID`/`AGGREGATE` (e.g. `"embedding":"#vector(0.12,0.44,0.91)"`), and a vector field is indexable like any other. The vector field index is sorted by a **SimHash (locality-sensitive) signature**, so `nearest` pre-filters candidates from the neighbourhood of the query's signature in the sorted index and then re-scores each fetched document exactly. Because SimHash is locality-sensitive but not exact, this index path is **approximate (ANN)**: a query may miss matches that fall outside the scanned neighbourhood. Pass `"exact":true` to force an exact full scan instead (guaranteed top-`k`, no index). A `COUNT` after a `nearest` filter always reads the matched documents (the ranked candidates cannot be counted from ids alone), and returns `min(k, matches)`.
+Vector values are stored and read through ordinary `SAVE`/`FIND_BY_ID`/`AGGREGATE` (e.g. `"embedding":"#vector(0.12,0.44,0.91)"`), and a vector field is indexable like any other. The vector field index is sorted by a **SimHash (locality-sensitive) signature**, so `nearest` pre-filters candidates from the neighbourhood of the query's signature in the sorted index and then re-scores each fetched document exactly. The index keys each vector by its 16-bit signature and a 64-bit hash of its components (20 characters, whatever the dimension), not by the vector itself, so it stays small enough to cache: an `EQUALS`/`IN` on a vector field uses it only to nominate candidates, which are re-tested against the stored documents, and every other operator, `COUNT`, `DISTINCT`, `GROUP_BY` and `SORT` on that field read the documents. Because SimHash is locality-sensitive but not exact, this index path is **approximate (ANN)**: a query may miss matches that fall outside the scanned neighbourhood. Pass `"exact":true` to force an exact full scan instead (guaranteed top-`k`, no index). A `COUNT` after a `nearest` filter always reads the matched documents (the ranked candidates cannot be counted from ids alone), and returns `min(k, matches)`.
 
 #### Explain / Analyze
 
@@ -378,6 +378,17 @@ Returned even when there are no results: in analyze mode an empty result set sti
 ```json
 {"type":"CREATE_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
 ```
+Several fields can be indexed with one request through `fieldNames`, which builds every field that is not indexed yet
+in one pass over the collection instead of one pass per field:
+```json
+{"type":"CREATE_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldNames":["email","status","age"]}
+```
+`fieldName` and `fieldNames` may be combined; their union is indexed. A field already indexed is skipped, not rebuilt,
+and the message names it (`Created index for fields: status, age; already existed for field: email`). `fieldNames`
+must not be empty (`400-1`), and one invalid, blank or reserved name refuses the whole request (`400-1`) before anything
+is built, as does a name that collides with another one on disk (`409-11`) or a request that would take the
+collection past `maxIndexesPerCollection` (`400-42`).
+
 Answers `404-11` when the collection does not exist (`503-10` on a cluster node it has not reached yet), like the write operations; `script_runs` can be indexed once the first recorded run has created it. Creating an index that already exists answers `OK` without rebuilding it. Creating one past `maxIndexesPerCollection` is refused with `400-42`.
 
 #### `DROP_INDEX`
@@ -669,7 +680,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - **Importing shared code**: a script may import any stored procedure of its own database with `import … from "procedures/<name>"` — a library is just a procedure that `export`s instead of returning. `SAVE_PROCEDURE` refuses an import that does not resolve (`400-18`), so libraries must be installed before their users. A caller without script `MANAGE` (or ownership, or admin) on the database runs imported code but cannot read it: `toString()` of an imported function or class answers the `function name() { [native code] }` stub. Only `export`ed bindings are visible, so a procedure written in the `CALL_PROCEDURE` style (a top-level `return`) imports as `undefined`.
 - **Outbound HTTP** is available: `scriptFetchEnabled` is on and `scriptFetchAllowlist` is `*`, which means any **public** host. Every address a host resolves to is checked and the connection goes to that checked address, so loopback, private (10/8, 172.16/12, 192.168/16), link-local (the 169.254.169.254 metadata endpoint), CGNAT, multicast, reserved and unique-local addresses are refused with `fetch: host not allowed` — even through a DNS name or a later DNS answer — unless the **exact** host is listed (`10.0.0.5`, `localhost`); a `*.example.com` wildcard never re-opens them, and listing an internal host logs a SECURITY WARNING at startup. Only `http`/`https` URLs are fetched, redirects are never followed, the body is read as a stream and abandoned past `scriptFetchMaxResponseBytes`, a run may have at most `scriptFetchMaxConcurrent` (default 8) fetches in flight (one more rejects with `fetch: too many concurrent requests`), and any other network failure rejects with the bare `fetch failed` — the cause goes to the server log, not to the script. `*` still lets any script make the server call any public host, and the server warns at every startup — **narrow it**. `fetch` stays unavailable to pipeline scripts and before-write hooks, which hold collection locks.
 - **Native work is budgeted too**: a builtin's own loop (`indexOf`, `includes`, `splice`, typed-array scans…) is charged about one instruction per element, so a scan over a sparse `new Array(2 ** 32 - 1)` ends with `400-11` and honours `CANCEL_SCRIPT` and the timeout; native recursion over script data (`JSON.parse`/`JSON.stringify`, `structuredClone`, `flat`, `String()` of nested arrays, and converting a returned or stored value to the host document form) stops at 256 levels with a catchable `RangeError: Maximum nesting depth exceeded`; a BigInt result over 2^24 bits (2 MiB) is a catchable `RangeError: Maximum BigInt size exceeded` and a large one (from any operator, or converted to text) is charged to `scriptMaxMemoryBytes`; `JSON.parse` is charged per value it builds, and a builtin that writes past an array's dense end is charged for the holes it pads; a locale argument (`toLocaleString`, `localeCompare`) resolves to the closest locale the JDK ships, dropping extensions and private-use subtags (`'en-x-foo'` formats as `en`, an unknown language as `scriptLocale`, an ill-formed tag is a `RangeError`); and a JVM stack or heap exhaustion inside an async function or generator ends the run with `400-12` instead of hanging it. `import … from "procedures/<name>"` resolves only a name the wire would accept (3-64 letters, digits, `_` or `-`); anything else is `Cannot find module`.
-- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes. Rows are written in batches (one per database), at most `scriptRunHistoryMaxQueued` wait to be written, and the sweep (every `scriptRunHistorySweepMs`) applies the retention and the optional `scriptRunHistoryMaxRows` cap.
+- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes. Rows are written in batches (one per database), at most `scriptRunHistoryMaxQueued` wait to be written, and the sweep (every `scriptRunHistorySweepMs`) applies the retention and the `scriptRunHistoryMaxRows` cap (100,000 rows per database by default, `0` for none).
 - **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`, the name and message each clipped to `scriptMaxLogLineChars` like every stack frame; an engine failure with no script-level meaning reads `InternalError: Internal script error`, the detail going only to the server log), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-30` an array-like past `scriptMaxArrayLength`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `503-7` the run was placed on another node that never reported an outcome — it is deliberately **not** re-run here, because it may already have run there, so retrying is only safe if the script is idempotent, `409-6` sent with a transaction open.
 - Under clustering the run is **placed** on a live node chosen by script load and ownership share (`scriptRoutingEnabled`, on by default); each operation it issues is then routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
@@ -1094,7 +1105,7 @@ Replaces the full owners list for a database. All usernames must already exist. 
 ```
 
 #### `GET_DATABASE_STATS`
-Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxMemory`. `memory.userCacheBytes` is the modelled heap of the user cache (the total `maxMemory` is enforced against); the `heap*` fields are the JVM's measured heap.
+Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxMemory`. `memory.userCacheBytes` is the modelled heap of the user cache (the total `maxMemory` is enforced against); the `heap*` fields are the JVM's measured heap. `memory.residentTombstoneBytes` is the modelled heap of the delete tombstones a clustered node keeps in memory for `tombstoneRetentionMs` (outside `maxMemory`, about 12 bytes per tombstone plus its id).
 
 ```json
 {"type":"GET_DATABASE_STATS"}
@@ -1112,6 +1123,7 @@ Response shape:
       "heapMaxBytes": 6442450944,
       "heapCommittedBytes": 268435456,
       "userCacheBytes": 2097152,
+      "residentTombstoneBytes": 0,
       "maxMemoryBytes": 536870912,
       "cachingDisabled": false,
       "cacheUnlimited": false
@@ -1368,7 +1380,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-33` | `ERROR` | The user has the maximum number of schedules across every database (`scheduleMaxTotalPerUser`) |
 | `400-34` | `ERROR` | The database has the maximum number of procedures (`maxProceduresPerDatabase`); replacing an existing procedure is never refused |
 | `400-35` | `ERROR` | The schedule interval is below the allowed minimum (`scheduleMinIntervalMs`) |
-| `400-36` | `ERROR` | The aggregation result exceeds the maximum result size — the `MAP` strings and `SCRIPT` values, `JOIN` arrays and rows one pipeline built passed `aggregateMaxResultBytes` |
+| `400-36` | `ERROR` | The aggregation result exceeds the maximum result size — the `MAP` strings and `SCRIPT` values, `JOIN` arrays, the documents its steps held (`GROUP_BY`, unbounded `SORT`, `JOIN`, `DISTINCT`) and the result rows one pipeline built passed `aggregateMaxResultBytes` |
 | `400-37` | `ERROR` | The `LISTEN` request line exceeds `listenMaxRequestBytes`; refused before the query runs |
 | `400-38` | `ERROR` | The user already holds `maxListensPerUser` listen registrations across their connections |
 | `400-39` | `ERROR` | The schema has more regular expressions than allowed — more `pattern` values and `patternProperties` keys than `schemaMaxPatterns`, refused by `SAVE_SCHEMA` before compiling any |
@@ -1561,9 +1573,11 @@ java -jar lwnrdb.jar --restore [connection] < backup.ldump
 - **`--shell`** prints a `lwnrdb> ` prompt, sends each line (one JSON request) as it is and pretty-prints the reply.
   `exit`, `quit` or end of input ends the session. There is no line editing, history or multi-line input.
 - **`--exec`** sends each `--exec` value, or each line of standard input when no value is given, and prints every
-  reply on its own line. It stops at the first reply that is not `OK`.
+  reply on its own line, exactly as the server sent it: the reply is streamed to standard output rather than parsed,
+  so a result of any size needs only a small client heap. It stops at the first reply that is not `OK`.
 - **`--dump`** writes a backup to standard output and progress (`shop.orders: 12000 documents`) to standard error.
-  `--compress` gzips the stream.
+  `--compress` gzips the stream. Documents are read in pages of about 4 MB: the first page asks for 1,000
+  documents and each next page sizes itself from the previous page's bytes per document (at most 100,000 documents).
 - **`--restore`** reads a backup from standard input, plain or gzipped (detected by its first two bytes), and prints
   `restored N requests` to standard error every 1000 requests and at the end.
 
@@ -1572,7 +1586,8 @@ Exit codes: `0` success; `1` a command answered non-OK, or the dump or restore s
 `lwnrdb.cfg` and never creates `db/` or `logs/` in its working directory.
 
 **The dump format is the restore script.** Every line is one ordinary request: `CREATE_DATABASE`,
-`CREATE_COLLECTION`, `BULK_SAVE` (at most 4 MB of documents per line), `SAVE_SCHEMA`, `CREATE_INDEX`,
+`CREATE_COLLECTION`, `BULK_SAVE` (at most 4 MB of documents per line), `SAVE_SCHEMA`, `CREATE_INDEX` (one line per
+collection, naming every indexed field in `fieldNames`, so a restore builds them in one pass),
 `SAVE_PROCEDURE`, `SAVE_TRIGGER` and `SAVE_SCHEDULE`, in that order, so a restore writes documents before the schema,
 before hooks and indexes that would re-check or slow them, saves a procedure before what imports or binds it, and
 installs after triggers last so they do not fire on a fresh target. Restore sends each line and stops at the first
@@ -1679,7 +1694,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
 | `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory (Windows, for one) logs that warning and falls back to `false` instead of refusing to start |
-| `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, the pages and `pk.idx` its records touched are synced together and the log is rewritten as a single checkpoint. Larger means fewer checkpoints and a longer replay after a crash |
+| `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, a background worker syncs the pages and `pk.idx` its records touched together and rewrites the log as a single checkpoint, holding only the collection's read lock; a writer does it itself only past twice this size. Larger means fewer checkpoints and a longer replay after a crash |
 | `walIdleCheckpointMs` | Long (default `60000`). A background worker checkpoints a collection's log once it has sat this long with records past its checkpoint, no open write group and no pending field-index work, so an idle collection is not replayed after a crash. `0` turns it off |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
@@ -1687,7 +1702,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `schemaPatternCacheMaxBytes` | Valid size > 0 (default `32Mb`). Estimated heap the node's compiled schema regular expressions may keep cached, weighed by their character sets, nodes and literal text; the least recently used are evicted past it. A pattern longer than `schemaMaxPatternLength` or heavier than the whole cache is compiled on every use and never cached |
 | `defaultAdminUsername` | 3–64 characters from `A-Z a-z 0-9 _ -`, the same rule `CREATE_USER` applies (cluster peers refuse to replicate any other user name). The server refuses to start otherwise |
 | `defaultAdminPassword` | Required (at least 8 characters, not `administrator`) when no admin user exists; may be blank once one does. `administrator`, a commonly used password and the admin username itself (all ignoring case) are always refused at startup, and a non-blank value shorter than 8 characters is a validation error |
-| `maxMemory` | Human-readable size; `0` (unlimited, named in the startup `SECURITY WARNING`) and `-1` (caching disabled) are also valid |
+| `maxMemory` | `auto` (default: 40% of the JVM's max heap) or a human-readable size, capped at 60% of the max heap with a startup warning; `0` (unlimited, named in the startup `SECURITY WARNING`) and `-1` (caching disabled) are also valid |
 | `transientLoadPermits` | Valid number ≥ 1 (default `4`). Whole `pk.idx` or field-index loads that may not be cached, allowed to run at once: one whose upper-bound estimate from the file lengths (`pk.idx`, or an `.idx` plus its `.idxlog`) does not fit in `maxMemory`, every load while caching is disabled, and every load by a lock-free reader. Further ones wait; nothing is refused |
 | `indexScanFallbackPercent` | Valid number, 1–100 (default `25`). Share of a collection of at least 4096 documents an index match may cover before a `FILTER` reads the collection instead of fetching the matches by id; a `GROUP_BY` and an unbounded `SORT` at the start of a pipeline also read the collection while it is not wholly cached. Index and scan answer identically, so this only changes speed; analyze still lists an index it consulted. `100` always uses the index |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
@@ -1803,7 +1818,8 @@ schemaPatternCacheMaxBytes=32Mb
 defaultAdminUsername=admin
 # required until the first admin exists; never 'administrator'
 defaultAdminPassword=<choose-a-strong-password>
-maxMemory=512Mb
+# auto = 40% of the JVM's max heap; an explicit size above 60% of it is capped there
+maxMemory=auto
 # ms a transactional write waits for a busy collection lock before aborting (409-5)
 transactionLockTimeoutMs=5000
 shutdownTimeoutMs=15000
@@ -1836,7 +1852,7 @@ listenThreads=2
 maxFilterOperands=10000
 maxVectorDimensions=16384
 aggregateTimeoutMs=300000
-aggregateMaxResultBytes=256Mb
+aggregateMaxResultBytes=auto
 # share of a large collection an index match may cover before the query reads the collection instead
 indexScanFallbackPercent=25
 # TLS: when enabled, plaintext clients are rejected at the handshake
@@ -1880,7 +1896,7 @@ scriptRunHistoryRetentionMs=604800000
 scriptRunHistoryIncludeLogs=false
 scriptRunHistoryMaxErrorChars=2000
 scriptRunHistoryMaxQueued=10000
-scriptRunHistoryMaxRows=0
+scriptRunHistoryMaxRows=100000
 scriptRunHistorySweepMs=3600000
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
@@ -1905,6 +1921,8 @@ triggerMaxAttempts=3
 triggerRetryBackoffMs=1000
 triggerRetryMaxBackoffMs=60000
 triggerDeadLetterRetentionMs=604800000
+# dead-lettered runs kept per database; 0 = no cap
+triggerDeadLetterMaxRuns=10000
 ```
 
 **Graceful shutdown.** On SIGTERM the server runs an ordered shutdown within
@@ -1969,8 +1987,9 @@ or other users can access, with the `chmod 700`/`chmod 600` that fixes it. A Doc
 by the runtime is often `0755`, so that warning is expected there until you tighten it. A permission
 failure never stops startup; on non-POSIX filesystems none of this applies.
 
-Two file-handling rules follow from the same concern: log cleanup only ever deletes files named
-`yyyy-MM-dd.log` that fell out of `maxLogFiles` (any other file in `logPath` is left alone), and
+Two file-handling rules follow from the same concern: log cleanup (at startup and on the first log line
+of each new day) only ever deletes files named `yyyy-MM-dd.log` that fell out of `maxLogFiles` (any
+other file in `logPath` is left alone), and
 `DROP_DATABASE` / `DROP_COLLECTION` never follow a symbolic link — a linked folder inside a database
 is unlinked, and its target's contents are left untouched.
 
@@ -2013,7 +2032,7 @@ acting user on the node that runs it (see [docs/clustering.md](docs/clustering.m
 
 ### Memory management
 
-`maxMemory` bounds the **user cache**: a background sweep (every 5s) sums the **modelled heap size** of the cached user collections and indexes and, while that total exceeds the budget, evicts the least-frequently-used of them. Each document and index entry is sized from the JVM's object layout — object headers (compact or not), reference width (4 bytes under G1, the collector the image and the run commands use, or 8 under ZGC, without compressed references, or with a heap of 32 GB and more), alignment, `String` backing arrays, map entries and hash tables — so the total tracks the heap the cache really holds rather than the documents' on-disk size, which is several times smaller (a small document costs about 3 KB of heap against under 200 bytes on disk). It is still the cache's own accounting, not measured JVM heap — nothing reads real heap to decide an eviction (`GET_DATABASE_STATS` reads it only to report). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+`maxMemory` bounds the **user cache**: a background sweep (every 5s) sums the **modelled heap size** of the cached user collections and indexes and, while that total exceeds the budget, evicts the least-frequently-used of them. Each document and index entry is sized from the JVM's object layout — object headers (compact or not), reference width (4 bytes under G1, the collector the image and the run commands use, or 8 under ZGC, without compressed references, or with a heap of 32 GB and more), alignment, `String` backing arrays, map entries and hash tables — so the total tracks the heap the cache really holds rather than the documents' on-disk size, which is several times smaller (a small document costs about 3 KB of heap against under 200 bytes on disk). It is still the cache's own accounting, not measured JVM heap — nothing reads real heap to decide an eviction (`GET_DATABASE_STATS` reads it only to report). Values are human-readable (e.g. `512Mb`, `2Gb`), or `auto`, the default: 40% of the JVM's max heap (`-Xmx`, or the share of the machine or container the JVM picks by itself), so the cache follows the heap instead of a fixed number that a small box cannot hold. An explicit size above 60% of the max heap is capped at 60% and the startup log says so, because the collector, the page a scan is reading and in-flight requests need the rest. Two special values are accepted:
 - `0` — unlimited; caching is on but eviction never triggers (suitable when `-Xmx` is already the only ceiling you want).
 - `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
 
@@ -2021,7 +2040,7 @@ Eviction order is LFU. Access counts are recorded asynchronously and persisted i
 
 A primary-key index or a field-index type that cannot fit in `maxMemory` (or any of them while caching is disabled) is never cached, and the log names it once. Keyed reads and writes then find their rows with one streaming pass over `pk.idx` for the ids they name, and index maintenance appends each change to that type's `.idxlog` without loading the type, folding the log into the `.idx` only once it outgrows it. Queries on such a field still load it from disk, so a deployment that queries it should raise `maxMemory` above the size the warning gives.
 
-**Sizing `-Xmx` against the cap.** `maxMemory` bounds the cache's real heap, so the rest of `-Xmx` is what the collector, the page a scan is reading, in-flight requests and scripts get. Size `-Xmx` to roughly twice `maxMemory`, plus the metadata cache and script budgets; startup logs a warning when `-Xmx > maxMemory × 2`, suggesting `maxMemory` around half of `-Xmx`. `maxMemory` cannot reclaim metaspace, JIT code or committed-but-unused heap, so the OS-visible process size stays above it. The image and the run commands use G1 (`-XX:+UseG1GC`): ZGC runs without compressed references, which cost 21% more live heap for the same load (183.1 MB against 151.8 MB under G1) and about 2.5x the peak process size on the Docker bench (1,161 MB against 468 MB at 0.3 scale). The flag is explicit because the JVM picks SerialGC by itself in a container under 2 CPUs or 1792 MB. Under ZGC the container's peak memory followed the heap ceiling, not the data: on the Docker bench (100k documents of about 512 B, about 190 MB of live heap after a full GC) the same run peaked at 1.2 GiB under a 1 GiB ceiling, 1.6 GiB under 1.4 GiB and 2.7 GiB under 2.8 GiB, with no extra CPU per operation and no allocation stalls under the smaller ceilings, so keep the ceiling near the rule above rather than at most of the container. If you run ZGC anyway, `-XX:SoftMaxHeapSize` keeps it near a smaller heap and lets it exceed it only under pressure (1.3 GiB peak under a 2.8 GiB ceiling). The Docker image sets no heap flag, so its JVM sizes the heap at a quarter of the container's memory; change it with `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=50` (or `-Xmx` through the same variable), and keep the heap at least as large as `maxMemory` plus the metadata and script budgets, or the JVM can run out of memory before the cache budget evicts anything.
+**Sizing `-Xmx` against the cap.** `maxMemory` bounds the cache's real heap, so the rest of `-Xmx` is what the collector, the page a scan is reading, in-flight requests and scripts get. With `maxMemory=auto` nothing needs sizing: the cache takes 40% of `-Xmx`. With an explicit value, size `-Xmx` to roughly twice `maxMemory`, plus the metadata cache and script budgets; startup logs a warning when `-Xmx > maxMemory × 2`, suggesting `maxMemory` around half of `-Xmx`. `maxMemory` cannot reclaim metaspace, JIT code or committed-but-unused heap, so the OS-visible process size stays above it. The image and the run commands use G1 (`-XX:+UseG1GC`): ZGC runs without compressed references, which cost 21% more live heap for the same load (183.1 MB against 151.8 MB under G1) and about 2.5x the peak process size on the Docker bench (1,161 MB against 468 MB at 0.3 scale). The flag is explicit because the JVM picks SerialGC by itself in a container under 2 CPUs or 1792 MB. Under ZGC the container's peak memory followed the heap ceiling, not the data: on the Docker bench (100k documents of about 512 B, about 190 MB of live heap after a full GC) the same run peaked at 1.2 GiB under a 1 GiB ceiling, 1.6 GiB under 1.4 GiB and 2.7 GiB under 2.8 GiB, with no extra CPU per operation and no allocation stalls under the smaller ceilings, so keep the ceiling near the rule above rather than at most of the container. If you run ZGC anyway, `-XX:SoftMaxHeapSize` keeps it near a smaller heap and lets it exceed it only under pressure (1.3 GiB peak under a 2.8 GiB ceiling). The Docker image runs the JVM with `-XX:MaxRAMPercentage=70`, so its heap is 70% of the container's memory limit (358 MB on a 512 MB container) and the default `maxMemory=auto` cache 40% of that; change it with `-e JDK_JAVA_OPTIONS=-XX:MaxRAMPercentage=50` (or `-Xmx` through the same variable). With an explicit `maxMemory`, keep the heap at least as large as `maxMemory` plus the metadata and script budgets, or the JVM can run out of memory before the cache budget evicts anything.
 
 Earlier versions charged each document its on-disk size and each index entry a flat 64–96 bytes, which undercounted the real heap 3–8×. The same data now takes a larger share of `maxMemory`, so a deployment tuned to the old numbers evicts sooner and may want a larger cap.
 
@@ -2073,12 +2092,14 @@ With `syncWrites=true` a write is acknowledged once its record in the collection
 (`{collection}.wal`) is on the device: one sequential append and one force, whatever the write is. An insert, an
 update, a delete, a relocation and a whole bulk write each log one record holding the exact bytes they put on each
 page and in `pk.idx`, then write those files without forcing them. A checkpoint forces every page and `pk.idx` the log
-touched since the last one, in parallel, then rewrites the log as a single checkpoint record; it runs once the log
-passes `walCheckpointBytes`, before a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`, once the log
-has been idle for `walIdleCheckpointMs`, and at shutdown, where up to eight logs are checkpointed in parallel within
-`shutdownTimeoutMs`. A page vacuum does not checkpoint: it forces only the page it rewrites, logs a forced `REWRITE_BEGIN`, moves
-the rewritten page into place and syncs its folder, then logs `REWRITE_END` with the page's new length together with
-the record of the rows it moved. Replay skips every older change to that page and cuts it back to that new length (or,
+touched since the last one, in parallel, then rewrites the log as a single checkpoint record; it runs in the
+background, beside the collection's readers, once the log passes `walCheckpointBytes` (the writer runs it itself only
+past twice that size), before a `pk.idx` rewrite, before a `REINDEX` with `"primaryKey": true`, once the log
+has been idle for `walIdleCheckpointMs`, and at shutdown, where up to 32 logs are checkpointed in parallel within
+`shutdownTimeoutMs` (the page-occupancy logs under `admin/pages` are left for the next startup's replay, which
+restores them). A page vacuum does not checkpoint: it writes the rewritten page and its vacuum intent, forces them
+together with the page it rewrites, logs a forced `REWRITE_BEGIN`, moves the rewritten page into place and syncs its
+folder, then logs `REWRITE_END` with the page's new length together with the record of the rows it moved. Replay skips every older change to that page and cuts it back to that new length (or,
 without the `REWRITE_END`, never below its length at `REWRITE_BEGIN`). After a power loss startup replays the log over whatever the files hold and cuts each file back to
 its last logged end, so an acknowledged write is redone and an unacknowledged one leaves nothing. With
 `syncWrites=false` there is no cut, since the bytes past a logged end may then be an acknowledged write whose record

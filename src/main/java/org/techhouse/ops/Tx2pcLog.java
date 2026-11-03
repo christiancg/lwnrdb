@@ -125,19 +125,23 @@ public final class Tx2pcLog {
     }
 
     public static void garbageCollectOutcomes(long retentionMs) throws Exception {
-        final var cutoff = System.currentTimeMillis() - retentionMs;
-        for (final var dtxId : dtxIdsWithSuffix(AdminTransactionEntry.MARKER_OUTCOME)) {
-            final var entries = AdminOperationHelper
-                    .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
-            if (entries.isEmpty()) {
-                continue;
-            }
-            final var resolvedAt = Long
-                    .parseLong(entries.getFirst().getPayload().get(RESOLVED_AT_FIELD).asJsonString().getValue());
-            if (resolvedAt < cutoff) {
-                deleteOutcomeMarker(dtxId);
+        final var expired = new ArrayList<String>();
+        for (final var markerId : OutcomeMarkers.resolvedBefore(System.currentTimeMillis() - retentionMs)) {
+            final var dtxId = OutcomeMarkers.dtxIdOf(markerId);
+            if (!isPrepared(dtxId) && !TxCommitLog.isLocallyCommitted(dtxId)) {
+                expired.add(markerId);
             }
         }
+        if (!expired.isEmpty()) {
+            AdminOperationHelper.deleteTransactionOps(expired);
+        }
+    }
+
+    static long resolvedAtOf(AdminTransactionEntry marker) {
+        final var payload = marker.getPayload();
+        return payload != null && payload.has(RESOLVED_AT_FIELD)
+                ? Long.parseLong(payload.get(RESOLVED_AT_FIELD).asJsonString().getValue())
+                : System.currentTimeMillis();
     }
 
     public static void recordCoordinatorCommit(String dtxId, String sessionId, List<String> participants)

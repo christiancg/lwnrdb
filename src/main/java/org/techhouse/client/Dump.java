@@ -16,7 +16,9 @@ import org.techhouse.ioc.IocContainer;
 
 public final class Dump {
     public static final int PAGE_SIZE = 1000;
+    public static final int MAX_PAGE_SIZE = 100_000;
     public static final int BATCH_BYTES = 4 * 1024 * 1024;
+    public static final long PAGE_TARGET_BYTES = 4L * 1024 * 1024;
     private static final String NO_RESULTS = "404-3";
     private static final String NO_SCHEMA = "404-12";
     private static final Set<String> SKIPPABLE_LISTINGS = Set.of("403-2", "403-6");
@@ -80,8 +82,9 @@ public final class Dump {
             dumpSchema(database, collection);
         }
         for (final var collection : plan.collections()) {
-            for (final var field : scope.indexesOf(database, collection)) {
-                emit(Requests.createIndex(database, collection, field));
+            final var fields = scope.indexesOf(database, collection);
+            if (!fields.isEmpty()) {
+                emit(Requests.createIndexes(database, collection, fields));
             }
         }
         dumpDefinitions(plan);
@@ -89,8 +92,9 @@ public final class Dump {
 
     private void dumpDocuments(String database, String collection) throws IOException {
         var skip = 0;
+        var limit = PAGE_SIZE;
         while (true) {
-            final var request = Requests.aggregatePage(database, collection, skip, PAGE_SIZE);
+            final var request = Requests.aggregatePage(database, collection, skip, limit);
             final var reply = connection.send(request);
             if (NO_RESULTS.equals(Connection.errorCodeOf(reply))) {
                 break;
@@ -102,22 +106,30 @@ public final class Dump {
             if (documents.isEmpty()) {
                 break;
             }
+            var pageBytes = 0L;
             for (final var document : documents) {
-                append(database, collection, document);
+                pageBytes += append(database, collection, document);
             }
             skip += documents.size();
+            limit = nextPageSize(pageBytes, documents.size());
         }
         flushBatch(database, collection);
         err.println(database + "." + collection + ": " + skip + " documents");
     }
 
-    private void append(String database, String collection, JsonObject document) throws IOException {
+    public static int nextPageSize(long pageBytes, int documents) {
+        final var bytesPerDocument = Math.max(1L, pageBytes / Math.max(1, documents));
+        return (int) Math.clamp(PAGE_TARGET_BYTES / bytesPerDocument, 1L, MAX_PAGE_SIZE);
+    }
+
+    private int append(String database, String collection, JsonObject document) throws IOException {
         final var size = eJson.toJsonBytes(document, SIZE_HINT).length;
         if (!batch.isEmpty() && batchBytes + size > BATCH_BYTES) {
             flushBatch(database, collection);
         }
         batch.add(document);
         batchBytes += size;
+        return size;
     }
 
     private void flushBatch(String database, String collection) throws IOException {

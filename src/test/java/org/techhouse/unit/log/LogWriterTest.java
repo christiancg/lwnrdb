@@ -10,7 +10,9 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
 import org.junit.jupiter.api.AfterEach;
@@ -273,6 +275,76 @@ public class LogWriterTest {
         } finally {
             java.nio.file.Files.deleteIfExists(keptRolled.toPath());
             java.nio.file.Files.deleteIfExists(expiredRolled.toPath());
+        }
+    }
+
+    private static void setClock(LocalDate day) throws Exception {
+        TestUtils.setPrivateStaticField(LogWriter.class, "clock", Clock
+                .fixed(day.atStartOfDay(ZoneId.systemDefault()).plusHours(12).toInstant(), ZoneId.systemDefault()));
+    }
+
+    private static void restoreClock() throws Exception {
+        LogWriter.flushAndClose();
+        TestUtils.setPrivateStaticField(LogWriter.class, "clock", Clock.systemDefaultZone());
+    }
+
+    private static File dated(LocalDate day) {
+        return new File(TestGlobals.LOG_PATH, day.format(DateTimeFormatter.ISO_DATE) + Globals.LOG_FILE_EXTENSION);
+    }
+
+    @Test
+    public void dateRolloverPrunesOldFiles() throws Exception {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxLogFiles", 1);
+        final var firstDay = LocalDate.of(2100, 1, 10);
+        try {
+            LogWriter.flushAndClose();
+            setClock(firstDay);
+            LogWriter.writeLogEntry("written on the first day");
+            final var expired = dated(firstDay.minusDays(5));
+            assertTrue(expired.createNewFile());
+
+            setClock(firstDay.plusDays(1));
+            LogWriter.writeLogEntry("written after midnight");
+
+            assertFalse(expired.exists(), "a file that fell out of the window is pruned without a restart");
+            assertTrue(dated(firstDay).exists(), "yesterday is still inside the window");
+            assertTrue(Files.readString(dated(firstDay.plusDays(1)).toPath()).contains("written after midnight"));
+        } finally {
+            restoreClock();
+        }
+    }
+
+    @Test
+    public void pruningAnUnwritableLogFolderKeepsLogging() throws Exception {
+        assumeTrue(OwnerOnlyFiles.supported());
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxLogFiles", 1);
+        final var firstDay = LocalDate.of(2100, 2, 10);
+        final var folder = new File(TestGlobals.LOG_PATH).toPath();
+        final var stdout = System.out;
+        final var captured = new ByteArrayOutputStream();
+        try {
+            LogWriter.flushAndClose();
+            setClock(firstDay);
+            LogWriter.writeLogEntry("first day");
+            final var expired = dated(firstDay.minusDays(5));
+            final var nextDay = dated(firstDay.plusDays(1));
+            assertTrue(expired.createNewFile());
+            assertTrue(nextDay.createNewFile());
+            Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
+            assumeTrue(!expired.delete(), "running as a user that ignores folder permissions");
+            System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
+            setClock(firstDay.plusDays(1));
+
+            LogWriter.writeLogEntry("next day");
+
+            System.setOut(stdout);
+            assertTrue(expired.exists());
+            assertTrue(Files.readString(nextDay.toPath()).contains("next day"));
+            assertTrue(captured.toString(StandardCharsets.UTF_8).contains("Error deleting old log file"));
+        } finally {
+            System.setOut(stdout);
+            Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"));
+            restoreClock();
         }
     }
 }

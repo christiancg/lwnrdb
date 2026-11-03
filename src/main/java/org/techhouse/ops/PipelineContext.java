@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.host.ScriptErrorNames.TIMED_OUT_MESSAGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,7 @@ import org.techhouse.simplejs.host.PipelineHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
 public final class PipelineContext implements ReadObserver, AutoCloseable {
+    public static final int POINT_SCANS_BEFORE_PIN = 8;
     private static final long CHECK_EVERY = 256L;
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final CompiledScriptCache compiledScriptCache = IocContainer.get(CompiledScriptCache.class);
@@ -35,6 +37,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
 
     private final Map<String, ScriptCallable> callables = new HashMap<>();
     private final Map<String, List<PkIndexEntry>> pinnedPk = new HashMap<>();
+    private final Map<String, Integer> pointScannedFetches = new HashMap<>();
     private int transientPins;
     private final long scriptDeadline = System.currentTimeMillis() + configuration.getAggregationScriptTimeoutMs();
     private final boolean scriptsAllowed;
@@ -45,6 +48,8 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     private long work;
     private long nextCheck = CHECK_EVERY;
     private long resultBytes;
+    private final List<HeldRows> deferringHeld = new ArrayList<>();
+    private long deferredHeldBytes;
     private boolean pointHold;
 
     private PipelineContext(long timeoutMs, long maxResultBytes, AnalyzeContext analyze, boolean scriptsAllowed) {
@@ -121,9 +126,37 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     }
 
     public void chargeResult(long bytes) {
+        if (deferredHeldBytes > 0 && resultBytes + deferredHeldBytes + bytes > maxResultBytes) {
+            settleDeferredHeld();
+        }
         resultBytes += bytes;
         if (resultBytes > maxResultBytes) {
             throw new AggregateLimitException(ErrorCode.AGGREGATE_RESULT_TOO_LARGE);
+        }
+    }
+
+    public void chargeHeld(long bytes) {
+        chargeResult(bytes);
+    }
+
+    boolean defersHeld(HeldRows held, long atMostBytes) {
+        if (resultBytes + deferredHeldBytes + atMostBytes > maxResultBytes) {
+            return false;
+        }
+        if (!deferringHeld.contains(held)) {
+            deferringHeld.add(held);
+        }
+        deferredHeldBytes += atMostBytes;
+        return true;
+    }
+
+    void settledHeld(long atMostBytes) {
+        deferredHeldBytes -= atMostBytes;
+    }
+
+    private void settleDeferredHeld() {
+        while (!deferringHeld.isEmpty()) {
+            deferringHeld.removeLast().settle();
         }
     }
 
@@ -161,6 +194,12 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         if (pinned != null) {
             return pinned;
         }
+        if (cache.pkServedByPointScans(dbName, collName)) {
+            return pointScannedFetches.merge(collectionIdentifier, 1, Integer::sum) > POINT_SCANS_BEFORE_PIN
+                    && cache.userCache().tryPinTransientPkIndex()
+                            ? pinnedPointScannedPk(dbName, collName, collectionIdentifier)
+                            : null;
+        }
         final var rows = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         if (cache.userCache().isResidentPkIndex(dbName, collName, rows)) {
             pinnedPk.put(collectionIdentifier, rows);
@@ -169,6 +208,19 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
             pinnedPk.put(collectionIdentifier, rows);
         }
         return rows;
+    }
+
+    private List<PkIndexEntry> pinnedPointScannedPk(String dbName, String collName, String collectionIdentifier)
+            throws IOException {
+        try {
+            final var rows = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            transientPins++;
+            pinnedPk.put(collectionIdentifier, rows);
+            return rows;
+        } catch (IOException | RuntimeException e) {
+            cache.userCache().unpinTransientPkIndex();
+            throw e;
+        }
     }
 
     public ScriptCallable callableFor(String source) {

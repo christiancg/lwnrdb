@@ -104,8 +104,8 @@ public class DirtyMarkerDurabilityTest {
         final var generation = pendingIndexWrites.markRecovered(TestGlobals.DB, TestGlobals.COLL, List.of("adopted"));
         IocContainer.get(FileSystem.class).appendIndexLog(TestGlobals.DB, TestGlobals.COLL, "name", "String",
                 List.of(new IndexLogChange(FieldIndexEntry.fileKeyOf("x"), List.of("adopted"), List.of())),
-                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "x",
-                        new HashSet<>(Set.of("adopted")))));
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "x", new HashSet<>(Set.of("adopted")))),
+                false);
         assertTrue(markerFile().exists());
         recorder.clear();
         return generation;

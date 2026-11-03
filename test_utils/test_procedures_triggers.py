@@ -45,6 +45,13 @@ BUSY_TRIGGERED_COLL = "busy_triggered"
 BUSY_AUDIT = "busy_audit"
 BUSY_TRIGGERED_DOCS = 300
 BUSY_CALLERS = 3
+CAP_DB = "proc_cap_db"
+CAP_RUNS_COLL = "capped_runs"
+DEAD_LETTER_CAP = 3
+CAPPED_DEAD_LETTERS = 6
+MANY_DEAD_COLL = "many_dead"
+MANY_DEAD_RUNS = 1000
+SWEEP_WAIT_S = 75.0
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -2379,6 +2386,104 @@ def test_cascade_deletes(conn: Conn, work_dir: str):
     check_result("runs the new body", conn.call("doomed", db="proc_drop_db"), 99)
 
 
+def dead_runs_of(conn: Conn, trigger_name: str, database: str) -> list:
+    return [run for run in trigger_runs(conn, "DEAD")
+            if run.get("trigger") == trigger_name and run.get("database") == database]
+
+
+def cap_log_lines(log_path: str) -> int:
+    with open(log_path, encoding="utf-8", errors="replace") as log:
+        lines = sum(1 for line in log if f"Database '{CAP_DB}' holds" in line
+                    and "triggerDeadLetterMaxRuns" in line)
+    return lines
+
+
+def test_dead_letter_cap_drops_oldest(conn: Conn, log_path: str):
+    section(f"triggerDeadLetterMaxRuns={DEAD_LETTER_CAP} keeps the newest dead letters of a database")
+    conn.send({"type": "DROP_DATABASE", "databaseName": CAP_DB})
+    check_status("create the capped database", conn.send({"type": "CREATE_DATABASE", "databaseName": CAP_DB}), "OK")
+    check_status("create its collection", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": CAP_DB, "collectionName": CAP_RUNS_COLL}), "OK")
+    check_status("a procedure that always throws",
+                 conn.save_procedure("cap_boom", "throw new Error('cap boom');", db=CAP_DB), "OK")
+    check_status("a trigger running it", conn.save_trigger("capping", ["CREATED"], "cap_boom", coll=CAP_RUNS_COLL,
+                                                           db=CAP_DB), "OK")
+    died = []
+    for index in range(CAPPED_DEAD_LETTERS):
+        check_status(f"write {index} fires the failing trigger", conn.save_doc({"_id": f"cap{index}"},
+                                                                               coll=CAP_RUNS_COLL, db=CAP_DB), "OK")
+        fresh = await_latest(lambda: [run.get("runId") for run in dead_runs_of(conn, "capping", CAP_DB)
+                                      if run.get("runId") not in died], bool, 30.0, 0.2)
+        check(f"write {index} is dead-lettered", len(fresh) == 1, f"new dead letters {fresh!r}")
+        died.extend(fresh)
+    kept = sorted(run.get("runId") for run in dead_runs_of(conn, "capping", CAP_DB))
+    check(f"only the newest {DEAD_LETTER_CAP} dead letters are kept", kept == sorted(died[-DEAD_LETTER_CAP:]),
+          f"kept={kept!r} died in order={died!r}")
+    check("the cap is logged once for the episode", cap_log_lines(log_path) == 1,
+          f"{cap_log_lines(log_path)} cap lines in the log")
+    listed = len(trigger_runs(conn))
+    pending = node_stats(conn).get("triggers", {}).get("pendingRuns")
+    check("pendingRuns still counts every kept record", pending == listed, f"pendingRuns={pending} listed={listed}")
+    check_status("drop the capped database", conn.send({"type": "DROP_DATABASE", "databaseName": CAP_DB}), "OK")
+
+
+def exhausted_counts(log_path: str) -> list:
+    counts = []
+    with open(log_path, encoding="utf-8", errors="replace") as log:
+        for line in log:
+            marker = " trigger run(s) exhausted their attempts"
+            if marker in line:
+                head = line.split(marker)[0].split()
+                if head and head[-1].isdigit():
+                    counts.append(int(head[-1]))
+    return counts
+
+
+def arrange_many_dead_runs(conn: Conn):
+    section(f"{MANY_DEAD_RUNS} dead-lettered runs")
+    check_status("create the collection", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": MANY_DEAD_COLL}), "OK")
+    check_status("a procedure that always throws", conn.save_procedure("many_boom", "throw new Error('many');"), "OK")
+    check_status("a trigger running it", conn.save_trigger("many_dead", ["CREATED"], "many_boom",
+                                                           coll=MANY_DEAD_COLL), "OK")
+    check_status(f"one BULK_SAVE fires {MANY_DEAD_RUNS} runs", conn.send(bulk_of("many", MANY_DEAD_RUNS,
+                                                                              MANY_DEAD_COLL)), "OK")
+    dead = await_latest(lambda: len(dead_runs_of(conn, "many_dead", DB)), lambda count: count >= MANY_DEAD_RUNS,
+                        180.0, 1.0)
+    check(f"all {MANY_DEAD_RUNS} runs are dead-lettered", dead == MANY_DEAD_RUNS, f"dead={dead}")
+    recorded = await_latest(lambda: history_count(conn, "many_dead"), lambda count: count >= MANY_DEAD_RUNS,
+                            60.0, 0.5)
+    check("every attempt reached the run history", recorded == MANY_DEAD_RUNS, f"history rows={recorded}")
+    return recorded
+
+
+def test_sweep_with_many_dead_runs_is_cheap(conn: Conn, log_path: str, history_before: int):
+    section("With many dead letters, startup, dead-lettering and the sweep keep working from the run index")
+    check("every dead letter survived the restart", len(dead_runs_of(conn, "many_dead", DB)) == MANY_DEAD_RUNS,
+          f"dead={len(dead_runs_of(conn, 'many_dead', DB))}")
+    check("startup replayed no dead letter", history_count(conn, "many_dead") == history_before,
+          f"history {history_before} -> {history_count(conn, 'many_dead')}")
+    listed = len(trigger_runs(conn))
+    pending = node_stats(conn).get("triggers", {}).get("pendingRuns")
+    check("pendingRuns equals the listed runs", pending == listed, f"pendingRuns={pending} listed={listed}")
+    check_status("one more failing write", conn.save_doc({"_id": "many-extra"}, coll=MANY_DEAD_COLL), "OK")
+    extra = await_latest(lambda: len(dead_runs_of(conn, "many_dead", DB)),
+                         lambda count: count > MANY_DEAD_RUNS, 30.0, 0.3)
+    check("it is dead-lettered beside the others", extra == MANY_DEAD_RUNS + 1, f"dead={extra}")
+    at_start = len(exhausted_counts(log_path))
+    swept = bu.wait_until(lambda: len(exhausted_counts(log_path)) > at_start, SWEEP_WAIT_S, 1.0)
+    check("the periodic sweep inspected the dead letters", bool(swept), f"counts={exhausted_counts(log_path)!r}")
+    check("and counted every one of them", exhausted_counts(log_path)[-1:] >= [MANY_DEAD_RUNS + 1],
+          f"counts={exhausted_counts(log_path)!r}")
+    check("the sweep removed none of them (retention and cap not reached)",
+          len(dead_runs_of(conn, "many_dead", DB)) == MANY_DEAD_RUNS + 1,
+          f"dead={len(dead_runs_of(conn, 'many_dead', DB))}")
+    check_status("drop the collection", conn.send(
+        {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": MANY_DEAD_COLL}), "OK")
+    check("its dead letters went with it", not dead_runs_of(conn, "many_dead", DB),
+          f"dead={len(dead_runs_of(conn, 'many_dead', DB))}")
+
+
 def test_switches_off(conn: Conn):
     section("Master switches off")
     check_code("scriptsEnabled=false refuses a call", conn.call("greet"), "FORBIDDEN", "403-2")
@@ -2547,6 +2652,25 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_retention_empties_history(conn)
+        bu.stop_server(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            many_dead_history = arrange_many_dead_runs(conn)
+        bu.stop_server(proc)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_sweep_with_many_dead_runs_is_cheap(conn, log_path, many_dead_history)
+        bu.stop_server(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True,
+                     triggerDeadLetterMaxRuns=DEAD_LETTER_CAP)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_dead_letter_cap_drops_oldest(conn, log_path)
         bu.stop_server(proc)
         proc = None
 

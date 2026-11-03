@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.techhouse.test.ClusterTestHarness.node;
 
@@ -23,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AntiEntropyService;
@@ -31,6 +33,7 @@ import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.admin.AdminRecord;
+import org.techhouse.cluster.admin.AdminTombstoneDigest;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
@@ -44,6 +47,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -404,5 +408,59 @@ public class AdminAntiEntropyServiceTest {
         } finally {
             service.stop();
         }
+    }
+
+    private List<String> shippedTombstones(AdminSnapshotPayload request) throws Exception {
+        return service.buildSnapshot(request).getRecords().stream().filter(AdminRecord::isTombstone)
+                .map(AdminRecord::rawKey).toList();
+    }
+
+    @Test
+    public void test_snapshot_ships_only_differing_buckets() throws Exception {
+        for (var i = 0; i < 40; i++) {
+            AdminStamp.tombstoneAt(AdminRecordKey.database("gone" + i), clock.next());
+        }
+        final var local = new HashMap<>(AdminStamp.tombstones());
+        final var changed = AdminRecordKey.database("gone7").id();
+        final var peer = new HashMap<>(local);
+        peer.put(changed, local.get(changed) - 1);
+        final var digest = AdminTombstoneDigest.of(peer);
+        final var bucket = AdminTombstoneDigest.bucketOf(changed, digest.bucketCount());
+
+        final var shipped = shippedTombstones(AdminSnapshotPayload.request(digest.bucketCount(), digest.summaries()));
+
+        assertTrue(shipped.contains(changed), String.valueOf(shipped));
+        assertTrue(shipped.size() < local.size(), String.valueOf(shipped));
+        shipped.forEach(key -> assertEquals(bucket, AdminTombstoneDigest.bucketOf(key, digest.bucketCount()), key));
+        final var same = AdminTombstoneDigest.of(local);
+        assertTrue(shippedTombstones(AdminSnapshotPayload.request(same.bucketCount(), same.summaries())).isEmpty());
+        assertEquals(local.size(), shippedTombstones(null).size(), "a peer that sends no digest gets every tombstone");
+        assertEquals(local.size(), shippedTombstones(AdminSnapshotPayload.request(3, same.summaries())).size(),
+                "an invalid bucket count is treated as no digest");
+        assertTrue(
+                service.buildSnapshot(AdminSnapshotPayload.request(same.bucketCount(), same.summaries())).getRecords()
+                        .stream()
+                        .anyMatch(record -> record.rawKey().equals(AdminRecordKey.database(TestGlobals.DB).id())),
+                "live records always travel");
+
+        stubSnapshot();
+        service.reconcile();
+        final var sent = ArgumentCaptor.forClass(ClusterMessage.class);
+        verify(mockPool).request(any(), sent.capture(), anyLong());
+        assertEquals(same.summaries(), sent.getValue().getAdminSnapshot().getTombstoneBuckets());
+    }
+
+    @Test
+    public void test_a_superseded_tombstone_travels_and_is_kept_so_the_digests_converge() throws Exception {
+        final var key = AdminRecordKey.database(TestGlobals.DB);
+        stubSnapshot(AdminRecord.tombstone(key, 2L));
+
+        service.reconcile();
+
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB), "an older tombstone never removes a newer record");
+        assertEquals(2L, AdminStamp.tombstones().get(key.id()));
+        final var empty = AdminTombstoneDigest.of(new HashMap<>());
+        assertTrue(shippedTombstones(AdminSnapshotPayload.request(empty.bucketCount(), empty.summaries()))
+                .contains(key.id()), "a peer lacking the superseded tombstone is sent it");
     }
 }

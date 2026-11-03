@@ -353,6 +353,11 @@ public class ResourceLocking {
         return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.WRITE);
     }
 
+    public boolean tryLockIndex(String dbName, String collName, String fieldName, long timeoutMillis)
+            throws InterruptedException {
+        return tryAcquireWithin(getIndexIdentifier(dbName, collName, fieldName), Mode.WRITE, timeoutMillis);
+    }
+
     public boolean tryLockIndexRead(String dbName, String collName, String fieldName) {
         return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.READ);
     }

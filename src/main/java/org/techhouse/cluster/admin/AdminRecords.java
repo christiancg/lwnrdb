@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -29,7 +30,43 @@ public final class AdminRecords {
     }
 
     public static List<AdminRecord> all() throws IOException {
+        return withTombstonesIn(AdminStamp.tombstones(), null, false);
+    }
+
+    public static List<AdminRecord> snapshotFor(int peerBucketCount, List<String> peerBuckets) throws IOException {
         final var tombstones = AdminStamp.tombstones();
+        if (!AdminTombstoneDigest.isValid(peerBucketCount, peerBuckets)) {
+            return withTombstonesIn(tombstones, null, true);
+        }
+        final var differing = AdminTombstoneDigest.of(tombstones, peerBucketCount).differingFrom(peerBuckets);
+        return withTombstonesIn(tombstones,
+                key -> differing.contains(AdminTombstoneDigest.bucketOf(key, peerBucketCount)), true);
+    }
+
+    private static List<AdminRecord> withTombstonesIn(Map<String, Long> tombstones, Predicate<String> shipped,
+            boolean withSuperseded) {
+        final var keys = liveKeys();
+        for (final var id : tombstones.keySet()) {
+            if (shipped == null || shipped.test(id)) {
+                keys.add(AdminRecordKey.parse(id));
+            }
+        }
+        final var records = new ArrayList<AdminRecord>();
+        for (final var key : keys.stream().distinct().toList()) {
+            final var record = current(key, tombstones);
+            final var tombstoneShipped = shipped == null || shipped.test(key.id());
+            if (record != null && (!record.isTombstone() || tombstoneShipped)) {
+                records.add(record);
+            }
+            final var superseded = tombstones.get(key.id());
+            if (withSuperseded && tombstoneShipped && superseded != null && record != null && !record.isTombstone()) {
+                records.add(AdminRecord.tombstone(key, superseded));
+            }
+        }
+        return records;
+    }
+
+    private static List<AdminRecordKey> liveKeys() {
         final var keys = new ArrayList<AdminRecordKey>();
         for (final var dbName : cache.getUserDatabaseNames()) {
             keys.add(AdminRecordKey.database(dbName));
@@ -46,15 +83,7 @@ public final class AdminRecords {
         for (final var user : cache.getAllAdminUserEntries()) {
             keys.add(AdminRecordKey.user(user.get_id()));
         }
-        tombstones.keySet().forEach(id -> keys.add(AdminRecordKey.parse(id)));
-        final var records = new ArrayList<AdminRecord>();
-        for (final var key : keys.stream().distinct().toList()) {
-            final var record = current(key, tombstones);
-            if (record != null) {
-                records.add(record);
-            }
-        }
-        return records;
+        return keys;
     }
 
     public static List<AdminRecord> of(List<AdminRecordKey> keys) throws IOException {

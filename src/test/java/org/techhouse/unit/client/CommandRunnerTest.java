@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.client.ClientException;
 import org.techhouse.client.CommandRunner;
+import org.techhouse.client.Connection;
 import org.techhouse.unit.client.support.FakeLineServer;
 
 public class CommandRunnerTest {
@@ -47,6 +48,47 @@ public class CommandRunnerTest {
         final var lines = printed().lines().toList();
         assertEquals(2, lines.size());
         assertEquals(FakeLineServer.ok("LIST_DATABASES"), lines.getFirst());
+    }
+
+    @Test
+    public void test_exec_prints_raw_line() throws IOException {
+        final var raw = "{ \"databases\" : [ {\"status\":\"ERROR\"} ], \"message\":\"a\\\"b\", "
+                + "\"type\":\"LIST_DATABASES\",\"status\":\"OK\",\"errorCode\":null }";
+        server.reply("LIST_DATABASES", raw);
+        try (var connection = server.connect()) {
+            final var result = new CommandRunner(connection, out, true, false)
+                    .run(List.of("{\"type\":\"LIST_DATABASES\"}").iterator());
+
+            assertEquals(ClientException.OK, result);
+        }
+        assertEquals(List.of(raw), printed().lines().toList());
+    }
+
+    @Test
+    public void test_exec_holds_a_retryable_reply_and_prints_only_the_retry() throws IOException {
+        server.reply("SAVE", FakeLineServer.error("SAVE", "ERROR", "503-16"), FakeLineServer.ok("SAVE"));
+        try (var connection = server.connect()) {
+            final var result = new CommandRunner(connection, out, true, false)
+                    .run(List.of("{\"type\":\"SAVE\"}").iterator());
+
+            assertEquals(ClientException.OK, result);
+        }
+        assertEquals(List.of(FakeLineServer.ok("SAVE")), printed().lines().toList());
+    }
+
+    @Test
+    public void test_exec_streams_a_reply_larger_than_the_hold() throws IOException {
+        final var results = "\"results\":[\"" + "x".repeat(3 * Connection.HELD_REPLY_BYTES) + "\"]";
+        final var failed = "{" + results + ",\"type\":\"AGGREGATE\",\"status\":\"ERROR\",\"errorCode\":\"503-16\"}";
+        server.reply("AGGREGATE", failed);
+        try (var connection = server.connect()) {
+            final var result = new CommandRunner(connection, out, true, false)
+                    .run(List.of("{\"type\":\"AGGREGATE\"}").iterator());
+
+            assertEquals(ClientException.FAILED, result);
+        }
+        assertEquals(List.of(failed), printed().lines().toList());
+        assertEquals(1, server.types().stream().filter("AGGREGATE"::equals).count());
     }
 
     @Test

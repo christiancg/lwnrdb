@@ -43,6 +43,7 @@ public final class IndexWindowWalk implements Iterator<String> {
     private List<String> page = new ArrayList<>();
     private int at;
     private boolean exhausted;
+    private boolean startedWithPendingIds;
     private FieldIndexEntry<Object> cursor;
     private int cursorOffset;
     private int cursorModifications;
@@ -67,11 +68,13 @@ public final class IndexWindowWalk implements Iterator<String> {
             return null;
         }
         final var operands = operandsOf(operator);
-        if (operands == null) {
+        if (operands == null || cache.answersFromIndexFile(dbName, collName, fieldName,
+                IndexKind.scalarIndexClassOf(operands.getFirst()))) {
             return null;
         }
         final var walk = new IndexWindowWalk(dbName, collName, operator, operands, Math.clamp(firstPage, 1, MAX_PAGE));
         for (final var id : PendingWriteReconciler.pendingIds(dbName, collName)) {
+            walk.startedWithPendingIds = true;
             if (walk.emitted.add(id)) {
                 walk.page.add(id);
             }
@@ -119,6 +122,10 @@ public final class IndexWindowWalk implements Iterator<String> {
             operands.add(operand);
         }
         return operands;
+    }
+
+    public boolean startedWithoutPendingIds() {
+        return !startedWithPendingIds;
     }
 
     @Override

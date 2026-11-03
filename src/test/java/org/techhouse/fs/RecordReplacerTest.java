@@ -256,7 +256,7 @@ public class RecordReplacerTest {
     }
 
     @Test
-    public void walRewriteBegunFiresAfterTheBeginAndBeforeTheRename() throws Exception {
+    public void walRewriteBegunFiresAfterTheIntentAndTheBeginAndBeforeTheRename() throws Exception {
         rf.replacer.delete(rf.fx.indexed("a"));
         final var lengthBefore = rf.fx.page(0).length();
         final var observed = haltRecording(FaultPoint.WAL_REWRITE_BEGUN,
@@ -267,7 +267,7 @@ public class RecordReplacerTest {
 
         rf.vacuum.vacuum(DB, COLL, 0, PageRows.of(rf.fx.store, null, DB, COLL, 0));
 
-        assertEquals(List.of("begun=true compacted=false intents=0"), observed);
+        assertEquals(List.of("begun=true compacted=false intents=1"), observed);
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
     }
 

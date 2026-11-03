@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mockStatic;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,7 +27,12 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.PageRowWriteBack;
+import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.DropCollectionRequest;
+import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -36,6 +42,7 @@ public class AdminUsageBatchTest {
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private RecordingForcer recorder;
 
     @BeforeEach
@@ -157,5 +164,72 @@ public class AdminUsageBatchTest {
         assertEquals(List.of(counter), dirty, "a counter whose flush failed is never lost");
         AdminOperationHelper.flushCollectionUsage(dirty);
         assertNotNull(storedRow("requeued"));
+    }
+
+    private List<UsageCounter> touchedFields(int count) {
+        final var counters = new ArrayList<UsageCounter>();
+        for (var i = 0; i < count; i++) {
+            counters.add(touched(AccessKind.FIELD_INDEX, "field" + i));
+        }
+        return counters;
+    }
+
+    private String fieldRow(int index) {
+        return AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "field" + index);
+    }
+
+    @Test
+    public void dropDeletesUsageRowsInOneWrite() throws Exception {
+        AdminOperationHelper.flushCollectionUsage(touchedFields(300));
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "otherColl")).getStatus());
+        memoryManagement.recordAccess(AccessKind.COLLECTION, TestGlobals.DB, "otherColl", null);
+        AdminOperationHelper.flushCollectionUsage(
+                List.of(memoryManagement.getCounter(AccessKind.COLLECTION, TestGlobals.DB, "otherColl", null)));
+        final var otherRow = AdminCollectionUsageEntry.buildId(TestGlobals.DB, "otherColl", "");
+        final var before = usageLogForces();
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL)).getStatus());
+
+        assertEquals(1, usageLogForces() - before, "300 usage rows go in one forced record");
+        for (var i = 0; i < 300; i += 37) {
+            assertNull(cache.getPkIndexCollectionUsage(fieldRow(i)));
+            assertEquals(0, rowsOnDisk(fieldRow(i)));
+        }
+        assertNotNull(cache.getPkIndexCollectionUsage(otherRow), "another collection's row is kept");
+    }
+
+    @Test
+    public void dropDatabaseDeletesEveryUsageRowOfIt() throws Exception {
+        AdminOperationHelper.flushCollectionUsage(touchedFields(5));
+
+        assertEquals(OperationStatus.OK, processor.processMessage(new DropDatabaseRequest(TestGlobals.DB)).getStatus());
+
+        for (var i = 0; i < 5; i++) {
+            assertNull(cache.getPkIndexCollectionUsage(fieldRow(i)));
+            assertEquals(0, rowsOnDisk(fieldRow(i)));
+        }
+    }
+
+    @Test
+    public void cleanupDeletesExpiredInOneWrite() throws Exception {
+        AdminOperationHelper.flushCollectionUsage(touchedFields(300));
+        final var before = usageLogForces();
+
+        AdminOperationHelper.cleanupCollectionUsage(TimeUnit.DAYS.toMillis(1));
+
+        assertEquals(0, usageLogForces() - before, "nothing expired, nothing written");
+        assertNotNull(cache.getPkIndexCollectionUsage(fieldRow(0)));
+
+        AdminOperationHelper.cleanupCollectionUsage(-TimeUnit.MINUTES.toMillis(1));
+
+        assertEquals(1, usageLogForces() - before, "300 expired rows go in one forced record");
+        for (var i = 0; i < 300; i += 37) {
+            assertNull(cache.getPkIndexCollectionUsage(fieldRow(i)));
+            assertEquals(0, rowsOnDisk(fieldRow(i)));
+            assertNull(
+                    memoryManagement.getCounter(AccessKind.FIELD_INDEX, TestGlobals.DB, TestGlobals.COLL, "field" + i));
+        }
     }
 }

@@ -43,6 +43,12 @@ public class FaultInjector {
         }
     }
 
+    public void at(FaultPoint point, String dbName, String collName) {
+        if (enabled) {
+            at(point, dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName);
+        }
+    }
+
     public boolean dropsAt(FaultPoint point, String subject) {
         if (!enabled) {
             return false;

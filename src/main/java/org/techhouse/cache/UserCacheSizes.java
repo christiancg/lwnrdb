@@ -18,7 +18,7 @@ final class UserCacheSizes {
     private final Map<String, RefusedPk> refusedPk = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Long>> refusedFieldIndexes = new ConcurrentHashMap<>();
 
-    record RefusedPk(long bytesPerEntry, long rows) {
+    record RefusedPk(long bytesPerEntry, long rows, boolean displaced) {
         long bytes() {
             return bytesPerEntry * rows;
         }
@@ -122,7 +122,11 @@ final class UserCacheSizes {
     }
 
     void refusePk(String collId, long bytesPerEntry, long rows) {
-        refusedPk.put(collId, new RefusedPk(bytesPerEntry, rows));
+        refusedPk.put(collId, new RefusedPk(bytesPerEntry, rows, false));
+    }
+
+    void displacePk(String collId, long bytesPerEntry, long rows) {
+        refusedPk.put(collId, new RefusedPk(bytesPerEntry, rows, true));
     }
 
     RefusedPk refusedPk(String collId) {

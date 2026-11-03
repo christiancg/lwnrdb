@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
+import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
@@ -135,7 +136,7 @@ public final class CountOperatorHelper {
         return switch (operand) {
             case JsonBoolean bool -> bool.getValue();
             case JsonNumber number -> number.getValue();
-            case JsonCustom<?> custom -> custom;
+            case JsonCustom<?> custom -> IndexKind.valueKeysCandidatesOnly(custom) ? null : custom;
             case JsonString string -> string.getValue();
             case null, default -> null;
         };

@@ -26,7 +26,28 @@ public final class IdleLogCheckpoint {
         }
     };
 
+    private static final CollectionTryLock COLLECTION_READ_LOCKS = new CollectionTryLock() {
+        @Override
+        public boolean tryLock(String dbName, String collName) {
+            try {
+                return locks.tryLockRead(dbName, collName, Globals.WAL_BACKGROUND_CHECKPOINT_LOCK_WAIT_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        @Override
+        public void unlock(String dbName, String collName) {
+            locks.releaseRead(dbName, collName);
+        }
+    };
+
     private IdleLogCheckpoint() {
+    }
+
+    public static void runRequested() {
+        fs.checkpointRequestedWriteAheadLogs(COLLECTION_READ_LOCKS);
     }
 
     public static int runDue(long now) {
