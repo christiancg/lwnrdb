@@ -2,7 +2,6 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -11,6 +10,7 @@ import java.util.TreeMap;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
+import org.techhouse.fs.io.ChunkedChannelWrites;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -292,11 +292,7 @@ final class WalPlan {
 
     static void writeAt(File file, long offset, byte[] bytes, int from, int length) throws IOException {
         try (var channel = FileChannel.open(file.toPath(), StandardOpenOption.WRITE)) {
-            final var buffer = ByteBuffer.wrap(bytes, from, length);
-            var position = offset;
-            while (buffer.hasRemaining()) {
-                position += channel.write(buffer, position);
-            }
+            ChunkedChannelWrites.writeAt(channel, offset, bytes, from, length);
         }
     }
 }

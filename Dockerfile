@@ -46,4 +46,4 @@ VOLUME /app/logs
 EXPOSE ${PORT}
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["java", "-XX:+UseG1GC", "-XX:MaxRAMPercentage=70", "-jar", "app.jar"]
+CMD ["java", "-XX:+UseG1GC", "-XX:MaxRAMPercentage=70", "-XX:G1PeriodicGCInterval=60000", "-Djdk.nio.maxCachedBufferSize=262144", "-jar", "app.jar"]

@@ -420,6 +420,10 @@ BIG = "big_rows"
 BIG_ROWS = 400
 BIG_ROW_BYTES = 100_000
 SMALL_CLIENT_HEAP = "-Xmx32m"
+WIDE = "client_wide"
+WIDE_ROWS = 160
+WIDE_ROW_BYTES = 60_000
+WIDE_LINE_BYTES = 1_000_000
 
 
 def registered_indexes(port: int, db: str, coll: str) -> list:
@@ -491,6 +495,35 @@ def test_exec_large_result_small_client_heap(cwd: str):
     send(SOURCE_PORT, {"type": "DROP_COLLECTION", "databaseName": CRM, "collectionName": BIG})
 
 
+def test_dump_restore_of_multi_megabyte_lines(cwd: str):
+    section("Dump and restore of multi-megabyte BULK_SAVE lines")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {WIDE}", c.send({"type": "CREATE_DATABASE", "databaseName": WIDE}), "OK")
+        check_status(f"create {WIDE}.{BIG}", c.send({"type": "CREATE_COLLECTION", "databaseName": WIDE,
+                                                     "collectionName": BIG}), "OK")
+        for start in range(0, WIDE_ROWS, 20):
+            check_status(f"save wide rows {start}..", c.send({
+                "type": "BULK_SAVE", "databaseName": WIDE, "collectionName": BIG,
+                "objects": [{"_id": f"w{i:04d}", "body": f"{i}:" + "w" * WIDE_ROW_BYTES, "n": i}
+                            for i in range(start, start + 20)]}), "OK")
+    dumped = client(cwd, "--dump", "--databases", WIDE)
+    check("--dump of the wide database exits 0", dumped.returncode == 0, dumped.stderr.decode())
+    longest = max(len(line) for line in dumped.stdout.splitlines())
+    check("its BULK_SAVE lines are several megabytes, past many write chunks", longest > WIDE_LINE_BYTES,
+          f"longest line {longest} bytes")
+    restored = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("--restore of the wide lines exits 0", restored.returncode == 0, restored.stderr.decode())
+    check("every wide document is restored byte for byte",
+          documents_of_port(TARGET_PORT, WIDE, BIG) == documents_of_port(SOURCE_PORT, WIDE, BIG)
+          and len(documents_of_port(TARGET_PORT, WIDE, BIG)) == WIDE_ROWS)
+    update = {"type": "SAVE", "databaseName": WIDE, "collectionName": BIG,
+              "object": {"_id": "w0007", "body": "rewritten", "n": 7}}
+    check_status("the restored collection takes a write", send(TARGET_PORT, update), "OK")
+    check("and reads it back", (document_of(TARGET_PORT, WIDE, BIG, "w0007") or {}).get("body") == "rewritten")
+    for port in (SOURCE_PORT, TARGET_PORT):
+        send(port, {"type": "DROP_DATABASE", "databaseName": WIDE})
+
+
 def test_hygiene(cwd: str, plain_dump: bytes):
     section("Hygiene")
     check("the client working directory stays empty", os.listdir(cwd) == [], str(os.listdir(cwd)))
@@ -544,6 +577,7 @@ def main():
         test_non_admin_dump_and_restore(client_dir)
         test_dump_restore_multi_field_index_round_trip(client_dir)
         test_exec_large_result_small_client_heap(client_dir)
+        test_dump_restore_of_multi_megabyte_lines(client_dir)
         test_hygiene(client_dir, plain_dump)
         bu.stop_server(source, port=SOURCE_PORT)
         source = None

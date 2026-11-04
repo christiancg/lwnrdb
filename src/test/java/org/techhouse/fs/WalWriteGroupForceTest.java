@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.fs.io.ChunkedChannelWrites;
 
 public class WalWriteGroupForceTest {
     private static final String DB = "forceDb";
@@ -102,6 +103,27 @@ public class WalWriteGroupForceTest {
 
             assertEquals(forced, wals(recorder));
             assertEquals(StorageFixture.record("a", "new-a"), rf.fx.readAt(rf.fx.indexed("a")));
+        }
+    }
+
+    @Test
+    public void test_a_grouped_multi_chunk_record_is_appended_whole_and_decodes() throws Exception {
+        try (var recorder = RecordingForcer.install(true)) {
+            final var wal = new WriteAheadLog(rf.fx.paths);
+            final var big = "z".repeat(5 * ChunkedChannelWrites.CHUNK_BYTES + 3);
+            final var recordsBefore = records();
+            wal.openGroup(DB, COLL);
+            rf.replace("b", big, 0, PagePlacement.APPEND);
+            rf.replace("c", "new-c", 0, PagePlacement.APPEND);
+            final var beforeForce = wals(recorder);
+
+            assertTrue(wal.forceGroup(DB, COLL));
+            assertTrue(wal.closeGroup(DB, COLL));
+
+            assertEquals(beforeForce + 1L, wals(recorder), "the group forced its log once");
+            assertEquals(recordsBefore + 2, records(), "both records decode, the large one across its chunks");
+            assertEquals(StorageFixture.record("b", big), rf.fx.readAt(rf.fx.indexed("b")));
+            assertEquals(StorageFixture.record("c", "new-c"), rf.fx.readAt(rf.fx.indexed("c")));
         }
     }
 

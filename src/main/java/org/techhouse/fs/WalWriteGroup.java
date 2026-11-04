@@ -2,13 +2,13 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.techhouse.fs.io.ChunkedChannelWrites;
 import org.techhouse.log.Logger;
 
 final class WalWriteGroup {
@@ -102,11 +102,7 @@ final class WalWriteGroup {
 
     static void appendTo(FileChannel appending, File log, byte[] header, byte[] payload, int payloadLength,
             boolean force) throws IOException {
-        final var buffers = new ByteBuffer[]{ByteBuffer.wrap(header), ByteBuffer.wrap(payload, 0, payloadLength)};
-        var unwritten = (long) header.length + payloadLength;
-        while (unwritten > 0) {
-            unwritten -= appending.write(buffers);
-        }
+        ChunkedChannelWrites.append(appending, header, payload, payloadLength);
         if (force) {
             SyncedWrites.content(appending, log.toPath());
         }
