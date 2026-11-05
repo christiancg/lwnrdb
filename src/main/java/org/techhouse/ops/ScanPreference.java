@@ -1,7 +1,6 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
 import org.techhouse.analyze.AnalyzeContext;
@@ -9,7 +8,6 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
@@ -64,26 +62,15 @@ final class ScanPreference {
                 final var value = CountOperatorHelper.scalarOperand(operator.getValue());
                 yield value == null ? OptionalLong.empty() : cache.countEquals(dbName, collName, fieldName, value);
             }
-            case NOT_EQUALS -> complementOf(scalarOperands(List.of(operator.getValue())), dbName, collName, fieldName);
+            case NOT_EQUALS -> complementOf(CountOperatorHelper.scalarOperands(List.of(operator.getValue())), dbName,
+                    collName, fieldName);
             case NOT_IN -> operator.getValue() instanceof JsonArray operands
-                    ? complementOf(scalarOperands(operands.asList()), dbName, collName, fieldName)
+                    ? complementOf(CountOperatorHelper.scalarOperands(operands.asList()), dbName, collName, fieldName)
                     : OptionalLong.empty();
             default -> RangeBounds.isNumericRange(operator)
                     ? cache.countInRange(dbName, collName, RangeBounds.fromLeaves(fieldName, List.of(operator)))
                     : OptionalLong.empty();
         };
-    }
-
-    private static List<Object> scalarOperands(List<JsonBaseElement> operands) {
-        final var values = new ArrayList<>(operands.size());
-        for (final var operand : operands) {
-            final var value = CountOperatorHelper.scalarOperand(operand);
-            if (value == null) {
-                return null;
-            }
-            values.add(value);
-        }
-        return values.isEmpty() ? null : values;
     }
 
     private static OptionalLong complementOf(List<Object> operands, String dbName, String collName, String fieldName)

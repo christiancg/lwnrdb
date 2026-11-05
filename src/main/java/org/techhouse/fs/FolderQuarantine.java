@@ -49,7 +49,7 @@ public final class FolderQuarantine {
     }
 
     private static boolean moveAside(File folder, String targetPrefix) {
-        PageTails.forgetUnder(folder);
+        PageLengths.forgetUnder(folder);
         final var stamp = targetPrefix + System.currentTimeMillis();
         var target = new File(folder.getParentFile(), stamp);
         for (var attempt = 1; target.exists(); attempt++) {

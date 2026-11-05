@@ -77,7 +77,7 @@ final class PowerLossFixture implements Forcer, AutoCloseable {
         final var root = new File(paths.dbPath());
         WriteAheadLog.forgetUnder(root);
         WriteIntentJournal.forgetUnder(root);
-        PageTails.forgetUnder(root);
+        PageLengths.forgetUnder(root);
         TombstoneStore.forgetUnder(root);
         PkIndexStore.forgetState(paths.pkIndexFile(dbName, collName));
     }

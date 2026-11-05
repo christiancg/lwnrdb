@@ -26,6 +26,10 @@ final class IndexKeyOrder {
         return new IndexKeyOrder(type);
     }
 
+    Class<?> type() {
+        return type;
+    }
+
     Object parse(byte[] bytes, int from, int to) {
         try {
             return FieldIndexEntry.parseIndexValue(new String(bytes, from, to - from, StandardCharsets.UTF_8), type);

@@ -29,7 +29,11 @@ final class PkIndexStore {
     private final FilePaths paths;
     private final WriteAheadLog wal;
 
-    record PkFileState(long length, FileTime modified, long liveRows, long deadRows) {
+    record PkFileState(long length, FileTime modified, long liveRows, long deadRows, boolean written) {
+        boolean missing() {
+            return !written() && modified() == null;
+        }
+
         boolean needsCompaction() {
             return deadRows >= Math.max(liveRows, Globals.PK_LOG_MIN_DEAD_ROWS);
         }
@@ -74,22 +78,23 @@ final class PkIndexStore {
     PkAppend prepareAppend(String dbName, String collName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collName);
         final var before = trustedOrHealed(dbName, collName, indexFile);
-        if (before == null || before.modified() == null) {
+        if (before == null || before.missing()) {
             OwnerOnly.ensureOwnerOnlyFile(indexFile.toPath());
             return new PkAppend(indexFile, before, indexFile.length());
         }
         return new PkAppend(indexFile, before, before.length());
     }
 
-    void appended(String dbName, String collName, PkAppend append, int rowCount, long liveDelta) {
+    void appended(String dbName, String collName, PkAppend append, long bytes, int rowCount, long liveDelta) {
         final var before = append.before();
         if (before == null || before.length() != append.offset()) {
             forget(append.file());
             return;
         }
-        final var after = remember(append.file(), before.liveRows() + liveDelta,
-                before.deadRows() + rowCount - liveDelta);
-        if (after != null && after.needsCompaction()) {
+        final var after = new PkFileState(append.offset() + bytes, null, before.liveRows() + liveDelta,
+                before.deadRows() + rowCount - liveDelta, true);
+        fileStates.put(append.file().getAbsolutePath(), after);
+        if (after.needsCompaction()) {
             compact(dbName, collName, append.file());
         }
     }
@@ -375,15 +380,18 @@ final class PkIndexStore {
     }
 
     private static PkFileState trusted(File indexFile) {
+        final var known = fileStates.get(indexFile.getAbsolutePath());
+        if (known != null && known.written()) {
+            return known;
+        }
         final BasicFileAttributes attributes;
         try {
             attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
         } catch (NoSuchFileException e) {
-            return new PkFileState(0L, null, 0L, 0L);
+            return new PkFileState(0L, null, 0L, 0L, false);
         } catch (IOException e) {
             return null;
         }
-        final var known = fileStates.get(indexFile.getAbsolutePath());
         if (known == null || known.modified() == null) {
             return null;
         }
@@ -392,15 +400,13 @@ final class PkIndexStore {
                 : null;
     }
 
-    private static PkFileState remember(File indexFile, long liveRows, long deadRows) {
+    private static void remember(File indexFile, long liveRows, long deadRows) {
         try {
             final var attributes = Files.readAttributes(indexFile.toPath(), BasicFileAttributes.class);
-            final var state = new PkFileState(attributes.size(), attributes.lastModifiedTime(), liveRows, deadRows);
-            fileStates.put(indexFile.getAbsolutePath(), state);
-            return state;
+            fileStates.put(indexFile.getAbsolutePath(),
+                    new PkFileState(attributes.size(), attributes.lastModifiedTime(), liveRows, deadRows, false));
         } catch (IOException e) {
             forget(indexFile);
-            return null;
         }
     }
 

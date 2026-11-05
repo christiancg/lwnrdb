@@ -49,7 +49,7 @@ final class RecordReplacer {
             if (vacuumed != null && targetPage == oldRow.getPage()) {
                 oldPosition = positionAfter(vacuumed, oldRow.getValue(), oldPosition);
             }
-            final var sourceLength = source.length();
+            final var sourceLength = PageLengths.lengthOf(source);
             requireWithinPage(oldRow, oldPosition, sourceLength);
             final var before = residentRows == null || occupancy == null ? null : occupancy.apply(oldRow.getPage());
             final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
@@ -79,7 +79,7 @@ final class RecordReplacer {
         final var page = paths.collectionPage(dbName, collName, oldRow.getPage());
         final var lock = FileLocks.lockWrite(page);
         try {
-            final var fileLength = page.length();
+            final var fileLength = PageLengths.lengthOf(page);
             requireWithinPage(oldRow, oldRow.getPosition(), fileLength);
             final var before = residentRows == null || occupancy == null ? null : occupancy.apply(oldRow.getPage());
             final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
@@ -105,8 +105,8 @@ final class RecordReplacer {
             final var lock = FileLocks.lockWrite(page);
             try {
                 final var after = occupancy.apply(pageNumber);
-                if (after != null
-                        && PagePlacement.vacuumsAfterDelete(after.liveBytes(), page.length(), maxPageSize())) {
+                if (after != null && PagePlacement.vacuumsAfterDelete(after.liveBytes(), PageLengths.lengthOf(page),
+                        maxPageSize())) {
                     vacuumWrittenPage(dbName, collName, pageNumber, residentRows, after, page, WrittenRows.NONE,
                             "Deleted records");
                 }
@@ -205,7 +205,7 @@ final class RecordReplacer {
             }
             final var vacuumed = vacuum.vacuumIfNeeded(dbName, collName, group.getKey(), appended, null, residentRows,
                     occupancy);
-            final var pageLength = files.get(group.getKey()).length();
+            final var pageLength = PageLengths.lengthOf(files.get(group.getKey()));
             for (final var index : group.getValue()) {
                 final var oldRow = entries.get(index).getIndex();
                 if (vacuumed != null) {

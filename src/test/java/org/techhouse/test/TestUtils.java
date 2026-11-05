@@ -82,6 +82,9 @@ public class TestUtils {
         TestUtils.setPrivateField(
                 TestUtils.getPrivateField(IocContainer.get(Cache.class), "absentIndexTypes", Object.class),
                 "byCollection", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(
+                TestUtils.getPrivateField(IocContainer.get(Cache.class), "scanRefusals", Object.class), "refusals",
+                new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pageCacheOf(adminCache), "pages", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(pageCacheOf(adminCache), "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());

@@ -53,7 +53,7 @@ final class WriteAheadLog {
     }
 
     private static WalLogState knownState(LogPath log) throws IOException {
-        return WalLogState.knownOrRead(log.file(), log.key(), log.dbName(), log.collName());
+        return stateOf(log);
     }
 
     Lock lock(String dbName, String collName) {
@@ -221,9 +221,10 @@ final class WriteAheadLog {
             }
             appended = true;
         } finally {
-            if (!appended && log.length() != state.knownLength) {
-                FileLocks.truncateTo(log, state.knownLength, "Could not roll back a partial append to the"
-                        + " write-ahead log " + log.getPath() + "; the next startup cuts it");
+            if (!appended && log.length() != state.knownLength
+                    && !FileLocks.truncateTo(log, state.knownLength, "Could not roll back a partial append to the"
+                            + " write-ahead log " + log.getPath() + "; the next startup cuts it")) {
+                state.reseedOnNextUse();
             }
         }
         //noinspection NonAtomicOperationOnVolatileField

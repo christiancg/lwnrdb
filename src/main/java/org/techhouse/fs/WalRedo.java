@@ -99,7 +99,7 @@ final class WalRedo {
                 }
             }
         }
-        PageTails.forgetUnder(paths.collectionFolder(dbName, collName));
+        PageLengths.forgetUnder(paths.collectionFolder(dbName, collName));
         PkIndexStore.forgetState(paths.pkIndexFile(dbName, collName));
     }
 

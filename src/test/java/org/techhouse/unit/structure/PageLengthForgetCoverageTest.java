@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.techhouse.unit.structure.JavaSources.JavaSourceFile;
 
-public class PageTailForgetCoverageTest {
+public class PageLengthForgetCoverageTest {
     private static final String FS = "org.techhouse.fs";
     private static final String FS_IO = "org.techhouse.fs.io";
     private static final Pattern REWRITE = Pattern.compile(
@@ -18,14 +18,14 @@ public class PageTailForgetCoverageTest {
     private static final Set<String> NEVER_A_PAGE = Set.of("NodeIdStore.java", "IndexMarkers.java",
             "WriteIntentJournal.java");
 
-    static Set<String> rewritesThatKeepATail(List<JavaSourceFile> files) {
+    static Set<String> rewritesThatKeepALength(List<JavaSourceFile> files) {
         final var found = new TreeSet<String>();
         for (final var file : files) {
             if (!file.isInPackage(FS) || file.isInPackage(FS_IO) || isNeverAPage(file)) {
                 continue;
             }
             final var code = file.text().code();
-            if (REWRITE.matcher(code).find() && !code.contains("PageTails.")) {
+            if (REWRITE.matcher(code).find() && !code.contains("PageLengths.")) {
                 found.add(file.relativePath());
             }
         }
@@ -37,10 +37,12 @@ public class PageTailForgetCoverageTest {
     }
 
     @Test
-    public void test_every_page_rewrite_forgets_the_remembered_tail() {
-        final var found = rewritesThatKeepATail(JavaSources.under(JavaSources.MAIN));
-        assertTrue(found.isEmpty(), "these fs classes rewrite, truncate or move a file in place without calling"
-                + " PageTails, so a remembered page tail could outlive the bytes it describes: " + found);
+    public void test_every_page_rewrite_forgets_the_remembered_length() {
+        final var found = rewritesThatKeepALength(JavaSources.under(JavaSources.MAIN));
+        assertTrue(found.isEmpty(),
+                "these fs classes rewrite, truncate or move a file in place without calling"
+                        + " PageLengths, so a remembered page length or line end could outlive the bytes it describes: "
+                        + found);
     }
 
     @Test
@@ -58,11 +60,10 @@ public class PageTailForgetCoverageTest {
                 class Forgetter {
                     void cut(java.io.RandomAccessFile file, java.io.File page) throws java.io.IOException {
                         file.setLength(0);
-                        PageTails.forget(page);
+                        PageLengths.cut(page, 0L);
                     }
                 }
                 """);
-
-        assertEquals(Set.of("org/techhouse/fs/Rewriter.java"), rewritesThatKeepATail(List.of(source, forgetting)));
+        assertEquals(Set.of("org/techhouse/fs/Rewriter.java"), rewritesThatKeepALength(List.of(source, forgetting)));
     }
 }

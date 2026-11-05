@@ -197,7 +197,7 @@ public class FileTreeDeleterTest {
         final var field = PkIndexStore.class.getDeclaredField("fileStates");
         field.setAccessible(true);
         final var states = (java.util.Map<String, Object>) field.get(null);
-        final var state = new PkIndexStore.PkFileState(1L, null, 1L, 0L);
+        final var state = new PkIndexStore.PkFileState(1L, null, 1L, 0L, true);
         states.put(inside.getAbsolutePath(), state);
         states.put(outside.getAbsolutePath(), state);
         try {

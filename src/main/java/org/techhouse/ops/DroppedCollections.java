@@ -28,6 +28,7 @@ public final class DroppedCollections {
 
     public static void forgetCollection(String dbName, String collName) {
         cache.evictCollection(dbName, collName);
+        cache.forgetScanRefusal(dbName, collName);
         pendingIndexWrites.clearCollection(dbName, collName);
         GroupCommit.forget(dbName, collName);
         memoryManagement.forgetUsage(dbName, collName);
@@ -40,6 +41,7 @@ public final class DroppedCollections {
     public static void forgetDatabase(String dbName) {
         locks.removeCollectionLock(dbName, Globals.PROCEDURES_FOLDER);
         cache.evictDatabase(dbName);
+        cache.forgetScanRefusals(dbName);
         pendingIndexWrites.clearDatabase(dbName);
         GroupCommit.forgetDatabase(dbName);
         memoryManagement.forgetDatabaseUsage(dbName);

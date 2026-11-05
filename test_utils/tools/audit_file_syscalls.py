@@ -37,7 +37,7 @@ PATH_CALLS = {"openat", "stat", "newfstatat", "statx", "lstat", "access", "facce
 LINE = re.compile(r'^\d+\s+(\w+)\((.*)$')
 DESCRIPTOR_PATH = re.compile(r'<([^>]*)>')
 QUOTED = re.compile(r'"([^"]*)"')
-BUDGETS = {"insert": 30.0, "update": 37.0, "delete": 28.0, "bulk_insert": 1.5, "bulk_update": 1.5,
+BUDGETS = {"insert": 18.0, "update": 21.0, "delete": 17.0, "bulk_insert": 1.5, "bulk_update": 1.5,
            "find_by_id": 1.0, "find_eq_indexed": 1.5}
 
 

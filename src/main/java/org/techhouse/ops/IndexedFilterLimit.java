@@ -3,11 +3,14 @@ package org.techhouse.ops;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
+import java.util.stream.Stream;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.filter.FieldPredicateFactory;
 import org.techhouse.ops.index.IndexWindowWalk;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
@@ -34,6 +37,9 @@ final class IndexedFilterLimit {
         if (bound <= 0 || !locks.holdsCollectionLock(dbName, collName)) {
             return null;
         }
+        if (isComplement(operator) && ScanPreference.prefersScan(operator, dbName, collName, context)) {
+            return new IndexedSource.Fast(context.watch(retested(context.source(null, dbName, collName), operator)), 1);
+        }
         final var matching = matchingIds(operator, dbName, collName, bound, context);
         if (matching == null) {
             return null;
@@ -43,11 +49,19 @@ final class IndexedFilterLimit {
         if (dropsSkip) {
             drop(matching.ids(), skip, context);
         }
+        return new IndexedSource.Fast(context.watch(retested(SortOperatorHelper.fetchInOrder(matching.ids(), dbName,
+                collName, dropsSkip ? bound - skip : bound, context), operator)), dropsSkip ? 2 : 1);
+    }
+
+    private static Stream<JsonObject> retested(Stream<JsonObject> documents, FieldOperator operator) {
         final var fieldName = operator.getField();
         final var test = FieldPredicateFactory.getTester(operator, operator.getFieldOperatorType());
-        return new IndexedSource.Fast(context.watch(SortOperatorHelper
-                .fetchInOrder(matching.ids(), dbName, collName, dropsSkip ? bound - skip : bound, context)
-                .filter(document -> test.test(document, fieldName))), dropsSkip ? 2 : 1);
+        return documents.filter(document -> test.test(document, fieldName));
+    }
+
+    private static boolean isComplement(FieldOperator operator) {
+        final var type = operator.getFieldOperatorType();
+        return type == FieldOperatorType.NOT_EQUALS || type == FieldOperatorType.NOT_IN;
     }
 
     private static long directSkip(List<BaseAggregationStep> steps) {

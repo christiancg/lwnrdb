@@ -13,6 +13,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongFunction;
+import java.util.function.LongUnaryOperator;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -57,6 +58,7 @@ public class FileSystem {
     public void createBaseDbPath() {
         paths.useDbPath(configuration.getFilePath());
         final var directory = new File(paths.dbPath());
+        FileTreeDeleter.forgetWrittenLengthsUnder(directory);
         if (!directory.exists()) {
             try {
                 OwnerOnly.createDirectories(directory.toPath());
@@ -114,6 +116,7 @@ public class FileSystem {
     public boolean createDatabaseFolder(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
         if (!dbFolder.exists()) {
+            FileTreeDeleter.forgetWrittenLengthsUnder(dbFolder);
             return OwnerOnly.createDirectory(dbFolder.toPath());
         }
         return true;
@@ -131,6 +134,7 @@ public class FileSystem {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
+            FileTreeDeleter.forgetWrittenLengthsUnder(collectionFolder);
             if (OwnerOnly.createDirectory(collectionFolder.toPath())) {
                 return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             } else {
@@ -138,6 +142,7 @@ public class FileSystem {
             }
         } else {
             if (!collectionFile.exists()) {
+                PageLengths.forget(collectionFile);
                 return OwnerOnly.createNewOwnerOnlyFile(collectionFile.toPath());
             }
             return true;
@@ -392,7 +397,11 @@ public class FileSystem {
     }
 
     public long pageFileLength(String dbName, String collName, long page) {
-        return paths.collectionPage(dbName, collName, page).length();
+        return PageLengths.lengthOf(paths.collectionPage(dbName, collName, page));
+    }
+
+    public LongUnaryOperator pageFileLengthsOf(String dbName, String collName) {
+        return PageLengths.of(paths, dbName, collName);
     }
 
     public void healTornPageTails(String dbName, String collName) throws IOException {

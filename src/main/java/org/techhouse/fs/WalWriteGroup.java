@@ -144,13 +144,12 @@ final class WalWriteGroup {
                 PageHoles.blank(channel, region[0], region[1]);
             }
         } catch (IOException e) {
-            PageTails.forget(deferred.page());
+            PageLengths.forget(deferred.page());
             logger.error("Committed a group of writes to " + deferred.page().getName() + " but could not blank the"
                     + " copies they superseded; they are blanked before the next write to the collection, or at the"
                     + " next startup", e);
             return false;
         }
-        PageTails.blanked(deferred.page());
         return true;
     }
 
@@ -158,7 +157,7 @@ final class WalWriteGroup {
         var cutBack = true;
         for (final var entry : lengthsBefore.entrySet()) {
             final var file = entry.getKey();
-            PageTails.forget(file);
+            PageLengths.forget(file);
             if (file.equals(pkIndex)) {
                 PkIndexStore.forgetState(file);
             }

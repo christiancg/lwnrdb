@@ -405,6 +405,60 @@ def test_strings_with_every_escape_class_round_trip(c):
     drop_coll(c, COLL_SHAPES)
 
 
+LONG_ASCII_PREFIX_LENGTHS = (1, 255, 256, 1021, 4097, 70001)
+
+
+def json_unicode_escape(code: int) -> str:
+    return "\\" + "u%04x" % code
+
+
+LONG_ASCII_TAILS = (
+    ("quote", '\\"', b'\\"'),
+    ("backslash", "\\\\", b"\\\\"),
+    ("newline", "\\n", b"\\n"),
+    ("control", json_unicode_escape(0x01), b"\\" + b"u0001"),
+    ("two-byte", json_unicode_escape(0xE9), chr(0xE9).encode()),
+    ("three-byte", json_unicode_escape(0x4E2D), chr(0x4E2D).encode()),
+    ("pair", json_unicode_escape(0xD83D) + json_unicode_escape(0xDE00), chr(0x1F600).encode()),
+    ("lone surrogate", json_unicode_escape(0xD800), b"\\" + b"ud800"),
+)
+
+
+def test_long_ascii_strings_ending_in_escapes_and_non_ascii_round_trip(c):
+    section("Long ASCII strings ending in an escape or a non-ASCII character come back byte for byte and group apart")
+    create_coll(c, COLL_SHAPES)
+    expected = {}
+    for length in LONG_ASCII_PREFIX_LENGTHS:
+        prefix = ("abcdefghij" * (length // 10 + 1))[:length]
+        for name, request_tail, wire_tail in LONG_ASCII_TAILS:
+            doc_id = f"long_{length}_{name.replace(' ', '_').replace('-', '_')}"
+            for copy in ("a", "b"):
+                c.send_raw('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_SHAPES
+                           + '","object":{"_id":"' + doc_id + copy + '","v":"' + prefix + request_tail + '"}}')
+            expected[doc_id] = b'"v":"' + prefix.encode() + wire_tail + b'"'
+    mismatched = []
+    for doc_id, wire in expected.items():
+        c.s.sendall((json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_SHAPES,
+                                 "_id": doc_id + "a"}) + "\n").encode())
+        if wire not in c.f.readline():
+            mismatched.append(doc_id)
+    check("FIND_BY_ID writes every long prefix and its escaped or raw tail exactly", not mismatched,
+          detail=str(mismatched[:5]))
+    c.s.sendall((json.dumps({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_SHAPES,
+                             "aggregationSteps": []}) + "\n").encode())
+    scanned = c.f.readline()
+    missing = [doc_id for doc_id, wire in expected.items() if scanned.count(wire) != 2]
+    check("a scan writes both copies of every value exactly", not missing, detail=str(missing[:5]))
+    distinct = aggregate(c, COLL_SHAPES, [{"type": "DISTINCT", "fieldName": "v"}]).get("results") or []
+    check("DISTINCT keeps one row per value", len(distinct) == len(expected),
+          detail=f"{len(distinct)} rows for {len(expected)} values")
+    grouped = aggregate(c, COLL_SHAPES, [{"type": "GROUP_BY", "fieldName": "v"}]).get("results") or []
+    check("GROUP_BY puts both copies of each value in one group",
+          len(grouped) == len(expected) and all(len(group.get("group") or []) == 2 for group in grouped),
+          detail=f"{len(grouped)} groups for {len(expected)} values")
+    drop_coll(c, COLL_SHAPES)
+
+
 def test_documents_of_one_shape_do_not_share_writes(c):
     section("Documents saved with the same keys never see each other's added or removed keys")
     create_coll(c, COLL_SHAPES)
@@ -1654,6 +1708,7 @@ def main():
         test_value_types,
         test_rows_of_different_shapes_round_trip,
         test_strings_with_every_escape_class_round_trip,
+        test_long_ascii_strings_ending_in_escapes_and_non_ascii_round_trip,
         test_documents_of_one_shape_do_not_share_writes,
         test_a_malformed_document_is_refused_as_a_client_error,
         test_a_line_with_a_second_value_or_a_nan_point_is_refused,

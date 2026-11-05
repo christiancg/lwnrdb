@@ -112,16 +112,76 @@ public final class SearchUtils {
     }
 
     public static <T> List<int[]> membershipRuns(List<FieldIndexEntry<T>> entries, List<T> operands) {
-        final var runs = new ArrayList<int[]>();
-        final var starts = new HashSet<Integer>();
+        return walkingIsCheaper(entries.size(), operands.size())
+                ? walkedRuns(entries, operands)
+                : searchedRuns(entries, operands);
+    }
+
+    private static boolean walkingIsCheaper(int entries, int operands) {
+        return (long) operands * (Integer.SIZE - Integer.numberOfLeadingZeros(entries)) > entries;
+    }
+
+    private static <T> List<int[]> searchedRuns(List<FieldIndexEntry<T>> entries, List<T> operands) {
+        final var runs = new ArrayList<int[]>(operands.size());
         for (final var operand : operands) {
-            final var run = equalRun(entries, operand);
-            if (run != null && starts.add(run[0])) {
-                runs.add(run);
+            final var from = partitionPoint(entries, entry -> entry.compareTo(operand) < 0);
+            final var to = gallop(entries, from, entry -> entry.compareTo(operand) <= 0);
+            if (from < to) {
+                runs.add(new int[]{from, to});
             }
         }
-        runs.sort(Comparator.comparingInt(run -> run[0]));
+        if (runs.size() > 1) {
+            runs.sort(Comparator.comparingInt(run -> run[0]));
+            var kept = 1;
+            for (var i = 1; i < runs.size(); i++) {
+                if (runs.get(i)[0] != runs.get(kept - 1)[0]) {
+                    runs.set(kept++, runs.get(i));
+                }
+            }
+            runs.subList(kept, runs.size()).clear();
+        }
         return runs;
+    }
+
+    private static <T> List<int[]> walkedRuns(List<FieldIndexEntry<T>> entries, List<T> operands) {
+        final var sorted = new ArrayList<>(operands);
+        final var probe = new FieldIndexEntry<T>(null, null, null, null);
+        sorted.sort((left, right) -> {
+            probe.setValue(left);
+            return probe.compareTo(right);
+        });
+        final var runs = new ArrayList<int[]>();
+        var from = 0;
+        for (final var operand : sorted) {
+            from = gallop(entries, from, entry -> entry.compareTo(operand) < 0);
+            final var to = gallop(entries, from, entry -> entry.compareTo(operand) <= 0);
+            if (from < to) {
+                runs.add(new int[]{from, to});
+                from = to;
+            }
+        }
+        return runs;
+    }
+
+    private static <E> int gallop(List<E> entries, int from, Predicate<? super E> before) {
+        final var size = entries.size();
+        var low = from;
+        var high = from;
+        var step = 1L;
+        while (high < size && before.test(entries.get(high))) {
+            low = high + 1;
+            high = (int) Math.min(from + step, size);
+            step <<= 1;
+        }
+        while (low < high) {
+            final var middle = (low + high) >>> 1;
+            if (before.test(entries.get(middle))) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        return low;
     }
 
     private static <T> Set<String> findingWindow(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType,

@@ -11,6 +11,7 @@ import java.util.Set;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.analyze.ReadObserver;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.IndexIdCounts;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
@@ -31,6 +32,7 @@ import org.techhouse.utils.SaltedKey;
 public final class IndexEntryReader {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
+    private static final IndexIdCounts idCounts = IocContainer.get(IndexIdCounts.class);
 
     private IndexEntryReader() {
     }
@@ -114,7 +116,8 @@ public final class IndexEntryReader {
                 if (cached != null && !cached.isEmpty()) {
                     final var entries = cast(cached);
                     typeLists.add(entries);
-                    covered += idCount(entries);
+                    covered += idCounts.count(dbName, collName, Cache.memoizedIndexIdentifier(fieldName, type),
+                            () -> idCount(entries));
                 }
             }
             if (typeLists.isEmpty() || coversFewer(covered, dbName, collName)) {

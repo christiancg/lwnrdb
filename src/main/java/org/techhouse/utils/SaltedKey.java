@@ -11,7 +11,9 @@ import org.techhouse.ejson.elements.JsonString;
 public final class SaltedKey {
     private static final long SEED = seedFrom(new SecureRandom());
     private static final long MULTIPLIER = 0x9E3779B97F4A7C15L;
+    private static final long WORD_KEY = mix(SEED) | 1L;
     private static final int ARRAY_STEP = 31;
+    private static final int CHARS_PER_ROUND = 4;
     private final JsonBaseElement element;
     private final int hash;
 
@@ -44,14 +46,31 @@ public final class SaltedKey {
     }
 
     private static long stringHash(String value) {
-        if (value == null) {
-            return SEED;
+        return value == null ? SEED : seededStringHash(SEED, WORD_KEY, value);
+    }
+
+    @SuppressWarnings("SameParameterValue")
+    private static long seededStringHash(long seed, long wordKey, String value) {
+        final var length = value.length();
+        var hash = seed ^ length;
+        var i = 0;
+        for (; i + CHARS_PER_ROUND <= length; i += CHARS_PER_ROUND) {
+            hash = absorb(hash ^ fourCharsAt(value, i), wordKey);
         }
-        var hash = SEED ^ value.length();
-        for (var i = 0; i < value.length(); i++) {
+        for (; i < length; i++) {
             hash = mix(hash ^ value.charAt(i));
         }
         return hash;
+    }
+
+    private static long absorb(long input, long wordKey) {
+        return input * wordKey ^ Math.unsignedMultiplyHigh(input, wordKey);
+    }
+
+    private static long fourCharsAt(String value, int index) {
+        return value.charAt(index) | (long) value.charAt(index + 1) << Character.SIZE
+                | (long) value.charAt(index + 2) << 2 * Character.SIZE
+                | (long) value.charAt(index + 3) << 3 * Character.SIZE;
     }
 
     private static long numberHash(double number) {

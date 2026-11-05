@@ -20,6 +20,7 @@ public final class Globals {
     public static final int PAGE_VACUUM_DEAD_DIVISOR = 4;
     public static final long COMPACT_STAY_DEAD_FLOOR = 16 * 1024;
     public static final long FIELD_INDEX_LOG_MIN_BYTES = 64 * 1024;
+    public static final long INDEX_LOG_MEMO_MAX_BYTES = 16L * 1024 * 1024;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String VACUUM_FILE_EXTENSION = ".vacuum";
     public static final String INTENT_LOG_EXTENSION = ".intents";

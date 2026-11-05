@@ -117,7 +117,8 @@ public final class IndexFileLookup {
         var absent = false;
         try {
             final var collector = new Collector(
-                    IndexLogOverlay.read(FilePaths.logFileOf(index), query.order(), query.selects()), countOnly);
+                    IndexLogMemo.SHARED.overlayOf(FilePaths.logFileOf(index), query.order(), query.selects()),
+                    countOnly);
             try (var cursor = IndexFileCursor.open(index)) {
                 absent = cursor == null && !collector.log.present();
                 if (absent) {

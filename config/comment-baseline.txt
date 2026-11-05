@@ -41,7 +41,6 @@ src/main/java/org/techhouse/ejson/internal/UnsafeAllocator.java 1
 src/main/java/org/techhouse/ejson/validate/MetaSchemaValidator.java 1
 src/main/java/org/techhouse/ejson/validate/SchemaKeywords.java 2
 src/main/java/org/techhouse/ejson/validate/SchemaValidator.java 1
-src/main/java/org/techhouse/fs/DocumentPageStore.java 2
 src/main/java/org/techhouse/fs/FieldIndexLoader.java 3
 src/main/java/org/techhouse/fs/FileLocks.java 3
 src/main/java/org/techhouse/fs/FilePaths.java 4

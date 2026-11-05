@@ -9,6 +9,7 @@ import time
 import base_utils as bu
 import held_rows_budget
 import refused_index_writes
+import scan_refusal
 from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
@@ -636,6 +637,8 @@ def main():
     held_rows_budget.test_group_by_over_budget_is_refused_not_oom()
 
     refused_index_writes.run_refused_index_phase()
+
+    scan_refusal.run_scan_refusal_phase()
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

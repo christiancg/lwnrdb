@@ -28,6 +28,8 @@ import org.techhouse.utils.RangeBounds;
 final class IndexOrderTopK {
     private static final int MAX_LIMIT = 4096;
     private static final long WALK_PER_CANDIDATE = 16;
+    private static final long UNINDEXED_WALK_PER_ROW = 64;
+    private static final long UNINDEXED_WALK_PK_DIVISOR = 64;
     private static final int MIN_FETCH = 32;
     private static final int MAX_FETCH = 256;
     private static final int MIN_PAGE = 64;
@@ -68,30 +70,37 @@ final class IndexOrderTopK {
             return null;
         }
         final var resolved = candidatesOf(split.others(), dbName, collName, context);
-        if (resolved == null && split.walkRange() == null) {
-            return null;
-        }
         final var candidates = resolved == null ? new Candidates(null, false) : resolved;
         final long matched = resolved == null ? Long.MAX_VALUE : resolved.ids().size();
         if (matched == 0) {
             return new IndexedSource.Fast(Stream.empty(), next);
         }
-        final var expectedWalk = (double) bound * Math.max(cache.pkIndexSize(dbName, collName), 1) / matched;
+        final var documents = Math.max(cache.pkIndexSize(dbName, collName), 1);
+        final var expectedWalk = (double) bound * documents / matched;
         if (expectedWalk > (double) WALK_PER_CANDIDATE * matched) {
             return null;
         }
-        final var firstPage = (long) Math.clamp(Math.max(expectedWalk, bound) * 2, MIN_PAGE, MAX_FIRST_PAGE);
+        final var unindexed = resolved == null && split.walkRange() == null;
+        final var budget = resolved != null
+                ? 2 * WALK_PER_CANDIDATE * matched + bound
+                : unindexed ? unindexedBudget(documents, bound) : Long.MAX_VALUE;
+        final var firstPage = unindexed
+                ? Math.min(budget + 1, MAX_FIRST_PAGE)
+                : (long) Math.clamp(Math.max(expectedWalk, bound) * 2, MIN_PAGE, MAX_FIRST_PAGE);
         final var ids = split.walkRange() == null
                 ? SortedIdWalk.open(dbName, collName, sortField, sort.getAscending(), firstPage, context)
                 : RangeIdWalk.open(dbName, collName, split.walkRange(), sort.getAscending(), firstPage, context);
         if (ids == null) {
             return null;
         }
-        final var budget = resolved == null ? Long.MAX_VALUE : 2 * WALK_PER_CANDIDATE * matched + bound;
         final var plan = new Plan(dbName, collName, candidates, OperatorPredicate.of(filter.getOperator(), context),
                 skip, (int) (bound - skip), budget);
         final var rows = walk(ids, plan, context);
         return rows == null ? null : new IndexedSource.Fast(rows.stream(), next);
+    }
+
+    private static long unindexedBudget(long documents, long bound) {
+        return Math.max(UNINDEXED_WALK_PER_ROW * bound, documents / UNINDEXED_WALK_PK_DIVISOR);
     }
 
     private static boolean walkable(BaseOperator operator) {

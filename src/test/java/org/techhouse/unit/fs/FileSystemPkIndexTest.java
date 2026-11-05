@@ -14,6 +14,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.OutsideWrites;
 import org.techhouse.test.TestGlobals;
 
 public class FileSystemPkIndexTest extends FileSystemTestBase {
@@ -361,6 +362,7 @@ public class FileSystemPkIndexTest extends FileSystemTestBase {
 
         Files.writeString(pkIndexFile().toPath(), "this is not a valid pk index line\nnor is this",
                 StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+        OutsideWrites.madeTo(pkIndexFile());
         final var corruptedBytes = Files.readAllBytes(pkIndexFile().toPath());
 
         assertThrows(IOException.class, () -> fs.deleteFromCollection(good1Index));
