@@ -20,6 +20,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.OutsideWrites;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -43,7 +44,7 @@ public class RequestedLogCheckpointTest {
         for (var i = 0; i < 8; i++) {
             insert("seed" + i);
         }
-        TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", log.length());
+        TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", OutsideWrites.logEnd(log));
     }
 
     @AfterEach

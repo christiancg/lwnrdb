@@ -8,12 +8,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.techhouse.config.Globals;
 import org.techhouse.fs.io.ChunkedChannelWrites;
 import org.techhouse.log.Logger;
 
 final class WalWriteGroup {
     private static final Logger logger = Logger.logFor(WalWriteGroup.class);
     private static final String TAKE_BACK_FAILURE = "Could not take back a failed group of writes from ";
+    private static final byte[] ZEROS = new byte[Globals.WAL_PREALLOCATE_MIN_BYTES];
 
     private final Map<File, Long> lengthsBefore = new LinkedHashMap<>();
     private final List<DeferredBlanks> blanks = new ArrayList<>();
@@ -71,12 +73,12 @@ final class WalWriteGroup {
         }
     }
 
-    void append(File log, byte[] header, byte[] payload, int payloadLength, boolean force) throws IOException {
+    long write(File log, long at, long allocated, byte[] frame, int length, boolean force) throws IOException {
         if (channel == null) {
-            channel = openAppending(log);
+            channel = openWritable(log);
         }
         try {
-            appendTo(channel, log, header, payload, payloadLength, force);
+            return writeFrame(channel, log, at, allocated, frame, length, force);
         } catch (IOException | RuntimeException e) {
             dropChannel();
             throw e;
@@ -96,16 +98,55 @@ final class WalWriteGroup {
         }
     }
 
-    static FileChannel openAppending(File log) throws IOException {
-        return FileChannel.open(log.toPath(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    static FileChannel openWritable(File log) throws IOException {
+        return FileChannel.open(log.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
     }
 
-    static void appendTo(FileChannel appending, File log, byte[] header, byte[] payload, int payloadLength,
+    static long writeFrame(FileChannel writable, File log, long at, long allocated, byte[] frame, int length,
             boolean force) throws IOException {
-        ChunkedChannelWrites.append(appending, header, payload, payloadLength);
+        final var end = at + length;
+        final var room = end > allocated ? preallocate(writable, allocated, end) : allocated;
+        ChunkedChannelWrites.writeAt(writable, at, frame, 0, length);
         if (force) {
-            SyncedWrites.content(appending, log.toPath());
+            SyncedWrites.content(writable, log.toPath());
         }
+        return room;
+    }
+
+    private static long preallocate(FileChannel writable, long allocated, long end) throws IOException {
+        final var growth = Math.clamp(allocated, Globals.WAL_PREALLOCATE_MIN_BYTES, Globals.WAL_PREALLOCATE_MAX_BYTES);
+        final var room = Math.max(end, allocated + growth);
+        zero(writable, allocated, room);
+        return room;
+    }
+
+    private static void zero(FileChannel writable, long from, long to) throws IOException {
+        for (var at = from; at < to; at += ZEROS.length) {
+            ChunkedChannelWrites.writeAt(writable, at, ZEROS, 0, (int) Math.min(ZEROS.length, to - at));
+        }
+    }
+
+    static boolean erase(File log, long from, long to, String failureMessage) {
+        if (to <= from || !log.isFile()) {
+            return true;
+        }
+        try (var writable = FileChannel.open(log.toPath(), StandardOpenOption.WRITE)) {
+            zero(writable, from, to);
+            SyncedWrites.content(writable, log.toPath());
+            return true;
+        } catch (IOException e) {
+            logger.error(failureMessage, e);
+            return false;
+        }
+    }
+
+    static long writtenEnd(byte[] bytes, long from) {
+        for (var at = bytes.length - 1; at >= from; at--) {
+            if (bytes[at] != 0) {
+                return at + 1L;
+            }
+        }
+        return from;
     }
 
     static void forceUnheld(File log) throws IOException {
@@ -153,7 +194,7 @@ final class WalWriteGroup {
         return true;
     }
 
-    boolean takeBack(File log, File pkIndex) {
+    boolean takeBack(File log, long logEnd, File pkIndex) {
         var cutBack = true;
         for (final var entry : lengthsBefore.entrySet()) {
             final var file = entry.getKey();
@@ -165,8 +206,7 @@ final class WalWriteGroup {
                     || FileLocks.truncateTo(file, entry.getValue(), TAKE_BACK_FAILURE + file.getName());
         }
         blanks.clear();
-        return cutBack && (log.length() == logLengthBefore
-                || FileLocks.truncateTo(log, logLengthBefore, TAKE_BACK_FAILURE + log.getName()));
+        return cutBack && erase(log, logLengthBefore, logEnd, TAKE_BACK_FAILURE + log.getName());
     }
 
     void restartFrom(long logLength) {

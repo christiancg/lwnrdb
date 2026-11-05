@@ -146,6 +146,17 @@ def relay(meter: phase_cpu.PhaseCpu) -> Callable[[str], None]:
     return forward
 
 
+def errored(result: Dict) -> bool:
+    return any(phase.get("errors", 0) for phase in result.get("phases", []))
+
+
+def save_engine_log(env: Dict[str, str], engine: str, path: str) -> None:
+    logs = compose(env, "--profile", engine, "logs", "--no-color", engine, capture=True, check=False)
+    with open(path, "w") as handle:
+        handle.write(logs.stdout or "")
+    print(f"phase errors: saved the {engine} log to {path}", flush=True)
+
+
 def run_engine(env: Dict[str, str], engine: str, run_id: str, workload_args: List[str], keep: bool,
                durability: str) -> int:
     print(f"\n=== {engine} ===", flush=True)
@@ -167,6 +178,8 @@ def run_engine(env: Dict[str, str], engine: str, run_id: str, workload_args: Lis
                                    "memory": env["BENCH_MEMORY"]}
             with open(path, "w") as handle:
                 json.dump(result, handle, indent=2)
+            if errored(result):
+                save_engine_log(env, engine, os.path.join(RESULTS, run_id, f"{engine}.log"))
         return status
     finally:
         if not keep:
