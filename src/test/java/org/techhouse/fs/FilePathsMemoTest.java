@@ -1,6 +1,8 @@
 package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.File;
@@ -23,9 +25,34 @@ public class FilePathsMemoTest {
     }
 
     private static String expectedPage(String root, String physicalDatabase, String collection, long page) {
-        return new File(root + Globals.FILE_SEPARATOR + physicalDatabase + Globals.FILE_SEPARATOR + collection
-                + Globals.FILE_SEPARATOR + collection + Globals.FILE_PAGE_SEPARATOR + page + Globals.DB_FILE_EXTENSION)
-                .getPath();
+        return new File(new File(root).getAbsolutePath() + Globals.FILE_SEPARATOR + physicalDatabase
+                + Globals.FILE_SEPARATOR + collection + Globals.FILE_SEPARATOR + collection
+                + Globals.FILE_PAGE_SEPARATOR + page + Globals.DB_FILE_EXTENSION).getPath();
+    }
+
+    @Test
+    public void the_pk_index_file_is_built_once_per_collection_until_forgotten() {
+        final var first = paths.pkIndexFile("shop", "orders");
+        assertSame(first, paths.pkIndexFile("shop", "orders"));
+
+        paths.forgetCollection("shop", "orders");
+        final var rebuilt = paths.pkIndexFile("shop", "orders");
+        assertNotSame(first, rebuilt);
+        assertEquals(first, rebuilt);
+
+        paths.forgetDatabase("shop");
+        assertNotSame(rebuilt, paths.pkIndexFile("shop", "orders"));
+
+        paths.useDbPath("elsewhere");
+        assertEquals(new File("elsewhere").getAbsolutePath(),
+                paths.pkIndexFile("shop", "orders").getParentFile().getParentFile().getParent());
+    }
+
+    @Test
+    public void a_relative_base_path_is_made_absolute_once() {
+        assertEquals(new File(ROOT).getAbsolutePath(), paths.dbPath());
+        final var page = paths.collectionPage("shop", "orders", 1);
+        assertEquals(page.getPath(), page.getAbsolutePath());
     }
 
     @Test

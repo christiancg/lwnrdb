@@ -52,7 +52,8 @@ final class RecordReplacer {
             final var sourceLength = PageLengths.lengthOf(source);
             requireWithinPage(oldRow, oldPosition, sourceLength);
             final var before = residentRows == null || occupancy == null ? null : occupancy.apply(oldRow.getPage());
-            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName).onPage(targetPage, target)
+                    .onPage(oldRow.getPage(), source);
             final var newRow = new PkIndexEntry(dbName, collName, oldRow.getValue(), plan.append(targetPage, line),
                     line.length, targetPage, entry.getVersion());
             plan.replaceRow(newRow);
@@ -82,7 +83,7 @@ final class RecordReplacer {
             final var fileLength = PageLengths.lengthOf(page);
             requireWithinPage(oldRow, oldRow.getPosition(), fileLength);
             final var before = residentRows == null || occupancy == null ? null : occupancy.apply(oldRow.getPage());
-            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName).onPage(oldRow.getPage(), page);
             plan.deleteRow(oldRow.getValue());
             plan.blank(oldRow.getPage(), oldRow.getPosition(), oldRow.getLength());
             plan.commit(null, FaultPoint.PK_ROW_COMMITTED);

@@ -18,7 +18,7 @@ final class WalPlan {
     private static final Logger logger = Logger.logFor(WalPlan.class);
     private static final int PK_ROW_BYTES_HINT = 64;
     private static final byte LINE_FEED = '\n';
-    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
 
     private final FilePaths paths;
     private final PkIndexStore pkIndexStore;
@@ -38,6 +38,7 @@ final class WalPlan {
         private long next;
         private int payloadStart;
         private int payloadLength;
+        private FileChannel channel;
 
         private PageChanges(File file) {
             this.file = file;
@@ -57,7 +58,7 @@ final class WalPlan {
     WalPlan(FilePaths paths, PkIndexStore pkIndexStore, String dbName, String collName) throws IOException {
         this.paths = paths;
         this.pkIndexStore = pkIndexStore;
-        this.wal = new WriteAheadLog(paths);
+        this.wal = pkIndexStore.wal();
         this.dbName = dbName;
         this.collName = collName;
         wal.requireApplied(dbName, collName);
@@ -138,8 +139,19 @@ final class WalPlan {
         return delta;
     }
 
+    WalPlan onPage(long page, File file) {
+        pages.putIfAbsent(page, new PageChanges(file));
+        return this;
+    }
+
     private PageChanges changesOf(long page) {
-        return pages.computeIfAbsent(page, number -> new PageChanges(paths.collectionPage(dbName, collName, number)));
+        final var known = pages.get(page);
+        if (known != null) {
+            return known;
+        }
+        final var changes = new PageChanges(paths.collectionPage(dbName, collName, page));
+        pages.put(page, changes);
+        return changes;
     }
 
     private void fire(FaultPoint point) {
@@ -221,8 +233,7 @@ final class WalPlan {
                     if (!changes.existed) {
                         OwnerOnly.ensureOwnerOnlyFile(changes.file.toPath());
                     }
-                    writeAt(changes.file, changes.lengthBefore, record.bytes(), changes.payloadStart,
-                            changes.payloadLength);
+                    appendTo(changes, record, group == null && !changes.blanks.isEmpty());
                     PageLengths.grew(changes.file, changes.next, endsWithLineFeed(changes.lines.getLast()));
                 }
             }
@@ -230,6 +241,7 @@ final class WalPlan {
                 writeAt(pk.file(), pk.offset(), record.bytes(), pkSlice.start(), pkSlice.length());
             }
         } catch (IOException e) {
+            closeKeptChannels(e);
             abort(seq, pk, e);
             throw e;
         }
@@ -279,17 +291,46 @@ final class WalPlan {
             if (changes.blanks.isEmpty()) {
                 continue;
             }
-            try (var channel = FileChannel.open(changes.file.toPath(), StandardOpenOption.WRITE)) {
+            try (var channel = changes.channel != null
+                    ? changes.channel
+                    : FileChannel.open(changes.file.toPath(), StandardOpenOption.WRITE)) {
+                changes.channel = null;
                 for (final var blank : changes.blanks) {
                     PageHoles.blank(channel, blank[0], blank[1]);
                 }
             } catch (IOException e) {
+                closeKeptChannels(e);
                 PageLengths.forget(changes.file);
                 wal.markUnapplied(dbName, collName);
                 logger.error("Committed a write to " + changes.file.getName() + " but could not blank the copies it"
                         + " superseded; they are blanked before the next write to the collection, or at the next"
                         + " startup", e);
                 return;
+            }
+        }
+    }
+
+    private static void appendTo(PageChanges changes, WalCodec.RecordBuffer record, boolean keepForBlanks)
+            throws IOException {
+        if (!keepForBlanks) {
+            writeAt(changes.file, changes.lengthBefore, record.bytes(), changes.payloadStart, changes.payloadLength);
+            return;
+        }
+        final var channel = FileChannel.open(changes.file.toPath(), StandardOpenOption.WRITE);
+        changes.channel = channel;
+        ChunkedChannelWrites.writeAt(channel, changes.lengthBefore, record.bytes(), changes.payloadStart,
+                changes.payloadLength);
+    }
+
+    private void closeKeptChannels(IOException failure) {
+        for (final var changes : pages.values()) {
+            if (changes.channel != null) {
+                try {
+                    changes.channel.close();
+                } catch (IOException closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+                changes.channel = null;
             }
         }
     }

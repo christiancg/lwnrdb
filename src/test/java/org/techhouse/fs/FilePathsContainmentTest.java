@@ -68,8 +68,10 @@ public class FilePathsContainmentTest {
 
     @Test
     public void acceptsAdminPagesAndTranslatesIt() {
-        assertEquals(new File(ROOT + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME + Globals.FILE_SEPARATOR
-                + Globals.ADMIN_PAGES_FOLDER), paths.databaseFolder(Globals.ADMIN_PAGES_DB_NAME));
+        assertEquals(
+                new File(new File(ROOT).getAbsolutePath() + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME
+                        + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER),
+                paths.databaseFolder(Globals.ADMIN_PAGES_DB_NAME));
     }
 
     @Test
@@ -78,7 +80,8 @@ public class FilePathsContainmentTest {
             assertNotNull(builder.apply("orders_1"));
         }
         assertNotNull(paths.indexFile("shop", "orders", "a.b", "String"));
-        assertEquals(new File(ROOT + Globals.FILE_SEPARATOR + "shop"), paths.databaseFolder("shop"));
+        assertEquals(new File(new File(ROOT).getAbsolutePath() + Globals.FILE_SEPARATOR + "shop"),
+                paths.databaseFolder("shop"));
     }
 
     @Test

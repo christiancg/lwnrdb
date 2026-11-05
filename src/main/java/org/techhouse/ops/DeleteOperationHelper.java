@@ -11,7 +11,6 @@ import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
-import org.techhouse.cache.PkIndexList;
 import org.techhouse.cache.WriterPkRows;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
@@ -61,10 +60,7 @@ public final class DeleteOperationHelper {
                     return null;
                 });
         cache.updatePageSizeInMemory(dbName, collName, idxEntry.getPage(), -idxEntry.getLength(), -1);
-        final var primaryKeyIndex = pkRows.editable();
-        if (primaryKeyIndex != null) {
-            primaryKeyIndex.remove(PkIndexList.positionOf(primaryKeyIndex, id));
-        }
+        pkRows.remove(id);
         cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, deletedRef,
                 CollectionIncarnation.current(dbName, collName), pendingGeneration));

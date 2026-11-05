@@ -133,10 +133,11 @@ final class PageAppender {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
-        final var lock = FileLocks.lockWrite(paths.collectionPage(dbName, collName, page));
+        final var file = paths.collectionPage(dbName, collName, page);
+        final var lock = FileLocks.lockWrite(file);
         try {
             vacuum.vacuumIfNeeded(dbName, collName, page, line.length, null, null);
-            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName);
+            final var plan = new WalPlan(paths, pkIndexStore, dbName, collName).onPage(page, file);
             final var row = new PkIndexEntry(dbName, collName, entry.get_id(), plan.append(page, line), line.length,
                     page, entry.getVersion());
             plan.insertRow(row);
