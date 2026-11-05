@@ -72,23 +72,19 @@ final class DocumentPageStore {
             return new HashMap<>();
         }
         final var result = new HashMap<String, DbEntry>();
-        final var bytes = FileLocks.readAllBytesLocked(collectionFile);
-        var start = 0;
-        while (start < bytes.length) {
-            final var end = FileLocks.lineEnd(bytes, start);
-            if (!PageHoles.isSkippable(bytes, start, end)) {
-                try {
-                    final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
-                    entry.setPage(page);
-                    result.put(entry.get_id(), entry);
-                } catch (Exception e) {
-                    // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
-                    // line here would invalidate every later entry's recorded position.
-                    logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
-                }
+        final var chunks = FileLocks.readChunksLocked(collectionFile, ChunkedLines.CHUNK_BYTES);
+        ChunkedLines.forEachLine(chunks, (bytes, start, end) -> {
+            if (PageHoles.isSkippable(bytes, start, end)) {
+                return;
             }
-            start = FileLocks.nextLineStart(bytes, end);
-        }
+            try {
+                final var entry = DbEntry.fromBytes(dbName, collectionName, bytes, start, end);
+                entry.setPage(page);
+                result.put(entry.get_id(), entry);
+            } catch (Exception e) {
+                logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
+            }
+        });
         return result;
     }
 

@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -78,5 +81,30 @@ public class FileSystemTrustedLiveRowsTest extends FileSystemTestBase {
         }
 
         assertTrustedEqualsFolded("compactions");
+    }
+
+    @Test
+    public void test_the_count_after_an_own_append_is_known_without_a_stat() throws IOException {
+        fs.insertIntoCollection(document("a", "0"));
+        fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        fs.insertIntoCollection(document("b", "0"));
+        Files.setLastModifiedTime(
+                Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL, TestGlobals.COLL + "-pk.idx"),
+                FileTime.fromMillis(0L));
+
+        assertEquals(2L, fs.trustedLiveRows(TestGlobals.DB, TestGlobals.COLL).orElseThrow(),
+                "the store's own append is exact, so no attribute read can void it");
+    }
+
+    @Test
+    public void test_the_live_row_count_follows_a_primary_key_rebuild() throws IOException {
+        fs.insertIntoCollection(document("a", "0"));
+        fs.insertIntoCollection(document("b", "0"));
+
+        fs.applyPkRebuild(TestGlobals.DB, TestGlobals.COLL, fs.planPkRebuild(TestGlobals.DB, TestGlobals.COLL));
+        assertTrustedEqualsFolded("a primary-key rebuild");
+
+        fs.insertIntoCollection(document("c", "0"));
+        assertTrustedEqualsFolded("an append after a primary-key rebuild");
     }
 }

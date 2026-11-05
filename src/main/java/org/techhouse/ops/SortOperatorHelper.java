@@ -143,8 +143,23 @@ public final class SortOperatorHelper {
         if (ids == null) {
             return null;
         }
+        final var skip = AggregationOperationHelper.skipAfter(steps, 1);
+        if (skip <= 0) {
+            return new IndexedSource.Fast(
+                    context.watch(fetchInOrder(ids, dbName, collName, bound, context).filter(range.matches())), 2);
+        }
+        context.tick(skipIds(ids, skip));
         return new IndexedSource.Fast(
-                context.watch(fetchInOrder(ids, dbName, collName, bound, context).filter(range.matches())), 2);
+                context.watch(fetchInOrder(ids, dbName, collName, bound - skip, context).filter(range.matches())), 3);
+    }
+
+    private static long skipIds(Iterator<String> ids, long skip) {
+        var skipped = 0L;
+        while (skipped < skip && ids.hasNext()) {
+            ids.next();
+            skipped++;
+        }
+        return skipped;
     }
 
     private static Stream<JsonObject> fetchInOrder(List<String> orderedIds, String dbName, String collName, long bound,

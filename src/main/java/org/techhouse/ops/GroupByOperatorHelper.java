@@ -16,7 +16,15 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
+import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
+import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
+import org.techhouse.ops.req.agg.step.map.MapOperationType;
+import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.utils.FieldPath;
 import org.techhouse.utils.SaltedKey;
 
@@ -31,16 +39,64 @@ final class GroupByOperatorHelper {
     private record IdKeyed(String id, JsonObject document) {
     }
 
+    enum GroupDemand {
+        KEYS, SIZES, ORDERED_GROUPS
+    }
+
+    static GroupDemand demandOf(BaseAggregationStep next) {
+        if (next instanceof CountAggregationStep) {
+            return GroupDemand.KEYS;
+        }
+        return next instanceof MapAggregationStep map && onlySizesThenRemovesGroup(map.getOperators())
+                ? GroupDemand.SIZES
+                : GroupDemand.ORDERED_GROUPS;
+    }
+
+    private static boolean onlySizesThenRemovesGroup(List<MapOperator> operators) {
+        if (operators == null || operators.isEmpty() || keepsGroup(operators.getLast())) {
+            return false;
+        }
+        for (final var operator : operators) {
+            if (keepsGroup(operator) && !sizesGroup(operator)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean keepsGroup(MapOperator operator) {
+        return operator == null || operator.getType() != MapOperationType.REMOVE_FIELD
+                || operator.getCondition() != null || !GROUP_FIELD_NAME.equals(operator.getFieldName());
+    }
+
+    private static boolean sizesGroup(MapOperator operator) {
+        return operator instanceof AddFieldMapOperator add && add.getCondition() == null
+                && add.getOperator() instanceof OneParamMidOperator size && size.getType() == MidOperationType.SIZE
+                && GROUP_FIELD_NAME.equals(size.getOperand()) && writesOutsideGroup(add.getFieldName());
+    }
+
+    private static boolean writesOutsideGroup(String target) {
+        if (target == null) {
+            return false;
+        }
+        final var segments = FieldPath.of(target).segments();
+        return segments.isEmpty() || !GROUP_FIELD_NAME.equals(segments.getFirst());
+    }
+
     static Stream<JsonObject> processGroupByStep(GroupByAggregationStep groupByStep, Stream<JsonObject> resultStream,
-            String dbName, String collName, boolean onlyCounted, PipelineContext context) throws IOException {
+            String dbName, String collName, GroupDemand demand, PipelineContext context) throws IOException {
         final var fieldName = groupByStep.getFieldName();
         final var path = FieldPath.of(fieldName);
-        if (resultStream == null && (onlyCounted || !ScanPreference.groupByPrefersScan(dbName, collName))) {
+        final var onlyCounted = demand == GroupDemand.KEYS;
+        if (resultStream == null && onlyCounted) {
+            final var values = IndexHelper.getDistinctIndexValues(dbName, collName, fieldName, context);
+            if (values != null) {
+                return indexedGroupKeys(values, path);
+            }
+        } else if (resultStream == null && !ScanPreference.groupByPrefersScan(dbName, collName)) {
             final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName, context);
             if (indexEntries != null) {
-                return onlyCounted
-                        ? indexedGroupKeys(indexEntries, path)
-                        : groupByViaIndex(indexEntries, dbName, collName, path, context);
+                return groupByViaIndex(indexEntries, dbName, collName, path, demand, context);
             }
         }
         if (onlyCounted) {
@@ -57,14 +113,13 @@ final class GroupByOperatorHelper {
         return grouped.entrySet().stream().map(jsonElementListEntry -> {
             final var groupedEntry = new JsonObject();
             path.set(groupedEntry, jsonElementListEntry.getKey().element());
-            groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(jsonElementListEntry.getValue(), context));
+            groupedEntry.add(GROUP_FIELD_NAME, groupArray(jsonElementListEntry.getValue(), demand, context));
             return groupedEntry;
         });
     }
 
-    private static Stream<JsonObject> indexedGroupKeys(List<FieldIndexEntry<?>> indexEntries, FieldPath path) {
-        return indexEntries.stream().filter(entry -> !entry.getIds().isEmpty())
-                .map(entry -> keyRow(path, IndexHelper.indexValueToElement(entry.getValue())));
+    private static Stream<JsonObject> indexedGroupKeys(List<Object> values, FieldPath path) {
+        return values.stream().map(value -> keyRow(path, IndexHelper.indexValueToElement(value)));
     }
 
     private static Stream<JsonObject> scannedGroupKeys(Stream<JsonObject> source, FieldPath path,
@@ -84,6 +139,19 @@ final class GroupByOperatorHelper {
         final var row = new JsonObject();
         path.set(row, key);
         return row;
+    }
+
+    private static JsonArray groupArray(List<JsonObject> documents, GroupDemand demand, PipelineContext context) {
+        return demand == GroupDemand.SIZES ? inEncounterOrder(documents, context) : inIdOrder(documents, context);
+    }
+
+    private static JsonArray inEncounterOrder(List<JsonObject> documents, PipelineContext context) {
+        context.tick(documents.size());
+        final var array = new JsonArray();
+        for (final var document : documents) {
+            array.add(document);
+        }
+        return array;
     }
 
     static JsonArray inIdOrder(List<JsonObject> documents, PipelineContext context) {
@@ -107,7 +175,7 @@ final class GroupByOperatorHelper {
     }
 
     private static Stream<JsonObject> groupByViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
-            String collName, FieldPath path, PipelineContext context) throws IOException {
+            String collName, FieldPath path, GroupDemand demand, PipelineContext context) throws IOException {
         final var allIds = new HashSet<String>();
         for (var indexEntry : indexEntries) {
             context.tick(indexEntry.getIds().size());
@@ -135,7 +203,7 @@ final class GroupByOperatorHelper {
                 continue;
             }
             final var groupedEntry = keyRow(path, IndexHelper.indexValueToElement(indexEntry.getValue()));
-            groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(groupDocuments, context));
+            groupedEntry.add(GROUP_FIELD_NAME, groupArray(groupDocuments, demand, context));
             grouped.add(groupedEntry);
         }
         return grouped.stream();

@@ -100,8 +100,7 @@ final class FieldIndexStore {
 
     static void replaceType(File indexFile, File logFile, List<? extends FieldIndexEntry<?>> entries)
             throws IOException {
-        PageTails.forget(logFile);
-        FieldIndexLog.restamp(indexFile);
+        FieldIndexLog.replaced(indexFile);
         if (entries.isEmpty()) {
             deleteIndexFile(indexFile);
             deleteIndexFile(logFile);
@@ -127,8 +126,7 @@ final class FieldIndexStore {
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {
-                    FieldIndexLog.restamp(baseOf(index));
-                    PageTails.forget(index);
+                    FieldIndexLog.replaced(baseOf(index));
                     deleted.add(index.delete());
                     FileLocks.evictIfUnused(index);
                 }
@@ -175,8 +173,7 @@ final class FieldIndexStore {
                     out.write(EMPTY_FILE);
                 }
             });
-            FieldIndexLog.restamp(indexFile);
-            PageTails.forget(FilePaths.logFileOf(indexFile));
+            FieldIndexLog.replaced(indexFile);
             if (Files.deleteIfExists(FilePaths.logFileOf(indexFile).toPath())) {
                 syncFolderOf(indexFile);
             }

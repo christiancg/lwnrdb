@@ -134,6 +134,7 @@ public class FieldIndexLogTest {
         append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
         Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn" + Globals.ID_SEPARATOR + "t",
                 StandardCharsets.UTF_8, StandardOpenOption.APPEND);
+        FieldIndexLog.forgetFilesUnder(tmp);
 
         assertEquals(Map.of("kept", Set.of("k")), loaded());
 
@@ -310,14 +311,14 @@ public class FieldIndexLogTest {
                 List.of(entry("one", "a"), entry("two", "b")))));
 
         assertEquals(Map.of("one", Set.of("a"), "two", Set.of("b")), loaded());
-        assertEquals(log.length(), PageTails.knownTerminatedLength(log));
     }
 
     @Test
-    public void test_an_externally_changed_log_is_checked_again() throws IOException {
+    public void test_a_forgotten_log_is_checked_again() throws IOException {
         append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
         Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn", StandardCharsets.UTF_8,
                 StandardOpenOption.APPEND);
+        FieldIndexLog.forgetFilesUnder(tmp);
 
         assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
                 List.of(entry("kept", "k"), entry("next", "n")))));
@@ -327,13 +328,61 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    public void test_a_failed_append_checks_the_log_again() throws IOException {
+        append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
+        final var kept = Files.readAllBytes(log.toPath());
+        Files.delete(log.toPath());
+        assertTrue(log.mkdir());
+        final var generation = FieldIndexLog.generationOf(log);
+
+        assertThrows(IOException.class, () -> append(List.of(change("lost", List.of("l"), List.of())),
+                List.of(entry("kept", "k"), entry("lost", "l"))));
+
+        assertTrue(FieldIndexLog.generationOf(log) > generation, "a failed append moves the log's generation");
+        assertTrue(log.delete());
+        Files.write(log.toPath(), kept);
+        Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn", StandardCharsets.UTF_8,
+                StandardOpenOption.APPEND);
+        assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
+                List.of(entry("kept", "k"), entry("next", "n")))));
+        assertEquals(Map.of("kept", Set.of("k"), "next", Set.of("n")), loaded());
+    }
+
+    @Test
     public void test_a_folded_log_is_forgotten() throws IOException {
         append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
-        assertTrue(PageTails.knownTerminatedLength(log) > 0);
+        final var generation = FieldIndexLog.generationOf(log);
 
         FieldIndexStore.replaceType(base, log, List.of(entry("kept", "k")));
 
         assertFalse(log.exists());
-        assertEquals(-1L, PageTails.knownTerminatedLength(log));
+        assertTrue(FieldIndexLog.generationOf(log) > generation, "a fold moves the log's generation");
+        assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
+                List.of(entry("kept", "k"), entry("next", "n")))));
+    }
+
+    @Test
+    public void test_appends_move_the_stamp_but_not_the_generation() throws IOException {
+        append(List.of(change("one", List.of("a"), List.of())), List.of(entry("one", "a")));
+        final var generation = FieldIndexLog.generationOf(log);
+        final var stamp = FieldIndexLog.stampOf(base);
+
+        append(List.of(change("two", List.of("b"), List.of())), List.of(entry("one", "a"), entry("two", "b")));
+
+        assertEquals(generation, FieldIndexLog.generationOf(log));
+        assertTrue(FieldIndexLog.stampOf(base) > stamp);
+    }
+
+    @Test
+    public void test_a_fresh_folder_forgets_the_remembered_log_lengths() throws IOException {
+        append(List.of(change("kept", List.of("k"), List.of())), List.of(entry("kept", "k")));
+        Files.writeString(log.toPath(), "+" + Globals.ID_SEPARATOR + "torn", StandardCharsets.UTF_8,
+                StandardOpenOption.APPEND);
+        FileTreeDeleter.forgetWrittenLengthsUnder(tmp);
+
+        assertEquals(1, tornLineChecksDuring(() -> append(List.of(change("next", List.of("n"), List.of())),
+                List.of(entry("kept", "k"), entry("next", "n")))));
+
+        assertFalse(Files.readString(log.toPath()).contains("torn"), "the torn line is cut before the append");
     }
 }

@@ -194,26 +194,17 @@ final class AdminPageCache {
 
     long selectPageForInsert(String dbName, String collName, int entryByteSize) {
         return selectPageForInsert(pageList(dbName, collName), entryByteSize, Map.of(),
-                page -> fs.pageFileLength(dbName, collName, page));
+                fs.pageFileLengthsOf(dbName, collName));
     }
 
     long[] selectPagesForInsert(String dbName, String collName, int[] entryByteSizes) {
-        final var placement = new BatchPagePlacement(pageList(dbName, collName), fileLengthsOf(dbName, collName),
+        final var placement = new BatchPagePlacement(pageList(dbName, collName), fs.pageFileLengthsOf(dbName, collName),
                 configuration.getMaxPageSize(), entryByteSizes);
         final var targets = new long[entryByteSizes.length];
         for (var index = 0; index < entryByteSizes.length; index++) {
             targets[index] = placement.place(entryByteSizes[index]);
         }
         return targets;
-    }
-
-    private LongUnaryOperator fileLengthsOf(String dbName, String collName) {
-        try {
-            final var lengths = fs.pageFileLengths(dbName, collName);
-            return page -> lengths.getOrDefault(page, 0L);
-        } catch (IOException e) {
-            return page -> fs.pageFileLength(dbName, collName, page);
-        }
     }
 
     private long selectPageForInsert(List<AdminPageEntry> pageEntries, int entryByteSize,

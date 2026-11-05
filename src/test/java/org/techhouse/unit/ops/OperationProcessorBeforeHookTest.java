@@ -15,6 +15,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -54,6 +55,10 @@ public class OperationProcessorBeforeHookTest {
     static void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
+        TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget",
+                ConfigKey.BEFORE_HOOK_INSTRUCTION_BUDGET.defaultValue());
+        TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs",
+                ConfigKey.BEFORE_HOOK_TIMEOUT_MS.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }

@@ -13,6 +13,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -190,13 +191,39 @@ final class FileLocks {
         }
     }
 
-    static byte[] readAllBytesLocked(File file) throws IOException {
+    static List<byte[]> readChunksLocked(File file, int chunkBytes) throws IOException {
         final var lock = lockRead(file);
-        try {
-            return Files.readAllBytes(file.toPath());
+        try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
+            return readChunks(reader, reader.length(), chunkBytes);
         } finally {
             lock.unlock();
         }
+    }
+
+    static List<byte[]> readChunks(RandomAccessFile reader, long measuredLength, int chunkBytes) throws IOException {
+        final var chunks = new ArrayList<byte[]>();
+        for (var remaining = measuredLength; remaining > 0;) {
+            final var chunk = readUpTo(reader, (int) Math.min(chunkBytes, remaining));
+            if (chunk.length == 0) {
+                break;
+            }
+            chunks.add(chunk);
+            remaining -= chunk.length;
+        }
+        return chunks;
+    }
+
+    private static byte[] readUpTo(RandomAccessFile reader, int length) throws IOException {
+        final var chunk = new byte[length];
+        var filled = 0;
+        while (filled < length) {
+            final var read = reader.read(chunk, filled, length - filled);
+            if (read < 0) {
+                return Arrays.copyOf(chunk, filled);
+            }
+            filled += read;
+        }
+        return chunk;
     }
 
     static int lineEnd(byte[] bytes, int start) {
@@ -276,7 +303,7 @@ final class FileLocks {
     }
 
     static void moveIntoPlaceUnsynced(Path tmp, Path path) throws IOException {
-        PageTails.forget(path.toFile());
+        PageLengths.forget(path.toFile());
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
@@ -300,7 +327,7 @@ final class FileLocks {
     }
 
     static void cutUnterminatedTail(File file) throws IOException {
-        PageTails.forget(file);
+        PageLengths.forget(file);
         final var cut = file.exists() ? endOfLastCompleteLine(file) : -1L;
         if (cut < 0) {
             return;
@@ -347,10 +374,11 @@ final class FileLocks {
     }
 
     static boolean truncateTo(File file, long length, String failureMessage) {
-        PageTails.forget(file);
+        PageLengths.forget(file);
         try (var channel = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             channel.setLength(length);
             SyncedWrites.content(channel.getChannel(), file.toPath());
+            PageLengths.cut(file, length);
             return true;
         } catch (IOException e) {
             logger.error(failureMessage, e);

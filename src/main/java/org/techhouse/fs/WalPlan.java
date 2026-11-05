@@ -2,7 +2,6 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
@@ -11,12 +10,14 @@ import java.util.TreeMap;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
+import org.techhouse.fs.io.ChunkedChannelWrites;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
 final class WalPlan {
     private static final Logger logger = Logger.logFor(WalPlan.class);
     private static final int PK_ROW_BYTES_HINT = 64;
+    private static final byte LINE_FEED = '\n';
     private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
 
     private final FilePaths paths;
@@ -121,7 +122,7 @@ final class WalPlan {
                 walLock.unlock();
             }
             if (pk != null) {
-                pkIndexStore.appended(dbName, collName, pk, pkRows.size(), liveDelta());
+                pkIndexStore.appended(dbName, collName, pk, pkSlice.length(), pkRows.size(), liveDelta());
             }
             wal.checkpointIfFull(dbName, collName);
         } finally {
@@ -222,7 +223,7 @@ final class WalPlan {
                     }
                     writeAt(changes.file, changes.lengthBefore, record.bytes(), changes.payloadStart,
                             changes.payloadLength);
-                    PageTails.appended(changes.file, changes.lines.getLast());
+                    PageLengths.grew(changes.file, changes.next, endsWithLineFeed(changes.lines.getLast()));
                 }
             }
             if (pk != null) {
@@ -264,8 +265,12 @@ final class WalPlan {
                 failure);
     }
 
+    private static boolean endsWithLineFeed(byte[] line) {
+        return line.length > 0 && line[line.length - 1] == LINE_FEED;
+    }
+
     private static boolean cutBack(File file, long length) {
-        PageTails.forget(file);
+        PageLengths.forget(file);
         return !file.exists() || file.length() == length || FileLocks.truncateTo(file, length);
     }
 
@@ -279,24 +284,19 @@ final class WalPlan {
                     PageHoles.blank(channel, blank[0], blank[1]);
                 }
             } catch (IOException e) {
-                PageTails.forget(changes.file);
+                PageLengths.forget(changes.file);
                 wal.markUnapplied(dbName, collName);
                 logger.error("Committed a write to " + changes.file.getName() + " but could not blank the copies it"
                         + " superseded; they are blanked before the next write to the collection, or at the next"
                         + " startup", e);
                 return;
             }
-            PageTails.blanked(changes.file);
         }
     }
 
     static void writeAt(File file, long offset, byte[] bytes, int from, int length) throws IOException {
         try (var channel = FileChannel.open(file.toPath(), StandardOpenOption.WRITE)) {
-            final var buffer = ByteBuffer.wrap(bytes, from, length);
-            var position = offset;
-            while (buffer.hasRemaining()) {
-                position += channel.write(buffer, position);
-            }
+            ChunkedChannelWrites.writeAt(channel, offset, bytes, from, length);
         }
     }
 }

@@ -20,7 +20,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
-import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
@@ -130,7 +129,7 @@ public final class AggregationOperationHelper {
                     processFilterStep(step, resultStream, dbName, collName, context, boundAfterRowWise(steps, i));
                 case MAP -> processMapStep(step, resultStream, dbName, collName, context);
                 case GROUP_BY -> GroupByOperatorHelper.processGroupByStep((GroupByAggregationStep) step, resultStream,
-                        dbName, collName, stepAt(steps, i + 1) instanceof CountAggregationStep, context);
+                        dbName, collName, GroupByOperatorHelper.demandOf(stepAt(steps, i + 1)), context);
                 case JOIN -> processJoinStep(step, resultStream, dbName, collName, transaction, context);
                 case COUNT -> processCountStep(resultStream, dbName, collName);
                 case DISTINCT -> processDistinctStep(step, resultStream, dbName, collName, context);
@@ -318,11 +317,15 @@ public final class AggregationOperationHelper {
                     .map(jsonObject -> jsonObject.copyWithout(Globals.PK_FIELD));
         } else {
             final var path = FieldPath.of(fieldName);
-            return distinctRows(resultStream.filter(path::isIn).map(jsonObject -> {
-                final var json = new JsonObject();
-                path.set(json, path.valueIn(jsonObject));
-                return json;
-            }), context);
+            final var seen = new HashSet<SaltedKey>();
+            final var held = new HeldRows(context);
+            return resultStream.filter(path::isIn).map(path::valueIn).filter(value -> seen.add(new SaltedKey(value)))
+                    .map(value -> {
+                        final var json = new JsonObject();
+                        path.set(json, value);
+                        held.hold(json);
+                        return json;
+                    });
         }
     }
 

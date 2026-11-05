@@ -1,63 +1,26 @@
 package org.techhouse.fs;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Predicate;
-import org.techhouse.data.FieldIndexEntry;
 
 final class IndexLogOverlay {
-    private static final byte ADD = '+';
-    private static final byte REMOVE = '-';
-    private static final IndexLogOverlay ABSENT = new IndexLogOverlay(false);
+    static final IndexLogOverlay ABSENT = new IndexLogOverlay(false, Map.of());
 
     private final boolean present;
-    private final Map<String, List<Change>> byKey = new LinkedHashMap<>();
+    private final Map<String, List<Change>> byKey;
 
-    private record Change(boolean adds, List<String> ids) {
+    record Change(boolean adds, List<String> ids) {
     }
 
-    private IndexLogOverlay(boolean present) {
+    private IndexLogOverlay(boolean present, Map<String, List<Change>> byKey) {
         this.present = present;
+        this.byKey = byKey;
     }
 
-    static IndexLogOverlay read(File log, IndexKeyOrder order, Predicate<Object> selects) throws IOException {
-        try (var cursor = IndexFileCursor.open(log)) {
-            if (cursor == null) {
-                return ABSENT;
-            }
-            final var overlay = new IndexLogOverlay(true);
-            cursor.seek(0);
-            while (cursor.nextLine()) {
-                if (!cursor.lineTerminated()) {
-                    throw new IndexFileDeclined();
-                }
-                overlay.add(cursor, order, selects);
-            }
-            return overlay;
-        }
-    }
-
-    private void add(IndexFileCursor cursor, IndexKeyOrder order, Predicate<Object> selects) {
-        final var bytes = cursor.lineBytes();
-        final var from = cursor.lineFrom();
-        final var to = cursor.lineTo();
-        if (to - from < 2 || bytes[from] != ADD && bytes[from] != REMOVE
-                || bytes[from + 1] != IndexFileCursor.SEPARATOR) {
-            throw new IndexFileDeclined();
-        }
-        final var keyFrom = from + 2;
-        final var keyTo = cursor.separatorIn(keyFrom, to);
-        final var value = order.parse(bytes, keyFrom, keyTo);
-        if (selects.test(value)) {
-            byKey.computeIfAbsent(FieldIndexEntry.fileKeyOf(value), _ -> new ArrayList<>())
-                    .add(new Change(bytes[from] == ADD, IndexLines.ids(bytes, keyTo, to)));
-        }
+    static IndexLogOverlay of(Map<String, List<Change>> byKey) {
+        return new IndexLogOverlay(true, byKey);
     }
 
     boolean present() {

@@ -24,6 +24,7 @@ final class WalLogState {
     boolean pendingLogged;
     WalWriteGroup group;
     volatile long lastWriteMillis;
+    private volatile boolean seeded;
 
     private WalLogState(String dbName, String collName, String path) {
         this.dbName = dbName;
@@ -47,17 +48,20 @@ final class WalLogState {
         return states.values();
     }
 
-    static WalLogState knownOrRead(File log, String path, String dbName, String collName) throws IOException {
-        final var known = states.get(path);
-        return known != null ? known : of(log, path, dbName, collName);
-    }
-
     static WalLogState of(File log, String path, String dbName, String collName) throws IOException {
+        final var known = states.get(path);
+        if (known != null && known.seeded) {
+            return known;
+        }
         final var state = states.computeIfAbsent(path, _ -> new WalLogState(dbName, collName, path));
-        if (log.length() != state.knownLength) {
+        if (!state.seeded) {
             state.reseed(log);
         }
         return state;
+    }
+
+    void reseedOnNextUse() {
+        seeded = false;
     }
 
     static void forgetUnder(File folder) {
@@ -75,6 +79,7 @@ final class WalLogState {
             recordsSinceCheckpoint = 0;
             pendingLogged = false;
             knownLength = 0L;
+            seeded = true;
             return;
         }
         if (decoded.cleanLength() != log.length()) {
@@ -93,5 +98,6 @@ final class WalLogState {
         pendingLogged = decoded.pendingLogged();
         nextSeq = Math.max(nextSeq, decoded.lastSeq() + 1);
         knownLength = log.length();
+        seeded = true;
     }
 }

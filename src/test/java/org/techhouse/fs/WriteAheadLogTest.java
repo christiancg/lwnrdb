@@ -70,21 +70,23 @@ public class WriteAheadLogTest {
     }
 
     @Test
-    public void test_a_record_appended_by_another_writer_is_seen_by_length() throws Exception {
+    public void test_a_record_appended_by_another_writer_is_seen_once_the_state_is_forgotten() throws Exception {
         final var other = WalCodec
                 .encode(new WalRecord(500L, List.of(new WalChange(WalTarget.PAGE_BLANK, 0L, 0L, 0L, new byte[0]))));
         Files.write(log().toPath(), other, StandardOpenOption.APPEND);
+        OutsideWrites.madeTo(log());
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
         final var records = decoded().records();
-        assertEquals(501L, records.getLast().seq(), "the bookkeeping re-reads a log it did not write last");
+        assertEquals(501L, records.getLast().seq(), "the bookkeeping re-reads a log whose state was forgotten");
         assertEquals(5, records.size());
     }
 
     @Test
     public void test_a_torn_tail_is_cut_before_the_next_append() throws Exception {
         Files.write(log().toPath(), new byte[]{'W', 'R', 0}, StandardOpenOption.APPEND);
+        OutsideWrites.madeTo(log());
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
@@ -368,6 +370,7 @@ public class WriteAheadLogTest {
     @Test
     public void test_state_of_a_missing_log_is_empty() throws Exception {
         assertTrue(log().delete());
+        OutsideWrites.madeTo(log());
 
         rf.replace("a", "new-a", 0, PagePlacement.APPEND);
 

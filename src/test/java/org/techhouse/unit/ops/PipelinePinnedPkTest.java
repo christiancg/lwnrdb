@@ -30,6 +30,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.OutsideWrites;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.PipelineContext;
 import org.techhouse.test.TestGlobals;
@@ -173,10 +174,12 @@ public class PipelinePinnedPkTest {
         final var index = new File(TestGlobals.PATH + "/" + DB + "/" + COLL + "/" + COLL + "-pk.idx");
         final var original = Files.readAllBytes(index.toPath());
         Files.writeString(index.toPath(), "garbage\n", StandardCharsets.UTF_8);
+        OutsideWrites.madeTo(index);
         locks.lockRead(DB, COLL);
         try (var context = context()) {
             assertThrows(IOException.class, () -> context.pinnedPkIndex(DB, COLL));
             Files.write(index.toPath(), original);
+            OutsideWrites.madeTo(index);
             assertEquals(200, pinnedCount(context));
         } finally {
             locks.releaseRead(DB, COLL);

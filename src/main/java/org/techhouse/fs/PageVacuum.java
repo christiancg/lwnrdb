@@ -55,7 +55,7 @@ final class PageVacuum {
             return null;
         }
         final var page = paths.collectionPage(dbName, collName, pageNumber);
-        final var fileLength = page.length();
+        final var fileLength = PageLengths.lengthOf(page);
         final var maxPageSize = configuration.getMaxPageSize();
         final var compact = compactsBelowTheCap(dbName, residentRows);
         final var skippedUpTo = compact ? PagePlacement.compactFloor(maxPageSize) : maxPageSize;
@@ -174,6 +174,7 @@ final class PageVacuum {
             begun = barrier.begin(dbName, collName, pageNumber, bytes.length, alongside);
             faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, dbName, collName);
             FileLocks.moveIntoPlaceUnsynced(temp.toPath(), page.toPath());
+            PageLengths.cut(page, lengthAfter);
         } catch (IOException e) {
             Files.deleteIfExists(temp.toPath());
             journal.end(intent);

@@ -11,6 +11,7 @@ import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.data.IndexKind;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
@@ -108,14 +109,14 @@ public final class CountOperatorHelper {
     private static FastCount countOfSingleEquals(List<BaseAggregationStep> steps, int countIndex, String dbName,
             String collName, PipelineContext context) throws IOException {
         final var filters = stepsBesidesSorts(steps, countIndex);
-        final var operator = filters.size() == 1 ? singleScalarEquals(filters.getFirst()) : null;
-        if (operator == null || cache.hasNoIndex(dbName, collName, operator.getField())) {
+        final var operator = filters.size() == 1 ? singleScalarMembership(filters.getFirst()) : null;
+        final var values = operator == null ? null : membershipValues(operator);
+        if (values == null || cache.hasNoIndex(dbName, collName, operator.getField())) {
             return null;
         }
         final var fieldName = operator.getField();
-        final var value = scalarOperand(operator.getValue());
         return countWhileNothingPending(dbName, collName, fieldName, countIndex, context,
-                () -> cache.countEquals(dbName, collName, fieldName, value));
+                () -> cache.countEqualsAny(dbName, collName, fieldName, values));
     }
 
     private static List<BaseAggregationStep> stepsBesidesSorts(List<BaseAggregationStep> steps, int countIndex) {
@@ -123,13 +124,34 @@ public final class CountOperatorHelper {
                 .toList();
     }
 
-    private static FieldOperator singleScalarEquals(BaseAggregationStep step) {
+    private static FieldOperator singleScalarMembership(BaseAggregationStep step) {
         if (step instanceof FilterAggregationStep filter && filter.getOperator() instanceof FieldOperator field
-                && field.getFieldOperatorType() == FieldOperatorType.EQUALS
-                && !JsonUtils.isPrimaryKeyPath(field.getField()) && scalarOperand(field.getValue()) != null) {
+                && (field.getFieldOperatorType() == FieldOperatorType.EQUALS
+                        || field.getFieldOperatorType() == FieldOperatorType.IN)
+                && !JsonUtils.isPrimaryKeyPath(field.getField())) {
             return field;
         }
         return null;
+    }
+
+    private static List<Object> membershipValues(FieldOperator operator) {
+        if (operator.getFieldOperatorType() == FieldOperatorType.EQUALS) {
+            final var value = scalarOperand(operator.getValue());
+            return value == null ? null : List.of(value);
+        }
+        return operator.getValue() instanceof JsonArray operands ? scalarOperands(operands.asList()) : null;
+    }
+
+    static List<Object> scalarOperands(List<JsonBaseElement> operands) {
+        final var values = new ArrayList<>(operands.size());
+        for (final var operand : operands) {
+            final var value = scalarOperand(operand);
+            if (value == null) {
+                return null;
+            }
+            values.add(value);
+        }
+        return values.isEmpty() ? null : values;
     }
 
     static Object scalarOperand(JsonBaseElement operand) {

@@ -16,6 +16,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.OutsideWrites;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -297,9 +298,10 @@ public class CacheCompletenessGateTest extends CacheFixtureSupport {
             injectCachedEntry(collId, DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, stale));
         }
         assertEquals(2, cache.pkCountForCoverage(TestGlobals.DB, TestGlobals.COLL));
-        java.nio.file.Files.setLastModifiedTime(
-                java.nio.file.Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL, TestGlobals.COLL + "-pk.idx"),
-                java.nio.file.attribute.FileTime.fromMillis(0L));
+        final var pkIndex = java.nio.file.Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL,
+                TestGlobals.COLL + "-pk.idx");
+        java.nio.file.Files.setLastModifiedTime(pkIndex, java.nio.file.attribute.FileTime.fromMillis(0L));
+        OutsideWrites.madeTo(pkIndex.toFile());
 
         assertEquals(-1, cache.pkCountForCoverage(TestGlobals.DB, TestGlobals.COLL));
         final var loaded = cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);

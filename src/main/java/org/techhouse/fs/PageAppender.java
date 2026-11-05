@@ -87,7 +87,7 @@ final class PageAppender {
                         ? positions[index]
                         : RecordReplacer.positionAfter(moved, row.getValue(), positions[index]);
                 RecordReplacer.requireWithinPage(row, position,
-                        paths.collectionPage(dbName, collName, row.getPage()).length());
+                        PageLengths.lengthOf(paths.collectionPage(dbName, collName, row.getPage())));
                 plan.deleteRow(row.getValue());
                 plan.blank(row.getPage(), position, row.getLength());
             }

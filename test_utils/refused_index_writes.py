@@ -132,6 +132,65 @@ def test_writes_on_a_refused_pk_and_refused_index_types(c: Conn, log_path: str):
           "The field index " in log and FIELD_REFUSED_WARNING in log)
 
 
+LOG_ROUNDS = 6
+LOG_ROUND_DOCS = 1000
+
+
+def u_log_bytes(work_dir: str) -> int:
+    path = os.path.join(work_dir, "db", REFUSED_DB, REFUSED_COLL, f"{REFUSED_COLL}-u-Number.idxlog")
+    return os.path.getsize(path) if os.path.exists(path) else 0
+
+
+def u_probes(base: int, previous_base: int) -> list:
+    return [[bu.filter_step("u", "EQUALS", base + 3)], [bu.filter_step("u", "EQUALS", previous_base + 3)],
+            [bu.filter_step("u", "IN", [base + 1, base + 500, previous_base + 2, base + LOG_ROUND_DOCS + 7])],
+            [bu.filter_step("u", "GREATER_THAN_EQUALS", base + LOG_ROUND_DOCS - 10)],
+            [bu.filter_step("u", "SMALLER_THAN", 20)],
+            [bu.filter_step("u", "EQUALS", base + 9), {"type": "COUNT"}],
+            [bu.filter_step("u", "IN", [base + 4, base + 5, previous_base + 4]), {"type": "COUNT"}]]
+
+
+def answer_of(c: Conn, steps: list) -> list:
+    r = send(c, {"type": "AGGREGATE", "aggregationSteps": steps})
+    if steps[-1].get("type") == "COUNT":
+        return [bu.count_of(r)]
+    return sorted(row.get("_id", str(row)) for row in (r.get("results") or []))
+
+
+def u_mismatches(c: Conn, base: int, previous_base: int) -> list:
+    return [str(steps) for steps in u_probes(base, previous_base) for _ in range(2)
+            if answer_of(c, steps) != answer_of(c, [{"type": "SKIP", "skip": 0}] + steps)]
+
+
+def test_file_answers_follow_a_growing_log_and_its_folds(c: Conn, work_dir: str):
+    section("Answers from a refused type's files while its .idxlog grows, is re-read and is folded")
+    first = REFUSED_DOCS - LOG_ROUND_DOCS
+    previous_base = 0
+    sizes = [u_log_bytes(work_dir)]
+    immediate, settled = [], []
+    for round_number in range(LOG_ROUNDS):
+        base = 1_000_000 * (round_number + 1)
+        objects = []
+        for k in range(LOG_ROUND_DOCS):
+            moved = document(first + k, k % 50, f"s{k % 40}")
+            moved["u"] = base + k
+            objects.append(moved)
+        check_status(f"BULK_SAVE round {round_number} moves {LOG_ROUND_DOCS} unique u values",
+                     send(c, {"type": "BULK_SAVE", "objects": objects}), "OK")
+        immediate += u_mismatches(c, base, previous_base)
+        bu.wait_until(lambda: u_log_bytes(work_dir) != sizes[-1], 30.0, interval_s=0.2)
+        bu.wait_until(lambda: not mismatched(c), CONVERGE_S, interval_s=0.5)
+        settled += u_mismatches(c, base, previous_base)
+        sizes.append(u_log_bytes(work_dir))
+        previous_base = base
+    check("every u query answers like a scan right after each bulk write", not immediate, detail=str(immediate[:3]))
+    check("every u query answers like a scan once each round's log append landed", not settled,
+          detail=str(settled[:3]))
+    check("the u log grew between rounds", any(b > a for a, b in zip(sizes, sizes[1:])), detail=str(sizes))
+    check("the u log was folded at least once while the queries ran", any(b < a for a, b in zip(sizes, sizes[1:])),
+          detail=str(sizes))
+
+
 def run_refused_index_phase():
     bu.require_jar()
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-refused-index-")
@@ -143,6 +202,7 @@ def run_refused_index_phase():
         with Conn(port=REFUSED_PORT) as c:
             c.authenticate(bu.USERNAME, bu.PASSWORD)
             test_writes_on_a_refused_pk_and_refused_index_types(c, log_path)
+            test_file_answers_follow_a_growing_log_and_its_folds(c, work_dir)
     finally:
         bu.stop_server(proc, port=REFUSED_PORT)
         if bu.failure_count():

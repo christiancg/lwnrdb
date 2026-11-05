@@ -43,6 +43,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final ScanOrderMemo scanOrder = new ScanOrderMemo();
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private final AbsentIndexTypes absentIndexTypes = new AbsentIndexTypes();
+    private final ScanRefusals scanRefusals = new ScanRefusals();
     private final IndexIdCounts idCounts = IocContainer.get(IndexIdCounts.class);
     private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
             .get(org.techhouse.concurrency.ResourceLocking.class);
@@ -370,7 +371,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
                     : fs.streamEntries(dbName, collName);
         }
         final var scan = new ScanAdmission(sortedPages, inScanOrder, pageReader(dbName, collName), memoryManagement,
-                scanCompletion(dbName, collName));
+                scanCompletion(dbName, collName, ScanAdmission.liveBytesOf(sortedPages)));
         return StreamSupport.stream(scan, false);
     }
 
@@ -386,15 +387,40 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return page -> fs.readWholeCollectionPage(dbName, collName, page).values();
     }
 
-    private ScanAdmission.Completion scanCompletion(String dbName, String collName) {
+    private ScanAdmission.Completion scanCompletion(String dbName, String collName, long liveBytes) {
         if (userCache.isCachingDisabled(dbName) || !locks.holdsCollectionLock(dbName, collName)) {
             return null;
         }
-        return (collected, measuredBytes) -> {
-            if (locks.holdsCollectionLock(dbName, collName) && collected.size() == pkIndexSize(dbName, collName)) {
-                userCache.admitScannedCollection(dbName, collName, collected, measuredBytes);
+        final var identifier = getCollectionIdentifier(dbName, collName);
+        if (scanRefusals.refusedAt(identifier, freeBudgetBytes(), liveBytes)) {
+            return null;
+        }
+        return new ScanAdmission.Completion() {
+            @Override
+            public void admit(ConcurrentHashMap<String, DbEntry> collected, long measuredBytes) {
+                if (locks.holdsCollectionLock(dbName, collName) && collected.size() == pkIndexSize(dbName, collName)) {
+                    userCache.admitScannedCollection(dbName, collName, collected, measuredBytes);
+                }
+            }
+
+            @Override
+            public void refuse(long reachedBytes) {
+                scanRefusals.refused(identifier, reachedBytes, liveBytes);
             }
         };
+    }
+
+    private long freeBudgetBytes() {
+        final var maxBytes = userCache.maxMemoryBytes();
+        return maxBytes == Globals.CACHE_UNLIMITED ? Long.MAX_VALUE : maxBytes - userCache.footprintBytes();
+    }
+
+    public void forgetScanRefusal(String dbName, String collName) {
+        scanRefusals.forget(dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName);
+    }
+
+    public void forgetScanRefusals(String dbName) {
+        scanRefusals.forgetDatabase(dbName);
     }
 
     private static Stream<DbEntry> sortedById(Collection<DbEntry> pageDocuments) {

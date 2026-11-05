@@ -3,9 +3,12 @@ package org.techhouse.unit.cache;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongUnaryOperator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -146,14 +149,22 @@ public class AdminPageSelectionTest {
         assertEquals(400, cache.getAdminPageEntries(TestGlobals.DB, COLL).size());
     }
 
-    private static void firstPageFileOfLength(long length) throws IOException {
+    private static java.io.File pageFile(long number) {
         final var folder = new java.io.File(
                 TestGlobals.PATH + java.io.File.separator + TestGlobals.DB + java.io.File.separator + COLL);
-        assertTrue(folder.isDirectory() || folder.mkdirs());
-        try (var file = new java.io.RandomAccessFile(
-                new java.io.File(folder, COLL + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION), "rw")) {
-            file.setLength(length);
+        return new java.io.File(folder, COLL + Globals.FILE_PAGE_SEPARATOR + number + Globals.DB_FILE_EXTENSION);
+    }
+
+    private static void pageFileOfLength(long number, long length) throws IOException {
+        final var file = pageFile(number);
+        assertTrue(file.getParentFile().isDirectory() || file.getParentFile().mkdirs());
+        try (var raf = new java.io.RandomAccessFile(file, "rw")) {
+            raf.setLength(length);
         }
+    }
+
+    private static void firstPageFileOfLength(long length) throws IOException {
+        pageFileOfLength(0, length);
     }
 
     @Test
@@ -176,23 +187,70 @@ public class AdminPageSelectionTest {
         assertEquals(0L, cache.selectPagesForInsert(TestGlobals.DB, COLL, new int[]{100})[0]);
     }
 
+    private record CountingLengths(FileSystem realFs, FileSystem spyFs, List<Long> asked) {
+    }
+
+    private CountingLengths countingLengths() throws NoSuchFieldException, IllegalAccessException {
+        final var pageCache = TestUtils.getPrivateField(cache.adminCache(), "pageCache", Object.class);
+        final var realFs = TestUtils.getPrivateField(pageCache, "fs", FileSystem.class);
+        final var spyFs = Mockito.spy(realFs);
+        final var asked = new ArrayList<Long>();
+        Mockito.doAnswer(invocation -> {
+            final var real = (LongUnaryOperator) invocation.callRealMethod();
+            return (LongUnaryOperator) page -> {
+                asked.add(page);
+                return real.applyAsLong(page);
+            };
+        }).when(spyFs).pageFileLengthsOf(TestGlobals.DB, COLL);
+        TestUtils.setPrivateField(pageCache, "fs", spyFs);
+        return new CountingLengths(realFs, spyFs, asked);
+    }
+
+    private void restore(CountingLengths counting) throws NoSuchFieldException, IllegalAccessException {
+        final var pageCache = TestUtils.getPrivateField(cache.adminCache(), "pageCache", Object.class);
+        TestUtils.setPrivateField(pageCache, "fs", counting.realFs());
+    }
+
     @Test
     public void test_a_page_without_live_room_is_never_statted() throws NoSuchFieldException, IllegalAccessException {
         page(0, maxPageSize());
         page(1, maxPageSize() - 50);
         page(2, 0);
-        final var pageCache = TestUtils.getPrivateField(cache.adminCache(), "pageCache", Object.class);
-        final var realFs = TestUtils.getPrivateField(pageCache, "fs", FileSystem.class);
-        final var spyFs = Mockito.spy(realFs);
-        TestUtils.setPrivateField(pageCache, "fs", spyFs);
+        final var counting = countingLengths();
         try {
             assertEquals(2L, cache.selectPageForInsert(TestGlobals.DB, COLL, 100));
 
-            Mockito.verify(spyFs, Mockito.never()).pageFileLength(TestGlobals.DB, COLL, 0L);
-            Mockito.verify(spyFs, Mockito.never()).pageFileLength(TestGlobals.DB, COLL, 1L);
-            Mockito.verify(spyFs).pageFileLength(TestGlobals.DB, COLL, 2L);
+            assertEquals(List.of(2L), counting.asked());
+            Mockito.verify(counting.spyFs(), Mockito.never()).pageFileLength(Mockito.anyString(), Mockito.anyString(),
+                    Mockito.anyLong());
         } finally {
-            TestUtils.setPrivateField(pageCache, "fs", realFs);
+            restore(counting);
+        }
+    }
+
+    @Test
+    public void test_a_relocation_over_many_pages_stats_nothing() throws Exception {
+        final var pages = 48;
+        for (var number = 0; number < pages; number++) {
+            page(number, maxPageSize() * 3 / 4 + 1);
+            pageFileOfLength(number, maxPageSize());
+        }
+        assertEquals(pages, cache.selectPageForInsert(TestGlobals.DB, COLL, 100), "every page file is full");
+        final var counting = countingLengths();
+        try {
+            for (var number = 0; number < pages; number++) {
+                assertTrue(pageFile(number).delete());
+            }
+
+            assertEquals(pages, cache.selectPageForInsert(TestGlobals.DB, COLL, 100),
+                    "a stat would find every page gone and pick page 0, so the remembered lengths answered");
+            assertEquals(pages, counting.asked().size());
+            assertEquals(pages, cache.selectPagesForInsert(TestGlobals.DB, COLL, new int[]{100})[0]);
+            Mockito.verify(counting.spyFs(), Mockito.never()).pageFileLength(Mockito.anyString(), Mockito.anyString(),
+                    Mockito.anyLong());
+            Mockito.verify(counting.spyFs(), Mockito.never()).pageFileLengths(Mockito.anyString(), Mockito.anyString());
+        } finally {
+            restore(counting);
         }
     }
 }

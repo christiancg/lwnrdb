@@ -97,6 +97,7 @@ HEAL_SEEDED = 1000
 RACE_SECONDS = 3.0
 RACE_MAX_SECONDS = 90.0
 RACE_MIN_WRITES = 100
+RACE_MIN_CORRUPTIONS = 100
 
 PERM_USER_PREFIX = "page_grow_user_"
 PERM_FILL_PREFIX = "page_fill_user_"
@@ -2003,6 +2004,13 @@ def test_a_script_predicate_returning_infinity_keeps_its_document(conn: Conn):
               f"index={got}, scan={scanned}")
 
 
+def heals_logged_since(log_path: str, log_offset: int) -> int:
+    with open(log_path, "rb") as fp:
+        fp.seek(log_offset)
+        logged = fp.read()
+    return logged.decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-pk")
+
+
 def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, log_path: str):
     section("A PK-index self-heal racing committed writes")
 
@@ -2011,6 +2019,7 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
 
     log_offset = os.path.getsize(log_path)
     committed = []
+    corruptions = []
     errors = []
     stop = threading.Event()
     guard = threading.Lock()
@@ -2040,6 +2049,7 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
         while not stop.is_set():
             try:
                 append_torn_pk_line(work_dir, DB, HEAL_COLL)
+                corruptions.append(time.monotonic())
             except OSError:
                 pass
             time.sleep(0.005)
@@ -2051,7 +2061,8 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
     for thread in threads:
         thread.start()
     time.sleep(RACE_SECONDS)
-    while len(committed) <= RACE_MIN_WRITES and time.monotonic() - started < RACE_MAX_SECONDS:
+    while ((len(committed) <= RACE_MIN_WRITES or len(corruptions) <= RACE_MIN_CORRUPTIONS)
+           and time.monotonic() - started < RACE_MAX_SECONDS):
         time.sleep(0.2)
     raced_for = time.monotonic() - started
     stop.set()
@@ -2062,11 +2073,10 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
     check("the race committed enough writes to be worth asserting on", len(committed) > RACE_MIN_WRITES,
           f"only {len(committed)} writes committed in {raced_for:.1f}s")
 
-    with open(log_path, "rb") as fp:
-        fp.seek(log_offset)
-        heals = fp.read().decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-pk")
-    check("the writes really did race a self-heal", heals > 20,
-          f"only {heals} self-heals fired, so the assertions below prove little")
+    heals = heals_logged_since(log_path, log_offset)
+    check("the writes really did race torn lines appended to the live PK index",
+          len(corruptions) > RACE_MIN_CORRUPTIONS,
+          f"{len(corruptions)} torn lines appended and {heals} self-heals fired in {raced_for:.1f}s")
 
     missing = sorted(set(committed) - pk_index_ids(index_file))
     check("no committed write was erased from the PK index by a self-heal", not missing,
@@ -3002,6 +3012,97 @@ def run_page_placement_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+RELOCATION_DB = "relocation_db"
+RELOCATION_COLL = "many_pages"
+RELOCATION_DOCS = 1500
+RELOCATION_OPS = 1200
+RELOCATION_PAGE_BYTES = 4096
+
+
+def relocation_doc(i: int, value: int) -> dict:
+    return {"_id": f"rel_{i:05d}", "v": value, "cat": f"c{i % 13}", "pad": "r" * (60 + value % 5 * 40)}
+
+
+def churn_many_page_relocations(conn: Conn, expected: dict, first_op: int) -> list:
+    refused = []
+    for op in range(first_op, first_op + RELOCATION_OPS):
+        index = (op * 7919 + 13) % (RELOCATION_DOCS + first_op)
+        target = f"rel_{index:05d}"
+        if op % 5 == 4 and target in expected:
+            response = conn.send({"type": "DELETE", "databaseName": RELOCATION_DB,
+                                  "collectionName": RELOCATION_COLL, "_id": target})
+            del expected[target]
+        else:
+            doc = relocation_doc(index if op % 5 else RELOCATION_DOCS + op, op + 1)
+            response = conn.save(doc, db=RELOCATION_DB, coll=RELOCATION_COLL)
+            expected[doc["_id"]] = op + 1
+        if response.get("status") != "OK":
+            refused.append(target)
+    return refused
+
+
+def test_many_page_relocations_read_back(conn: Conn, work_dir: str, expected: dict, when: str):
+    section(f"Relocating updates over many pages read back exactly {when}")
+    wrong = [doc_id for doc_id, value in sorted(expected.items())
+             if (conn.find(doc_id, db=RELOCATION_DB, coll=RELOCATION_COLL).get("object") or {}).get("v") != value]
+    check("FIND_BY_ID answers every surviving id with its last acknowledged value", not wrong, f"wrong: {wrong[:5]}")
+    by_scan = conn.ids(RELOCATION_COLL, FULL_SCAN, db=RELOCATION_DB)
+    check("a scan returns exactly the surviving ids", by_scan == sorted(expected),
+          f"scan={len(by_scan)} expected={len(expected)} differ={sorted(set(by_scan) ^ set(expected))[:5]}")
+    check("the pk count equals the scan", conn.count_via_pk(RELOCATION_DB, RELOCATION_COLL) == len(by_scan))
+    oversized = oversized_pages(work_dir, RELOCATION_COLL, RELOCATION_PAGE_BYTES, RELOCATION_DB)
+    check("no page file grew past maxPageSize, so every placement saw the page's real length", not oversized,
+          f"oversized: {oversized}")
+    check(f"the collection spans many pages ({len(page_files(work_dir, RELOCATION_DB, RELOCATION_COLL))})",
+          len(page_files(work_dir, RELOCATION_DB, RELOCATION_COLL)) >= 30)
+    deadline = time.monotonic() + 5.0
+    while True:
+        drift = occupancy_drift(recorded_pages(work_dir, RELOCATION_DB, RELOCATION_COLL),
+                                actual_pages(work_dir, RELOCATION_DB, RELOCATION_COLL))
+        if not drift or time.monotonic() > deadline:
+            break
+        time.sleep(0.2)
+    check("every page row equals its page's live bytes and entries", not drift, "; ".join(drift[:5]))
+
+
+def run_many_page_relocation_kill_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-relocation-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, syncWrites=True, maxMemory="256mb", maxPageSize="4kb",
+                    maxEntrySize=MAX_ENTRY_SIZE)
+    proc = bu.start_server(work_dir, log_path)
+    expected = {}
+    try:
+        with admin_conn() as conn:
+            section("Relocation churn over many pages, then a kill -9 and a restart")
+            check_status("create the database", conn.send({"type": "CREATE_DATABASE",
+                                                           "databaseName": RELOCATION_DB}), "OK")
+            check_status("create the collection", conn.create_coll(RELOCATION_COLL, db=RELOCATION_DB), "OK")
+            check_status("index cat", conn.create_index("cat", coll=RELOCATION_COLL, db=RELOCATION_DB), "OK")
+            for start in range(0, RELOCATION_DOCS, 500):
+                objects = [relocation_doc(i, 0) for i in range(start, min(start + 500, RELOCATION_DOCS))]
+                check_status(f"bulk insert from {start}", conn.send({
+                    "type": "BULK_SAVE", "databaseName": RELOCATION_DB, "collectionName": RELOCATION_COLL,
+                    "objects": objects}), "OK")
+            expected.update({f"rel_{i:05d}": 0 for i in range(RELOCATION_DOCS)})
+            refused = churn_many_page_relocations(conn, expected, 0)
+            check("every churned write was acknowledged", not refused, f"refused: {refused[:5]}")
+        proc.kill()
+        proc.wait(timeout=30)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_many_page_relocations_read_back(conn, work_dir, expected, "after a kill -9")
+            refused = churn_many_page_relocations(conn, expected, RELOCATION_OPS)
+            check("churn after the restart was acknowledged", not refused, f"refused: {refused[:5]}")
+        bu.stop_server(proc)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_many_page_relocations_read_back(conn, work_dir, expected, "after more churn and a clean restart")
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 REPAIR_DB = "repair_db"
 REPAIR_COLL = "bulk_killed"
 REPAIR_FIELDS = ("cat", "n")
@@ -3298,6 +3399,7 @@ def main():
         run_pending_frame_phase()
         run_checkpoint_phase()
         run_page_placement_phase()
+        run_many_page_relocation_kill_phase()
         run_kill_during_bulk_repair_phase()
     finally:
         bu.stop_server(proc)

@@ -118,6 +118,23 @@ final class IndexFileCursor implements AutoCloseable {
         }
     }
 
+    byte[] bytesAt(long from, int count) throws IOException {
+        final var bytes = new byte[count];
+        for (var at = 0; at < count; at++) {
+            bytes[at] = (byte) byteAt(from + at);
+        }
+        return bytes;
+    }
+
+    boolean holdsAt(long from, byte[] expected) throws IOException {
+        for (var at = 0; at < expected.length; at++) {
+            if (byteAt(from + at) != (expected[at] & 0xFF)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void seek(long position) {
         readPosition = position;
         lineStart = 0;
