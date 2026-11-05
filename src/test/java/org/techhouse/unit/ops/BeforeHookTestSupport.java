@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.TriggerDefinition;
@@ -43,6 +44,10 @@ final class BeforeHookTestSupport {
     static void tearDownAll() throws Exception {
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
+        TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget",
+                ConfigKey.BEFORE_HOOK_INSTRUCTION_BUDGET.defaultValue());
+        TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs",
+                ConfigKey.BEFORE_HOOK_TIMEOUT_MS.defaultValue());
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
