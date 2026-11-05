@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import dataclasses
 import pathlib
 import re
 import shutil
@@ -10,6 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -31,10 +33,14 @@ COPY app.jar /app/app.jar
 """
 TRACED = ("openat,stat,newfstatat,fstat,statx,lstat,access,faccessat,faccessat2,read,pread64,write,pwrite64,writev,"
           "fsync,fdatasync,ftruncate,lseek,rename,renameat,renameat2,unlink,unlinkat,close,mkdir,mkdirat,fchmod,"
-          "fchmodat")
+          "fchmodat,fallocate,sync_file_range")
 PATH_CALLS = {"openat", "stat", "newfstatat", "statx", "lstat", "access", "faccessat", "faccessat2", "unlinkat",
               "unlink", "renameat", "renameat2", "rename", "mkdirat", "mkdir", "fchmodat"}
-LINE = re.compile(r'^\d+\s+(\w+)\((.*)$')
+LINE = re.compile(r'^(\d+)\s+(\w+)\((.*)$')
+RESUMED = re.compile(r'^(\d+)\s+<\.\.\. (\w+) resumed>')
+DURATION = re.compile(r'<(\d+\.\d+)>\s*$')
+SYNC_CALLS = {"fsync", "fdatasync", "sync_file_range"}
+RENAME_CALLS = {"rename", "renameat", "renameat2"}
 DESCRIPTOR_PATH = re.compile(r'<([^>]*)>')
 QUOTED = re.compile(r'"([^"]*)"')
 BUDGETS = {"insert": 18.0, "update": 21.0, "delete": 17.0, "bulk_insert": 1.5, "bulk_update": 1.5,
@@ -104,7 +110,7 @@ class Container:
     def trace(phase: str) -> None:
         pid = sh("docker", "exec", CONTAINER, "pgrep", "-f", "app.jar").stdout.split()[0]
         threads = sh("docker", "exec", CONTAINER, "ls", f"/proc/{pid}/task").stdout.split()
-        command = ["docker", "exec", "-d", CONTAINER, "strace", "-f", "-qq", "-y", "-e", f"trace={TRACED}", "-o",
+        command = ["docker", "exec", "-d", CONTAINER, "strace", "-f", "-qq", "-y", "-T", "-e", f"trace={TRACED}", "-o",
                    f"/out/{phase}.strace"]
         for thread in threads:
             command += ["-p", thread]
@@ -140,52 +146,125 @@ def kind_of(path: str) -> str:
     return admin + "folder " + path.split("/")[-1]
 
 
-def file_calls(trace: pathlib.Path) -> collections.Counter:
-    counts: collections.Counter = collections.Counter()
-    if not trace.exists():
-        return counts
-    for line in trace.read_text(errors="replace").splitlines():
+@dataclasses.dataclass
+class Trace:
+    counts: collections.Counter = dataclasses.field(default_factory=collections.Counter)
+    syncs: dict = dataclasses.field(default_factory=lambda: collections.defaultdict(list))
+
+    def wal_checkpoints(self) -> int:
+        return sum(count for (call, kind), count in self.counts.items() if call in RENAME_CALLS and kind == ".wal")
+
+
+def path_of(call: str, rest: str) -> str | None:
+    quoted = QUOTED.search(rest)
+    if call in PATH_CALLS and quoted:
+        return quoted.group(1)
+    descriptor = DESCRIPTOR_PATH.search(rest)
+    return descriptor.group(1) if descriptor else None
+
+
+def parse_trace(text: str) -> Trace:
+    trace = Trace()
+    unfinished: dict[str, str] = {}
+    for line in text.splitlines():
+        resumed = RESUMED.match(line)
+        if resumed:
+            kind = unfinished.pop(resumed.group(1), None)
+            duration = DURATION.search(line)
+            if kind is not None and duration and resumed.group(2) in SYNC_CALLS:
+                trace.syncs[kind].append(float(duration.group(1)))
+            continue
         match = LINE.match(line)
         if not match:
             continue
-        call, rest = match.group(1), match.group(2)
-        quoted = QUOTED.search(rest)
-        descriptor = DESCRIPTOR_PATH.search(rest)
-        if call in PATH_CALLS and quoted:
-            path = quoted.group(1)
-        elif descriptor:
-            path = descriptor.group(1)
-        else:
+        pid, call, rest = match.groups()
+        path = path_of(call, rest)
+        if path is None or not (path.startswith("/app/db") or path.startswith("db/")):
             continue
-        if path.startswith("/app/db") or path.startswith("db/"):
-            counts[(call, kind_of(normalize(path)))] += 1
-    return counts
+        kind = kind_of(normalize(path))
+        trace.counts[(call, kind)] += 1
+        if call not in SYNC_CALLS:
+            continue
+        duration = DURATION.search(rest)
+        if rest.rstrip().endswith("<unfinished ...>"):
+            unfinished[pid] = kind
+        elif duration:
+            trace.syncs[kind].append(float(duration.group(1)))
+    return trace
+
+
+def read_trace(path: pathlib.Path) -> Trace:
+    return parse_trace(path.read_text(errors="replace")) if path.exists() else Trace()
+
+
+def percentile(sorted_values: list[float], fraction: float) -> float:
+    rank = max(1, -(-len(sorted_values) * fraction // 1))
+    return sorted_values[int(rank) - 1]
+
+
+def sync_summary(durations: list[float]) -> str:
+    ordered = sorted(durations)
+    return (f"n={len(ordered)} sum={sum(ordered) * 1000:.0f}ms p50={percentile(ordered, 0.5) * 1000:.2f}ms "
+            f"p99={percentile(ordered, 0.99) * 1000:.2f}ms max={ordered[-1] * 1000:.2f}ms")
 
 
 class Audit:
-    def __init__(self, container: Container, ops: int):
+    def __init__(self, container: Container, ops: int, concurrency: int):
         self.container = container
         self.ops = ops
+        self.concurrency = concurrency
         self.per_op: dict[str, float] = {}
+
+    def send_all(self, conn: b.Conn, requests: list[dict]) -> None:
+        if self.concurrency <= 1:
+            for request in requests:
+                ok(conn, request)
+            return
+        failures: list[BaseException] = []
+
+        def worker(share: list[dict]) -> None:
+            try:
+                with b.Conn.authenticated(timeout=600) as own:
+                    for request in share:
+                        ok(own, request)
+            except BaseException as e:
+                failures.append(e)
+
+        threads = [threading.Thread(target=worker, args=(requests[i::self.concurrency],))
+                   for i in range(self.concurrency)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        if failures:
+            raise SystemExit(f"a client failed: {failures[0]}")
 
     def phase(self, conn: b.Conn, name: str, units: int, requests: list[dict]) -> None:
         self.container.trace(name)
-        for request in requests:
-            ok(conn, request)
+        started = time.monotonic()
+        self.send_all(conn, requests)
+        elapsed = time.monotonic() - started
         time.sleep(4.0)
         self.container.untrace()
-        counts = file_calls(self.container.out / f"{name}.strace")
-        total = sum(counts.values()) / units
+        trace = read_trace(self.container.out / f"{name}.strace")
+        total = sum(trace.counts.values()) / units
         self.per_op[name] = total
         by_kind: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
-        for (call, kind), count in counts.items():
+        for (call, kind), count in trace.counts.items():
             by_kind[kind][call] += count
-        print(f"\n{name}: {total:.1f} file syscalls per {'document' if name.startswith('bulk') else 'op'}")
+        unit = "document" if name.startswith("bulk") else "op"
+        print(f"\n{name}: {total:.1f} file syscalls per {unit}, {units / elapsed:.0f} {unit}s/s traced, "
+              f"{trace.wal_checkpoints()} wal checkpoint(s)")
         for kind, calls in sorted(by_kind.items(), key=lambda item: -sum(item[1].values())):
             share = sum(calls.values()) / units
             if share >= 0.05:
                 print(f"  {share:6.2f}  {kind:20s} "
                       + ", ".join(f"{call}={count / units:.2f}" for call, count in calls.most_common()))
+        for kind, durations in sorted(trace.syncs.items(), key=lambda item: -sum(item[1])):
+            print(f"  sync    {kind:20s} {sync_summary(durations)}")
+        wal_syncs = len(trace.syncs.get(".wal", []))
+        if wal_syncs and not name.startswith("bulk"):
+            print(f"  {units / wal_syncs:6.2f}  ops per .wal sync")
 
     def run(self) -> None:
         with b.Conn.authenticated(timeout=600) as conn:
@@ -244,6 +323,8 @@ def main() -> None:
     parser.add_argument("--budget", action="append", default=[], metavar="PHASE=CALLS",
                         help="override one phase's budget")
     parser.add_argument("--no-build", action="store_true", help=f"reuse the {IMAGE} image")
+    parser.add_argument("--concurrency", type=int, default=1,
+                        help="clients driving each phase, each on its own connection")
     parser.add_argument("--keep", action="store_true", help="keep the traces and print where they are")
     args = parser.parse_args()
     budgets = parse_budgets(args.budget)
@@ -252,7 +333,7 @@ def main() -> None:
     work = pathlib.Path(tempfile.mkdtemp(prefix="lwnrdb-syscalls-"))
     container = Container(work, build=not args.no_build)
     try:
-        audit = Audit(container, args.ops)
+        audit = Audit(container, args.ops, args.concurrency)
         audit.run()
     finally:
         container.stop()
