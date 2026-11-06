@@ -65,12 +65,13 @@ def resource_env(cpus: int, memory: int, host_cpus: int, synced: bool) -> Dict[s
     }
 
 
-def write_lwnrdb_config(memory: int, synced: bool, heap_percent: int = DEFAULT_HEAP_PERCENT) -> None:
+def write_lwnrdb_config(memory: int, synced: bool, heap_percent: int = DEFAULT_HEAP_PERCENT,
+                        extra: Optional[List[str]] = None) -> None:
     os.makedirs(GENERATED, exist_ok=True)
     cache_budget_mb = memory * heap_percent // 100 // MIB // CACHE_SHARE_OF_HEAP_DIVISOR
     lines = ["port=8989", "filePath=db", "logPath=logs", f"defaultAdminUsername={USERNAME}",
              f"defaultAdminPassword={PASSWORD}", f"maxMemory={cache_budget_mb}mb", "maxConnections=500",
-             f"syncWrites={str(synced).lower()}"]
+             f"syncWrites={str(synced).lower()}", *(extra or [])]
     path = os.path.join(GENERATED, "lwnrdb.cfg")
     with open(path, "w") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -196,6 +197,8 @@ def _parse(argv: List[str]):
     parser.add_argument("--durability", choices=DURABILITIES, default="relaxed",
                         help="relaxed: no engine syncs per commit; synced: every engine syncs every write")
     parser.add_argument("--keep", action="store_true", help="leave the last engine's container running")
+    parser.add_argument("--lwnrdb-config", action="append", default=[], metavar="KEY=VALUE",
+                        help="append a line to the generated lwnrdb.cfg (repeatable), e.g. groupCommitDelayMicros=100")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--heap-percent", type=int, default=DEFAULT_HEAP_PERCENT,
                         help="-XX:MaxRAMPercentage of the lwnrdb container; maxMemory is set to half the resulting heap")
@@ -221,7 +224,7 @@ def main(argv: List[str]) -> int:
     env = resource_env(args.cpus, memory, host_cpus, synced)
     env["LWNRDB_HEAP_PERCENT"] = str(args.heap_percent)
     env["LWNRDB_JAVA_OPTS"] = args.java_opts
-    write_lwnrdb_config(memory, synced, args.heap_percent)
+    write_lwnrdb_config(memory, synced, args.heap_percent, args.lwnrdb_config)
     run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     os.makedirs(os.path.join(RESULTS, run_id), exist_ok=True)
     compose(env, *profiles(list(DATA_DIRS)), "down", "-v", "--remove-orphans")
