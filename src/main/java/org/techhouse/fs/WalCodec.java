@@ -44,8 +44,9 @@ final class WalCodec {
     }
 
     static final class RecordBuffer extends OutputStream {
+        private static final int PAYLOAD_START = HEADER_BYTES + Integer.BYTES;
         private byte[] buf;
-        private int count = Integer.BYTES;
+        private int count = PAYLOAD_START;
         private int changes;
 
         RecordBuffer() {
@@ -53,7 +54,7 @@ final class WalCodec {
         }
 
         RecordBuffer(long expectedPayload) {
-            buf = new byte[(int) Math.min(Integer.MAX_VALUE - 8, Integer.BYTES + expectedPayload)];
+            buf = new byte[(int) Math.min(Integer.MAX_VALUE - 8, PAYLOAD_START + expectedPayload)];
         }
 
         static long changeBytes(long dataBytes) {
@@ -94,7 +95,7 @@ final class WalCodec {
 
         @Override
         public void close() {
-            count = Integer.BYTES;
+            count = PAYLOAD_START;
         }
 
         byte[] bytes() {
@@ -107,9 +108,10 @@ final class WalCodec {
             }
         }
 
-        byte[] header(long seq) {
-            ByteBuffer.wrap(buf, 0, Integer.BYTES).putInt(changes);
-            return WalCodec.header(WRITE, seq, buf, count);
+        void frame(long seq) {
+            ByteBuffer.wrap(buf, HEADER_BYTES, Integer.BYTES).putInt(changes);
+            System.arraycopy(WalCodec.header(WRITE, seq, buf, HEADER_BYTES, count - HEADER_BYTES), 0, buf, 0,
+                    HEADER_BYTES);
         }
     }
 
@@ -122,9 +124,8 @@ final class WalCodec {
                 buffer.change(change.target(), change.page(), change.offset(), change.length());
                 buffer.write(change.bytes(), 0, change.bytes().length);
             }
-            final var header = buffer.header(record.seq());
-            return ByteBuffer.allocate(header.length + buffer.size()).put(header).put(buffer.bytes(), 0, buffer.size())
-                    .array();
+            buffer.frame(record.seq());
+            return Arrays.copyOf(buffer.bytes(), buffer.size());
         }
     }
 
@@ -181,20 +182,20 @@ final class WalCodec {
     }
 
     private static byte[] frame(byte kind, long seq, byte[] payload) {
-        return ByteBuffer.allocate(HEADER_BYTES + payload.length).put(header(kind, seq, payload, payload.length))
+        return ByteBuffer.allocate(HEADER_BYTES + payload.length).put(header(kind, seq, payload, 0, payload.length))
                 .put(payload).array();
     }
 
-    private static byte[] header(byte kind, long seq, byte[] payload, int length) {
+    private static byte[] header(byte kind, long seq, byte[] payload, int from, int length) {
         return ByteBuffer.allocate(HEADER_BYTES).put(MAGIC).put(kind).putLong(seq).putInt(length)
-                .putInt(crcOf(kind, seq, payload, length)).array();
+                .putInt(crcOf(kind, seq, payload, from, length)).array();
     }
 
-    private static int crcOf(byte kind, long seq, byte[] payload, int length) {
+    private static int crcOf(byte kind, long seq, byte[] payload, int from, int length) {
         final var crc = new CRC32();
         crc.update(kind);
         crc.update(ByteBuffer.allocate(Long.BYTES + Integer.BYTES).putLong(seq).putInt(length).array());
-        crc.update(payload, 0, length);
+        crc.update(payload, from, length);
         return (int) crc.getValue();
     }
 
@@ -221,7 +222,7 @@ final class WalCodec {
             }
             final var payload = new byte[length];
             buffer.get(payload);
-            if (crcOf(kind, seq, payload, length) != crc) {
+            if (crcOf(kind, seq, payload, 0, length) != crc) {
                 break;
             }
             final boolean recognised;

@@ -127,13 +127,19 @@ is in bold.
 Throughput hides how much file work one operation does. `test_utils/tools/audit_file_syscalls.py` runs lwnrdb alone
 in a container with `strace` attached, seeds 10k documents with two indexes and synced writes, then traces each phase
 separately (single insert, update and delete, bulk insert and update, `FIND_BY_ID`, an indexed `FILTER`) and prints
-the file syscalls per operation by file kind (`.dat`, `.wal`, `-pk.idx`, `.idxlog`, `.idx`, admin files).
+the file syscalls per operation by file kind (`.dat`, `.wal`, `-pk.idx`, `.idxlog`, `.idx`, admin files). Each phase
+also reports its traced throughput, the write-ahead-log checkpoints it ran (renames of a `.wal`), and per file kind the
+count, sum, p50, p99 and max duration of its `fsync`/`fdatasync`/`sync_file_range` calls, so a synced phase shows where
+its time on the disk goes. `--concurrency N` drives each phase from N clients on their own connections; with it,
+`ops per .wal sync` is the real group-commit size. Durations are measured under `strace`, so compare them with each
+other rather than with the bench.
 
 ```bash
 mvn clean package -DskipTests
 python3 test_utils/tools/audit_file_syscalls.py --check            # fail a phase over its budget
 python3 test_utils/tools/audit_file_syscalls.py --ops 1000 --keep  # more operations, keep the raw traces
 python3 test_utils/tools/audit_file_syscalls.py --budget update=36 --no-build
+python3 test_utils/tools/audit_file_syscalls.py --concurrency 8 --ops 2000 --no-build
 ```
 
 The budgets (`BUDGETS` in the script) are a ratchet: lower one when a change removes calls, never raise one to pass.
@@ -152,6 +158,16 @@ mvn clean package -DskipTests
 python3 test_utils/tools/profile_bench_cpu.py mine --docs 100000 --ops-scale 6 --phases insert,update_by_id
 java test_utils/tools/ProfileReport.java test_utils/bench/results/profiles/mine.jfr \
     test_utils/bench/results/profiles/mine.log --top 10 CacheSizeEstimator BackgroundProcessorThread
+```
+
+To split the background index maintenance of a write phase into the document re-read, the per-batch fixed cost and
+whole reloads, name its parts:
+
+```bash
+java test_utils/tools/ProfileReport.java test_utils/bench/results/profiles/mine.jfr \
+    test_utils/bench/results/profiles/mine.log --top 10 BackgroundProcessorThread getByIndexEntries \
+    FieldIndexSlot.attach FieldIndexBatch.buildLookup FieldIndexLog.append EventProcessorHelper.updateEntryCount \
+    flushPageRows
 ```
 
 `--jar` profiles another build and `--out` moves the files. Unrecognised flags go to `bench_client.py`.

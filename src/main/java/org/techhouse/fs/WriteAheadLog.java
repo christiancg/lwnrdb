@@ -79,7 +79,8 @@ final class WriteAheadLog {
             logGroupBase(dbName, collName, log.file(), state);
         }
         final var seq = state.nextSeq;
-        write(log.file(), state, record.header(seq), record.bytes(), record.size(), state.group == null);
+        record.frame(seq);
+        write(log.file(), state, record.bytes(), record.size(), state.group == null);
         state.nextSeq++;
         state.recordsSinceCheckpoint++;
         state.touchedPages.addAll(pages);
@@ -94,7 +95,7 @@ final class WriteAheadLog {
         final var log = logOf(dbName, collName);
         final var state = stateOf(log);
         final var frame = WalCodec.encodeAbort(state.nextSeq, seq);
-        write(log.file(), state, frame, new byte[0], 0, state.group == null);
+        write(log.file(), state, frame, frame.length, state.group == null);
         state.nextSeq++;
         state.recordsSinceCheckpoint++;
     }
@@ -102,7 +103,7 @@ final class WriteAheadLog {
     private void logGroupBase(String dbName, String collName, File log, WalLogState state) throws IOException {
         final var pkIndex = paths.pkIndexFile(dbName, collName);
         final var frame = WalCodec.encodeGroupBase(state.nextSeq, pkIndex.exists() ? pkIndex.length() : 0L);
-        write(log, state, frame, new byte[0], 0, true);
+        write(log, state, frame, frame.length, true);
         state.nextSeq++;
         state.groupBaseLogged = true;
         state.group.rebase(state.knownLength);
@@ -197,7 +198,7 @@ final class WriteAheadLog {
 
     private void takeBack(String dbName, String collName, File log, WalLogState state) {
         final var group = state.group;
-        if (group.takeBack(log, paths.pkIndexFile(dbName, collName))) {
+        if (group.takeBack(log, state.knownLength, paths.pkIndexFile(dbName, collName))) {
             state.recordsSinceCheckpoint = Math.max(0, state.recordsSinceCheckpoint - group.records());
             state.knownLength = group.logLengthBefore();
         } else {
@@ -208,27 +209,31 @@ final class WriteAheadLog {
         group.restartFrom(state.knownLength);
     }
 
-    private static void write(File log, WalLogState state, byte[] header, byte[] payload, int payloadLength,
-            boolean force) throws IOException {
-        var appended = false;
+    private static void write(File log, WalLogState state, byte[] frame, int length, boolean force) throws IOException {
+        final var at = state.knownLength;
+        var written = false;
         try {
             if (state.group == null) {
-                try (var channel = WalWriteGroup.openAppending(log)) {
-                    WalWriteGroup.appendTo(channel, log, header, payload, payloadLength, force);
+                try (var channel = WalWriteGroup.openWritable(log)) {
+                    state.allocatedLength = WalWriteGroup.writeFrame(channel, log, at, state.allocatedLength, frame,
+                            length, force);
                 }
             } else {
-                state.group.append(log, header, payload, payloadLength, force);
+                state.allocatedLength = state.group.write(log, at, state.allocatedLength, frame, length, force);
             }
-            appended = true;
+            written = true;
         } finally {
-            if (!appended && log.length() != state.knownLength
-                    && !FileLocks.truncateTo(log, state.knownLength, "Could not roll back a partial append to the"
-                            + " write-ahead log " + log.getPath() + "; the next startup cuts it")) {
-                state.reseedOnNextUse();
+            if (!written) {
+                if (!WalWriteGroup.erase(log, at, Math.min(at + length, log.length()),
+                        "Could not erase a partial append to the write-ahead log " + log.getPath()
+                                + "; the next startup cuts it")) {
+                    state.reseedOnNextUse();
+                }
+                state.allocatedLength = Math.max(at, log.length());
             }
         }
         //noinspection NonAtomicOperationOnVolatileField
-        state.knownLength += header.length + payloadLength;
+        state.knownLength += length;
         state.lastWriteMillis = System.currentTimeMillis();
     }
 
@@ -313,7 +318,8 @@ final class WriteAheadLog {
         try {
             final var state = stateOf(log);
             final var seq = state.nextSeq;
-            write(log.file(), state, frame.apply(seq), new byte[0], 0, force);
+            final var bytes = frame.apply(seq);
+            write(log.file(), state, bytes, bytes.length, force);
             state.nextSeq++;
             state.recordsSinceCheckpoint++;
             return seq;
@@ -394,6 +400,7 @@ final class WriteAheadLog {
             FileLocks.rewriteFileAtomically(log.file().toPath(), bytes);
             state.nextSeq += pending.isEmpty() ? 1 : 2;
             state.knownLength = bytes.length;
+            state.allocatedLength = bytes.length;
             state.recordsSinceCheckpoint = 0;
             state.groupBaseLogged = false;
             state.pendingLogged = !pending.isEmpty();

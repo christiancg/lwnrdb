@@ -155,7 +155,7 @@ final class PageVacuum {
         final var page = paths.collectionPage(dbName, collName, pageNumber);
         barrier.settle(dbName, collName);
         final var bytes = Files.readAllBytes(page.toPath());
-        final var lines = PageLines.recordsOf(bytes, 0L);
+        final var lines = PageLines.verifiedRecordsOf(bytes, 0L);
         final var pageRows = verified.rowsOf(lines);
         if (lines.isEmpty() && pageRows.isEmpty()) {
             final var begun = barrier.begin(dbName, collName, pageNumber, bytes.length);

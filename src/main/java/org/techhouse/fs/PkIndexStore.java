@@ -54,6 +54,10 @@ final class PkIndexStore {
         this.wal = new WriteAheadLog(paths);
     }
 
+    WriteAheadLog wal() {
+        return wal;
+    }
+
     record PkAppend(File file, PkFileState before, long offset) {
     }
 

@@ -225,7 +225,7 @@ public class WalRedoTest {
         insert("d");
         power.powerLoss();
         final var bytes = Files.readAllBytes(log().toPath());
-        Files.write(log().toPath(), Arrays.copyOf(bytes, bytes.length - 3));
+        Files.write(log().toPath(), Arrays.copyOf(bytes, (int) OutsideWrites.logEnd(log()) - 3));
 
         redo();
 
@@ -319,7 +319,7 @@ public class WalRedoTest {
         final var pk = rf.fx.paths.pkIndexFile(DB, COLL);
         wal.openGroup(DB, COLL);
         rf.replace("a", "new-a", 0, PagePlacement.APPEND);
-        final var firstRecordEnd = log().length();
+        final var firstRecordEnd = OutsideWrites.logEnd(log());
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
         power.powerLoss(Map.of(log(), firstRecordEnd, page, page.length(), pk, pk.length()));
 

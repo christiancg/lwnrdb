@@ -10,7 +10,7 @@ import org.techhouse.log.Logger;
 public final class Configuration {
     private static final Configuration config = new Configuration();
     private final Map<ConfigKey, String> values = new EnumMap<>(ConfigKey.class);
-    private final Map<ConfigKey, Object> resolved = new EnumMap<>(ConfigKey.class);
+    private final ResolvedValues resolved = new ResolvedValues(values);
     private boolean loading;
     private static final Logger logger = Logger.logFor(Configuration.class);
 
@@ -21,7 +21,7 @@ public final class Configuration {
     @SuppressWarnings("PMD.UnusedAssignment")
     private void load() {
         loading = true;
-        resolved.clear();
+        resolved.forgetAll();
         try {
             final var configs = ConfigReader.loadConfiguration();
             final var errors = ConfigurationValidator.validate(configs);
@@ -39,19 +39,19 @@ public final class Configuration {
     }
 
     public int intValue(ConfigKey key) {
-        return (int) resolved.computeIfAbsent(key, k -> Integer.parseInt(values.get(k).trim()));
+        return (Integer) resolved.resolve(key, Integer::valueOf);
     }
 
     public long longValue(ConfigKey key) {
-        return (long) resolved.computeIfAbsent(key, k -> Long.parseLong(values.get(k).trim()));
+        return (Long) resolved.resolve(key, Long::valueOf);
     }
 
     public long sizeValue(ConfigKey key) {
-        return (long) resolved.computeIfAbsent(key, k -> HeapShares.sizeOf(k, values.get(k)));
+        return resolved.resolveSize(key);
     }
 
     public boolean booleanValue(ConfigKey key) {
-        return (boolean) resolved.computeIfAbsent(key, k -> Boolean.parseBoolean(values.get(k).trim()));
+        return (Boolean) resolved.resolve(key, Boolean::valueOf);
     }
 
     public String stringValue(ConfigKey key) {
@@ -60,7 +60,7 @@ public final class Configuration {
 
     public void override(ConfigKey key, String value) {
         values.put(key, value);
-        resolved.remove(key);
+        resolved.forget(key);
     }
 
     public static Configuration getInstance() {

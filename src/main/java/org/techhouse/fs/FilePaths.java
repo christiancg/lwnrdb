@@ -10,19 +10,23 @@ import org.techhouse.ex.InvalidPathSegmentException;
 final class FilePaths {
     static final int MAX_REMEMBERED_PREFIXES = 8192;
     private final NameMemo<String> prefixes = new NameMemo<>(MAX_REMEMBERED_PREFIXES);
+    private final NameMemo<File> pkIndexFiles = new NameMemo<>(MAX_REMEMBERED_PREFIXES);
     private String dbPath;
 
     void useDbPath(String dbPath) {
-        this.dbPath = dbPath;
+        this.dbPath = new File(dbPath).getAbsolutePath();
         prefixes.clear();
+        pkIndexFiles.clear();
     }
 
     void forgetCollection(String dbName, String collectionName) {
         prefixes.forget(dbName, collectionName);
+        pkIndexFiles.forget(dbName, collectionName);
     }
 
     void forgetDatabase(String dbName) {
         prefixes.forgetAll(dbName);
+        pkIndexFiles.forgetAll(dbName);
     }
 
     int rememberedPrefixCount() {
@@ -80,8 +84,12 @@ final class FilePaths {
     }
 
     File pkIndexFile(String dbName, String collectionName) {
-        return new File(collectionPrefix(dbName, collectionName) + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
+        final var hit = pkIndexFiles.get(dbName, collectionName);
+        if (hit != null) {
+            return hit;
+        }
+        return pkIndexFiles.remember(dbName, collectionName, new File(collectionPrefix(dbName, collectionName)
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION));
     }
 
     File adminTombstoneFile() {

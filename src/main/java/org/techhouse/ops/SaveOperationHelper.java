@@ -14,7 +14,6 @@ import org.techhouse.bckg_ops.events.EntityRef;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
-import org.techhouse.cache.PkIndexList;
 import org.techhouse.cache.WriterPkRows;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.config.Configuration;
@@ -126,7 +125,7 @@ public final class SaveOperationHelper {
                     pendingGeneration, () -> fs.insertIntoCollection(entry, encodedLine));
             cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(), savedPkIndexEntry.getLength());
         }
-        editRow(pkRows.editable(), savedPkIndexEntry, eventType == EventType.UPDATED);
+        pkRows.store(savedPkIndexEntry, eventType == EventType.UPDATED);
         cache.addEntryToCache(dbName, collName, entry);
         submit(new EntityEvent(eventType, dbName, collName, EntityRef.of(entry, priors),
                 CollectionIncarnation.current(dbName, collName), pendingGeneration),
@@ -381,26 +380,6 @@ public final class SaveOperationHelper {
         return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, WriterPkRows.of(primaryKeyIndex), null, false);
     }
 
-    private static void editRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row, boolean replaces) {
-        if (primaryKeyIndex == null) {
-            return;
-        }
-        if (replaces) {
-            replaceRow(primaryKeyIndex, row);
-        } else {
-            insertRow(primaryKeyIndex, row);
-        }
-    }
-
-    private static void replaceRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row) {
-        primaryKeyIndex.set(PkIndexList.positionOf(primaryKeyIndex, row.getValue()), row);
-    }
-
-    private static void insertRow(List<PkIndexEntry> primaryKeyIndex, PkIndexEntry row) {
-        final var found = PkIndexList.positionOf(primaryKeyIndex, row.getValue());
-        primaryKeyIndex.add(found < 0 ? -(found + 1) : found, row);
-    }
-
     private static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
             PkIndexEntry idxEntry, WriterPkRows pkRows, byte[] encodedLine, boolean followOn) throws Exception {
         final var oldEntry = cache.getById(dbName, collName, idxEntry);
@@ -427,7 +406,7 @@ public final class SaveOperationHelper {
                 CollectionIncarnation.current(dbName, collName), deleteGeneration), followOn);
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
                 relocatedPkIndexEntry.getLength());
-        editRow(pkRows.editable(), relocatedPkIndexEntry, true);
+        pkRows.store(relocatedPkIndexEntry, true);
         cache.addEntryToCache(dbName, collName, entry);
         submit(new EntityEvent(EventType.CREATED, dbName, collName,
                 EntityRef.of(entry, PriorIndexedValues.of(priorFields, null)),

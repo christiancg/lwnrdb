@@ -128,6 +128,8 @@ public final class Globals {
     public static final int SAME_TIER_EVICTION_RATIO = 4;
     public static final int REFUSED_INDEX_FOLD_DIVISOR = 8;
     public static final int WAL_SYNC_CHECKPOINT_FACTOR = 2;
+    public static final int WAL_PREALLOCATE_MIN_BYTES = 64 * 1024;
+    public static final int WAL_PREALLOCATE_MAX_BYTES = 1024 * 1024;
     public static final List<Integer> LAZY_CANDIDATE_CHUNKS = List.of(256, 1024, 4096, 16384);
     public static final int REPAIR_PASS_CHUNK = 4096;
     public static final long WAL_BACKGROUND_CHECKPOINT_LOCK_WAIT_MS = 1000L;

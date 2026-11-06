@@ -1,6 +1,6 @@
 import unittest
 
-from run_bench import parse_g1_pauses
+from run_bench import errored, parse_g1_pauses
 
 LOG = """[0.012s][info][gc] Using G1
 [1.204s][info][gc,start] GC(0) Pause Young (Normal) (G1 Evacuation Pause)
@@ -50,3 +50,13 @@ class ParseG1PausesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ErroredTest(unittest.TestCase):
+    def test_a_phase_with_errors_marks_the_run(self):
+        self.assertTrue(errored({"phases": [{"errors": 0}, {"errors": 2}]}))
+
+    def test_a_clean_run_or_one_without_phases_is_not_marked(self):
+        self.assertFalse(errored({"phases": [{"errors": 0}, {}]}))
+        self.assertFalse(errored({}))
+

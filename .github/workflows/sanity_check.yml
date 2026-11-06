@@ -185,6 +185,7 @@ jobs:
             start_server: false
             run: |
               python3 -m unittest discover -s test_utils/bench -p "test_*.py"
+              python3 -m unittest discover -s test_utils/tools -p "test_*.py"
 
           - name: cache-warmup-bench
             start_server: true

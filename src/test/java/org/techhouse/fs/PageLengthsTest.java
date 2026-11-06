@@ -118,7 +118,7 @@ public class PageLengthsTest {
         final var log = new File(tmp, "group.wal");
         Files.write(log.toPath(), new byte[0]);
 
-        assertTrue(group.takeBack(log, rf.fx.paths.pkIndexFile(DB, COLL)));
+        assertTrue(group.takeBack(log, 0L, rf.fx.paths.pkIndexFile(DB, COLL)));
 
         assertEquals(PageLengths.UNKNOWN, PageLengths.knownLength(page(0)));
         assertEquals(length, PageLengths.lengthOf(page(0)));

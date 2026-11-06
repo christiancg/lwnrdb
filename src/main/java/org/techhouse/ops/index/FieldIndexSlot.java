@@ -189,7 +189,7 @@ final class FieldIndexSlot {
             return fresh;
         }
         final var probe = new FieldIndexEntry<>(dbName, collName, value, Set.of());
-        final var at = Collections.binarySearch(entries, probe, order);
+        final var at = ChunkedList.binarySearch(entries, probe, order);
         if (at < 0) {
             return null;
         }
@@ -355,7 +355,7 @@ final class FieldIndexSlot {
             removeExact(entry);
         }
         for (final var entry : added) {
-            final var at = Collections.binarySearch(entries, entry, order);
+            final var at = ChunkedList.binarySearch(entries, entry, order);
             entries.add(at < 0 ? -at - 1 : at, entry);
         }
     }
@@ -372,7 +372,7 @@ final class FieldIndexSlot {
     }
 
     private int indexOfExact(FieldIndexEntry<Object> entry) {
-        final var at = Collections.binarySearch(entries, entry, order);
+        final var at = ChunkedList.binarySearch(entries, entry, order);
         if (at < 0) {
             return -1;
         }
