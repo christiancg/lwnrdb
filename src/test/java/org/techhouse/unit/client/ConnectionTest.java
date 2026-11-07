@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +22,7 @@ import org.techhouse.client.Requests;
 import org.techhouse.unit.client.support.FakeLineServer;
 
 public class ConnectionTest {
+    private static final Duration ACCEPT_WAIT = Duration.ofSeconds(10);
     private FakeLineServer server;
 
     @BeforeEach
@@ -169,7 +172,7 @@ public class ConnectionTest {
     @Test
     public void test_open_on_a_closed_port_is_unreachable() throws IOException {
         final int closedPort;
-        try (var probe = new ServerSocket(0)) {
+        try (var probe = loopbackServerSocket()) {
             closedPort = probe.getLocalPort();
         }
         final var options = ClientOptions.parse(new String[]{"--shell", "--port", String.valueOf(closedPort)},
@@ -185,7 +188,7 @@ public class ConnectionTest {
     }
 
     private static void assertHandshakeFails(String... tlsFlags) throws Exception {
-        try (var closing = new ServerSocket(0)) {
+        try (var closing = loopbackServerSocket()) {
             final var acceptor = Thread.ofVirtual().start(() -> {
                 try {
                     closing.accept().close();
@@ -197,7 +200,11 @@ public class ConnectionTest {
             final var options = ClientOptions.parse(args.toArray(String[]::new), Map.of());
             final var error = assertThrows(ClientException.class, () -> Connection.open(options).close());
             assertEquals(ClientException.UNREACHABLE, error.exitCode());
-            acceptor.join();
+            assertTrue(acceptor.join(ACCEPT_WAIT), "the client never reached this test's own server socket");
         }
+    }
+
+    private static ServerSocket loopbackServerSocket() throws IOException {
+        return new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
     }
 }
