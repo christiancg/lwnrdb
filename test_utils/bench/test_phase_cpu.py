@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 
 import phase_cpu
@@ -49,6 +51,38 @@ class PhaseCpuTest(unittest.TestCase):
 
         self.assertEqual(2.0, report["phases"][0]["cpu_seconds"])
         self.assertEqual(5.0, report["phases"][0]["cpu_ms_per_op"])
+
+    def test_a_timed_marker_moves_the_start_and_divides_by_the_timed_ops(self):
+        meter = PhaseCpu(Reader([stat(0), stat(1_000_000), stat(3_000_000)]))
+        run(meter, ["PHASE_START bulk_insert", "PHASE_TIMED bulk_insert", "PHASE_END bulk_insert 400"])
+        report = {"phases": [{"phase": "bulk_insert", "ops": 200, "ops_with_warmup": 400}]}
+
+        meter.attach(report)
+
+        self.assertEqual(2.0, report["phases"][0]["cpu_seconds"])
+        self.assertEqual(10.0, report["phases"][0]["cpu_ms_per_op"])
+
+    def test_without_a_timed_marker_the_start_is_kept(self):
+        meter = PhaseCpu(Reader([stat(0), stat(4_000_000)]))
+        run(meter, ["PHASE_START insert", "PHASE_END insert 400"])
+        report = {"phases": [{"phase": "insert", "ops": 360, "ops_with_warmup": 400}]}
+
+        meter.attach(report)
+
+        self.assertEqual(10.0, report["phases"][0]["cpu_ms_per_op"])
+
+    def test_a_timed_marker_for_an_unknown_phase_is_ignored(self):
+        meter = PhaseCpu(Reader([stat(0), stat(2_000_000)]))
+        run(meter, ["PHASE_TIMED insert", "PHASE_START insert", "PHASE_END insert 100"])
+
+        self.assertEqual({"insert": 2.0}, meter.cpu_seconds())
+
+    def test_the_timed_marker_prints_one_flushed_line(self):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            phase_cpu.timed_marker("update_by_id")()
+
+        self.assertEqual("PHASE_TIMED update_by_id\n", printed.getvalue())
 
     def test_attach_falls_back_to_the_marker_operation_count(self):
         meter = PhaseCpu(Reader([stat(0), stat(1_000_000)]))

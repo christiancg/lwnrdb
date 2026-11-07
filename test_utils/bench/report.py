@@ -96,7 +96,7 @@ def _header(reports: list) -> list:
         f"{resources.get('memory', '?')} memory, no swap; engines run one at a time on fresh volumes",
         f"- Workload: {settings['docs']:,} documents of ~{settings['payload']} B payload, "
         f"{settings['concurrency']} client processes, bulk batches of {settings['batch']}, "
-        f"ops scale {settings['ops_scale']}, warm-up {settings['warmup']:.0%} per phase (untimed), seed {settings['seed']}",
+        f"ops scale {settings['ops_scale']}, warm-up {settings['warmup']:.0%} per phase and {settings.get('bulk_warmup', 0):.0%} of the bulk batches (untimed), seed {settings['seed']}",
         f"- Durability: {_durability(first)} for every engine",
         "",
     ]
