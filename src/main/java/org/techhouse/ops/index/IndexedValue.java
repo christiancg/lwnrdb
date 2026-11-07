@@ -39,6 +39,17 @@ public record IndexedValue(Class<?> type, IndexKind kind, String key, Object val
         return null;
     }
 
+    public static boolean holdsSameScalar(Object held, JsonBaseElement element) {
+        return switch (element) {
+            case JsonNumber number -> held instanceof Double value
+                    && Double.doubleToLongBits(value) == Double.doubleToLongBits(number.doubleValue() + 0.0);
+            case JsonString string when string.isJsonCustom() -> false;
+            case JsonString string -> held instanceof String value && value.equals(string.getValue());
+            case JsonBoolean bool -> held instanceof Boolean value && value.equals(bool.getValue());
+            case null, default -> false;
+        };
+    }
+
     private static IndexedValue scalar(Class<?> type, Object value) {
         return new IndexedValue(type, null, FieldIndexEntry.fileKeyOf(value), value);
     }

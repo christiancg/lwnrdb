@@ -30,6 +30,7 @@ public final class FieldIndexBatch {
     private final Collection<String> batchIds;
     private final Map<String, List<IndexedValue>> priors;
     private final HeldTypeLists held;
+    private final CanonicalIds canonicalIds;
     private final List<FieldIndexSlot> slots = new ArrayList<>();
     private final Map<String, FieldIndexSlot> slotsByIdentifier = new HashMap<>();
     private final Map<Class<?>, FieldIndexSlot> scalarSlots = new HashMap<>();
@@ -41,7 +42,8 @@ public final class FieldIndexBatch {
     private boolean logsOnly;
 
     private FieldIndexBatch(String dbName, String collName, String fieldName, Collection<String> batchIds,
-            Map<String, List<IndexedValue>> priors, HeldTypeLists held) {
+            Map<String, List<IndexedValue>> priors, HeldTypeLists held, CanonicalIds canonicalIds) {
+        this.canonicalIds = canonicalIds;
         this.dbName = dbName;
         this.collName = collName;
         this.fieldName = fieldName;
@@ -51,17 +53,19 @@ public final class FieldIndexBatch {
     }
 
     public static FieldIndexBatch open(String dbName, String collName, String fieldName, Collection<String> batchIds) {
-        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, null, null);
+        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, null, null,
+                new CanonicalIds(dbName, collName));
     }
 
     public static FieldIndexBatch open(String dbName, String collName, String fieldName, Collection<String> batchIds,
             Map<String, List<IndexedValue>> priors) {
-        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, priors, null);
+        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, priors, null,
+                new CanonicalIds(dbName, collName));
     }
 
     static FieldIndexBatch open(String dbName, String collName, String fieldName, Collection<String> batchIds,
-            Map<String, List<IndexedValue>> priors, HeldTypeLists held) {
-        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, priors, held);
+            Map<String, List<IndexedValue>> priors, HeldTypeLists held, CanonicalIds canonicalIds) {
+        return new FieldIndexBatch(dbName, collName, fieldName, batchIds, priors, held, canonicalIds);
     }
 
     private record Target(FieldIndexSlot slot, String key, Object value) {
@@ -72,10 +76,14 @@ public final class FieldIndexBatch {
         if (logsOnly) {
             logPriorsOf(id);
         }
+        final var current = lookup.locate(id);
+        if (!logsOnly && current != null && current.next() == null
+                && IndexedValue.holdsSameScalar(current.entry().getValue(), currentValue)) {
+            return;
+        }
         final var target = targetOf(currentValue);
         final var loggedTarget = target != null && target.slot().isLogOnly();
         final var found = target == null || loggedTarget ? null : target.slot().find(target.key(), target.value());
-        final var current = lookup.locate(id);
         if (current != null && found != null && alreadyHolds(current, target, found)) {
             return;
         }
@@ -169,13 +177,13 @@ public final class FieldIndexBatch {
         for (final var type : IndexKind.scalarIndexClasses()) {
             if (mayHaveAFile(Cache.memoizedIndexIdentifier(fieldName, type))) {
                 covered &= register(scalarSlots.computeIfAbsent(type,
-                        _ -> FieldIndexSlot.scalar(dbName, collName, fieldName, type, held)));
+                        _ -> FieldIndexSlot.scalar(dbName, collName, fieldName, type, held, canonicalIds)));
             }
         }
         for (final var kind : IndexKind.HASH_KINDS) {
             if (mayHaveAFile(Cache.memoizedHashIndexIdentifier(fieldName, kind))) {
                 covered &= register(hashSlots.computeIfAbsent(kind,
-                        _ -> FieldIndexSlot.hash(dbName, collName, fieldName, kind, held)));
+                        _ -> FieldIndexSlot.hash(dbName, collName, fieldName, kind, held, canonicalIds)));
             }
         }
         lookup = covered && anyResident() ? cache.fieldIndexLookup(dbName, collName, fieldName) : null;
@@ -228,7 +236,7 @@ public final class FieldIndexBatch {
         if (existing != null) {
             return existing;
         }
-        final var slot = FieldIndexSlot.scalar(dbName, collName, fieldName, type, held);
+        final var slot = FieldIndexSlot.scalar(dbName, collName, fieldName, type, held, canonicalIds);
         scalarSlots.put(type, slot);
         return registerLate(slot);
     }
@@ -238,7 +246,7 @@ public final class FieldIndexBatch {
         if (existing != null) {
             return existing;
         }
-        final var slot = FieldIndexSlot.hash(dbName, collName, fieldName, kind, held);
+        final var slot = FieldIndexSlot.hash(dbName, collName, fieldName, kind, held, canonicalIds);
         hashSlots.put(kind, slot);
         return registerLate(slot);
     }
