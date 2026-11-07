@@ -19,6 +19,7 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.CanonicalIds;
 import org.techhouse.ops.index.DeferredFold;
 import org.techhouse.ops.index.FieldIndexFolds;
 import org.techhouse.ops.index.FieldMaintenance;
@@ -123,9 +124,10 @@ public class IndexHelper {
                     ids.size() == 1 ? Set.of(ids.getFirst()) : new HashSet<>(ids))) {
                 byId.put(doc.get_id(), doc);
             }
+            final var canonicalIds = new CanonicalIds(dbName, collName);
             for (var fieldName : existingIndexes) {
-                folds.addAll(
-                        FieldMaintenance.maintain(dbName, collName, fieldName, ids, byId, priors.forField(fieldName)));
+                folds.addAll(FieldMaintenance.maintain(dbName, collName, fieldName, ids, byId,
+                        priors.forField(fieldName), canonicalIds));
             }
         } finally {
             rl.releaseRead(dbName, collName);

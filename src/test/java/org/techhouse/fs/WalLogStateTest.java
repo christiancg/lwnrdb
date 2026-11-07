@@ -49,6 +49,8 @@ public class WalLogStateTest {
         state().reseedOnNextUse();
 
         assertEquals(known, state().knownLength);
-        assertEquals(known, log.length(), "the reseed cuts the torn end it finds");
+        final var bytes = Files.readAllBytes(log.toPath());
+        assertEquals(bytes.length, WalWriteGroup.writtenEnd(bytes, known) == known ? bytes.length : -1,
+                "the reseed erases the torn end it finds");
     }
 }

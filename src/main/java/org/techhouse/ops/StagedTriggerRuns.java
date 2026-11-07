@@ -21,6 +21,7 @@ import org.techhouse.log.Logger;
 public final class StagedTriggerRuns {
     private static final Logger logger = Logger.logFor(StagedTriggerRuns.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final List<EventType> UNCLAIMED_TYPES = List.of(EventType.CREATED, EventType.UPDATED);
     private static final StagedTriggerRuns NONE = new StagedTriggerRuns(List.of());
 
     private final List<StagedRun> runs;
@@ -64,6 +65,10 @@ public final class StagedTriggerRuns {
 
     public void submitLanded(Map<EventType, Set<String>> landedIds, String dbName, String collName, String actingUser,
             int depth) {
+        if (runs.isEmpty()) {
+            submitUnclaimed(landedIds, Map.of(), dbName, collName, actingUser, depth);
+            return;
+        }
         final var claimed = new HashMap<EventType, Set<String>>();
         final var vanished = new ArrayList<String>();
         final var keptRuns = new ArrayList<KeptRun>();
@@ -100,6 +105,9 @@ public final class StagedTriggerRuns {
     }
 
     private static List<String> nonNull(List<String> runIds) {
+        if (runIds.isEmpty()) {
+            return List.of();
+        }
         return runIds.stream().filter(Objects::nonNull).toList();
     }
 
@@ -189,10 +197,13 @@ public final class StagedTriggerRuns {
 
     private static void submitUnclaimed(Map<EventType, Set<String>> landedIds, Map<EventType, Set<String>> claimed,
             String dbName, String collName, String actingUser, int depth) {
-        for (final var type : List.of(EventType.CREATED, EventType.UPDATED)) {
+        for (final var type : UNCLAIMED_TYPES) {
+            final var landed = landedIds.get(type);
+            if (landed == null || landed.isEmpty()) {
+                continue;
+            }
             final var claimedOfType = claimed.getOrDefault(type, Set.of());
-            final var unclaimed = landedIds.getOrDefault(type, Set.of()).stream()
-                    .filter(id -> !claimedOfType.contains(id)).toList();
+            final var unclaimed = landed.stream().filter(id -> !claimedOfType.contains(id)).toList();
             if (!unclaimed.isEmpty()) {
                 TriggerHelper.afterWriteIds(dbName, collName, type, unclaimed, actingUser, depth);
             }

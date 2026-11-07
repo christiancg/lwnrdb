@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -73,7 +72,7 @@ public class WriteAheadLogTest {
     public void test_a_record_appended_by_another_writer_is_seen_once_the_state_is_forgotten() throws Exception {
         final var other = WalCodec
                 .encode(new WalRecord(500L, List.of(new WalChange(WalTarget.PAGE_BLANK, 0L, 0L, 0L, new byte[0]))));
-        Files.write(log().toPath(), other, StandardOpenOption.APPEND);
+        OutsideWrites.appendToLog(log(), other);
         OutsideWrites.madeTo(log());
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
@@ -85,13 +84,14 @@ public class WriteAheadLogTest {
 
     @Test
     public void test_a_torn_tail_is_cut_before_the_next_append() throws Exception {
-        Files.write(log().toPath(), new byte[]{'W', 'R', 0}, StandardOpenOption.APPEND);
+        OutsideWrites.appendToLog(log(), new byte[]{'W', 'R', 0});
         OutsideWrites.madeTo(log());
 
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
 
         final var decoded = decoded();
-        assertEquals(Files.size(log().toPath()), decoded.cleanLength());
+        final var bytes = Files.readAllBytes(log().toPath());
+        assertEquals(decoded.cleanLength(), WalWriteGroup.writtenEnd(bytes, decoded.cleanLength()));
         assertEquals(4, decoded.records().size());
     }
 
@@ -355,7 +355,7 @@ public class WriteAheadLogTest {
     @Test
     public void test_an_append_outside_a_group_is_one_forced_record() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
-            final var lengthBefore = log().length();
+            final var lengthBefore = OutsideWrites.logEnd(log());
 
             rf.replace("a", "new-a", 0, PagePlacement.APPEND);
 
@@ -363,7 +363,7 @@ public class WriteAheadLogTest {
             final var records = decoded().records();
             assertEquals(4, records.size());
             assertFalse(records.getLast().changes().isEmpty(), "the header and the payload landed together");
-            assertEquals(log().length() - lengthBefore, WalCodec.encode(records.getLast()).length);
+            assertEquals(OutsideWrites.logEnd(log()) - lengthBefore, WalCodec.encode(records.getLast()).length);
         }
     }
 

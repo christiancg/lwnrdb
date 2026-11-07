@@ -128,7 +128,8 @@ public final class IndexRepairPass {
             for (final var doc : cache.getEntriesByIds(dbName, collName, new HashSet<>(chunk))) {
                 byId.put(doc.get_id(), doc);
             }
-            folds = FieldMaintenance.maintain(dbName, collName, field, chunk, byId, null, held);
+            folds = FieldMaintenance.maintain(dbName, collName, field, chunk, byId, null, held,
+                    new CanonicalIds(dbName, collName));
         } finally {
             rl.releaseRead(dbName, collName);
         }

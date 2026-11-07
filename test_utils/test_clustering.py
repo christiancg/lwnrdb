@@ -3512,9 +3512,11 @@ def test_admin_tombstone_snapshot_ships_differences():
                      and admin_tombstones(nodes[0]).get(churn_key) is not None, timeout_s=30.0),
           f"versions: {[admin_tombstones(n).get(churn_key) for n in nodes]}")
     for n in nodes:
+        compacted = wait_until(lambda node=n: len(admin_tombstone_lines(node)) < 2 * len(admin_tombstones(node)),
+                               timeout_s=10.0)
         lines, keys = len(admin_tombstone_lines(n)), len(admin_tombstones(n))
         check(f"node-{n.index} keeps fewer than two lines per admin tombstone after {cycles} drops of one name",
-              lines < 2 * keys, f"{lines} lines for {keys} keys")
+              compacted, f"{lines} lines for {keys} keys")
 
     victim = nodes[2]
     print(f"  Killing node-{victim.index} so it misses the next drops ...")

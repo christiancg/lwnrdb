@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build & Verify
+  package:
+    name: Package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -20,8 +20,8 @@ jobs:
           distribution: 'temurin'
           architecture: x64
           cache: maven
-      - name: Run Maven Verify
-        run: mvn -B --no-transfer-progress verify
+      - name: Package the jar
+        run: mvn -B --no-transfer-progress -DskipTests package
       - name: Upload jar
         uses: actions/upload-artifact@v7
         with:
@@ -29,9 +29,130 @@ jobs:
           path: target/lwnrdb.jar
           retention-days: 1
 
+  unit-tests:
+    name: Unit tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Plan the shards
+        run: python3 test_utils/tools/test_shards.py --shards 4 --out target/shards-plan
+      - name: Run shard ${{ matrix.shard }}
+        run: >-
+          mvn -B --no-transfer-progress -Pci-shard
+          -DtestShardFile=target/shards-plan/shard-${{ matrix.shard }}.txt -DskipSerialTests=true test
+      - name: Name the coverage data
+        if: always()
+        run: if [ -f target/jacoco.exec ]; then mv target/jacoco.exec target/jacoco-shard-${{ matrix.shard }}.exec; fi
+      - name: Upload coverage data and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-shard-${{ matrix.shard }}
+          path: |
+            target/jacoco-shard-${{ matrix.shard }}.exec
+            target/surefire-reports/TEST-*.xml
+          retention-days: 1
+
+  unit-tests-serial:
+    name: Unit tests (serial)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Run the single-fork executions
+        run: mvn -B --no-transfer-progress -Pci-shard -DskipShardedTests=true test
+      - name: Name the coverage data
+        if: always()
+        run: if [ -f target/jacoco.exec ]; then mv target/jacoco.exec target/jacoco-serial.exec; fi
+      - name: Upload coverage data and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-serial
+          path: |
+            target/jacoco-serial.exec
+            target/surefire-reports/TEST-*.xml
+          retention-days: 1
+
+  coverage:
+    name: Coverage
+    needs: [unit-tests, unit-tests-serial]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Download every shard's data
+        uses: actions/download-artifact@v8
+        with:
+          pattern: unit-*
+          path: target/shards
+      - name: Check every test class ran exactly once
+        run: python3 test_utils/tools/test_shards.py --check-complete target/shards
+      - name: Merge the coverage and apply the gate
+        run: >-
+          mvn -B --no-transfer-progress -Pci-coverage compile
+          jacoco:merge@merge-shards jacoco:report@report jacoco:check@jacoco-check
+      - name: Upload the coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: target/site/jacoco
+          retention-days: 7
+
+  static-spotbugs:
+    name: Static gates (SpotBugs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Run SpotBugs
+        run: >-
+          mvn -B --no-transfer-progress -DskipTests -Dspotless.check.skip -Dcheckstyle.skip -Dpmd.skip -Dcpd.skip
+          verify
+
+  static-style:
+    name: Static gates (style)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Run Spotless, Checkstyle, CPD and PMD
+        run: mvn -B --no-transfer-progress -DskipTests -Dspotbugs.skip verify
+
   integration:
     name: ${{ matrix.name }}
-    needs: build
+    needs: package
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -185,6 +306,7 @@ jobs:
             start_server: false
             run: |
               python3 -m unittest discover -s test_utils/bench -p "test_*.py"
+              python3 -m unittest discover -s test_utils/tools -p "test_*.py"
 
           - name: cache-warmup-bench
             start_server: true
@@ -286,15 +408,22 @@ jobs:
 
   verify:
     name: Verify
-    needs: [build, integration, test262]
+    needs: [package, unit-tests, unit-tests-serial, coverage, static-spotbugs, static-style, integration, test262]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }} test262=${{ needs.test262.result }}"
-          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ] || [ "${{ needs.test262.result }}" != "success" ]; then
-            echo "::error::one or more jobs failed"
-            exit 1
-          fi
-          echo "All jobs succeeded."
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          results = {job: outcome["result"] for job, outcome in json.load(sys.stdin).items()}
+          for job, result in sorted(results.items()):
+              print(f"{job}={result}")
+          failed = [job for job, result in results.items() if result != "success"]
+          if failed:
+              print("::error::jobs did not succeed: " + ", ".join(sorted(failed)))
+              sys.exit(1)
+          print("All jobs succeeded.")
+          '

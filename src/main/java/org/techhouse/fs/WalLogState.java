@@ -18,6 +18,7 @@ final class WalLogState {
     final Set<Long> touchedPages = new HashSet<>();
     long nextSeq = 1L;
     volatile long knownLength;
+    long allocatedLength;
     int recordsSinceCheckpoint;
     boolean unapplied;
     boolean groupBaseLogged;
@@ -74,17 +75,21 @@ final class WalLogState {
             group.dropChannel();
         }
         touchedPages.clear();
-        final var decoded = log.exists() ? WalCodec.decodeAll(Files.readAllBytes(log.toPath())) : null;
+        final var bytes = log.exists() ? Files.readAllBytes(log.toPath()) : null;
+        final var decoded = bytes == null ? null : WalCodec.decodeAll(bytes);
         if (decoded == null || decoded.checkpoint() == null) {
             recordsSinceCheckpoint = 0;
             pendingLogged = false;
             knownLength = 0L;
+            allocatedLength = 0L;
             seeded = true;
             return;
         }
-        if (decoded.cleanLength() != log.length()) {
-            FileLocks.truncateTo(log, decoded.cleanLength(), "Could not cut the torn end of the write-ahead log "
-                    + log.getPath() + "; the next startup cuts it");
+        final var cleanLength = decoded.cleanLength();
+        if (!WalWriteGroup.erase(log, cleanLength, WalWriteGroup.writtenEnd(bytes, cleanLength),
+                "Could not erase the torn end of the write-ahead log " + log.getPath())) {
+            throw new IOException("The torn end of the write-ahead log " + log.getPath() + " could not be erased, so"
+                    + " no write is appended to it");
         }
         for (final var record : decoded.records()) {
             for (final var change : record.changes()) {
@@ -97,7 +102,8 @@ final class WalLogState {
         groupBaseLogged = decoded.groupBase() != WalCodec.NO_GROUP_BASE;
         pendingLogged = decoded.pendingLogged();
         nextSeq = Math.max(nextSeq, decoded.lastSeq() + 1);
-        knownLength = log.length();
+        knownLength = cleanLength;
+        allocatedLength = bytes.length;
         seeded = true;
     }
 }

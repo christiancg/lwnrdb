@@ -18,18 +18,18 @@ public final class FieldMaintenance {
     }
 
     public static List<DeferredFold> maintain(String dbName, String collName, String fieldName, Collection<String> ids,
-            Map<String, DbEntry> byId, Map<String, List<IndexedValue>> priors)
+            Map<String, DbEntry> byId, Map<String, List<IndexedValue>> priors, CanonicalIds canonicalIds)
             throws IOException, InterruptedException {
-        return maintain(dbName, collName, fieldName, ids, byId, priors, null);
+        return maintain(dbName, collName, fieldName, ids, byId, priors, null, canonicalIds);
     }
 
     static List<DeferredFold> maintain(String dbName, String collName, String fieldName, Collection<String> ids,
-            Map<String, DbEntry> byId, Map<String, List<IndexedValue>> priors, HeldTypeLists held)
-            throws IOException, InterruptedException {
+            Map<String, DbEntry> byId, Map<String, List<IndexedValue>> priors, HeldTypeLists held,
+            CanonicalIds canonicalIds) throws IOException, InterruptedException {
         rl.lockIndex(dbName, collName, fieldName);
         var flushed = false;
         try {
-            final var batch = FieldIndexBatch.open(dbName, collName, fieldName, ids, priors, held);
+            final var batch = FieldIndexBatch.open(dbName, collName, fieldName, ids, priors, held, canonicalIds);
             final var path = FieldPath.of(fieldName);
             for (var id : ids) {
                 final var doc = byId.get(id);

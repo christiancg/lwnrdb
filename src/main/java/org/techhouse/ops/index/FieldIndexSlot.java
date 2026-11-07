@@ -57,12 +57,15 @@ final class FieldIndexSlot {
     private int changedIds;
     private boolean dirty;
     private boolean logOnly;
+    private final CanonicalIds canonicalIds;
     private PendingFold fold;
     private long idsAdded;
     private long idsRemoved;
 
     private FieldIndexSlot(String dbName, String collName, String fieldName, String identifier, String fileLabel,
-            Comparator<FieldIndexEntry<Object>> order, boolean spellingMatters, IndexTypeReader loader) {
+            Comparator<FieldIndexEntry<Object>> order, boolean spellingMatters, IndexTypeReader loader,
+            CanonicalIds canonicalIds) {
+        this.canonicalIds = canonicalIds;
         this.dbName = dbName;
         this.collName = collName;
         this.fieldName = fieldName;
@@ -73,22 +76,26 @@ final class FieldIndexSlot {
         this.loader = loader;
     }
 
-    static FieldIndexSlot scalar(String dbName, String collName, String fieldName, Class<?> type, HeldTypeLists held) {
+    static FieldIndexSlot scalar(String dbName, String collName, String fieldName, Class<?> type, HeldTypeLists held,
+            CanonicalIds canonicalIds) {
         final var identifier = Cache.memoizedIndexIdentifier(fieldName, type);
         final var label = IndexKind.fileLabel(type);
         return new FieldIndexSlot(dbName, collName, fieldName, identifier, label, cast(FieldIndexLoader.orderFor(type)),
                 hasSpellings(type),
                 HeldTypeLists.reading(held, identifier, () -> fs.indexTypeStamp(dbName, collName, fieldName, label),
-                        () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, type)));
+                        () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, type)),
+                canonicalIds);
     }
 
-    static FieldIndexSlot hash(String dbName, String collName, String fieldName, IndexKind kind, HeldTypeLists held) {
+    static FieldIndexSlot hash(String dbName, String collName, String fieldName, IndexKind kind, HeldTypeLists held,
+            CanonicalIds canonicalIds) {
         final var identifier = Cache.memoizedHashIndexIdentifier(fieldName, kind);
         return new FieldIndexSlot(dbName, collName, fieldName, identifier, kind.label(),
                 cast(FieldIndexLoader.hashOrder()), true,
                 HeldTypeLists.reading(held, identifier,
                         () -> fs.indexTypeStamp(dbName, collName, fieldName, kind.label()),
-                        () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind)));
+                        () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind)),
+                canonicalIds);
     }
 
     private static boolean hasSpellings(Class<?> type) {
@@ -189,7 +196,7 @@ final class FieldIndexSlot {
             return fresh;
         }
         final var probe = new FieldIndexEntry<>(dbName, collName, value, Set.of());
-        final var at = Collections.binarySearch(entries, probe, order);
+        final var at = ChunkedList.binarySearch(entries, probe, order);
         if (at < 0) {
             return null;
         }
@@ -225,7 +232,7 @@ final class FieldIndexSlot {
         } else {
             touch(entry);
         }
-        final var canonical = shared == null ? null : cache.canonicalPkId(dbName, collName, id);
+        final var canonical = shared == null ? null : canonicalIds.of(id);
         if (entry.getIds().add(canonical != null ? canonical : id)) {
             idsAdded++;
             if (resident != null) {
@@ -239,7 +246,7 @@ final class FieldIndexSlot {
 
     void removeId(String id, FieldIndexEntry<Object> entry) {
         touch(entry);
-        final var wasShared = shared != null && heldTheCanonicalId(entry, id);
+        final var wasShared = shared != null && entry.getIds() instanceof IdSet ids && canonicalIds.heldIn(ids, id);
         if (entry.getIds().remove(id)) {
             idsRemoved++;
             if (resident != null) {
@@ -264,18 +271,6 @@ final class FieldIndexSlot {
             idBytesDelta += bytes;
         }
         changedIds++;
-    }
-
-    private boolean heldTheCanonicalId(FieldIndexEntry<Object> entry, String id) {
-        if (!(entry.getIds() instanceof IdSet ids)) {
-            return false;
-        }
-        final var canonical = cache.canonicalPkId(dbName, collName, id);
-        return canonical == null || sameInstance(canonical, ids.stored(id));
-    }
-
-    private static boolean sameInstance(Object canonical, Object held) {
-        return canonical == held;
     }
 
     private void log(String key, String id, boolean present) {
@@ -355,7 +350,7 @@ final class FieldIndexSlot {
             removeExact(entry);
         }
         for (final var entry : added) {
-            final var at = Collections.binarySearch(entries, entry, order);
+            final var at = ChunkedList.binarySearch(entries, entry, order);
             entries.add(at < 0 ? -at - 1 : at, entry);
         }
     }
@@ -372,7 +367,7 @@ final class FieldIndexSlot {
     }
 
     private int indexOfExact(FieldIndexEntry<Object> entry) {
-        final var at = Collections.binarySearch(entries, entry, order);
+        final var at = ChunkedList.binarySearch(entries, entry, order);
         if (at < 0) {
             return -1;
         }

@@ -75,8 +75,12 @@ public final class TriggerHelper {
         if (!configuration.isTriggersEnabled() || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return List.of();
         }
+        final var triggers = triggersOrNone(dbName, collName);
+        if (triggers.isEmpty()) {
+            return List.of();
+        }
         final var matching = new ArrayList<TriggerDefinition>();
-        for (final var trigger : triggersOrNone(dbName, collName)) {
+        for (final var trigger : triggers) {
             if (!trigger.isBefore() && trigger.isEnabled() && trigger.getEvents().contains(type)
                     && (depth == 0 || trigger.isAllowCascade())) {
                 matching.add(trigger);

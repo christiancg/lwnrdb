@@ -30,7 +30,7 @@ port forwarder.
 | `--no-build` | off | reuse the built `lwnrdb-bench-server` and `lwnrdb-bench-client` images |
 
 Every other flag is passed to `bench_client.py`: `--docs` (100000), `--batch` (500), `--payload` (512 bytes),
-`--concurrency` (8 client processes), `--ops-scale` (1.0), `--warmup` (0.1), `--seed` (42) and `--phases`
+`--concurrency` (8 client processes), `--ops-scale` (1.0), `--warmup` (0.1), `--bulk-warmup` (0.5), `--seed` (42) and `--phases`
 (a comma-separated subset; `bulk_insert` always runs, since it loads the data).
 
 ## Memory
@@ -98,7 +98,7 @@ the wall time from the first start to the last finish; latencies are per operati
 
 | Phase | Operation | Ops at scale 1 |
 |---|---|---|
-| `bulk_insert` | load `--docs` documents in `--batch` batches (reported as docs/s, no warm-up) | docs / batch |
+| `bulk_insert` | load `--docs` documents in `--batch` batches, reported as docs/s; the last `--bulk-warmup` share of the batches loads first, untimed, so every document is inserted once and the timed half runs past JIT warm-up | docs / batch |
 | `insert` | single insert of a new document | 20,000 |
 | `get_by_id` | primary-key lookup of a random loaded document | 50,000 |
 | `update_by_id` | full replace of a random loaded document | 20,000 |
@@ -127,13 +127,19 @@ is in bold.
 Throughput hides how much file work one operation does. `test_utils/tools/audit_file_syscalls.py` runs lwnrdb alone
 in a container with `strace` attached, seeds 10k documents with two indexes and synced writes, then traces each phase
 separately (single insert, update and delete, bulk insert and update, `FIND_BY_ID`, an indexed `FILTER`) and prints
-the file syscalls per operation by file kind (`.dat`, `.wal`, `-pk.idx`, `.idxlog`, `.idx`, admin files).
+the file syscalls per operation by file kind (`.dat`, `.wal`, `-pk.idx`, `.idxlog`, `.idx`, admin files). Each phase
+also reports its traced throughput, the write-ahead-log checkpoints it ran (renames of a `.wal`), and per file kind the
+count, sum, p50, p99 and max duration of its `fsync`/`fdatasync`/`sync_file_range` calls, so a synced phase shows where
+its time on the disk goes. `--concurrency N` drives each phase from N clients on their own connections; with it,
+`ops per .wal sync` is the real group-commit size. Durations are measured under `strace`, so compare them with each
+other rather than with the bench.
 
 ```bash
 mvn clean package -DskipTests
 python3 test_utils/tools/audit_file_syscalls.py --check            # fail a phase over its budget
 python3 test_utils/tools/audit_file_syscalls.py --ops 1000 --keep  # more operations, keep the raw traces
 python3 test_utils/tools/audit_file_syscalls.py --budget update=36 --no-build
+python3 test_utils/tools/audit_file_syscalls.py --concurrency 8 --ops 2000 --no-build
 ```
 
 The budgets (`BUDGETS` in the script) are a ratchet: lower one when a change removes calls, never raise one to pass.
@@ -154,6 +160,20 @@ java test_utils/tools/ProfileReport.java test_utils/bench/results/profiles/mine.
     test_utils/bench/results/profiles/mine.log --top 10 CacheSizeEstimator BackgroundProcessorThread
 ```
 
+To follow a hot frame to its callers outside `ProfileReport`, export the samples with
+`jfr print --json --stack-depth 64 --events jdk.ExecutionSample mine.jfr`: the default depth of 5 frames hides every
+caller.
+
+To split the background index maintenance of a write phase into the document re-read, the per-batch fixed cost and
+whole reloads, name its parts:
+
+```bash
+java test_utils/tools/ProfileReport.java test_utils/bench/results/profiles/mine.jfr \
+    test_utils/bench/results/profiles/mine.log --top 10 BackgroundProcessorThread getByIndexEntries \
+    FieldIndexSlot.attach FieldIndexBatch.buildLookup FieldIndexLog.append EventProcessorHelper.updateEntryCount \
+    flushPageRows
+```
+
 `--jar` profiles another build and `--out` moves the files. Unrecognised flags go to `bench_client.py`.
 Use `--ops-scale 6` or more for the read and write phases, because one phase at the default scale lasts one or two
 seconds and yields a few hundred samples, and `--docs 400000 --phases bulk_insert` for the bulk path.
@@ -167,11 +187,14 @@ back a throughput difference with the change in a CPU share the profile names.
 
 Throughput on a laptop moves 10-20% between identical runs, so each result also carries the CPU the engine container
 used per operation. `bench_client.py` prints `PHASE_START <phase>` (and waits one second so the sample lands before the
-load) and `PHASE_END <phase> <operations>`; `run_bench.py` and `profile_bench_cpu.py` read the client's output as it
+load), `PHASE_TIMED <phase>` once every worker has finished its warm-up (the barrier's action), and
+`PHASE_END <phase> <operations>`; `run_bench.py` and `profile_bench_cpu.py` read the client's output as it
 streams and, at each marker, read `usage_usec` from the engine container's `/sys/fs/cgroup/cpu.stat` through
-`docker compose exec`. A phase is measured from its own start to the next phase's start (to its end for the last one), so
+`docker compose exec`. A phase is measured from its `PHASE_TIMED` marker (its start when there is none) to the next phase's start (to its end for the last one), so
 the index maintenance a write phase leaves behind in the background is billed to that phase. The operations counted are
-the timed ones plus the untimed warm-up, and `bulk_insert` counts batches. `summary.md` gets an "Engine CPU per operation"
+the timed ones (the timed ones plus the warm-up for a phase without the marker), and `bulk_insert` counts batches.
+Results from before 2026-11-07 included the warm-up in `cpu_ms_per_op` and loaded every bulk batch timed, so they are
+not comparable with later ones. `summary.md` gets an "Engine CPU per operation"
 table, each phase in `lwnrdb.json` gets `cpu_seconds` and `cpu_ms_per_op`, and `profile_bench_cpu.py` prints them and
 saves `<name>.cpu.json`. A counter that is unreadable or goes backwards leaves the phase without a value rather than
 with a wrong one. `python3 -m unittest discover -s test_utils/bench -p "test_*.py"` runs the tests (a CI leg does too).

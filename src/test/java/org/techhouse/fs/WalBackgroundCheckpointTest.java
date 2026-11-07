@@ -54,7 +54,7 @@ public class WalBackgroundCheckpointTest {
             submitted.incrementAndGet();
             return accepting.get();
         });
-        TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", log().length());
+        TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", OutsideWrites.logEnd(log()));
     }
 
     @AfterEach
@@ -96,7 +96,7 @@ public class WalBackgroundCheckpointTest {
 
     @Test
     public void writerCheckpointsSynchronouslyPastTwiceTheBytes() throws Exception {
-        TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", log().length() / 3);
+        TestUtils.setPrivateField(Configuration.getInstance(), "walCheckpointBytes", OutsideWrites.logEnd(log()) / 3);
 
         rf.replace("a", "new-a", 0, PagePlacement.APPEND);
 

@@ -7,6 +7,7 @@ import traceback
 import zlib
 from typing import Any, Callable
 
+import phase_cpu
 from engines import create
 from workload import Phase, Settings
 
@@ -116,7 +117,7 @@ def _collect(results, processes: list, timeout_s: float) -> list:
 
 
 def run_phase(engine_name: str, phase: Phase, settings: Settings) -> dict:
-    barrier = CONTEXT.Barrier(settings.concurrency)
+    barrier = CONTEXT.Barrier(settings.concurrency, action=phase_cpu.timed_marker(phase.name))
     results = CONTEXT.Queue()
     processes = [CONTEXT.Process(target=_worker, args=(engine_name, phase, settings, index, barrier, results))
                  for index in range(settings.concurrency)]
