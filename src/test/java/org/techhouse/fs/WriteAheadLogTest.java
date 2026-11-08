@@ -274,6 +274,23 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    public void test_a_failed_group_force_removes_a_page_file_the_group_created() throws Exception {
+        try (var recorder = RecordingForcer.install(true)) {
+            final var wal = new WriteAheadLog(rf.fx.paths);
+            final var created = rf.fx.page(1);
+            wal.openGroup(DB, COLL);
+            rf.replace("b", "new-b", 1, PagePlacement.APPEND);
+            assertTrue(created.exists());
+            recorder.failingFor(COLL + ".wal");
+
+            assertFalse(wal.closeGroup(DB, COLL));
+
+            assertFalse(created.exists(), "a page the taken-back group created is removed, not left empty");
+            assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(rf.fx.indexed("b")));
+        }
+    }
+
+    @Test
     public void test_a_failed_take_back_marks_the_log_unapplied() throws Exception {
         final var page = rf.fx.page(0);
         final var old = rf.fx.indexed("b");

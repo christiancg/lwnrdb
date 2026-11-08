@@ -26,6 +26,7 @@ import org.techhouse.log.Logger;
 // The finer tier below ResourceLocking's collection locks, and what makes dirty reads safe: a
 // dirty read skips the collection lock but still serializes against each file's physical write.
 final class FileLocks {
+    static final long ABSENT = -1L;
     private static final Logger logger = Logger.logFor(FileLocks.class);
 
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
@@ -381,6 +382,27 @@ final class FileLocks {
                 end = start;
             }
             return 0;
+        }
+    }
+
+    static boolean cutBackTo(File file, long length, String failureMessage) {
+        if (length == ABSENT) {
+            return removeCreated(file, failureMessage);
+        }
+        return !file.exists() || file.length() == length || truncateTo(file, length, failureMessage);
+    }
+
+    private static boolean removeCreated(File file, String failureMessage) {
+        PageLengths.forget(file);
+        try {
+            if (Files.deleteIfExists(file.toPath())) {
+                SyncedWrites.entriesOfLanded(file.getAbsoluteFile().getParentFile().toPath(),
+                        "Removing " + file.getName());
+            }
+            return true;
+        } catch (IOException e) {
+            logger.error(failureMessage, e);
+            return false;
         }
     }
 

@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -66,6 +67,17 @@ public class WalPlanTest {
         assertArrayEquals(page, Files.readAllBytes(rf.fx.page(0).toPath()));
         assertArrayEquals(pk, Files.readAllBytes(rf.fx.paths.pkIndexFile(DB, COLL).toPath()));
         assertEquals(records, decodedLog().records().size(), "the aborted record is not replayed");
+    }
+
+    @Test
+    public void test_an_aborted_write_removes_the_page_file_it_created() throws Exception {
+        final var created = rf.fx.page(1);
+        makeReadOnly(rf.fx.paths.pkIndexFile(DB, COLL));
+
+        assertThrows(IOException.class, () -> rf.replace("b", "new-b", 1, PagePlacement.APPEND));
+
+        assertFalse(created.exists(), "a page the aborted write created is removed, not left empty without a row");
+        assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(rf.fx.indexed("b")));
     }
 
     @Test

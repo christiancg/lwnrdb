@@ -48,6 +48,10 @@ final class WalPlan {
         private boolean appends() {
             return !lines.isEmpty();
         }
+
+        private long lengthBeforeOrAbsent() {
+            return existed ? lengthBefore : FileLocks.ABSENT;
+        }
     }
 
     private record PkRow(PkIndexEntry row, String deletedId, int liveDelta) {
@@ -213,7 +217,7 @@ final class WalPlan {
     private void rememberLengths(WalWriteGroup group, PkIndexStore.PkAppend pk) {
         for (final var changes : pages.values()) {
             if (changes.appends()) {
-                group.rememberLength(changes.file, changes.lengthBefore);
+                group.rememberLength(changes.file, changes.lengthBeforeOrAbsent());
             }
         }
         if (pk != null) {
@@ -262,7 +266,7 @@ final class WalPlan {
         var cutBack = true;
         for (final var changes : pages.values()) {
             if (changes.appends()) {
-                cutBack &= cutBack(changes.file, changes.lengthBefore);
+                cutBack &= cutBack(changes.file, changes.lengthBeforeOrAbsent());
             }
         }
         if (pk != null) {
@@ -292,7 +296,8 @@ final class WalPlan {
 
     private static boolean cutBack(File file, long length) {
         PageLengths.forget(file);
-        return !file.exists() || file.length() == length || FileLocks.truncateTo(file, length);
+        return FileLocks.cutBackTo(file, length, "Could not roll back the page append for " + file.getAbsolutePath()
+                + " after its index write failed; run REINDEX on this collection");
     }
 
     private void applyBlanks() {

@@ -202,8 +202,7 @@ final class WalWriteGroup {
             if (file.equals(pkIndex)) {
                 PkIndexStore.forgetState(file);
             }
-            cutBack &= !file.exists() || file.length() == entry.getValue()
-                    || FileLocks.truncateTo(file, entry.getValue(), TAKE_BACK_FAILURE + file.getName());
+            cutBack &= FileLocks.cutBackTo(file, entry.getValue(), TAKE_BACK_FAILURE + file.getName());
         }
         blanks.clear();
         return cutBack && erase(log, logLengthBefore, logEnd, TAKE_BACK_FAILURE + log.getName());
