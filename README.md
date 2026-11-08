@@ -1306,7 +1306,7 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete wrote everything its logged record describes: the new copies, the `pk.idx` rows and the blanks of the copies they supersede | `<db>\|<collection>` |
 | `WAL_REWRITE_BEGUN` | A page vacuum logged its forced `REWRITE_BEGIN` frame and has not written its intent, rewritten or truncated the page yet | `<db>\|<collection>` |
 | `PAGE_VACUUM_RENAMED` | A page vacuum moved its rewritten page into place and has not appended the moved records' rows to `pk.idx` yet | `<db>\|<collection>` |
-| `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log (and forced it with `syncWrites`) and has not written the pages or `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log and has not written the pages or `pk.idx` yet; with `syncWrites` an ungrouped write has forced the record by then, while a write inside a write group (a grouped `SAVE`/`DELETE`, or a transaction commit's group) appends it unforced and the group forces it later | `<db>\|<collection>` |
 | `WAL_CHECKPOINT_FORCED` | A checkpoint forced the pages and `pk.idx` the log touched and has not rewritten the log as a single checkpoint yet | `<db>\|<collection>` |
 | `WAL_GROUP_APPENDED` | A write group appended its records to the log, unforced, and has not forced it yet | `<db>\|<collection>` |
 | `WAL_GROUP_FORCED` | A write group forced its records and has not applied the blanks they wait for yet | `<db>\|<collection>` |
@@ -1483,6 +1483,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-15` | `ERROR` | The server's listen registrations already keep `listenMaxRetainedBytes` of requests; retry once some end |
 | `503-16` | `ERROR` | The background index queue is full and nothing was written; retry shortly *(a `SAVE`, `BULK_SAVE`, `DELETE` or `COMMIT_TRANSACTION` that found `backgroundQueueMaxEvents` events queued and no room within `backgroundBacklogWaitMs`; a write forwarded to a full owner gets it at once. Writes inside a transaction are buffered and enqueue nothing, so only their commit is held back, and the transaction stays open)* |
 | `503-17` | `ERROR` | The server holds the maximum bytes of unsent responses; retry shortly *(the response would have pushed the encoded responses waiting to be written, across every connection, past `maxUnsentResponseBytes`; a response under 64Kb and the response to a write are never refused, so only a read gets it, and repeating the read is safe)* |
+| `503-19` | `ERROR` | The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly *(a write to it answered `500-34` and applying its log before the read still failed, typically because the disk is still full; nothing was read, and repeating the read is safe)* |
 
 ### Quickstart
 
@@ -1571,7 +1572,7 @@ java -jar lwnrdb.jar --restore [connection] < backup.ldump
 | `--user <user>` | `admin` | |
 | `--password <password>` | | or the `LWNRDB_PASSWORD` environment variable; `--shell` on a terminal prompts for it |
 | `--tls` | off | TLS, verified against the JVM trust store with hostname verification |
-| `--insecure` | off | with `--tls`, trust any certificate, e.g. the server's dev-only self-signed one |
+| `--insecure` | off | with `--tls`, trust any certificate, e.g. the server's dev-only self-signed one; the client prints a `WARNING: --insecure is active` line on standard error, since anyone on the network path can then read the password and the data |
 
 - **`--shell`** prints a `lwnrdb> ` prompt, sends each line (one JSON request) as it is and pretty-prints the reply.
   `exit`, `quit` or end of input ends the session. There is no line editing, history or multi-line input.
@@ -1587,6 +1588,11 @@ java -jar lwnrdb.jar --restore [connection] < backup.ldump
 Exit codes: `0` success; `1` a command answered non-OK, or the dump or restore stopped (the restore names the line);
 `2` usage error; `3` the server cannot be reached, TLS failed, or authentication was refused. The client never reads
 `lwnrdb.cfg` and never creates `db/` or `logs/` in its working directory.
+
+The client waits at most 10 seconds to connect and finish the TLS handshake, and at most 10 minutes for each reply;
+a server silent for longer ends the run with `no reply from the server within 600 s` (exit code `3`). A reply the
+client parses (`--shell`, the dump, the restore, authentication) is capped at 256 MB: a longer one ends the run with
+`the server's reply is longer than 268435456 bytes` (exit code `1`). `--exec` streams its replies and has no such cap.
 
 **The dump format is the restore script.** Every line is one ordinary request: `CREATE_DATABASE`,
 `CREATE_COLLECTION`, `BULK_SAVE` (at most 4 MB of documents per line), `SAVE_SCHEMA`, `CREATE_INDEX` (one line per

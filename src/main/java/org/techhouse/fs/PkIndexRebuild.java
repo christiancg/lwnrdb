@@ -128,6 +128,17 @@ final class PkIndexRebuild {
         return new IdLine(id, start, next - start);
     }
 
+    static void refuseStaleWriteIntents(WriteIntentRecovery recovery, String dbName, String collName)
+            throws IOException {
+        final var stale = recovery.replayableIntentsOf(dbName, collName);
+        if (!stale.isEmpty()) {
+            throw refused(dbName, collName,
+                    "write intent(s) " + stale + " were left by writes this process could not"
+                            + " clean up after, and a rebuild would freeze whatever half of each write the pages hold."
+                            + " Restart the server, which recovers them");
+        }
+    }
+
     static PkRebuildRefusedException refused(String dbName, String collName, String reason) {
         return new PkRebuildRefusedException(
                 "The PK index of " + dbName + "|" + collName + " was not rebuilt and is left untouched: " + reason);

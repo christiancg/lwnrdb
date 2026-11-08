@@ -242,7 +242,7 @@ public class Tx2pcLogTest {
         Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:9000", List.of("127.0.0.1:9000"), List.of("db|collA"));
         try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
             log.when(() -> Tx2pcLog.isPrepared(dtxId)).thenAnswer(_ -> {
-                SliceCommit.beginFromDurable(dtxId);
+                SliceCommit.beginFromDurable(dtxId, Tx2pcLog.readParticipantMarker(dtxId));
                 return false;
             });
 

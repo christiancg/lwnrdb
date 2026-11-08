@@ -81,7 +81,7 @@ public class MessageProcessor implements Runnable {
         this.remoteHost = hostOf(socket);
         this.preAuthAdmitted = clientId != null && preAuthSlots.acquire(remoteHost);
         this.holdingPreAuthSlot = preAuthAdmitted;
-        this.reaper = new IdleTransactionReaper(clientId, this::remoteAddress);
+        this.reaper = new IdleTransactionReaper(clientId, this::remoteAddress, shuttingDown);
     }
 
     private static String hostOf(Socket socket) {
@@ -125,9 +125,21 @@ public class MessageProcessor implements Runnable {
                 outbound.discard();
             }
             if (clientId != null) {
+                depart();
+            }
+        }
+    }
+
+    private void depart() {
+        try {
+            listenManager.unregisterAllForClient(clientId);
+        } finally {
+            clientTracker.releaseSocketSlot(clientId);
+            try {
+                reaper.redriveUntilFinished();
+            } finally {
                 try {
                     TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                    listenManager.unregisterAllForClient(clientId);
                 } finally {
                     clientTracker.removeById(clientId);
                 }
@@ -221,7 +233,11 @@ public class MessageProcessor implements Runnable {
                 if (!everAuthenticated()) {
                     return closeUnauthenticated();
                 }
-                reaper.reap(budget.reapReason());
+                if (budget.redrive()) {
+                    reaper.redrive();
+                } else {
+                    reaper.reap(budget.reapReason());
+                }
             } catch (RequestTooLargeException tooLarge) {
                 ConnectionLog.warn(logger,
                         "Closed a connection from " + remoteAddress() + ": " + tooLarge.getMessage());

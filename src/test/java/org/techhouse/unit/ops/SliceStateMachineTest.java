@@ -188,7 +188,7 @@ public class SliceStateMachineTest extends VersionedReplaySupport {
         final var op = preparedSave(dtxId, 0, document("durable", "v"));
         markPrepared(dtxId);
 
-        SliceCommit.beginFromDurable(dtxId);
+        SliceCommit.beginFromDurable(dtxId, Tx2pcLog.readParticipantMarker(dtxId));
 
         final var marker = TxCommitLog.readLocalCommitMarker(dtxId);
         assertNotNull(marker);

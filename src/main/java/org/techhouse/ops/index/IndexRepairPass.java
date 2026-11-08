@@ -141,8 +141,8 @@ public final class IndexRepairPass {
     }
 
     private void resubmit(Set<String> repaired, String field, int at) {
-        taskManager.submitMaintenance(new IndexRepairEvent(dbName, collName, event.getIds(), event.getIncarnation(),
-                event.getPendingGeneration(), repaired, field, at));
+        taskManager.submitMaintenanceFollowOn(new IndexRepairEvent(dbName, collName, event.getIds(),
+                event.getIncarnation(), event.getPendingGeneration(), repaired, field, at));
     }
 
     private boolean isStale() {

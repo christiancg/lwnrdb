@@ -22,6 +22,9 @@ BURST_CHUNK = 20
 BACKGROUND_MARKERS = ("Could not checkpoint", "Failed to process a background event", "Could not write the page",
                       "Error while processing", "vacuum")
 D5_SETTINGS = {"authTimeoutMs": 300}
+PARTIAL_COPY_SUFFIXES = (".repair", ".vacuum")
+COLLECTION_FENCED = "503-18"
+FENCE_HELD_MARKER = "its collections stay locked"
 
 
 def fill_during_workload(run: Run):
@@ -120,7 +123,8 @@ def full_at_startup(run: Run):
     output = run.since()
     fatal = [line for line in output.splitlines() if "-FATAL-" in line]
     if up:
-        run.report("D4 a server that came up on a full disk answers reads", reads_fail(run))
+        run.report("D4 a server that came up on a full disk answers reads",
+                   reads_fail(run, FENCE_HELD_MARKER in output))
         run.container.kill_server()
     elif run.container.alive():
         run.report("D4 the server either refuses or comes up", [Divergence(
@@ -132,6 +136,8 @@ def full_at_startup(run: Run):
     after = run.container.checksums()
     changed = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
     run.note(f"the start attempt {'came up' if up else 'exited'}; files it changed: {changed[:30]}")
+    run.report("D4 a start on a full disk leaves no partial copy of a file behind",
+               partial_copies(run, set(after) - set(before)))
     run.container.free(DATA_BALLAST)
     run.offset = len(run.container.output())
     if not run.container.start_server():
@@ -143,13 +149,20 @@ def full_at_startup(run: Run):
     run.recover_and_check(history)
 
 
-def reads_fail(run: Run) -> list:
+def partial_copies(run: Run, created: set) -> list:
+    return [Divergence("D4", run.seed, f"{path} was left behind by a rewrite that could not finish")
+            for path in sorted(created) if path.endswith(PARTIAL_COPY_SUFFIXES)]
+
+
+def reads_fail(run: Run, fence_held: bool) -> list:
     found = []
     with connect() as conn:
         for coll in run.schema.collections:
             answer = conn.send({"type": "AGGREGATE", "databaseName": run.schema.db, "collectionName": coll,
                                 "aggregationSteps": [{"type": "COUNT"}]})
-            if answer.get("status") != "OK":
+            if fence_held and answer.get("errorCode") == COLLECTION_FENCED:
+                run.note(f"{coll}: COUNT answered {COLLECTION_FENCED}, held by a commit the full disk cannot apply")
+            elif answer.get("status") != "OK":
                 found.append(Divergence("D4", run.seed, f"{coll}: COUNT answered {answer.get('errorCode')} "
                                                         f"{str(answer.get('message'))[:200]}"))
     return found

@@ -31,6 +31,7 @@ public class HeldRowsBudgetTest {
     private static final String MIXED = "heldMixed";
     private static final int DOCUMENTS = 200;
     private static final int REMOTE_DOCUMENTS = 300;
+    private static final int CASE_VARIANTS = 60;
     private static final String TIGHT = "16Kb";
     private static final String COUNT = "{\"type\":\"COUNT\"}";
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
@@ -189,6 +190,29 @@ public class HeldRowsBudgetTest {
         final var indexed = results(run(aggregate(TestGlobals.COLL, steps)));
         assertEquals(byId, indexed.stream().collect(
                 Collectors.toMap(row -> row.get("_id").asJsonString().getValue(), row -> row.get("m").toString())));
+    }
+
+    @Test
+    public void joinIndexedRemoteChargesOnlyTheRowsItKeeps() throws Exception {
+        assertOk(run("{\"type\":\"CREATE_COLLECTION\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + REMOTE + "\"}"));
+        final var remote = new StringBuilder(CASE_VARIANTS * 2_048);
+        remote.append("{\"_id\":\"exact\",\"key\":\"g1\"}");
+        for (var i = 0; i < CASE_VARIANTS; i++) {
+            remote.append(",{\"_id\":\"v").append(i).append("\",\"key\":\"G1\",\"pad\":\"").repeat("y", 2_000)
+                    .append("\"}");
+        }
+        assertOk(run(write("BULK_SAVE", REMOTE, "\"objects\":[" + remote + "]")));
+        final var steps = "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\","
+                + "\"value\":\"d1\"}},{\"type\":\"JOIN\",\"joinCollection\":\"" + REMOTE
+                + "\",\"localField\":\"k\",\"remoteField\":\"key\",\"asField\":\"m\"}";
+        capAt("64Kb");
+        assertEquals(List.of("exact"), joinedIds(results(run(aggregate(TestGlobals.COLL, steps))), "d1"));
+        uncapped();
+        index(REMOTE, "key");
+        capAt("64Kb");
+        assertEquals(List.of("exact"), joinedIds(results(run(aggregate(TestGlobals.COLL, steps))), "d1"),
+                "the case variants the index hands back are never joined, so they are never charged");
     }
 
     private static List<String> joinedIds(List<JsonObject> rows, String id) {

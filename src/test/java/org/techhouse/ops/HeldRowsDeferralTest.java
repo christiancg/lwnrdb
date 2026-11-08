@@ -121,4 +121,48 @@ public class HeldRowsDeferralTest {
             assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE, refused.getErrorCode());
         }
     }
+    private static final String LARGE = "x".repeat(500_000);
+    private static final int SKEWED_ROWS = 10_000;
+
+    private static JsonObject sized(int i, boolean large) {
+        final var row = new JsonObject();
+        row.add("_id", new JsonString("d" + i));
+        row.add("pad", new JsonString(large ? LARGE : "p"));
+        return row;
+    }
+
+    private static boolean sampled(int i) {
+        return i <= HeldRows.EXACT_ROWS || i % HeldRows.EXACT_ROWS == 0;
+    }
+
+    @Test
+    public void skewedRowsPastTheSampleAreStillCharged() {
+        final var budget = 64L * 1024 * 1024;
+        try (var context = PipelineContext.of(0L, budget, null)) {
+            final var held = new HeldRows(context);
+            final var exact = new long[1];
+            final var refused = assertThrows(AggregateLimitException.class, () -> {
+                for (var i = 1; i <= SKEWED_ROWS; i++) {
+                    final var row = sized(i, !sampled(i));
+                    exact[0] += HeldRows.bytesOf(row);
+                    assertTrue(exact[0] <= budget * HeldRows.MAX_UNDERCHARGE, "held " + exact[0] + " bytes");
+                    held.hold(row);
+                }
+            });
+            assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE, refused.getErrorCode());
+        }
+    }
+
+    @Test
+    public void largeSampledRowsDoNotRefuseTheSmallOnesBetweenThem() {
+        final var rows = new ArrayList<JsonObject>();
+        for (var i = 1; i <= SKEWED_ROWS; i++) {
+            rows.add(sized(i, sampled(i)));
+        }
+        final var bounded = rows.stream().mapToLong(HeldRows::bytesAtMost).sum();
+        try (var context = PipelineContext.of(0L, bounded, null)) {
+            final var held = new HeldRows(context);
+            assertDoesNotThrow(() -> rows.forEach(held::hold));
+        }
+    }
 }

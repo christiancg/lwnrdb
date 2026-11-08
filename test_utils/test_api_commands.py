@@ -1155,6 +1155,13 @@ def test_create_index_field_names(c):
     check("neither refused request built tier", "tier" not in registered_indexes(c, "multi_idx"))
     check_status("CREATE_INDEX fieldNames of registered fields stays idempotent",
                  create_indexes(c, "multi_idx", ["sku", "price"]), "OK")
+    started = time.monotonic()
+    huge = create_indexes(c, "multi_idx", [f"f{i}" for i in range(100_000)])
+    elapsed = time.monotonic() - started
+    check_code("100k fieldNames are refused -> 400-42", huge, "ERROR", "400-42")
+    check("the 100k fieldNames refusal answers quickly", elapsed < 5.0, f"{elapsed:.2f}s")
+    check("the collection keeps answering after the huge request",
+          len(ids_of(aggregate(c, "multi_idx", [filter_step("sku", "EQUALS", "s7")]))) == 1)
     drop_coll(c, "multi_idx")
 
 

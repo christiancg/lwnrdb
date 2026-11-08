@@ -26,6 +26,9 @@ public final class ClientMain {
             ClientOptions.DEFAULT_HOST, ConfigKey.PORT.defaultValue(), ClientOptions.DEFAULT_USER,
             ClientOptions.PASSWORD_ENV);
 
+    public static final String INSECURE_WARNING = "WARNING: --insecure is active: the server's TLS certificate and host"
+            + " name are not verified, so anyone on the network path can read the password and the data";
+
     private ClientMain() {
     }
 
@@ -40,6 +43,9 @@ public final class ClientMain {
     public static int run(String[] args, Map<String, String> env, InputStream in, PrintStream out, PrintStream err) {
         try {
             final var options = ClientOptions.parse(args, env);
+            if (options.insecure()) {
+                err.println(INSECURE_WARNING);
+            }
             final var password = passwordFor(options);
             try (var connection = Connection.open(options)) {
                 connection.authenticate(options.user(), password);

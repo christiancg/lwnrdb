@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.NameMemo;
 
@@ -105,5 +106,40 @@ public class NameMemoTest {
 
         assertEquals(0, wrong.size(), wrong.toString());
         assertTrue(memo.size() <= 64 + 8, "size " + memo.size());
+    }
+
+    @Test
+    public void concurrentForgetsNeverDriftTheSize() throws Exception {
+        final var memo = new NameMemo<String>(Integer.MAX_VALUE);
+        final var writers = 4;
+        final var rounds = 20_000;
+        try (var pool = Executors.newFixedThreadPool(writers + 2)) {
+            final var futures = new ArrayList<Future<?>>();
+            for (var writer = 0; writer < writers; writer++) {
+                final var id = writer;
+                futures.add(pool.submit(() -> {
+                    for (var i = 0; i < rounds; i++) {
+                        memo.remember("db", id + ":" + i, "v");
+                        if (i % 3 == 0) {
+                            memo.forget("db", id + ":" + (i - 1));
+                        }
+                    }
+                }));
+            }
+            final var done = new AtomicBoolean();
+            final var forgetter = pool.submit(() -> {
+                while (!done.get()) {
+                    memo.forgetAll("db");
+                }
+            });
+            for (final var future : futures) {
+                future.get(60, TimeUnit.SECONDS);
+            }
+            done.set(true);
+            forgetter.get(60, TimeUnit.SECONDS);
+        }
+        memo.forgetAll("db");
+
+        assertEquals(0, memo.size());
     }
 }

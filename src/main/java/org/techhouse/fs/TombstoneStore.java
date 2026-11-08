@@ -162,7 +162,7 @@ public final class TombstoneStore {
         }
         final var lock = FileLocks.lockWrite(file);
         try {
-            final var resident = loadLocked(file);
+            final var resident = renewedAfterFailedForce(file, loadLocked(file));
             final var lines = new ArrayList<String>(ids.size());
             for (var i = 0; i < ids.size(); i++) {
                 lines.add(lineOf(ids.get(i), versions.get(i)));
@@ -178,6 +178,20 @@ public final class TombstoneStore {
         } finally {
             lock.unlock();
         }
+    }
+
+    private static ResidentTombstones renewedAfterFailedForce(File file, ResidentTombstones resident)
+            throws IOException {
+        if (resident == null || !ForceFailures.hasFailed(file.toPath())) {
+            return resident;
+        }
+        final var kept = resident.merged();
+        final var key = file.getAbsolutePath();
+        residents.remove(key);
+        TombstoneFile.rewrite(file, kept);
+        final var renewed = ResidentTombstones.of(kept, kept.size(), FileState.of(file));
+        residents.put(key, renewed);
+        return renewed;
     }
 
     static Map<String, Long> read(File file) throws IOException {

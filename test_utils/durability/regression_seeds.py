@@ -8,4 +8,13 @@ REGRESSION_SEEDS = [
     (322, "pointed", "HALT at PK_INDEX_REPLACED, strict rebuild"),
     (6, "fsync-failure", "a failed force of the collection's write-ahead log, strict rebuild"),
     (200, "fsync-failure", "a failed force of the collection's write-ahead log, strict rebuild"),
+    (201, "fsync-failure", "a failed force of pk.idx, then a checkpoint that rebuilds it, strict rebuild"),
+    (206, "fsync-failure", "a failed force of the write-ahead log, then writes the log must not take, strict rebuild"),
+    (209, "fsync-failure", "a failed force of pk.idx, then a checkpoint that rebuilds it, strict rebuild"),
+    (210, "fsync-failure", "a failed force of pk.idx, then a checkpoint that rebuilds it, strict rebuild"),
+    (214, "fsync-failure", "a failed force of the write-ahead log, then writes the log must not take, strict rebuild"),
+    (217, "fsync-failure", "a failed force of a page, then a checkpoint that rebuilds it, strict rebuild"),
+    (219, "fsync-failure", "a failed force of a page, then a checkpoint that rebuilds it, strict rebuild"),
+    (221, "fsync-failure", "a failed force of pk.idx, then a checkpoint that rebuilds it, strict rebuild"),
+    (222, "fsync-failure", "a failed force of a page, then a checkpoint that rebuilds it, strict rebuild"),
 ]

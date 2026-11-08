@@ -540,8 +540,15 @@ def test_tls(cwd: str, work_dir: str, log_path: str):
         trusted = bu.wait_until(lambda: client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
                                 .returncode == 0, 30.0)
         check("--tls --insecure exits 0", bool(trusted))
+        insecure = client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
+        check("--insecure warns on stderr", insecure.stderr.decode().startswith("WARNING: --insecure is active"),
+              insecure.stderr.decode())
+        check("and keeps stdout to the reply alone", json.loads(insecure.stdout.decode()).get("status") == "OK",
+              insecure.stdout.decode()[:200])
         verified = client(cwd, "--tls", "--exec", '{"type":"LIST_DATABASES"}')
         check("--tls against the self-signed certificate exits 3", verified.returncode == 3, verified.stderr.decode())
+        check("a verified --tls prints no insecure warning", "--insecure" not in verified.stderr.decode(),
+              verified.stderr.decode())
     finally:
         bu.stop_server(proc, port=SOURCE_PORT)
 

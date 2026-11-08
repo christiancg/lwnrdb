@@ -449,8 +449,24 @@ public class FileSystem {
         return tombstones.forcedBeside(deleteTombstones, writeAheadLog.forceGroup(dbName, collName), dbName, collName);
     }
 
+    public boolean forceGroupTombstones(String dbName, String collName) {
+        return tombstones.forcedBeside(tombstones.startGroupForce(dbName, collName), true, dbName, collName);
+    }
+
     public boolean settleWriteGroup(String dbName, String collName) throws IOException {
-        return writeAheadLog.closeGroup(dbName, collName);
+        try {
+            return writeAheadLog.closeGroup(dbName, collName);
+        } finally {
+            DeferredApplies.flagIfUnapplied(paths, dbName, collName);
+        }
+    }
+
+    public boolean applyDeferredWrites(String dbName, String collName) throws IOException {
+        return writeAheadLog.requireApplied(dbName, collName);
+    }
+
+    public void onDeferredApply(DeferredApplyListener listener) {
+        DeferredApplies.listenWith(listener);
     }
 
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
@@ -458,22 +474,13 @@ public class FileSystem {
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
             writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
-            refuseStaleWriteIntents(dbName, collName);
+            PkIndexRebuild.refuseStaleWriteIntents(writeIntentRecovery, dbName, collName);
         }
         return PkIndexRebuild.plan(paths, pkIndexStore, dbName, collName, pageFileLengths(dbName, collName).keySet());
     }
 
     public void applyPkRebuild(String dbName, String collName, PkRebuild rebuild) throws IOException {
         PkIndexRebuild.apply(pkIndexStore, dbName, collName, rebuild);
-    }
-
-    private void refuseStaleWriteIntents(String dbName, String collName) throws IOException {
-        final var stale = writeIntentRecovery.replayableIntentsOf(dbName, collName);
-        if (!stale.isEmpty()) {
-            throw PkIndexRebuild.refused(dbName, collName, "write intent(s) " + stale + " were left by writes this"
-                    + " process could not clean up after, and a rebuild would freeze whatever half of each write the"
-                    + " pages hold. Restart the server, which recovers them");
-        }
     }
 
     public List<DbEntry> adoptOrphanedRecords(PkRowsSession session) throws IOException {

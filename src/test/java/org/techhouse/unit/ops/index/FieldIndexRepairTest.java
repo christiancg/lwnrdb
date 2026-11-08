@@ -280,6 +280,24 @@ public class FieldIndexRepairTest {
     }
 
     @Test
+    public void aBusyPassDuringTheDrainDoesNotLeaveAnUncleanMarker() throws Exception {
+        final var pass = markedPass();
+        final var locks = spyTheLocks();
+        final var calls = new AtomicInteger();
+        doAnswer(invocation -> calls.incrementAndGet() == 2 ? Boolean.FALSE : invocation.callRealMethod()).when(locks)
+                .tryLockRead(eq(TestGlobals.DB), eq(TestGlobals.COLL), anyLong());
+        TestUtils.setPrivateField(stubTaskManager, "draining", true);
+
+        IndexRepairPass.run(pass);
+        final var rest = resubmitted();
+        assertEquals(1, rest.size(), "the drain waits for the rest of the pass instead of dropping it");
+        IndexRepairPass.run(rest.getFirst());
+
+        assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
+        assertTrue(realFs.indexMarkers().retainUncleanStops().isEmpty());
+    }
+
+    @Test
     public void aPassForADroppedCollectionOnlyClearsItsMarks() throws Exception {
         final var ids = List.of("x", "y");
         final var pass = new IndexRepairEvent(TestGlobals.DB, "droppedColl", ids, 0L,

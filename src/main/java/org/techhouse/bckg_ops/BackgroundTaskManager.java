@@ -45,6 +45,10 @@ public class BackgroundTaskManager {
         return true;
     }
 
+    public void submitMaintenanceFollowOn(Event op) {
+        lanes.addMaintenance(op);
+    }
+
     public synchronized void startBackgroundWorkers() {
         draining = false;
         fs.onCheckpointRequest(() -> submitMaintenance(new WalCheckpointEvent()));

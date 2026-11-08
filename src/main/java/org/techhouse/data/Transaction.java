@@ -29,6 +29,7 @@ public class Transaction {
     private final Map<String, Map<String, Long>> versions = new HashMap<>();
     private final Map<Long, Set<String>> insertedIdsByOp = new HashMap<>();
     private boolean aborted;
+    private boolean commitFenced;
     private final long startedAtNanos = System.nanoTime();
     private int bufferedOps;
     private long bufferedBytes;
@@ -106,6 +107,14 @@ public class Transaction {
 
     public void markOpsDurable() {
         opsDurable = true;
+    }
+
+    public boolean isCommitFenced() {
+        return commitFenced;
+    }
+
+    public void markCommitFenced() {
+        commitFenced = true;
     }
 
     public List<String> getBufferedOpIds() {

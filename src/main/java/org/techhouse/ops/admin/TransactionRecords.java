@@ -11,6 +11,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminTransactionEntry;
+import org.techhouse.ex.LoggedWriteNotAppliedException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -70,6 +71,11 @@ public final class TransactionRecords {
 
     private static void discardLanded(List<String> landed, Exception failure) {
         if (landed.isEmpty()) {
+            return;
+        }
+        if (LoggedWriteNotAppliedException.isCauseOf(failure)) {
+            logger.warning("Kept " + landed.size() + " transaction op record(s) written before a record that was"
+                    + " logged but not applied: the log applies that record, and it needs them");
             return;
         }
         try {

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.ex.LoggedWriteNotAppliedException;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.io.ChunkedChannelWrites;
@@ -61,7 +62,10 @@ final class WalPlan {
         this.wal = pkIndexStore.wal();
         this.dbName = dbName;
         this.collName = collName;
-        wal.requireApplied(dbName, collName);
+        if (wal.requireApplied(dbName, collName)) {
+            throw new IOException("Applied the earlier logged writes of " + WriteAheadLog.subject(dbName, collName)
+                    + " just before this write, which had read the collection before them; nothing of it was written");
+        }
     }
 
     long append(long page, byte[] line) throws IOException {
@@ -242,7 +246,9 @@ final class WalPlan {
             }
         } catch (IOException e) {
             closeKeptChannels(e);
-            abort(seq, pk, e);
+            if (!abort(seq, pk, e)) {
+                throw new LoggedWriteNotAppliedException(WriteAheadLog.subject(dbName, collName), e);
+            }
             throw e;
         }
         if (group != null) {
@@ -252,7 +258,7 @@ final class WalPlan {
         }
     }
 
-    private void abort(long seq, PkIndexStore.PkAppend pk, IOException failure) {
+    private boolean abort(long seq, PkIndexStore.PkAppend pk, IOException failure) {
         var cutBack = true;
         for (final var changes : pages.values()) {
             if (changes.appends()) {
@@ -266,15 +272,18 @@ final class WalPlan {
         if (cutBack) {
             try {
                 wal.abort(dbName, collName, seq);
-                return;
+                return true;
             } catch (IOException abortFailure) {
                 failure.addSuppressed(abortFailure);
             }
         }
         wal.markUnapplied(dbName, collName);
-        logger.error("Logged a write to " + WriteAheadLog.subject(dbName, collName) + " but could not apply it or"
-                + " take it back; it is applied before the next write to the collection, or at the next startup",
+        DeferredApplies.flag(dbName, collName);
+        logger.error(
+                "Logged a write to " + WriteAheadLog.subject(dbName, collName) + " but could not apply it or"
+                        + " take it back; it is applied before the collection is next used, or at the next startup",
                 failure);
+        return false;
     }
 
     private static boolean endsWithLineFeed(byte[] line) {
@@ -302,9 +311,10 @@ final class WalPlan {
                 closeKeptChannels(e);
                 PageLengths.forget(changes.file);
                 wal.markUnapplied(dbName, collName);
+                DeferredApplies.flag(dbName, collName);
                 logger.error("Committed a write to " + changes.file.getName() + " but could not blank the copies it"
-                        + " superseded; they are blanked before the next write to the collection, or at the next"
-                        + " startup", e);
+                        + " superseded; they are blanked before the collection is next used, or at the next startup",
+                        e);
                 return;
             }
         }

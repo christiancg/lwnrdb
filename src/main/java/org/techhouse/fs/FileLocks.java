@@ -283,6 +283,9 @@ final class FileLocks {
             content.writeTo(out);
             out.flush();
             SyncedWrites.content(file.getChannel(), tmp);
+        } catch (IOException | RuntimeException e) {
+            discardTemporary(tmp, e);
+            throw e;
         }
         moveIntoPlace(tmp, path);
     }
@@ -293,8 +296,19 @@ final class FileLocks {
         try (var out = new FileOutputStream(tmp.toFile())) {
             out.write(content);
             SyncedWrites.content(out.getChannel(), tmp);
+        } catch (IOException | RuntimeException e) {
+            discardTemporary(tmp, e);
+            throw e;
         }
         moveIntoPlace(tmp, path);
+    }
+
+    private static void discardTemporary(Path tmp, Exception cause) {
+        try {
+            Files.deleteIfExists(tmp);
+        } catch (IOException e) {
+            cause.addSuppressed(e);
+        }
     }
 
     static void moveIntoPlace(Path tmp, Path path) throws IOException {
@@ -310,6 +324,8 @@ final class FileLocks {
             // ATOMIC_MOVE is not supported across filesystems or on every platform.
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
+        ForceFailures.cleared(tmp);
+        ForceFailures.cleared(path);
     }
 
     static String separatorBeforeAppend(File file) throws IOException {

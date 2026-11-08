@@ -40,12 +40,16 @@ public class ClientTracker {
 
     public void removeById(UUID clientId) {
         clients.remove(clientId);
-        if (disconnectSignals.remove(clientId) != null) {
-            socketClients.decrementAndGet();
-        }
+        releaseSocketSlot(clientId);
         final var departure = departures.remove(clientId);
         if (departure != null) {
             departure.countDown();
+        }
+    }
+
+    public void releaseSocketSlot(UUID clientId) {
+        if (disconnectSignals.remove(clientId) != null) {
+            socketClients.decrementAndGet();
         }
     }
 
@@ -115,6 +119,18 @@ public class ClientTracker {
     public Client.TransactionReap consumeTransactionReaped(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
         return client != null ? client.consumeTransactionReaped() : null;
+    }
+
+    public void markCommitRedriven(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.markCommitRedriven();
+        }
+    }
+
+    public boolean consumeCommitRedriven(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null && client.consumeCommitRedriven();
     }
 
     public void markRemoteSliceFenced(UUID clientId) {

@@ -47,6 +47,7 @@ public final class IndexWindowWalk implements Iterator<String> {
     private FieldIndexEntry<Object> cursor;
     private int cursorOffset;
     private int cursorModifications;
+    private boolean opened;
 
     @SuppressWarnings("unchecked")
     private IndexWindowWalk(String dbName, String collName, FieldOperator operator, List<Object> operands,
@@ -166,6 +167,10 @@ public final class IndexWindowWalk implements Iterator<String> {
         try {
             final var entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
             if (entries == null) {
+                if (opened) {
+                    throw new IOException("The index on " + fieldName + " of " + dbName + "|" + collName
+                            + " could not be read in the middle of a walk");
+                }
                 exhausted = true;
                 return false;
             }
@@ -173,6 +178,7 @@ public final class IndexWindowWalk implements Iterator<String> {
                     Cache.getIndexIdentifier(fieldName, type));
             final var resident = cached == entries;
             collect(entries, runsOf(entries), resident ? page.size() + pageSize : Integer.MAX_VALUE);
+            opened = true;
             return true;
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);

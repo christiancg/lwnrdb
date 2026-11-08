@@ -4,28 +4,66 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 
 final class ReplyReader {
     private static final int BUFFER_BYTES = 64 * 1024;
 
     private final InputStream in;
+    private final int maxLineBytes;
     private final byte[] buffer = new byte[BUFFER_BYTES];
     private int position;
     private int limit;
 
-    ReplyReader(InputStream in) {
+    ReplyReader(InputStream in, int maxLineBytes) {
         this.in = in;
+        this.maxLineBytes = maxLineBytes;
+    }
+
+    static final class ReplyTooLongException extends IOException {
+        ReplyTooLongException(int maxLineBytes) {
+            super("the server's reply is longer than " + maxLineBytes + " bytes");
+        }
+    }
+
+    private static final class BoundedLine extends ByteArrayOutputStream {
+        private final int maxBytes;
+
+        BoundedLine(int maxBytes) {
+            this.maxBytes = maxBytes;
+        }
+
+        @Override
+        @SuppressWarnings("NullableProblems")
+        public synchronized void write(byte[] bytes, int offset, int length) {
+            if ((long) count + length > maxBytes + 1L) {
+                throw new UncheckedIOException(new ReplyTooLongException(maxBytes));
+            }
+            super.write(bytes, offset, length);
+        }
+
+        synchronized String text() throws ReplyTooLongException {
+            final var length = count > 0 && buf[count - 1] == '\r' ? count - 1 : count;
+            if (length > maxBytes) {
+                throw new ReplyTooLongException(maxBytes);
+            }
+            return new String(buf, 0, length, StandardCharsets.UTF_8);
+        }
     }
 
     String readLine() throws IOException {
-        final var line = new ByteArrayOutputStream();
-        if (endsBeforeNextLine(line, null)) {
+        final var line = new BoundedLine(maxLineBytes);
+        final boolean ended;
+        try {
+            ended = endsBeforeNextLine(line, null);
+        } catch (UncheckedIOException e) {
+            throw e.getCause();
+        }
+        if (ended) {
             return null;
         }
-        final var bytes = line.toByteArray();
-        final var length = bytes.length > 0 && bytes[bytes.length - 1] == '\r' ? bytes.length - 1 : bytes.length;
-        return new String(bytes, 0, length, StandardCharsets.UTF_8);
+        return line.text();
     }
 
     boolean endsBeforeNextLine(OutputStream sink, ReplyHeader header) throws IOException {

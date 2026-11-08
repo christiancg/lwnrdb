@@ -140,4 +140,21 @@ public class MessageProcessorResponseBudgetTest {
                         + ErrorCode.RESPONSE_BUDGET_EXHAUSTED.getDefaultMessage() + "\",\"errorCode\":\"503-17\"}",
                 refused);
     }
+
+    @Test
+    public void aLargeListProceduresIsRefusable() throws Exception {
+        assertOk(connection.exchange("{\"type\":\"SAVE_PROCEDURE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"name\":\"big\",\"script\":\"export const blob = '" + "p".repeat(LARGE_FIELD_CHARS) + "';\"}"));
+        exhaustTheBudget();
+
+        final var listing = "{\"type\":\"LIST_PROCEDURES\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"includeSource\":true}";
+        assertRefused(connection.exchange(listing));
+
+        budget.release(heldByTest);
+        heldByTest = 0;
+        final var answered = connection.exchange(listing);
+        assertOk(answered);
+        assertTrue(answered.length() > LARGE_FIELD_CHARS, "the retried listing carries the source");
+    }
 }

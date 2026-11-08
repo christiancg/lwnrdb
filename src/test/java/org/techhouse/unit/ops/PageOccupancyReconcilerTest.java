@@ -160,6 +160,21 @@ public class PageOccupancyReconcilerTest {
     }
 
     @Test
+    public void test_an_empty_page_file_with_no_row_gets_an_empty_row() throws Exception {
+        save("a");
+        final var page = new File(persistedRowsFolder().getParentFile().getParentFile().getParentFile(),
+                TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
+                        + "-1" + Globals.DB_FILE_EXTENSION);
+        Files.createFile(page.toPath());
+
+        assertTrue(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+
+        assertEquals(0, existingRow(1).getEntryCount());
+        assertEquals(0L, existingRow(1).getPageSize());
+        assertFalse(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    @Test
     public void test_an_empty_collection_needs_nothing() throws Exception {
         assertFalse(PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL));
     }

@@ -1,9 +1,11 @@
 package org.techhouse.unit.bckg_ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -12,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.IndexRepairEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
@@ -24,6 +27,7 @@ import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRecord;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
@@ -31,6 +35,8 @@ import org.techhouse.test.TestUtils;
 
 public class DrainFollowOnEventTest {
     private static final long WAIT_MILLIS = 5_000L;
+    private static final long DRAIN_MILLIS = 300L;
+    private static final long REPAIR_LOCK_WAIT_MS = 20L;
 
     private final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
@@ -168,5 +174,30 @@ public class DrainFollowOnEventTest {
     public void aClientSaveIsRefusedWhileDraining() throws Exception {
         final var before = backgroundTaskManager.pending();
         assertEquals(before, pendingAfterASaveWhileDraining(false));
+    }
+
+    @Test
+    public void aRepairPassResubmittingDuringTheDrainIsCutAtTheDrainTimeout() throws Exception {
+        final var lockTimeout = configuration.getTransactionLockTimeoutMs();
+        TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", REPAIR_LOCK_WAIT_MS);
+        final var entry = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        final var indexes = new HashSet<>(entry.getIndexes());
+        indexes.add("name");
+        entry.setIndexes(indexes);
+        backgroundTaskManager.startBackgroundWorkers();
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            assertTrue(backgroundTaskManager.submitMaintenance(new IndexRepairEvent(TestGlobals.DB, TestGlobals.COLL,
+                    List.of("busy"), CollectionIncarnation.current(TestGlobals.DB, TestGlobals.COLL), 0L)));
+            final var started = System.nanoTime();
+
+            assertFalse(backgroundTaskManager.drain(DRAIN_MILLIS), "the repair pass keeps resubmitting itself");
+
+            assertTrue(System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(WAIT_MILLIS),
+                    "the drain is bounded by its timeout, whatever the maintenance queue does");
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+            TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", lockTimeout);
+        }
     }
 }

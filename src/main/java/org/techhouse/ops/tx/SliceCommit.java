@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ReplicationOutcome;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ioc.IocContainer;
@@ -22,6 +23,7 @@ public final class SliceCommit {
     private static final Logger logger = Logger.logFor(SliceCommit.class);
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
     private SliceCommit() {
     }
@@ -45,14 +47,13 @@ public final class SliceCommit {
         transaction.markOpsDurable();
     }
 
-    public static void beginFromDurable(String txId) throws Exception {
+    public static void beginFromDurable(String txId, Tx2pcLog.ParticipantMarker marker) throws Exception {
         if (TxCommitLog.isLocallyCommitted(txId)) {
             return;
         }
-        final var marker = Tx2pcLog.readParticipantMarker(txId);
+        final var opIds = marker == null || marker.opIds() == null ? Tx2pcLog.sliceOpIds(txId) : marker.opIds();
         AdminOperationHelper.writeTransactionRecords(
-                List.of(TxCommitLog.localCommitMarker(txId, Tx2pcLog.sliceOpIds(txId),
-                        marker == null ? List.of() : marker.collections())),
+                List.of(TxCommitLog.localCommitMarker(txId, opIds, marker == null ? List.of() : marker.collections())),
                 List.of(Tx2pcLog.participantMarkerId(txId)));
     }
 
@@ -74,6 +75,7 @@ public final class SliceCommit {
             }
         }
         if (!applied || !durable) {
+            locks.fence(transaction.getHeldLocks());
             return Result.HALF_APPLIED;
         }
         final var stagedTriggers = CommittedOpTriggers.stage(ops, actingUser, transaction.getTriggerDepth(),

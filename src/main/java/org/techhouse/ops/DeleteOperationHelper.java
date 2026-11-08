@@ -49,8 +49,7 @@ public final class DeleteOperationHelper {
             return new OperationResponse(OperationType.DELETE, "Entry with id " + id + " not found",
                     ErrorCode.ENTRY_NOT_FOUND);
         }
-        final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
-        entryToBeDeleted.setPage(idxEntry.getPage());
+        final var entryToBeDeleted = onPage(cache.getById(dbName, collName, idxEntry), idxEntry.getPage());
         final var deletedRef = EntityRef.of(entryToBeDeleted,
                 PriorIndexedValues.of(PriorIndexedValues.fieldsOf(dbName, collName), entryToBeDeleted));
         final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
@@ -126,5 +125,16 @@ public final class DeleteOperationHelper {
             }
         }
         return rows;
+    }
+
+    private static DbEntry onPage(DbEntry entry, long page) {
+        if (entry.getPage() == page) {
+            return entry;
+        }
+        final var copy = DbEntry.fromJsonObject(entry.getDatabaseName(), entry.getCollectionName(), entry.getData());
+        copy.set_id(entry.get_id());
+        copy.setPage(page);
+        copy.setVersion(entry.getVersion());
+        return copy;
     }
 }

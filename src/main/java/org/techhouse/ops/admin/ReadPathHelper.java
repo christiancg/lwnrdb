@@ -96,15 +96,20 @@ public final class ReadPathHelper {
         return aggregate(aggregateRequest, activeTransaction, overlaid, false);
     }
 
-    private static List<String> acquireLocks(AggregateRequest aggregateRequest, Transaction activeTransaction,
-            boolean pointHold) throws InterruptedException {
-        final var timeout = activeTransaction != null ? configuration.getTransactionLockTimeoutMs() : 0L;
+    private static List<String> lockIdsOf(AggregateRequest aggregateRequest, boolean pointHold) {
+        return pointHold
+                ? List.of(Cache.getCollectionIdentifier(aggregateRequest.getDatabaseName(),
+                        aggregateRequest.getCollectionName()))
+                : AggregationOperationHelper.aggregateLockSet(aggregateRequest);
+    }
+
+    private static List<String> acquireLocks(AggregateRequest aggregateRequest, boolean bounded, boolean pointHold)
+            throws InterruptedException {
+        final var timeout = bounded ? configuration.getTransactionLockTimeoutMs() : 0L;
         if (pointHold) {
-            return locks.acquirePointReadLock(false, Cache.getCollectionIdentifier(aggregateRequest.getDatabaseName(),
-                    aggregateRequest.getCollectionName()), timeout);
+            return locks.acquirePointReadLock(false, lockIdsOf(aggregateRequest, true).getFirst(), timeout);
         }
-        return locks.acquireReadLocks(aggregateRequest.isDirtyRead(),
-                AggregationOperationHelper.aggregateLockSet(aggregateRequest), timeout);
+        return locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockIdsOf(aggregateRequest, false), timeout);
     }
 
     private static void releaseLocks(List<String> readLocks, boolean pointHold) {
@@ -126,9 +131,13 @@ public final class ReadPathHelper {
             if (notRegistered != null) {
                 return notRegistered;
             }
-            final var acquired = acquireLocks(aggregateRequest, activeTransaction, pointHold);
+            final var lockIds = lockIdsOf(aggregateRequest, pointHold);
+            final var inTransaction = activeTransaction != null;
+            final var acquired = acquireLocks(aggregateRequest, OperationLocks.waitsBounded(inTransaction, lockIds),
+                    pointHold);
             if (acquired == null) {
-                return new OperationResponse(OperationType.AGGREGATE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+                return new OperationResponse(OperationType.AGGREGATE,
+                        OperationLocks.readRefusalOf(inTransaction, lockIds));
             }
             readLocks = acquired;
             final var unregistered = CollectionReadinessGuard.checkRead(OperationType.AGGREGATE, dbName,

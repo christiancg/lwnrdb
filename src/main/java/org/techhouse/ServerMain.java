@@ -45,6 +45,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.admin.AdminStamp;
+import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
 import org.techhouse.simplejs.host.ScriptHeapGuard;
 
@@ -108,6 +109,7 @@ public class ServerMain {
         fs.createAdminDatabase();
         StartupWarnings.retainAndReportUncleanStops();
         final var replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());
+        DeferredWrites.install();
         fs.recoverWriteIntents();
         cache.loadAdminData();
         AdminPasswordGuard.refuseUnsetPasswordWhenBootstrapping(cache);

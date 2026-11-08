@@ -26,21 +26,47 @@ public final class TransactionRecovery {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final String OPS_NOT_APPLIED = "its ops did not all apply";
+    private static final String OPS_MISSING = "some of its op records are missing";
 
     private TransactionRecovery() {
     }
 
-    private static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
+    private static void commitPreparedFromDurable(String dtxId, Tx2pcLog.ParticipantMarker marker, long timeoutMillis)
             throws Exception {
-        SliceCommit.beginFromDurable(dtxId);
-        if (!replayDurableSlice(dtxId, collections, timeoutMillis)) {
+        final var expected = marker == null ? null : marker.opIds();
+        if (incomplete(dtxId, expected)) {
+            throw new DurableReplayIncompleteException(dtxId, OPS_MISSING);
+        }
+        SliceCommit.beginFromDurable(dtxId, marker);
+        if (!replayDurableSlice(dtxId, marker == null ? List.of() : marker.collections(), expected, timeoutMillis)) {
             throw new DurableReplayIncompleteException(dtxId, OPS_NOT_APPLIED);
         }
     }
 
-    private static boolean replayDurableSlice(String txId, List<String> collections, long timeoutMillis)
-            throws Exception {
+    private static boolean incomplete(String txId, List<String> expectedOpIds) {
+        if (expectedOpIds == null) {
+            return false;
+        }
+        final var present = new HashSet<>(Tx2pcLog.sliceOpIds(txId));
+        final var missing = expectedOpIds.stream().filter(id -> !present.contains(id)).toList();
+        if (missing.isEmpty()) {
+            return false;
+        }
+        logger.error("Transaction " + txId + " is missing " + missing.size() + " of its " + expectedOpIds.size()
+                + " durable op record(s) (" + missing.getFirst() + (missing.size() > 1 ? ", ..." : "")
+                + "); none of its remaining ops is applied and its records are kept for an operator to inspect");
+        return true;
+    }
+
+    private static boolean replayDurableSlice(String txId, List<String> collections, List<String> expectedOpIds,
+            long timeoutMillis) throws Exception {
         locks.acquireWriteLocksNotHeld(collections, timeoutMillis);
+        if (incomplete(txId, expectedOpIds)) {
+            locks.fence(collections);
+            logger.error("Transaction " + txId + " may be partly applied; its collections stay locked until an"
+                    + " operator resolves its records");
+            return false;
+        }
         var finished = false;
         try {
             final var ops = AdminOperationHelper.readTransactionOps(Tx2pcLog.sliceOpIds(txId));
@@ -91,12 +117,12 @@ public final class TransactionRecovery {
         }
         if (state == SliceStateMachine.State.COMMITTING) {
             final var marker = TxCommitLog.readLocalCommitMarker(dtxId);
-            if (!replayDurableSlice(dtxId, marker == null ? List.of() : marker.collections(), timeoutMillis)) {
+            if (!replayDurableSlice(dtxId, marker == null ? List.of() : marker.collections(),
+                    marker == null ? null : marker.opIds(), timeoutMillis)) {
                 throw new DurableReplayIncompleteException(dtxId, OPS_NOT_APPLIED);
             }
         } else if (state == SliceStateMachine.State.PREPARED && commit) {
-            final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-            commitPreparedFromDurable(dtxId, marker != null ? marker.collections() : List.of(), timeoutMillis);
+            commitPreparedFromDurable(dtxId, Tx2pcLog.readParticipantMarker(dtxId), timeoutMillis);
         } else if (state == SliceStateMachine.State.PREPARED) {
             abortFromDurable(dtxId);
         }
@@ -178,7 +204,8 @@ public final class TransactionRecovery {
 
     public static boolean finishLocalCommit(String txId) throws Exception {
         final var marker = TxCommitLog.readLocalCommitMarker(txId);
-        return replayDurableSlice(txId, marker == null ? List.of() : marker.collections(), 0L);
+        return replayDurableSlice(txId, marker == null ? List.of() : marker.collections(),
+                marker == null ? null : marker.opIds(), 0L);
     }
 
     private static String dtxIdOf(String recordId) {

@@ -152,8 +152,9 @@ public class WalBackgroundCheckpointTest {
         wal.markUnapplied(DB, COLL);
         assertFalse(wal.checkpointRequested(DB, COLL), "a replay needs the collection write lock");
 
+        assertTrue(wal.requireApplied(DB, COLL), "the collection's next user applies the log");
         rf.replace("b", "new-b", 0, PagePlacement.APPEND);
-        assertTrue(wal.checkpointRequested(DB, COLL), "the next write applied the log");
+        assertTrue(wal.checkpointRequested(DB, COLL), "the log is applied");
         assertEquals(0, records());
     }
 

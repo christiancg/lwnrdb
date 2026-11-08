@@ -133,6 +133,10 @@ public final class Globals {
     public static final List<Integer> LAZY_CANDIDATE_CHUNKS = List.of(256, 1024, 4096, 16384);
     public static final int REPAIR_PASS_CHUNK = 4096;
     public static final long WAL_BACKGROUND_CHECKPOINT_LOCK_WAIT_MS = 1000L;
+    public static final long DEFERRED_APPLY_LOCK_WAIT_MS = 1000L;
+    public static final long FENCE_REDRIVE_INITIAL_MS = 100L;
+    public static final long FENCE_REDRIVE_MAX_MS = 5000L;
+    public static final long FENCE_RECHECK_MS = 200L;
     public static final long REFUSAL_MIN_SPACING_MS = 1000L;
     public static final long TRANSIENT_SORT_WALK_MAX_INDEX_BYTES = 1024L * 1024L;
 }

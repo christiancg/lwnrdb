@@ -9,6 +9,7 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 
 public final class HeldRows {
     public static final int EXACT_ROWS = 64;
+    public static final int MAX_UNDERCHARGE = 4;
     private static final HeapLayout layout = HeapLayout.current();
     private static final HeapBound bound = new HeapBound(layout);
 
@@ -37,7 +38,17 @@ public final class HeldRows {
         if (rows <= EXACT_ROWS || rows % EXACT_ROWS == 0) {
             chargeMeasured(row);
         } else {
-            context.chargeHeld(Math.ceilDiv(sampledBytes, sampledRows));
+            chargeBounded(row);
+        }
+    }
+
+    private void chargeBounded(JsonBaseElement row) {
+        final var atMost = bytesAtMost(row);
+        final var average = Math.ceilDiv(sampledBytes, sampledRows);
+        if (atMost > MAX_UNDERCHARGE * average) {
+            chargeMeasured(row);
+        } else {
+            context.chargeHeld(Math.min(average, atMost));
         }
     }
 

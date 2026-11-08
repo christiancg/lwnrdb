@@ -1456,6 +1456,31 @@ def arrange_a_killed_commit_with_repeated_ids(conn: Conn, work_dir: str):
                conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
 
 
+REDRIVE_COLL = "redriven_fence"
+
+
+def test_a_fenced_commit_finishes_once_the_fault_clears(conn: Conn, work_dir: str):
+    section("A commit fenced by a transient I/O failure finishes by itself once the fault clears")
+    check_status(f"create {REDRIVE_COLL}", conn.create_coll(REDRIVE_COLL), "OK")
+    folder = os.path.join(work_dir, "db", DB, REDRIVE_COLL)
+    with admin_conn() as holder:
+        check_status("start the transaction", holder.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("buffer a save", holder.save({"_id": "redriven", "v": 1}, coll=REDRIVE_COLL), "OK")
+        os.chmod(folder, 0o000)
+        try:
+            check_code("the commit fences past its commit point",
+                       holder.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
+        finally:
+            os.chmod(folder, 0o755)
+        landed = bu.wait_until(lambda: conn.find("redriven", coll=REDRIVE_COLL).get("status") == "OK", 20, 0.3)
+        check("the fence is re-driven in the background and the document lands, with no restart", bool(landed),
+              f"got {conn.find('redriven', coll=REDRIVE_COLL)}")
+        check_status("the collection takes writes again",
+                     conn.save({"_id": "after-fence", "v": 1}, coll=REDRIVE_COLL), "OK")
+        check_status("a COMMIT re-sent after the background finish answers OK",
+                     holder.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+
 def release_the_replay_fence(work_dir: str):
     os.chmod(replay_fence_folder(work_dir), 0o755)
     check("the commit marker outlived the kill", bu.local_commit_markers(work_dir) == 1,
@@ -3313,6 +3338,7 @@ def main():
             seed_drops_a_kill_will_interrupt(conn, work_dir)
             seed_a_collection_its_database_will_stop_listing(conn)
             seed_a_database_whose_collection_will_be_a_symlink(conn)
+            test_a_fenced_commit_finishes_once_the_fault_clears(conn, work_dir)
             interrupted = admin_conn()
             arrange_a_killed_commit_with_repeated_ids(interrupted, work_dir)
 

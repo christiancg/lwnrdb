@@ -16,6 +16,17 @@ HELD_COLL = "held_rows_coll"
 HELD_DOCS = int(os.environ.get("MEMORY_TEST_HELD_DOCS", "60000"))
 HELD_GROUPS = 10
 BULK = 5000
+SKEW_BUDGET = "40mb"
+SKEW_COLL = "held_skewed"
+SKEW_DOCS = 300
+SKEW_NUMBERS = 20_000
+SKEW_LIGHT_HEAD = 110
+FAN_LEFT = "held_fan_left"
+FAN_REMOTE = "held_fan_remote"
+FAN_DOCS = 1000
+FAN_PAD = 60_000
+CASE_REMOTE = "held_case_remote"
+CASE_VARIANTS = 800
 
 
 def send(c: Conn, request: dict) -> dict:
@@ -110,6 +121,97 @@ def test_group_by_over_budget_is_refused_not_oom():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def skewed_doc(i: int) -> dict:
+    light = i <= SKEW_LIGHT_HEAD or i % 64 == 0
+    return {"_id": f"s{i:05d}", "x": i, "pad": "p" * (2 * SKEW_NUMBERS) if light else [1] * SKEW_NUMBERS}
+
+
+def load_in_batches(c: Conn, coll: str, docs: list, batch: int) -> list:
+    refused = []
+    for start in range(0, len(docs), batch):
+        r = send(c, {"type": "BULK_SAVE", "collectionName": coll, "objects": docs[start:start + batch]})
+        if r.get("status") != "OK":
+            refused.append(r.get("errorCode") or r.get("message"))
+    return refused
+
+
+def test_skewed_rows_and_an_indexed_join_fan_in_are_refused():
+    section(f"Skewed rows and an indexed JOIN fan-in are charged under aggregateMaxResultBytes={SKEW_BUDGET}")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-held-skew-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, HELD_PORT, aggregateMaxResultBytes=SKEW_BUDGET, maxMemory="1mb", syncWrites=False)
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path, port=HELD_PORT)
+        with Conn(port=HELD_PORT) as c:
+            c.authenticate(bu.USERNAME, bu.PASSWORD)
+            check_status("create the held-rows database", c.send({"type": "CREATE_DATABASE", "databaseName": HELD_DB}),
+                         "OK")
+            for coll in (SKEW_COLL, FAN_LEFT, FAN_REMOTE, CASE_REMOTE):
+                check_status(f"create {coll}", send(c, {"type": "CREATE_COLLECTION", "collectionName": coll}), "OK")
+            refused = load_in_batches(c, SKEW_COLL, [skewed_doc(i) for i in range(1, SKEW_DOCS + 1)], 40)
+            check(f"every BULK_SAVE of the {SKEW_DOCS} skewed documents succeeds", not refused, detail=str(refused[:3]))
+            check_code("an unbounded SORT over heavy rows between light sampled ones is refused with 400-36",
+                       send(c, {"type": "AGGREGATE", "collectionName": SKEW_COLL,
+                                "aggregationSteps": [{"type": "SORT", "fieldName": "x", "ascending": True}]}),
+                       "ERROR", "400-36")
+            check_status("the left side loads", send(c, {"type": "BULK_SAVE", "collectionName": FAN_LEFT, "objects": [
+                {"_id": "l0", "n": 0}, {"_id": "l1", "n": 1}]}), "OK")
+            refused = load_in_batches(c, FAN_REMOTE, [{"_id": f"r{i:05d}", "k": 1, "pad": "q" * FAN_PAD}
+                                                      for i in range(FAN_DOCS)], 100)
+            check(f"every BULK_SAVE of the {FAN_DOCS} remote documents succeeds", not refused, detail=str(refused[:3]))
+            check_status("index the remote key",
+                         send(c, {"type": "CREATE_INDEX", "collectionName": FAN_REMOTE, "fieldName": "k"}), "OK")
+            check("the background settles", bu.wait_until(lambda: background_idle(c), timeout_s=60))
+            check_code("an indexed JOIN whose fan-in no emitted row reaches is refused with 400-36",
+                       send(c, {"type": "AGGREGATE", "collectionName": FAN_LEFT, "aggregationSteps": [
+                           {"type": "JOIN", "joinCollection": FAN_REMOTE, "localField": "n", "remoteField": "k",
+                            "asField": "m"},
+                           {"type": "LIMIT", "limit": 1}]}), "ERROR", "400-36")
+            check_case_variants_are_not_charged(c)
+            check_status("the server stays healthy afterwards", c.send({"type": "LIST_DATABASES"}), "OK")
+            check("the server never ran out of heap", "OutOfMemoryError" not in bu.read_log(log_path))
+            c.send({"type": "DROP_DATABASE", "databaseName": HELD_DB}, timeout=120)
+    finally:
+        bu.stop_server(proc, port=HELD_PORT, wait_for_port=False)
+        if bu.failure_count():
+            bu.dump_log(log_path)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def check_case_variants_are_not_charged(c: Conn):
+    check_status("a left row names the exact key", send(c, {"type": "SAVE", "collectionName": FAN_LEFT,
+                                                            "object": {"_id": "case", "s": "g1"}}), "OK")
+    docs = [{"_id": "exact", "s": "g1"}] + [{"_id": f"v{i:05d}", "s": "G1", "pad": "q" * FAN_PAD}
+                                            for i in range(CASE_VARIANTS)]
+    refused = load_in_batches(c, CASE_REMOTE, docs, 100)
+    check(f"every BULK_SAVE of the {CASE_VARIANTS} case-variant documents succeeds", not refused,
+          detail=str(refused[:3]))
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "_id", "value": "case"}},
+             {"type": "JOIN", "joinCollection": CASE_REMOTE, "localField": "s", "remoteField": "s", "asField": "m"}]
+    scanned = send(c, {"type": "AGGREGATE", "collectionName": FAN_LEFT, "aggregationSteps": steps})
+    check_status("the scanned JOIN keeps only the exact key", scanned, "OK")
+    check_status("index the case-variant key",
+                 send(c, {"type": "CREATE_INDEX", "collectionName": CASE_REMOTE, "fieldName": "s"}), "OK")
+    check("the background settles", bu.wait_until(lambda: background_idle(c), timeout_s=60))
+    indexed = send(c, {"type": "AGGREGATE", "collectionName": FAN_LEFT, "aggregationSteps": steps})
+    check_status("the indexed JOIN never charges the case variants the index hands back", indexed, "OK")
+    check("the indexed JOIN joins what the scan joins", joined(indexed) == joined(scanned) == ["exact"],
+          detail=f"{joined(indexed)} vs {joined(scanned)}")
+
+
+def joined(response: dict) -> list:
+    results = (response or {}).get("results") or [{}]
+    return [row.get("_id") for row in results[0].get("m", [])]
+
+
+def background_idle(c: Conn) -> bool:
+    background = c.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("background", {})
+    return background.get("maintenance", 1) == 0 and background.get("pending", 1) == 0
+
+
 if __name__ == "__main__":
     test_group_by_over_budget_is_refused_not_oom()
+    test_skewed_rows_and_an_indexed_join_fan_in_are_refused()
     bu.summary()

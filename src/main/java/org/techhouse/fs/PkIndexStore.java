@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
 import org.techhouse.config.Globals;
@@ -25,6 +26,7 @@ final class PkIndexStore {
     private static final long DELETED = -1L;
     private static final int VERSION_SCAN_CHUNK = 1 << 20;
     private static final Map<String, PkFileState> fileStates = new ConcurrentHashMap<>();
+    private static final Set<String> behindAVacuum = ConcurrentHashMap.newKeySet();
 
     private final FilePaths paths;
     private final WriteAheadLog wal;
@@ -197,6 +199,7 @@ final class PkIndexStore {
             return Map.of();
         }
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        requireCurrent(dbName, collectionName, indexFile);
         final var readLock = FileLocks.lockRead(indexFile);
         try (var in = Files.newInputStream(indexFile.toPath())) {
             return PkPointScan.rowsFor(in, indexFile, dbName, collectionName, ids);
@@ -282,8 +285,21 @@ final class PkIndexStore {
         }
     }
 
+    void markBehindAVacuum(String dbName, String collectionName) {
+        behindAVacuum.add(paths.pkIndexFile(dbName, collectionName).getAbsolutePath());
+    }
+
+    private static void requireCurrent(String dbName, String collectionName, File indexFile) throws IOException {
+        if (!behindAVacuum.isEmpty() && behindAVacuum.contains(indexFile.getAbsolutePath())) {
+            throw new IOException("The PK index of " + dbName + "|" + collectionName + " is behind a page vacuum whose"
+                    + " moved rows could not be recorded, so its positions are stale; restart the server, whose"
+                    + " startup re-derives them from the vacuum's open intent");
+        }
+    }
+
     private Folded readHealed(String dbName, String collectionName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        requireCurrent(dbName, collectionName, indexFile);
         if (!indexFile.exists()) {
             return new Folded(new ArrayList<>(), 0, false, false);
         }
@@ -310,6 +326,9 @@ final class PkIndexStore {
                 writeRows(dbName, collectionName, indexFile, refolded.live());
             }
             return refolded;
+        } catch (RewriteOpenException deferred) {
+            logger.info("Left " + indexFile.getName() + " unhealed for now: " + deferred.getMessage());
+            return fold(dbName, collectionName, indexFile);
         } finally {
             writeLock.unlock();
         }
@@ -425,5 +444,6 @@ final class PkIndexStore {
     static void forgetUnder(File folder) {
         final var prefix = folder.getAbsolutePath() + File.separator;
         fileStates.keySet().removeIf(path -> path.startsWith(prefix));
+        behindAVacuum.removeIf(path -> path.startsWith(prefix));
     }
 }

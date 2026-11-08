@@ -2,6 +2,7 @@ package org.techhouse.unit.ops.index;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -11,6 +12,8 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
@@ -135,5 +138,28 @@ public class CreateIndexMultiFieldTest {
         assertEquals(List.of("score", "tier", "status"), request.targetFieldNames());
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
         assertEquals(Set.of("score", "tier", "status"), registered());
+    }
+
+    @Test
+    public void aHugeFieldNamesListIsRefusedBeforeTheCollisionScan() throws Exception {
+        final var spied = spyTheBuild();
+        final var fields = new ArrayList<String>();
+        for (var i = 0; i < 30_000; i++) {
+            fields.add("f" + i);
+        }
+
+        final var response = assertTimeoutPreemptively(Duration.ofSeconds(2), () -> create(fields));
+
+        assertEquals(ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION.getCode(), response.getErrorCode());
+        assertTrue(registered().isEmpty());
+        verify(spied, never()).streamPages(anyString(), anyString());
+    }
+
+    @Test
+    public void aCollisionAmongManyMissingFieldsNamesTheFirstSpelling() {
+        final var response = create(List.of("alpha", "beta", "Alpha"));
+
+        assertEquals(ErrorCode.NAME_COLLIDES_ON_DISK.getCode(), response.getErrorCode());
+        assertTrue(response.getMessage().contains("alpha"), response.getMessage());
     }
 }

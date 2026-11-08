@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.cache.Cache;
@@ -26,17 +27,29 @@ final class GroupedBatch {
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final Logger logger = Logger.logFor(GroupedBatch.class);
 
+    private enum Settled {
+        DURABLE, TAKEN_BACK, UNKNOWN
+    }
+
     private final String dbName;
     private final String collName;
     private final String subject;
     private final List<GroupCommit.GroupedWrite> writes;
     private final WriteEffects effects = WriteEffects.grouped();
+    private final List<OperationResponse> responses;
+    private final int[] stagedBy;
+    private final BitSet unsure = new BitSet();
+    private int durablePrefix;
+    private int commitsStarted;
+    private boolean settled;
 
     private GroupedBatch(String dbName, String collName, List<GroupCommit.GroupedWrite> writes) {
         this.dbName = dbName;
         this.collName = collName;
         this.subject = Cache.getCollectionIdentifier(dbName, collName);
         this.writes = writes;
+        this.responses = new ArrayList<>(writes.size());
+        this.stagedBy = new int[writes.size()];
     }
 
     static void run(String dbName, String collName, List<GroupCommit.GroupedWrite> writes) {
@@ -55,54 +68,154 @@ final class GroupedBatch {
     }
 
     private void run() {
-        final var responses = new ArrayList<OperationResponse>(writes.size());
         final int durableWrites;
         try (var ignored = listenManager.openBatch(List.of(subject))) {
-            durableWrites = applyAndSettle(responses);
+            durableWrites = applyAndSettle();
         }
         for (var index = 0; index < writes.size(); index++) {
-            final var write = writes.get(index);
-            final var response = responses.get(index);
-            write.serve(
-                    index < durableWrites || response.getStatus() != OperationStatus.OK ? response : write.failure());
+            writes.get(index).serve(answerOf(index, durableWrites));
         }
     }
 
-    private int applyAndSettle(List<OperationResponse> responses) {
+    private OperationResponse answerOf(int index, int durableWrites) {
+        final var write = writes.get(index);
+        if (index >= responses.size()) {
+            return unsure.get(index) ? write.unknownOutcome() : write.failure();
+        }
+        final var response = responses.get(index);
+        if (response.getStatus() != OperationStatus.OK) {
+            return response;
+        }
+        if (index >= durableWrites) {
+            return write.failure();
+        }
+        return unsure.get(index) ? write.unknownOutcome() : response;
+    }
+
+    private int applyAndSettle() {
+        final boolean clustered;
+        final boolean forcedFirst;
+        try {
+            prepareAndCommit();
+            clustered = clusterConfig.isEnabled();
+            forcedFirst = clustered && force();
+        } catch (Throwable thrown) {
+            return afterThrow(thrown);
+        }
+        try (var window = !clustered || forcedFirst
+                ? locks.openSettleWindow(dbName, collName)
+                : SettleWindow.exclusive()) {
+            try {
+                return settleInWindow(window, clustered, forcedFirst);
+            } catch (Throwable thrown) {
+                window.fail();
+                return afterThrow(thrown);
+            }
+        }
+    }
+
+    private void prepareAndCommit() {
         final var commits = new ArrayList<GroupCommit.GroupedCommit>(writes.size());
-        final var stagedBy = new int[writes.size()];
         for (var index = 0; index < writes.size(); index++) {
             commits.add(writes.get(index).prepare(effects));
             stagedBy[index] = effects.stagedCount();
         }
         effects.flushStaging(subject);
-        var durablePrefix = 0;
         for (var index = 0; index < writes.size(); index++) {
+            commitsStarted++;
             responses.add(writes.get(index).commit(commits.get(index)));
             if (reopenAfterRewrite()) {
+                if (!fs.forceGroupTombstones(dbName, collName)) {
+                    unsure.set(durablePrefix, index + 1);
+                }
                 durablePrefix = index + 1;
                 effects.markDurablePrefix(stagedBy[index]);
             }
         }
-        final var clustered = clusterConfig.isEnabled();
-        final var forcedFirst = clustered && force();
-        try (var window = !clustered || forcedFirst
-                ? locks.openSettleWindow(dbName, collName)
-                : SettleWindow.exclusive()) {
-            if (!(clustered ? forcedFirst : force())) {
-                window.fail();
-            }
-            if (settle()) {
-                replicate(responses, effects.upsertIds(), effects.deleteVersions(), writes.size());
-                effects.runAfterForce();
-                return writes.size();
-            }
+    }
+
+    private int settleInWindow(SettleWindow window, boolean clustered, boolean forcedFirst) {
+        if (!(clustered ? forcedFirst : force())) {
             window.fail();
-            forgetTakenBack();
-            replicate(responses, effects.durablePrefixUpsertIds(), effects.durablePrefixDeleteVersions(),
-                    durablePrefix);
-            effects.abandon(subject);
-            return durablePrefix;
+        }
+        if (settle()) {
+            settled = true;
+            replicate(effects.upsertIds(), effects.deleteVersions(), writes.size());
+            effects.runAfterForce();
+            return writes.size();
+        }
+        window.fail();
+        return takenBack();
+    }
+
+    private int takenBack() {
+        forgetTakenBack();
+        replicate(effects.durablePrefixUpsertIds(), effects.durablePrefixDeleteVersions(), durablePrefix);
+        effects.abandon(subject);
+        return durablePrefix;
+    }
+
+    private int afterThrow(Throwable thrown) {
+        logger.error("A write batch on " + subject + " threw; its group is settled under the collection lock before"
+                + " its writes are answered", thrown);
+        final var committed = responses.size();
+        final var thrownMidCommit = commitsStarted > committed;
+        if (thrownMidCommit) {
+            unsure.set(committed);
+        }
+        if (settled) {
+            unsure.set(0, committed);
+            return committed;
+        }
+        final var landed = settleAfterThrow();
+        if (landed == Settled.UNKNOWN) {
+            unsure.set(durablePrefix, Math.max(durablePrefix, committed));
+            return committed;
+        }
+        if (landed == Settled.TAKEN_BACK) {
+            return takenBack();
+        }
+        final var through = thrownMidCommit ? committed : committed - 1;
+        effects.markDurablePrefix(through >= 0 ? stagedBy[through] : 0);
+        replicate(effects.durablePrefixUpsertIds(), effects.durablePrefixDeleteVersions(), committed);
+        effects.abandon(subject);
+        return committed;
+    }
+
+    private Settled settleAfterThrow() {
+        try {
+            fs.forceGroupTombstones(dbName, collName);
+            return fs.settleWriteGroup(dbName, collName) ? Settled.DURABLE : Settled.TAKEN_BACK;
+        } catch (Throwable thrown) {
+            logger.error("Could not settle the write group of " + subject + " after its batch threw; its writes are"
+                    + " answered with an unknown outcome", thrown);
+            return Settled.UNKNOWN;
+        }
+    }
+
+    static void closeAfterThrow(String dbName, String collName) {
+        final var relocked = !locks.holdsCollectionLock(dbName, collName) && relock(dbName, collName);
+        if (!relocked && !locks.holdsCollectionLock(dbName, collName)) {
+            logger.error("Could not settle the write group of " + Cache.getCollectionIdentifier(dbName, collName)
+                    + " after its batch threw: the collection lock could not be taken back; the next write or"
+                    + " checkpoint settles it");
+            return;
+        }
+        try {
+            fs.settleWriteGroup(dbName, collName);
+        } catch (IOException | RuntimeException e) {
+            logger.error("Could not settle the write group of " + Cache.getCollectionIdentifier(dbName, collName)
+                    + " after its batch threw", e);
+        }
+    }
+
+    private static boolean relock(String dbName, String collName) {
+        try {
+            locks.lock(dbName, collName);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 
@@ -134,8 +247,7 @@ final class GroupedBatch {
         }
     }
 
-    private void replicate(List<OperationResponse> responses, List<String> upsertIds, Map<String, Long> deleteVersions,
-            int replicatedWrites) {
+    private void replicate(List<String> upsertIds, Map<String, Long> deleteVersions, int replicatedWrites) {
         if (upsertIds.isEmpty() && deleteVersions.isEmpty()) {
             return;
         }
@@ -143,7 +255,7 @@ final class GroupedBatch {
         if (outcome == ReplicationOutcome.NOT_CLUSTERED) {
             return;
         }
-        for (var index = 0; index < replicatedWrites; index++) {
+        for (var index = 0; index < Math.min(replicatedWrites, responses.size()); index++) {
             responses.set(index, ClusterWriteHelper.afterGroupReplication(responses.get(index), outcome));
         }
     }

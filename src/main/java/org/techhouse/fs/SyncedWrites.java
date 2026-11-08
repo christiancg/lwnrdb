@@ -35,9 +35,15 @@ final class SyncedWrites {
     static void forceOrFail(FileChannel channel, Path path) throws IOException {
         if (faultInjector.isEnabled() && faultInjector.failsAt(FaultPoint.FILE_FORCED, subjectOf(path))) {
             forcer.forceFailed(path);
+            ForceFailures.failed(path);
             throw new IOException("injected force failure of " + path);
         }
-        forcer.force(channel, path);
+        try {
+            forcer.force(channel, path);
+        } catch (IOException | RuntimeException e) {
+            ForceFailures.failed(path);
+            throw e;
+        }
     }
 
     private static String subjectOf(Path path) {

@@ -16,12 +16,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.config.Configuration;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.test.TestUtils;
 
 public class WalPendingFrameTest {
     private static final String DB = "pendingDb";
     private static final String COLL = "pendingColl";
+    private static final int LARGE_PENDING_IDS = 2000;
+    private static final long SMALL_CHECKPOINT_BYTES = 4096L;
 
     @TempDir
     File tmp;
@@ -117,5 +120,28 @@ public class WalPendingFrameTest {
 
         assertFalse(decoded().pendingLogged(), "the clean stop dropped the resolved frame");
         assertEquals(List.of(), replayedIds(), "the second restart has nothing to repair");
+    }
+
+    @Test
+    public void aLargePendingFrameDoesNotForceSynchronousCheckpoints() throws Exception {
+        final var configuration = Configuration.getInstance();
+        final var shipped = configuration.getWalCheckpointBytes();
+        try {
+            for (var index = 0; index < LARGE_PENDING_IDS; index++) {
+                pending.add("pending-id-" + index);
+            }
+            new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);
+            TestUtils.setPrivateField(configuration, "walCheckpointBytes", SMALL_CHECKPOINT_BYTES);
+            assertTrue(log().length() > 2 * SMALL_CHECKPOINT_BYTES, "the frame alone is past twice the limit");
+
+            rf.replace("a", "new-a", 0, PagePlacement.APPEND);
+            assertEquals(1, decoded().records().size(), "the write is logged, not checkpointed away");
+
+            WriteAheadLog.forgetUnder(tmp);
+            rf.replace("b", "new-b", 0, PagePlacement.APPEND);
+            assertEquals(2, decoded().records().size(), "a reseeded log knows its frame size too");
+        } finally {
+            TestUtils.setPrivateField(configuration, "walCheckpointBytes", shipped);
+        }
     }
 }

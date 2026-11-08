@@ -177,4 +177,19 @@ public class ClientMainTest {
         assertTrue(err().startsWith("GET_DATABASE_STATS failed:"), err());
         assertEquals("", out());
     }
+
+    @Test
+    public void insecureTlsWarnsOnStderrBeforeConnecting() {
+        final var exit = runAgainstServer("", "--exec", LIST, "--tls", "--insecure");
+
+        assertEquals(ClientException.UNREACHABLE, exit);
+        assertTrue(err().startsWith(ClientMain.INSECURE_WARNING), err());
+    }
+
+    @Test
+    public void verifiedTlsPrintsNoInsecureWarning() {
+        runAgainstServer("", "--exec", LIST, "--tls");
+
+        assertFalse(err().contains(ClientMain.INSECURE_WARNING), err());
+    }
 }

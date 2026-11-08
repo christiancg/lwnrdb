@@ -92,9 +92,11 @@ public class WalPlanTest {
         assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(old), "the old copy is not blanked yet");
         assertTrue(readOnly.setWritable(true, true));
 
+        assertThrows(IOException.class, () -> rf.replace("c", "new-c", 1, PagePlacement.APPEND),
+                "the next write applies the logged blank first and is refused, having read before it");
         rf.replace("c", "new-c", 1, PagePlacement.APPEND);
 
-        assertTrue(rf.fx.readAt(old).isBlank(), "the next write applies the logged blank first");
+        assertTrue(rf.fx.readAt(old).isBlank(), "the logged blank was applied");
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
     }
 

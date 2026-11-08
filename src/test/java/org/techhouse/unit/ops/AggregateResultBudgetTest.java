@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -15,6 +16,11 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.EventProcessorHelper;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
@@ -35,6 +41,7 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class AggregateResultBudgetTest {
+    private static final String FAN_IN_REMOTE = "fanInRemote";
     private static final String JOINED = "joinedColl";
     private static final String LISTENER = "result-budget-listener";
     private static final int LEFT_DOCUMENTS = 200;
@@ -79,6 +86,17 @@ public class AggregateResultBudgetTest {
         TestUtils.setPrivateField(configuration, "aggregateMaxResultBytes", size);
     }
 
+    private static void drainPending() throws Exception {
+        final var collection = FAN_IN_REMOTE;
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        for (final var id : pending.idsFor(TestGlobals.DB, collection)) {
+            final var entries = IocContainer.get(Cache.class).getEntriesByIds(TestGlobals.DB, collection, Set.of(id));
+            EventProcessorHelper
+                    .processEvent(new EntityEvent(EventType.CREATED, TestGlobals.DB, collection, entries.getFirst()));
+        }
+        assertTrue(pending.idsFor(TestGlobals.DB, collection).isEmpty());
+    }
+
     private static String write(String type, String collection, String payload) {
         return "{\"type\":\"" + type + "\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + collection + "\"," + payload + "}";
@@ -119,6 +137,29 @@ public class AggregateResultBudgetTest {
         capAt("8Mb");
         final var answered = run(aggregate(firstRows(50) + "," + joinOnK()));
         assertEquals(OperationStatus.OK, answered.getStatus(), answered.getMessage());
+    }
+
+    @Test
+    public void anIndexedJoinFanInIsCharged() throws Exception {
+        final var remote = FAN_IN_REMOTE;
+        assertEquals(OperationStatus.OK, run("{\"type\":\"CREATE_COLLECTION\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + remote + "\"}").getStatus());
+        final var fanIn = new StringBuilder(200 * 10_100);
+        for (var i = 0; i < 200; i++) {
+            fanIn.append(i == 0 ? "" : ",").append("{\"_id\":\"f").append(i).append("\",\"k\":1,\"pad\":\"")
+                    .repeat("p", 10_000).append("\"}");
+        }
+        assertEquals(OperationStatus.OK, run(write("BULK_SAVE", remote, "\"objects\":[" + fanIn + "]")).getStatus());
+        assertEquals(OperationStatus.OK, run(write("CREATE_INDEX", remote, "\"fieldName\":\"k\"")).getStatus());
+        drainPending();
+        final var steps = firstRows(2) + ",{\"type\":\"JOIN\",\"joinCollection\":\"" + remote
+                + "\",\"localField\":\"n\",\"remoteField\":\"k\",\"asField\":\"m\"},"
+                + "{\"type\":\"LIMIT\",\"limit\":1}";
+        final var uncapped = run(aggregate(steps));
+        assertEquals(OperationStatus.OK, uncapped.getStatus(), uncapped.getMessage());
+        capAt("1Mb");
+        final var refused = run(aggregate(steps));
+        assertEquals(ErrorCode.AGGREGATE_RESULT_TOO_LARGE.getCode(), refused.getErrorCode(), refused.getMessage());
     }
 
     @Test

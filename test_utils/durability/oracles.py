@@ -295,8 +295,8 @@ def failures(divergences: list) -> list:
     return [divergence for divergence in divergences if divergence.severity == SEVERITY_FAIL]
 
 
-UNKNOWN_OUTCOME_CODES = ("503-8", "500-33")
-RETRYABLE_CODES = ("503-16", "503-17")
+UNKNOWN_OUTCOME_CODES = ("503-8", "500-33", "500-34")
+RETRYABLE_CODES = ("503-16", "503-17", "503-19")
 UNCAUGHT_MARKER = "Exception in thread"
 O7_PROBE_ID = PROBE_ID
 

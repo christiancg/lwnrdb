@@ -68,6 +68,10 @@ final class PageVacuum {
                     maxPageSize) != PagePlacement.VACUUM_THEN_APPEND) {
                 return null;
             }
+            if (placement == null && compact && fileLength + appendedBytes <= maxPageSize) {
+                return compactUnlessRefused(dbName, collName, pageNumber,
+                        () -> vacuumAfterWrite(dbName, collName, pageNumber, residentRows, known, WrittenRows.NONE));
+            }
             return vacuumAfterWrite(dbName, collName, pageNumber, residentRows, known, WrittenRows.NONE);
         }
         final var pageRows = PageRows.of(pkIndexStore, residentRows, dbName, collName, pageNumber);
@@ -76,7 +80,8 @@ final class PageVacuum {
             return null;
         }
         if (placement == null && compact && fileLength + appendedBytes <= maxPageSize) {
-            return compactUnlessRefused(dbName, collName, pageNumber, pageRows);
+            return compactUnlessRefused(dbName, collName, pageNumber,
+                    () -> vacuum(dbName, collName, pageNumber, pageRows));
         }
         return vacuum(dbName, collName, pageNumber, pageRows);
     }
@@ -93,10 +98,14 @@ final class PageVacuum {
                 : PagePlacement.forStay(liveBytes, fileLength, appendedBytes, maxPageSize);
     }
 
-    private VacuumedPage compactUnlessRefused(String dbName, String collName, long pageNumber,
-            List<PkIndexEntry> pageRows) throws IOException {
+    private interface Compaction {
+        VacuumedPage run() throws IOException;
+    }
+
+    private VacuumedPage compactUnlessRefused(String dbName, String collName, long pageNumber, Compaction compaction)
+            throws IOException {
         try {
-            return vacuum(dbName, collName, pageNumber, pageRows);
+            return compaction.run();
         } catch (VacuumRefusedException refused) {
             logger.warning("Left " + dbName + "|" + collName + " page " + pageNumber + " uncompacted: "
                     + refused.getMessage());
@@ -159,8 +168,13 @@ final class PageVacuum {
         final var pageRows = verified.rowsOf(lines);
         if (lines.isEmpty() && pageRows.isEmpty()) {
             final var begun = barrier.begin(dbName, collName, pageNumber, bytes.length);
-            faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, dbName, collName);
-            return truncate(begun, page);
+            try {
+                faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, dbName, collName);
+                truncateEmptied(page);
+            } finally {
+                barrier.renamed(begun);
+            }
+            return truncated(begun);
         }
         final var alongside = new ForceGroup();
         final var intent = journal.begin(dbName, collName, List.of(new WriteIntent.Vacuum(pageNumber)), alongside);
@@ -172,9 +186,13 @@ final class PageVacuum {
             lengthAfter = writeLiveRecords(temp, bytes, lines, moves);
             alongside.add(temp.toPath());
             begun = barrier.begin(dbName, collName, pageNumber, bytes.length, alongside);
-            faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, dbName, collName);
-            FileLocks.moveIntoPlaceUnsynced(temp.toPath(), page.toPath());
-            PageLengths.cut(page, lengthAfter);
+            try {
+                faultInjector.at(FaultPoint.WAL_REWRITE_BEGUN, dbName, collName);
+                FileLocks.moveIntoPlaceUnsynced(temp.toPath(), page.toPath());
+                PageLengths.cut(page, lengthAfter);
+            } finally {
+                barrier.renamed(begun);
+            }
         } catch (IOException e) {
             Files.deleteIfExists(temp.toPath());
             journal.end(intent);
@@ -192,6 +210,7 @@ final class PageVacuum {
             }
             pkIndexStore.appendReplacements(dbName, collName, moved);
         } catch (IOException e) {
+            pkIndexStore.markBehindAVacuum(dbName, collName);
             logger.error("Vacuumed " + page.getName() + " but could not record where its records moved; its intent is"
                     + " kept and the next startup re-derives the rows from the page", e);
             throw e;
@@ -200,10 +219,13 @@ final class PageVacuum {
         return vacuumed;
     }
 
-    private VacuumedPage truncate(WalRewriteBarrier.Begun begun, File page) throws IOException {
+    private static void truncateEmptied(File page) throws IOException {
         if (!FileLocks.truncateTo(page, 0L, "Could not truncate the emptied page " + page.getPath())) {
             throw new IOException("Could not truncate the emptied page " + page.getName());
         }
+    }
+
+    private VacuumedPage truncated(WalRewriteBarrier.Begun begun) throws IOException {
         final var vacuumed = new VacuumedPage(begun.dbName(), begun.collName(), begun.page(), Map.of());
         listener.accept(vacuumed);
         barrier.end(begun, 0L, true);

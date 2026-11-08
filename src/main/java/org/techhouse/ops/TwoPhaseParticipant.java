@@ -34,7 +34,8 @@ public final class TwoPhaseParticipant {
         try {
             Tx2pcLog.recordParticipantPrepared(transaction.getTransactionId().toString(), coordinatorAddress,
                     participants, new ArrayList<>(transaction.getHeldLocks()),
-                    transaction.areOpsDurable() ? List.of() : transaction.getPendingOps());
+                    transaction.areOpsDurable() ? List.of() : transaction.getPendingOps(),
+                    List.copyOf(transaction.getBufferedOpIds()));
             transaction.markOpsDurable();
             return true;
         } catch (Exception e) {

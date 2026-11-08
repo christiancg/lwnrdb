@@ -290,6 +290,8 @@ public class WriteAheadLogTest {
             }
         }
         try (var ignored = RecordingForcer.install(true)) {
+            assertThrows(IOException.class, () -> rf.replace("a", "new-a", 0, PagePlacement.APPEND),
+                    "a write that read the collection before the replay is refused");
             rf.replace("a", "new-a", 0, PagePlacement.APPEND);
 
             assertEquals(StorageFixture.record("b", "new-b"), rf.fx.readAt(rf.fx.indexed("b")),

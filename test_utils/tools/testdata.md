@@ -138,6 +138,29 @@ result is ~3 MB without reading it, then send the same `AGGREGATE` from a fourth
 {"type": "AGGREGATE", "status": "ERROR", "message": "The server holds the maximum bytes of unsent responses; retry shortly", "errorCode": "503-17"}
 ```
 
+A read of a collection held by a committed transaction that could not finish applying (a `500-33` fence, or a
+startup replay that hit a full disk) → `503-18` once `transactionLockTimeoutMs` passes, instead of waiting until the
+fence clears. Fill the disk, kill the server while a transaction commits, start it on the full disk, then count the
+collection:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The collection is held by a committed transaction that has not finished applying; retry shortly", "errorCode": "503-18"}
+```
+
+A read is also refused with `503-18` when the commit fences the collection while the read is already waiting for
+it: the waiting read re-checks the fence every 200 ms instead of waiting out the whole commit.
+
+A read (scan, `FIND_BY_ID` or `AGGREGATE`, not a dirty read) of a collection holding a forced write that could neither be
+applied nor taken back (the write answered `500-34`) first applies the logged writes; while that still fails, because
+the disk is still full, it answers `503-19` instead of scanning pages that may hold a copy the write meant to blank.
+Fill the disk until a `SAVE` answers `500-34`, keep it full, then count the collection:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly", "errorCode": "503-19"}
+```
+
+Free the disk and the same request answers normally (the read applies the log first).
+
 A connection whose response write makes no progress for `clientWriteStallTimeoutMs` (30000 by default, at least
 1000) is closed by the server and its transaction rolled back; the three non-readers above are closed once it
 passes, which frees the budget for the fourth.
@@ -3270,4 +3293,14 @@ back on the next load. One of them changes what a
 client does next: `500-33` is a commit that failed after its commit point. The transaction stays open and keeps
 its locks, and re-sending `COMMIT_TRANSACTION` finishes it once the fault is gone. Until then a `SAVE`,
 `BULK_SAVE` or `DELETE` sent on that connection answers `500-33` too and is not buffered: an op added after the
-commit point would be applied by recovery although the client never committed it, and could never be rolled back.
+commit point would be applied by recovery although the client never committed it, and could never be rolled back. The
+server also re-drives that commit by itself, with a backoff from 100 ms up to 5 s, on the connection's own thread
+(the one that holds the locks), both while the client is idle and after it disconnects, so freeing the space
+unblocks the collections without a restart; a `COMMIT_TRANSACTION` re-sent after such a background finish answers
+`OK`.
+
+`500-34` is the single-document counterpart: a `SAVE`, `BULK_SAVE` or `DELETE` (or any other write) whose
+write-ahead-log record was forced but which could neither be applied nor taken back, because the disk filled
+between the two. The record is the commit point, so the write may already have taken effect: it is applied before
+the collection is next read or written (marking its documents pending for the indexes and evicting their cached
+copies), or at the next startup. Treat it like `503-8`: retrying is only safe for an idempotent write.

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Set;
@@ -16,7 +17,8 @@ import org.techhouse.ioc.IocContainer;
 
 public final class Connection implements Closeable {
     public static final int CONNECT_TIMEOUT_MS = 10_000;
-    public static final int READ_TIMEOUT_MS = 0;
+    public static final Duration READ_TIMEOUT = Duration.ofMinutes(10);
+    public static final int MAX_REPLY_BYTES = 256 * 1024 * 1024;
     public static final int MAX_ATTEMPTS = 5;
     public static final Duration BACKOFF_STEP = Duration.ofMillis(200);
     public static final String STATUS = "status";
@@ -24,19 +26,27 @@ public final class Connection implements Closeable {
     public static final String ERROR_CODE = "errorCode";
     public static final int HELD_REPLY_BYTES = 64 * 1024;
     private static final Set<String> RETRYABLE = Set.of("503-2", "503-3", "503-4", "503-5", "503-9", "503-10", "503-16",
-            "503-17");
+            "503-17", "503-18", "503-19");
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     private final Socket socket;
     private final ReplyReader reader;
     private final OutputStream output;
     private final Duration backoffStep;
+    private final Duration readTimeout;
+    private boolean broken;
 
     public Connection(Socket socket, Duration backoffStep) throws IOException {
+        this(socket, backoffStep, READ_TIMEOUT, MAX_REPLY_BYTES);
+    }
+
+    public Connection(Socket socket, Duration backoffStep, Duration readTimeout, int maxReplyBytes) throws IOException {
         this.socket = socket;
-        this.reader = new ReplyReader(socket.getInputStream());
+        this.reader = new ReplyReader(socket.getInputStream(), maxReplyBytes);
         this.output = socket.getOutputStream();
         this.backoffStep = backoffStep;
+        this.readTimeout = readTimeout;
+        socket.setSoTimeout(Math.toIntExact(readTimeout.toMillis()));
     }
 
     public static Connection open(ClientOptions options) {
@@ -53,7 +63,7 @@ public final class Connection implements Closeable {
         final var plain = new Socket();
         try {
             plain.connect(new InetSocketAddress(options.host(), options.port()), CONNECT_TIMEOUT_MS);
-            plain.setSoTimeout(READ_TIMEOUT_MS);
+            plain.setSoTimeout(CONNECT_TIMEOUT_MS);
             if (!options.tls()) {
                 return plain;
             }
@@ -167,8 +177,22 @@ public final class Connection implements Closeable {
         output.flush();
     }
 
-    private static ClientException failed(IOException e) {
+    private ClientException failed(IOException e) {
+        broken = true;
+        if (e instanceof SocketTimeoutException) {
+            return new ClientException("no reply from the server within " + secondsOf(readTimeout) + " s",
+                    ClientException.UNREACHABLE, e);
+        }
+        if (e instanceof ReplyReader.ReplyTooLongException) {
+            return new ClientException(e.getMessage() + "; use --exec, which streams a reply, or narrow the request",
+                    ClientException.FAILED, e);
+        }
         return new ClientException("the connection to the server failed: " + e, ClientException.UNREACHABLE, e);
+    }
+
+    private static String secondsOf(Duration duration) {
+        final var millis = duration.toMillis();
+        return millis % 1000 == 0 ? String.valueOf(millis / 1000) : String.valueOf(millis / 1000.0);
     }
 
     private static ClientException closedByServer() {
@@ -210,6 +234,10 @@ public final class Connection implements Closeable {
 
     @Override
     public void close() {
+        if (broken) {
+            closeQuietly(socket);
+            return;
+        }
         try (socket) {
             exchange((eJson.toJson(Requests.close()) + "\n").getBytes(StandardCharsets.UTF_8));
         } catch (ClientException | IOException ignored) {
