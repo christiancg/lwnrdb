@@ -1,6 +1,7 @@
 package org.techhouse;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -89,6 +90,13 @@ public class ServerMain {
         }
     }
 
+    private static void installDurableShadowIfConfigured() throws IOException {
+        final var shadow = config.getPowerLossShadowPath();
+        if (config.isFaultInjectionEnabled() && !shadow.isBlank()) {
+            fs.installDurableShadow(Path.of(shadow));
+        }
+    }
+
     public static void main(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
         AdminPasswordGuard.refuseWeakPassword();
@@ -96,6 +104,7 @@ public class ServerMain {
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
         DeviceSyncGuard.fallBackWhenUnsyncable(fs);
+        installDurableShadowIfConfigured();
         fs.createAdminDatabase();
         StartupWarnings.retainAndReportUncleanStops();
         final var replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());

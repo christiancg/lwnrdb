@@ -1312,17 +1312,20 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `WAL_GROUP_FORCED` | A write group forced its records and has not applied the blanks they wait for yet | `<db>\|<collection>` |
 | `GROUP_RUNS_STAGED` | A write group recorded the after-trigger runs of all its writes in one forced record and has not appended any write yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
+| `FILE_FORCED` | Any file or folder is about to be forced to the device. The only point that can `FAIL`: the force then throws `injected force failure` instead of syncing, as a failed `fsync` would | the file name, e.g. `orders.wal`, or a folder name followed by `/`, e.g. `orders/` |
 
 | Action | Effect |
 |---|---|
 | `PAUSE` | Parks the thread until `RELEASE_FAULT`, for at most 120 seconds |
 | `HALT` | Stops the process at that statement with exit status `137`, skipping shutdown hooks, like `kill -9` |
 | `DROP` | Skips writing the reply (`PEER_REPLY` only) |
+| `FAIL` | Fails the force with an `IOException` (`FILE_FORCED` only). With `powerLossShadowPath` set, the file is also frozen: no later force of it counts as durable, which models a kernel that drops the dirty pages of a failed `fsync` |
 
 #### `ARM_FAULT` (admin only, testing only)
 `match` is optional; without it any subject fires the fault. Arming a point that is already armed releases the previous arm first.
 ```json
 {"type":"ARM_FAULT","point":"PEER_REPLY","action":"DROP","match":"COMMIT_TX"}
+{"type":"ARM_FAULT","point":"FILE_FORCED","action":"FAIL","match":"orders.wal"}
 ```
 
 #### `AWAIT_FAULT` (admin only, testing only)
@@ -1337,7 +1340,7 @@ Lets a paused thread continue and disarms the point. Without `point` it does so 
 {"type":"RELEASE_FAULT","point":"WRITE_OWNERSHIP_RECHECKED"}
 ```
 
-- **Errors**: `403-3` fault injection is disabled, `403-1` not an admin, `400-1` an unknown point or action, `DROP` on a point other than `PEER_REPLY`, or a `timeoutMs` out of range, `408-3` the point was not reached in time.
+- **Errors**: `403-3` fault injection is disabled, `403-1` not an admin, `400-1` an unknown point or action, `DROP` on a point other than `PEER_REPLY`, `FAIL` on a point other than `FILE_FORCED`, or a `timeoutMs` out of range, `408-3` the point was not reached in time.
 
 ### Error codes
 
@@ -1786,6 +1789,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scheduleMaxTotalPerUser` | Valid number ≥ 1 (default `500`). Cap on the schedules one user defines across every database, so `MANAGE` on many databases cannot multiply `scheduleMaxPerDatabase`; past it `400-33` |
 | `scheduleMinIntervalMs` | Valid number ≥ 1 (default `1000`). Smallest `intervalMs` a `SAVE_SCHEDULE` may ask for (`400-35` below it); a stored or replicated definition below it fires at this interval |
 | `faultInjectionEnabled` | `true` or `false` (default `false`). **Testing and debugging only — never in production.** Lets an admin arm the [fault injection](#fault-injection-testing-and-debugging-only) points over the wire, which can pause or halt the node. While off, those operations answer `403-3` and every point costs one field read. A node started with it on logs a `SECURITY WARNING` |
+| `powerLossShadowPath` | A folder path (default blank). **Power-loss harness only.** With `faultInjectionEnabled=true`, every force also records what it made durable into this folder: a copy of the forced file, or the forced folder's listing. `test_utils/test_power_loss.py` rebuilds the data folder from it after a `kill -9`, as a power loss would leave it. It must lie outside `filePath`; set without `faultInjectionEnabled=true`, or inside `filePath`, the server refuses to start. Every synced write gets slower by a copy of the file it forced |
 
 ```
 # the port the server listens on

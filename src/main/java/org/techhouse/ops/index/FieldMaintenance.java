@@ -6,13 +6,17 @@ import java.util.List;
 import java.util.Map;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ex.IndexLockBusyException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.FieldPath;
 
 public final class FieldMaintenance {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private FieldMaintenance() {
     }
@@ -26,7 +30,12 @@ public final class FieldMaintenance {
     static List<DeferredFold> maintain(String dbName, String collName, String fieldName, Collection<String> ids,
             Map<String, DbEntry> byId, Map<String, List<IndexedValue>> priors, HeldTypeLists held,
             CanonicalIds canonicalIds) throws IOException, InterruptedException {
-        rl.lockIndex(dbName, collName, fieldName);
+        final var budget = configuration.getTransactionLockTimeoutMs();
+        if (!rl.tryLockIndex(dbName, collName, fieldName, budget)) {
+            throw new IndexLockBusyException(
+                    Cache.getCollectionIdentifier(dbName, collName) + Globals.COLL_IDENTIFIER_SEPARATOR + fieldName,
+                    budget);
+        }
         var flushed = false;
         try {
             final var batch = FieldIndexBatch.open(dbName, collName, fieldName, ids, priors, held, canonicalIds);

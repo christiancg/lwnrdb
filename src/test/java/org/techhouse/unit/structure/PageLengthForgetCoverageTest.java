@@ -16,7 +16,7 @@ public class PageLengthForgetCoverageTest {
     private static final Pattern REWRITE = Pattern.compile(
             "setLength\\(|\\.truncate\\(|Files\\.move\\(|\\.renameTo\\(|new RandomAccessFile\\([^;]*RW_PERMISSIONS");
     private static final Set<String> NEVER_A_PAGE = Set.of("NodeIdStore.java", "IndexMarkers.java",
-            "WriteIntentJournal.java");
+            "WriteIntentJournal.java", "DurableShadow.java");
 
     static Set<String> rewritesThatKeepALength(List<JavaSourceFile> files) {
         final var found = new TreeSet<String>();

@@ -15,6 +15,7 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ex.IndexLockBusyException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.CollectionIncarnation;
@@ -130,6 +131,8 @@ public final class IndexRepairPass {
             }
             folds = FieldMaintenance.maintain(dbName, collName, field, chunk, byId, null, held,
                     new CanonicalIds(dbName, collName));
+        } catch (IndexLockBusyException busy) {
+            return Progress.BUSY;
         } finally {
             rl.releaseRead(dbName, collName);
         }

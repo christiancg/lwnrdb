@@ -485,6 +485,10 @@ public final class Configuration {
         return booleanValue(ConfigKey.FAULT_INJECTION_ENABLED);
     }
 
+    public String getPowerLossShadowPath() {
+        return stringValue(ConfigKey.POWER_LOSS_SHADOW_PATH).trim();
+    }
+
     public boolean isSyncWrites() {
         return booleanValue(ConfigKey.SYNC_WRITES);
     }

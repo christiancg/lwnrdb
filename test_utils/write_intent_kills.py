@@ -301,7 +301,12 @@ def queue_a_group_behind_a_held_lock(conn_factory, case: KillCase):
                      holder.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
 
 
-def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
+def plain_restart(work_dir: str) -> None:
+    return None
+
+
+def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list,
+                   recover: Callable[[str], None] = plain_restart):
     with conn_factory() as conn:
         for case in kill_round:
             check_status(f"arm {case.point} PAUSE for {case.coll}",
@@ -318,9 +323,11 @@ def kill_mid_write(proc, conn_factory, work_dir: str, kill_round: list):
             case.observed["logged"] = bu.logged_writes(collection_folder(work_dir, case.coll))
     proc.kill()
     proc.wait(timeout=30)
+    recover(work_dir)
 
 
-def run(work_dir: str, log_path: str, conn_factory, write_config: Callable[[], None]):
+def run(work_dir: str, log_path: str, conn_factory, write_config: Callable[[], None],
+        recover: Callable[[str], None] = plain_restart):
     rounds = cases()
     write_config()
     proc = bu.start_server(work_dir, log_path)
@@ -328,7 +335,7 @@ def run(work_dir: str, log_path: str, conn_factory, write_config: Callable[[], N
         seed(conn, rounds)
     for number, kill_round in enumerate(rounds, start=1):
         print(f"\n  Killing the server mid-write, round {number} of {len(rounds)} ...")
-        kill_mid_write(proc, conn_factory, work_dir, kill_round)
+        kill_mid_write(proc, conn_factory, work_dir, kill_round, recover)
         proc = bu.start_server(work_dir, log_path)
     return proc, rounds
 
@@ -407,7 +414,16 @@ def trigger_runs_of(conn, coll: str) -> list:
     return [trigger_run for trigger_run in runs if coll in json.dumps(trigger_run)]
 
 
-def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list):
+def lost_paused_write(case: KillCase) -> dict:
+    if case.expected is last_attempted_k1:
+        return last_acknowledged_k1(case)
+    if case.expected is without_attempted_deletes:
+        return without_attempted_deletes_but_the_last(case)
+    return all_acknowledged(case)
+
+
+def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: str, rounds: list,
+                                                               power_loss: bool = False):
     for case in (case for kill_round in rounds for case in kill_round):
         if case.writers > 1:
             test_a_killed_group_recovers_whole_documents(conn, case)
@@ -417,9 +433,12 @@ def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: s
         section(f"A write killed at {case.point} in {case.coll} recovers to what its write-ahead log committed")
         outcomes = case.expected(case)
         outcomes = outcomes if isinstance(outcomes, list) else [outcomes]
+        if power_loss:
+            outcomes = outcomes + [lost_paused_write(case)]
         ids = sorted({f"k{i}" for i in range(case.seed_docs)}.union(*outcomes))
         found = values_by_id(conn, case.coll, ids)
         expected = next((outcome for outcome in outcomes if outcome == found), outcomes[0])
+        lost = power_loss and found == outcomes[-1] and found not in outcomes[:-1]
         check("FIND_BY_ID answers exactly the committed values", found == expected,
               f"expected {' or '.join(map(str, outcomes))} got {found}")
         check("a full scan lists exactly the same documents", scanned_ids(conn, case.coll) == sorted(expected),
@@ -434,10 +453,13 @@ def test_every_killed_write_recovers_to_what_its_log_committed(conn, work_dir: s
         if case.logged_while_paused:
             check("the paused write was already in the write-ahead log", case.observed.get("logged", 0) >= 1,
                   f"saw {case.observed.get('logged')}")
-        if case.indexed:
+        if lost:
+            bu.warn(f"the unacknowledged write paused at {case.point} in {case.coll} was lost with the power",
+                    "it was never forced, so a power loss may drop it")
+        if case.indexed and not lost:
             bu.wait_until(lambda: indexed_count(conn, case.coll, "acknowledged-1") == 0, timeout_s=15, interval_s=0.2)
             check("the old value left no field-index entry", indexed_count(conn, case.coll, "acknowledged-1") == 0)
-        if case.repairs_index:
+        if case.repairs_index and not lost:
             bu.wait_until(lambda: indexed_types_of(work_dir, case.coll, "v", "k1") == ["Number"], timeout_s=15,
                           interval_s=0.2)
             check("startup re-queued the replayed write's index work, so the index files hold k1 only as a Number",

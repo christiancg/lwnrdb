@@ -146,6 +146,24 @@ public class FaultInjectorTest {
     }
 
     @Test
+    public void test_fails_at_fires_once_and_only_for_its_subject() {
+        injector.arm(FaultPoint.FILE_FORCED, FaultAction.FAIL, "orders.wal");
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders-pk.idx"));
+        assertTrue(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
+    }
+
+    @Test
+    public void test_fails_at_answers_false_when_disabled_or_for_another_action() throws Exception {
+        injector.arm(FaultPoint.FILE_FORCED, FaultAction.HALT, null);
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
+        assertEquals(List.of(137), halts);
+        injector.arm(FaultPoint.FILE_FORCED, FaultAction.FAIL, null);
+        TestUtils.setPrivateField(injector, "enabled", false);
+        assertFalse(injector.failsAt(FaultPoint.FILE_FORCED, "orders.wal"));
+    }
+
+    @Test
     public void test_at_ignores_a_drop() {
         injector.arm(FaultPoint.PEER_REPLY, FaultAction.DROP, null);
         injector.at(FaultPoint.PEER_REPLY, "COMMIT_TX");
@@ -257,5 +275,7 @@ public class FaultInjectorTest {
         assertNull(FaultInjector.parse(FaultAction.class, null));
         assertTrue(FaultPoint.PEER_REPLY.isDroppable());
         assertFalse(FaultPoint.WRITE_OWNERSHIP_RECHECKED.isDroppable());
+        assertTrue(FaultPoint.FILE_FORCED.isFailable());
+        assertFalse(FaultPoint.PEER_REPLY.isFailable());
     }
 }

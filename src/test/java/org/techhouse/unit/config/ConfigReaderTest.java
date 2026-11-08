@@ -180,6 +180,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scheduleMaxTotalPerUser", "500");
         expectedConfig.put("scheduleMinIntervalMs", "1000");
         expectedConfig.put("faultInjectionEnabled", "false");
+        expectedConfig.put("powerLossShadowPath", "");
         expectedConfig.put("scriptTextImportEnabled", "false");
         expectedConfig.put("scriptProcedureImportEnabled", "true");
         expectedConfig.put("aggregationScriptInstructionBudget", "1000000");

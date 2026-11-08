@@ -20,16 +20,27 @@ public enum FaultPoint {
     WAL_GROUP_APPENDED(false),
     WAL_GROUP_FORCED(false),
     GROUP_RUNS_STAGED(false),
-    PEER_REPLY(true);
+    PEER_REPLY(true),
+    FILE_FORCED(false, true);
     // @formatter:on
 
     private final boolean droppable;
+    private final boolean failable;
 
     FaultPoint(boolean droppable) {
+        this(droppable, false);
+    }
+
+    FaultPoint(boolean droppable, boolean failable) {
         this.droppable = droppable;
+        this.failable = failable;
     }
 
     public boolean isDroppable() {
         return droppable;
+    }
+
+    public boolean isFailable() {
+        return failable;
     }
 }

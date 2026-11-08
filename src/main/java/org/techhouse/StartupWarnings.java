@@ -121,6 +121,11 @@ public final class StartupWarnings {
         if (config.isFaultInjectionEnabled()) {
             logger.warning("SECURITY WARNING: faultInjectionEnabled=true, so any admin can pause or halt this node "
                     + "over the wire. It is for testing and debugging only; turn it off in lwnrdb.cfg.");
+            if (!config.getPowerLossShadowPath().isBlank()) {
+                logger.warning("POWER-LOSS SHADOW: powerLossShadowPath=" + config.getPowerLossShadowPath()
+                        + ", so every force also copies the forced file, or the forced folder's listing, into it."
+                        + " It is for the power-loss harness only and slows every synced write.");
+            }
         }
     }
 

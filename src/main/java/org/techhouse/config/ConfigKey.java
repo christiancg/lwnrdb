@@ -142,6 +142,7 @@ public enum ConfigKey {
     SCHEDULE_MAX_TOTAL_PER_USER("scheduleMaxTotalPerUser", ValueType.INT, "500", Rule.atLeast(1)),
     SCHEDULE_MIN_INTERVAL_MS("scheduleMinIntervalMs", ValueType.LONG, "1000", Rule.atLeast(1)),
     FAULT_INJECTION_ENABLED("faultInjectionEnabled", ValueType.BOOLEAN, "false", Rule.bool()),
+    POWER_LOSS_SHADOW_PATH("powerLossShadowPath", ValueType.STRING, "", Rule.none()),
     FILE_PATH("filePath", ValueType.STRING, "db", Rule.none()),
     LOG_PATH("logPath", ValueType.STRING, "logs", Rule.none()),
     LOG_LEVEL("logLevel", ValueType.STRING, "INFO", Rule.oneOf("FATAL", "ERROR", "WARNING", "INFO")),

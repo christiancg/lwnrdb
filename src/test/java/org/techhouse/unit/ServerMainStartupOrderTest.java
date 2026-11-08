@@ -35,6 +35,17 @@ public class ServerMainStartupOrderTest {
     }
 
     @Test
+    public void theShadowIsInstalledAfterTheSyncGuardAndBeforeAdminCreation() throws IOException {
+        final var body = mainBody();
+        final var install = positionOf(body, "installDurableShadowIfConfigured();");
+
+        assertTrue(positionOf(body, "DeviceSyncGuard.fallBackWhenUnsyncable(fs);") < install,
+                "the guard may turn syncWrites off, and the shadow must record the forces that remain");
+        assertTrue(install < positionOf(body, "fs.createAdminDatabase();"),
+                "every force from the first admin write on must be recorded, or a strict rebuild drops it");
+    }
+
+    @Test
     public void test_the_clock_is_seeded_before_transaction_recovery() throws IOException {
         final var body = mainBody();
 

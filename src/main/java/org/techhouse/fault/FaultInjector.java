@@ -61,6 +61,18 @@ public class FaultInjector {
         return fired.action == FaultAction.DROP;
     }
 
+    public boolean failsAt(FaultPoint point, String subject) {
+        if (!enabled) {
+            return false;
+        }
+        final var fired = fire(point, subject);
+        if (fired == null) {
+            return false;
+        }
+        perform(fired);
+        return fired.action == FaultAction.FAIL;
+    }
+
     public void arm(FaultPoint point, FaultAction action, String match) {
         final var previous = armed.put(point, new ArmedFault(action, match));
         if (previous != null) {

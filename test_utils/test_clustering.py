@@ -2895,6 +2895,24 @@ def test_cluster_port_reset_flood_is_rate_limited():
         check_status("the node still serves clients", conn.authenticate(), "OK")
 
 
+def test_a_malformed_peer_frame_does_not_drop_the_connection():
+    section("A malformed peer frame after HELLO is skipped and the next frame on the connection is answered")
+    victim = nodes[0]
+    marker = "Skipped a malformed cluster frame"
+    before = bu.read_log(victim.log_path).count(marker)
+    session = PeerSession(victim)
+    try:
+        session.write_line('{"type":"GOSSIP","secret":')
+        session.write_line("{}")
+        ack = session.frame({"type": "GOSSIP"})
+        check("the gossip after the malformed frames is answered on the same connection",
+              ack.get("type") == "GOSSIP_ACK", f"got {ack}")
+    finally:
+        session.close()
+    check("the skipped frames are logged", wait_until(
+        lambda: bu.read_log(victim.log_path).count(marker) - before >= 2, timeout_s=10.0))
+
+
 def test_a_trigger_writing_only_to_another_owner_consumes_its_run():
     section("A trigger whose body writes only to another node's collection consumes its run")
 
@@ -4225,6 +4243,7 @@ GROUPS = {
         test_a_trigger_writing_only_to_another_owner_consumes_its_run,
         test_cluster_delete_batch_forces_once,
         test_cluster_port_reset_flood_is_rate_limited,
+        test_a_malformed_peer_frame_does_not_drop_the_connection,
     ],
     "recreate": [
         test_formation_and_quorum_writes,

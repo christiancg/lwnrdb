@@ -165,6 +165,18 @@ public class StartupWarningsTest {
     }
 
     @Test
+    public void test_a_power_loss_shadow_is_warned_about_beside_fault_injection() throws Exception {
+        TestUtils.setPrivateField(config, "faultInjectionEnabled", "true");
+        TestUtils.setPrivateField(config, "powerLossShadowPath", "/tmp/shadow");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfFaultInjectionEnabled();
+            assertLogged(logWriter, "POWER-LOSS SHADOW: powerLossShadowPath=/tmp/shadow");
+        } finally {
+            TestUtils.setPrivateField(config, "powerLossShadowPath", "");
+        }
+    }
+
+    @Test
     public void test_warns_when_writes_are_not_synced() throws Exception {
         TestUtils.setPrivateField(config, "syncWrites", "false");
         try (var logWriter = mockStatic(LogWriter.class)) {

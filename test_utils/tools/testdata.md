@@ -3213,7 +3213,13 @@ An unknown point → `400-1`
 {"type": "ARM_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "action": "DROP"}
 ```
 
-An unknown action (anything but `PAUSE`, `HALT` or `DROP`) → `400-1`
+`FAIL` on a point that cannot fail (anything but `FILE_FORCED`) → `400-1`
+
+```json
+{"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "FAIL"}
+```
+
+An unknown action (anything but `PAUSE`, `HALT`, `DROP` or `FAIL`) → `400-1`
 
 ```json
 {"type": "ARM_FAULT", "point": "ANTI_ENTROPY_SNAPSHOTTED", "action": "DELAY"}
@@ -3246,6 +3252,14 @@ nothing.
 
 ```json
 {"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "HALT", "match": "test|testCollection"}
+```
+
+`FILE_FORCED` with `FAIL` makes the next force of the named file throw, as a failed `fsync` would: its `match` is a
+file name, or a folder name followed by `/`. Arm it on the collection's log and send a `SAVE`: the write whose
+force failed answers a `500-*` and is not acknowledged
+
+```json
+{"type": "ARM_FAULT", "point": "FILE_FORCED", "action": "FAIL", "match": "testCollection.wal"}
 ```
 
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not

@@ -115,7 +115,7 @@ public class ClusterConnectionHandler implements Runnable {
                 if (line.isBlank()) {
                     continue;
                 }
-                final var request = eJson.fromJson(line, ClusterMessage.class);
+                final var request = parseFrame(line);
                 if (request == null) {
                     continue;
                 }
@@ -130,6 +130,20 @@ public class ClusterConnectionHandler implements Runnable {
                 }
             }
         }
+    }
+
+    private ClusterMessage parseFrame(String line) {
+        ClusterMessage request;
+        try {
+            request = eJson.fromJson(line, ClusterMessage.class);
+        } catch (RuntimeException malformed) {
+            request = null;
+        }
+        if (request == null || request.getType() == null) {
+            ConnectionLog.warn(logger, "Skipped a malformed cluster frame from " + socket.getRemoteSocketAddress());
+            return null;
+        }
+        return request;
     }
 
     static String laneKeyOf(ClusterMessage request) {
