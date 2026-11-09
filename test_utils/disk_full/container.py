@@ -22,10 +22,11 @@ BLOCK = 4096
 
 class Container:
 
-    def __init__(self, name: str, port: int, settings: dict):
+    def __init__(self, name: str, port: int, settings: dict, image: str = IMAGE):
         self.name = name
         self.port = port
         self.settings = settings
+        self.image = image
         self.cfg_dir = tempfile.mkdtemp(prefix="lwnrdb-disk-full-")
 
     def _write_cfg(self):
@@ -39,15 +40,17 @@ class Container:
         os.chmod(path, 0o600)
         return path
 
+    def run_args(self) -> list:
+        return ["--tmpfs", f"{DATA}:rw,size={DATA_SIZE},mode=0700",
+                "--tmpfs", f"{LOGS}:rw,size={LOGS_SIZE},mode=0700"]
+
     def up(self):
         self.remove()
         cfg = self._write_cfg()
         subprocess.run(["docker", "run", "-d", "--init", "--name", self.name,
-                        "-p", f"127.0.0.1:{self.port}:{self.port}",
-                        "--tmpfs", f"{DATA}:rw,size={DATA_SIZE},mode=0700",
-                        "--tmpfs", f"{LOGS}:rw,size={LOGS_SIZE},mode=0700",
+                        "-p", f"127.0.0.1:{self.port}:{self.port}", *self.run_args(),
                         "-v", f"{cfg}:/app/lwnrdb.cfg:ro",
-                        IMAGE, "sleep", "infinity"], check=True, capture_output=True)
+                        self.image, "sleep", "infinity"], check=True, capture_output=True)
 
     def remove(self):
         subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)

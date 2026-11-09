@@ -27,11 +27,11 @@ def connect():
 
 class Run:
 
-    def __init__(self, name: str, seed: int, keep: bool, settings: dict = None):
+    def __init__(self, name: str, seed: int, keep: bool, settings: dict = None, container: Container = None):
         self.name = name
         self.seed = seed
         self.keep = keep
-        self.container = Container(NAME, PORT, {**SETTINGS, **(settings or {})})
+        self.container = container or Container(NAME, PORT, {**SETTINGS, **(settings or {})})
         self.divergences = []
         self.notes = []
         self.offset = 0

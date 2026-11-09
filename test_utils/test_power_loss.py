@@ -13,6 +13,7 @@ import transaction_kills
 import write_intent_kills
 from base_utils import check, check_status, section
 from durability import oracles, shadow
+from durability.interrupts import FSYNC_FAILURE, MODE_SALT, SEEDED_MODES, interrupt, kill_process
 from durability.regression_seeds import REGRESSION_SEEDS
 from durability.workload import Workload
 
@@ -20,28 +21,15 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("POWER_LOSS_TEST_PORT", "9454"))
 bu.configure(host=HOST, port=PORT)
 
-RANDOM = "random"
-POINTED = "pointed"
-FSYNC_FAILURE = "fsync-failure"
 CASES = "cases"
 ALL = "all"
-SEEDED_MODES = (RANDOM, POINTED, FSYNC_FAILURE)
-MODE_SALT = {RANDOM: 1, POINTED: 2, FSYNC_FAILURE: 3}
 
-POINTS = ["WAL_APPENDED", "WAL_GROUP_APPENDED", "WAL_GROUP_FORCED", "WAL_CHECKPOINT_FORCED", "WAL_REWRITE_BEGUN",
-          "PAGE_VACUUM_RENAMED", "PK_INDEX_REPLACED", "INDEX_BATCH_FLUSHED", "PAGE_COPY_APPENDED", "PK_ROW_COMMITTED",
-          "GROUP_RUNS_STAGED"]
 SERVER_SETTINGS = {"maxPageSize": "8kb", "maxEntrySize": "4kb", "walCheckpointBytes": "4kb",
                    "walIdleCheckpointMs": 200, "maxMemory": "1mb", "syncWrites": True, "faultInjectionEnabled": True}
 CASE_SETTINGS = {"maxMemory": "256mb", "maxPageSize": "4kb", "maxEntrySize": "1kb", "scriptsEnabled": True,
                  "faultInjectionEnabled": True, "syncWrites": True, "walCheckpointBytes": "16kb",
                  "walIdleCheckpointMs": 0, "triggersEnabled": True}
 CASES_DB = write_intent_kills.DB
-KILL_WINDOW_S = (0.2, 3.0)
-ARM_DELAY_S = (0.1, 1.0)
-HALT_WAIT_S = 10.0
-FAIL_RUN_S = 1.0
-FAULT_HALT_STATUS = 137
 DEFAULT_BUDGET_S = 300.0
 
 
@@ -59,45 +47,12 @@ def connect() -> bu.Conn:
     return bu.Conn.authenticated()
 
 
-def kill(proc) -> None:
-    if proc.poll() is None:
-        proc.kill()
-    proc.wait(timeout=30)
-
-
 def quietly(payload: dict) -> dict:
     try:
         with connect() as conn:
             return conn.send(payload, timeout=5)
     except OSError as exc:
         return {"status": "ERROR", "message": str(exc)}
-
-
-def interrupt(mode: str, proc, rng: random.Random, schema, notes: list) -> None:
-    if mode == RANDOM:
-        delay = rng.uniform(*KILL_WINDOW_S)
-        notes.append(f"SIGKILL after {delay:.2f} s")
-        time.sleep(delay)
-        kill(proc)
-        return
-    if mode == POINTED:
-        point = rng.choice(POINTS)
-        time.sleep(rng.uniform(*ARM_DELAY_S))
-        armed = quietly({"type": "ARM_FAULT", "point": point, "action": "HALT"})
-        try:
-            code = proc.wait(timeout=HALT_WAIT_S)
-            notes.append(f"HALT at {point} (exit {code}, armed {armed.get('status')})")
-        except Exception:
-            notes.append(f"{point} never fired within {HALT_WAIT_S:.0f} s, so the run ends with a SIGKILL")
-        kill(proc)
-        return
-    coll = rng.choice(schema.collections)
-    target = rng.choice([f"{coll}.wal", f"{coll}-pk.idx", f"{coll}-{rng.randint(0, 3)}.dat", f"{coll}.intents"])
-    armed = quietly({"type": "ARM_FAULT", "point": "FILE_FORCED", "action": "FAIL", "match": target})
-    time.sleep(FAIL_RUN_S)
-    fired = quietly({"type": "AWAIT_FAULT", "point": "FILE_FORCED", "timeoutMs": 1}).get("status") == "OK"
-    notes.append(f"FAIL armed on {target} ({armed.get('status')}), {'fired' if fired else 'never fired'}")
-    kill(proc)
 
 
 def restart_and_check(work_dir: str, log_path: str, seed: int, check_body) -> tuple:
@@ -125,10 +80,10 @@ def run_seed(seed: int, mode: str) -> Run:
         schema = workload.setup(connect)
         schema.work_dir = run.work_dir
         workload.start(connect)
-        interrupt(mode, proc, rng, schema, run.notes)
+        interrupt(mode, proc, rng, schema, run.notes, quietly)
         history = workload.stop()
     finally:
-        kill(proc)
+        kill_process(proc)
     rebuild_mode = shadow.STRICT if seed % 2 == 0 or mode == FSYNC_FAILURE else shadow.TORN
     run.rebuild = shadow.rebuild(shadow_root, os.path.join(run.work_dir, "db"), rebuild_mode, rng).summary()
     counts = {}
