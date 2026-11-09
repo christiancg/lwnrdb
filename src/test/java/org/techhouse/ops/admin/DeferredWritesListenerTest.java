@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -15,12 +16,18 @@ import org.mockito.Mockito;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.IndexRepairEvent;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -30,6 +37,8 @@ public class DeferredWritesListenerTest {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final DeferredWrites listener = new DeferredWrites();
+    private final Cache cache = IocContainer.get(Cache.class);
+    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -92,5 +101,56 @@ public class DeferredWritesListenerTest {
         assertFalse(locks.isWriteLockedByCurrentThread(Globals.ADMIN_DB_NAME + Globals.COLL_IDENTIFIER_SEPARATOR
                 + Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME));
         assertEquals(0, held.getCount());
+    }
+
+    @Test
+    public void staleRowsAreReconciledOnTheCollectionsNextUse() {
+        saveOne();
+        final var id = TestGlobals.DB + Globals.COLL_IDENTIFIER_SEPARATOR + TestGlobals.COLL;
+        final var row = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        row.setEntryCount(row.getEntryCount() + 1);
+
+        DeferredWrites.reconcileRowsOnNextUse(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(listener.pending(id), "a collection whose rows could not be reconciled waits for its next use");
+        listener.apply(id);
+
+        assertFalse(listener.pending(id));
+        assertEquals(1, entryCount());
+    }
+
+    @Test
+    public void aReconcileThatStillFailsStaysPendingForTheNextUse() throws Exception {
+        saveOne();
+        final var id = TestGlobals.DB + Globals.COLL_IDENTIFIER_SEPARATOR + TestGlobals.COLL;
+        final var row = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        row.setEntryCount(row.getEntryCount() + 1);
+        final var failing = Mockito.spy(fs);
+        Mockito.doThrow(new IOException("No space left on device")).when(failing).readWholePkIndexFile(TestGlobals.DB,
+                TestGlobals.COLL);
+        DeferredWrites.reconcileRowsOnNextUse(TestGlobals.DB, TestGlobals.COLL);
+        TestUtils.setPrivateStaticField(PageOccupancyReconciler.class, "fs", failing);
+        try {
+            listener.apply(id);
+            assertTrue(listener.pending(id), "a failed reconcile is retried on the next use, not left to a restart");
+        } finally {
+            TestUtils.setPrivateStaticField(PageOccupancyReconciler.class, "fs", fs);
+        }
+        listener.apply(id);
+        assertFalse(listener.pending(id));
+        assertEquals(1, entryCount());
+    }
+
+    private void saveOne() {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.addProperty("_id", "stale");
+        request.setObject(object);
+        request.set_id("stale");
+        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+    }
+
+    private int entryCount() {
+        return cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .mapToInt(AdminPageEntry::getEntryCount).sum();
     }
 }

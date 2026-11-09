@@ -2,6 +2,8 @@ package org.techhouse.ops.admin;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.DeferredApplyHook;
@@ -19,6 +21,7 @@ public final class DeferredWrites implements DeferredApplyHook, DeferredApplyLis
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    private static final Set<String> staleRows = ConcurrentHashMap.newKeySet();
 
     DeferredWrites() {
     }
@@ -29,9 +32,13 @@ public final class DeferredWrites implements DeferredApplyHook, DeferredApplyLis
         ResourceLocking.useDeferredApplyHook(installed);
     }
 
+    public static void reconcileRowsOnNextUse(String dbName, String collName) {
+        staleRows.add(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
     @Override
     public boolean pending(String lockName) {
-        return DeferredApplies.pending(lockName);
+        return DeferredApplies.pending(lockName) || !staleRows.isEmpty() && staleRows.contains(lockName);
     }
 
     @Override
@@ -50,7 +57,8 @@ public final class DeferredWrites implements DeferredApplyHook, DeferredApplyLis
                     + " next use retries: " + e.getMessage());
             return;
         }
-        if (applied && !Globals.ADMIN_PAGES_DB_NAME.equals(dbName)) {
+        final var rowsWereStale = staleRows.remove(lockName);
+        if ((applied || rowsWereStale) && !Globals.ADMIN_PAGES_DB_NAME.equals(dbName)) {
             reconcilePageRows(dbName, collName);
         }
     }
@@ -59,10 +67,12 @@ public final class DeferredWrites implements DeferredApplyHook, DeferredApplyLis
         try {
             PageOccupancyReconciler.reconcileRows(dbName, collName);
         } catch (InterruptedException e) {
+            reconcileRowsOnNextUse(dbName, collName);
             Thread.currentThread().interrupt();
         } catch (Exception e) {
-            logger.warning("Applied the logged writes of " + Cache.getCollectionIdentifier(dbName, collName)
-                    + " but could not reconcile its page rows; the next startup rebuilds them: " + e.getMessage());
+            reconcileRowsOnNextUse(dbName, collName);
+            logger.warning("Could not reconcile the page rows of " + Cache.getCollectionIdentifier(dbName, collName)
+                    + "; its next use retries: " + e.getMessage());
         }
     }
 

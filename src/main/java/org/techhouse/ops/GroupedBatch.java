@@ -15,6 +15,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -263,12 +264,14 @@ final class GroupedBatch {
     private void forgetTakenBack() {
         cache.evictCollection(dbName, collName);
         try {
-            PageOccupancyReconciler.reconcile(dbName, collName);
+            PageOccupancyReconciler.reconcileRows(dbName, collName);
         } catch (InterruptedException e) {
+            DeferredWrites.reconcileRowsOnNextUse(dbName, collName);
             Thread.currentThread().interrupt();
         } catch (Exception e) {
+            DeferredWrites.reconcileRowsOnNextUse(dbName, collName);
             logger.warning("Could not reconcile the page rows of " + subject
-                    + " after a failed write group; the next startup rebuilds them: " + e.getMessage());
+                    + " after a failed write group; its next use retries: " + e.getMessage());
         }
     }
 }
