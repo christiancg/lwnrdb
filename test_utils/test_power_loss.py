@@ -31,6 +31,8 @@ CASE_SETTINGS = {"maxMemory": "256mb", "maxPageSize": "4kb", "maxEntrySize": "1k
                  "walIdleCheckpointMs": 0, "triggersEnabled": True}
 CASES_DB = write_intent_kills.DB
 DEFAULT_BUDGET_S = 300.0
+AUTO = "auto"
+AT_POWER_LOSS = "db.at-power-loss"
 
 
 @dataclass
@@ -38,6 +40,7 @@ class Run:
     seed: int
     mode: str
     rebuild: str = ""
+    rebuild_mode: str = ""
     notes: list = field(default_factory=list)
     divergences: list = field(default_factory=list)
     work_dir: str = ""
@@ -68,7 +71,11 @@ def restart_and_check(work_dir: str, log_path: str, seed: int, check_body) -> tu
         bu.stop_server(proc, port=PORT)
 
 
-def run_seed(seed: int, mode: str) -> Run:
+def auto_rebuild(seed: int, mode: str) -> str:
+    return shadow.STRICT if seed % 2 == 0 or mode == FSYNC_FAILURE else shadow.TORN
+
+
+def run_seed(seed: int, mode: str, rebuild: str = AUTO) -> Run:
     rng = random.Random(seed * 7919 + MODE_SALT[mode])
     run = Run(seed, mode, work_dir=tempfile.mkdtemp(prefix=f"lwnrdb-powerloss-{seed}-"))
     shadow_root = tempfile.mkdtemp(prefix=f"lwnrdb-powerloss-shadow-{seed}-")
@@ -84,8 +91,10 @@ def run_seed(seed: int, mode: str) -> Run:
         history = workload.stop()
     finally:
         kill_process(proc)
-    rebuild_mode = shadow.STRICT if seed % 2 == 0 or mode == FSYNC_FAILURE else shadow.TORN
-    run.rebuild = shadow.rebuild(shadow_root, os.path.join(run.work_dir, "db"), rebuild_mode, rng).summary()
+    run.rebuild_mode = auto_rebuild(seed, mode) if rebuild == AUTO else rebuild
+    db = os.path.join(run.work_dir, "db")
+    run.rebuild = shadow.rebuild(shadow_root, db, run.rebuild_mode, rng).summary()
+    shutil.copytree(db, os.path.join(run.work_dir, AT_POWER_LOSS))
     counts = {}
     for entry in history.entries:
         key = f"{entry.outcome}/{entry.error_code}" if entry.error_code else entry.outcome
@@ -149,7 +158,8 @@ def report_run(run: Run, report: list) -> None:
     for oracle, detail in sorted(observations):
         bu.warn(f"{label}: {oracle} observation", detail)
     if failed:
-        print(f"    kept {run.work_dir}; replay: python3 test_utils/test_power_loss.py --replay {run.seed}"
+        print(f"    kept {run.work_dir} (db as rebuilt in {AT_POWER_LOSS}); replay: python3"
+              f" test_utils/test_power_loss.py --rebuild {run.rebuild_mode} --replay {run.seed}"
               f" --mode {run.mode}")
     else:
         shutil.rmtree(run.work_dir, ignore_errors=True)
@@ -157,10 +167,10 @@ def report_run(run: Run, report: list) -> None:
                    "divergences": [vars(d) for d in run.divergences], "work_dir": run.work_dir if failed else ""})
 
 
-def run_and_report(seed: int, mode: str, report: list) -> None:
-    section(f"Power loss, seed {seed}, mode {mode}")
+def run_and_report(seed: int, mode: str, rebuild: str, report: list) -> None:
+    section(f"Power loss, seed {seed}, mode {mode}, rebuild {rebuild}")
     try:
-        run = run_seed(seed, mode)
+        run = run_seed(seed, mode, rebuild)
     except Exception as exc:
         check(f"seed {seed} [{mode}] ran to completion", False, f"{exc}\n{traceback.format_exc()}")
         report.append({"seed": seed, "mode": mode, "error": str(exc)})
@@ -171,12 +181,17 @@ def run_and_report(seed: int, mode: str, report: list) -> None:
 def planned_runs(args) -> list:
     modes = SEEDED_MODES if args.mode in (ALL, CASES) else (args.mode,)
     if args.replay is not None:
-        return [(args.replay, mode) for mode in modes]
+        return [(args.replay, mode, args.rebuild) for mode in modes]
     if args.seeds == "regression":
-        return [(seed, mode) for seed, mode, _ in REGRESSION_SEEDS if mode in modes]
+        return [(entry[0], entry[1], pinned_rebuild(entry, args.rebuild)) for entry in REGRESSION_SEEDS
+                if entry[1] in modes]
     start = args.start if args.start is not None else random.randrange(1, 2 ** 31)
     print(f"  start seed {start}")
-    return [(start + offset, modes[offset % len(modes)]) for offset in range(int(args.seeds))]
+    return [(start + offset, modes[offset % len(modes)], args.rebuild) for offset in range(int(args.seeds))]
+
+
+def pinned_rebuild(entry: tuple, requested: str) -> str:
+    return entry[3] if len(entry) > 3 else requested
 
 
 def write_report(path: str, report: list) -> None:
@@ -192,6 +207,8 @@ def main() -> None:
     parser.add_argument("--budget", type=float, default=DEFAULT_BUDGET_S, help="wall-clock seconds for seeded runs")
     parser.add_argument("--replay", type=int, default=None, help="run one seed, keeping its folders on failure")
     parser.add_argument("--report", default=None, help="write every run's divergences as JSON")
+    parser.add_argument("--rebuild", default=AUTO, choices=[AUTO, *shadow.MODES],
+                        help="how db/ is rebuilt from the shadow; auto picks strict or torn by seed")
     args = parser.parse_args()
 
     bu.banner("power-loss harness", HOST, PORT)
@@ -201,11 +218,11 @@ def main() -> None:
     if args.mode in (ALL, CASES) and args.replay is None:
         run_cases()
     if args.mode != CASES:
-        for seed, mode in planned_runs(args):
+        for seed, mode, rebuild in planned_runs(args):
             if time.time() > deadline:
                 bu.warn(f"seed {seed} [{mode}] skipped", "wall-clock budget exhausted")
                 continue
-            run_and_report(seed, mode, report)
+            run_and_report(seed, mode, rebuild, report)
     if args.report:
         write_report(args.report, report)
     bu.summary()

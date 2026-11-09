@@ -156,7 +156,8 @@ public class DurableShadowTest {
         force(page);
         assertEquals("old-new", blob(page));
         try (Stream<Path> blobs = Files.list(blob.getParent())) {
-            assertEquals(1, blobs.filter(path -> !path.toString().endsWith(DurableShadow.TEMP_SUFFIX)).count());
+            assertEquals(1, blobs.filter(path -> !path.toString().endsWith(DurableShadow.TEMP_SUFFIX))
+                    .filter(path -> !path.endsWith(DurableShadow.KEY_MAP)).count());
         }
     }
 
@@ -263,5 +264,21 @@ public class DurableShadowTest {
 
     private static Object fileKeyOf(Path path) throws IOException {
         return Files.readAttributes(path, BasicFileAttributes.class).fileKey();
+    }
+
+    @Test
+    public void aRecordedFileAddsItsInodeToTheKeyMapOnce() throws IOException {
+        install();
+        final var file = write(data.resolve("mapped.dat"), "one");
+        force(file);
+        write(file, "two");
+        force(file);
+
+        final var keyMap = Files.readAllLines(shadowRoot.resolve(DurableShadow.BLOBS).resolve(DurableShadow.KEY_MAP));
+        final var id = String.valueOf(shadow.blobOf(file).getFileName());
+        final var inode = fileKeyOf(file);
+
+        assertEquals(1, keyMap.stream().filter(line -> line.startsWith(id + "\t")).count());
+        assertTrue(keyMap.contains(id + "\t" + inode), keyMap.toString());
     }
 }

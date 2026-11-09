@@ -29,6 +29,38 @@ public class ForceProbe {
     }
 }
 """
+APPEND_PROBE = "/tmp/AppendOffsetProbe.java"
+APPEND_PROBE_SOURCE = """import java.io.FileOutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+public class AppendOffsetProbe {
+    public static void main(String[] args) throws Exception {
+        var path = Path.of(args[0]);
+        var appends = Integer.parseInt(args[1]);
+        var line = "appended-line\\n".getBytes();
+        var stop = new AtomicBoolean();
+        var lister = Thread.ofPlatform().start(() -> {
+            while (!stop.get()) {
+                try (var names = Files.list(path.getParent())) {
+                    names.count();
+                } catch (Exception ignored) {
+                }
+            }
+        });
+        for (var i = 0; i < appends; i++) {
+            try (var out = new FileOutputStream(path.toFile(), true)) {
+                out.write(line);
+            }
+        }
+        stop.set(true);
+        lister.join();
+        System.out.println(Files.size(path) == (long) appends * line.length ? "kept" : "lost");
+    }
+}
+"""
+APPEND_PROBE_APPENDS = 2000
 SMOKE_FORCED = "smoke-forced"
 SMOKE_UNFORCED = "smoke-unforced"
 
@@ -86,6 +118,17 @@ class LazyFsContainer(Container):
         self.sh(f"rm -f {forced} {unforced}")
         passed = kept == SMOKE_FORCED and dropped != SMOKE_UNFORCED
         return passed, f"forced write kept {kept!r}, unforced write left {dropped!r}"
+
+    def append_offset_defect(self) -> bool:
+        self.sh(f"cat > {APPEND_PROBE} <<'EOF'\n{APPEND_PROBE_SOURCE}EOF")
+        probed = f"{DATA}/append-probe/appended"
+        self.sh(f"rm -rf {DATA}/append-probe && mkdir -p {DATA}/append-probe")
+        verdict = self.text(f"java {APPEND_PROBE} {probed} {APPEND_PROBE_APPENDS}", timeout=300).strip()
+        self.sh(f"rm -rf {DATA}/append-probe")
+        return verdict != "kept"
+
+    def lazyfs_log(self) -> str:
+        return self.text(f"cat {LAZYFS_LOG} 2>/dev/null")
 
     def unmount(self):
         self.sh(f"umount {DATA} 2>/dev/null || fusermount3 -u {DATA} 2>/dev/null")

@@ -6,11 +6,13 @@ from dataclasses import dataclass, field
 
 STRICT = "strict"
 TORN = "torn"
-MODES = (STRICT, TORN)
+EAGER = "eager"
+MODES = (STRICT, TORN, EAGER)
 
 BLOBS = "blobs"
 LISTINGS = "listings"
 LISTING_FILE = ".listing"
+KEY_MAP = "keys.tsv"
 SELF = "self"
 FOLDER = "d"
 FILE = "f"
@@ -140,6 +142,42 @@ def _live_files(data_root: str) -> list:
     return sorted(found)
 
 
+def _ids_by_inode(shadow_root: str) -> dict:
+    path = os.path.join(shadow_root, BLOBS, KEY_MAP)
+    ids = {}
+    if not os.path.isfile(path):
+        return ids
+    with open(path, "r", encoding="utf-8") as fp:
+        for line in fp.read().splitlines():
+            fields = line.split("\t")
+            inode = _inode_of(fields[1]) if len(fields) == 2 else None
+            if inode is not None:
+                ids[inode] = fields[0]
+    return ids
+
+
+def _restore_eager(shadow_root: str, data_root: str, staging: str, report: RebuildReport) -> None:
+    ids_by_inode = _ids_by_inode(shadow_root)
+    for root, folders, _ in os.walk(data_root):
+        for folder in folders:
+            os.makedirs(os.path.join(staging, os.path.relpath(os.path.join(root, folder), data_root)), mode=0o700,
+                        exist_ok=True)
+    for relative in _live_files(data_root):
+        live_path = os.path.join(data_root, relative)
+        key_id = ids_by_inode.get(os.stat(live_path, follow_symlinks=False).st_ino)
+        forced = _blob(shadow_root, key_id) if key_id is not None else None
+        if forced is None:
+            report.files_emptied.append(relative)
+            forced = b""
+        if os.path.getsize(live_path) > len(forced):
+            report.files_truncated.append(relative)
+        out_path = os.path.join(staging, relative)
+        os.makedirs(os.path.dirname(out_path), mode=0o700, exist_ok=True)
+        with open(out_path, "wb") as fp:
+            fp.write(forced)
+        os.chmod(out_path, 0o600)
+
+
 def rebuild(shadow_root: str, data_root: str, mode: str, rng: random.Random) -> RebuildReport:
     if mode not in MODES:
         raise ValueError(f"unknown rebuild mode {mode}")
@@ -148,9 +186,12 @@ def rebuild(shadow_root: str, data_root: str, mode: str, rng: random.Random) -> 
     staging = data_root + ".rebuild"
     shutil.rmtree(staging, ignore_errors=True)
     os.makedirs(staging, mode=0o700)
-    restored = set()
-    _restore_folder(shadow_root, data_root, staging, "", None, mode, rng, report, restored)
-    report.files_dropped = [path for path in _live_files(data_root) if path not in restored]
+    if mode == EAGER:
+        _restore_eager(shadow_root, data_root, staging, report)
+    else:
+        restored = set()
+        _restore_folder(shadow_root, data_root, staging, "", None, mode, rng, report, restored)
+        report.files_dropped = [path for path in _live_files(data_root) if path not in restored]
     shutil.rmtree(data_root)
     os.rename(staging, data_root)
     return report

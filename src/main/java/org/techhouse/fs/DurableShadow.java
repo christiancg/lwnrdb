@@ -8,11 +8,13 @@ import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Stream;
 import org.techhouse.fs.DurableShadowKeys.PinnedKey;
 
@@ -20,6 +22,7 @@ final class DurableShadow implements Forcer {
     static final String BLOBS = "blobs";
     static final String LISTINGS = "listings";
     static final String LISTING_FILE = ".listing";
+    static final String KEY_MAP = "keys.tsv";
     static final String TEMP_SUFFIX = ".tmp";
     static final String SELF = "self";
     static final char FILE = 'f';
@@ -30,6 +33,8 @@ final class DurableShadow implements Forcer {
     private final DurableShadowKeys keys = new DurableShadowKeys();
     private final Set<String> frozen = ConcurrentHashMap.newKeySet();
     private final AtomicLong temps = new AtomicLong();
+    private final Set<String> mapped = ConcurrentHashMap.newKeySet();
+    private final ReentrantLock keyMapLock = new ReentrantLock();
 
     private DurableShadow(Path dataRoot, Path shadowRoot) {
         this.dataRoot = dataRoot;
@@ -116,6 +121,19 @@ final class DurableShadow implements Forcer {
             writeAtomically(shadowRoot.resolve(BLOBS).resolve(key.id()), key.readAll());
         } finally {
             key.lock().unlock();
+        }
+        if (mapped.add(key.id())) {
+            mapKey(key);
+        }
+    }
+
+    private void mapKey(PinnedKey key) throws IOException {
+        keyMapLock.lock();
+        try {
+            Files.writeString(shadowRoot.resolve(BLOBS).resolve(KEY_MAP), key.id() + "\t" + key.fileKey() + "\n",
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } finally {
+            keyMapLock.unlock();
         }
     }
 
