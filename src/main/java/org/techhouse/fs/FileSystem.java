@@ -462,7 +462,8 @@ public class FileSystem {
     }
 
     public boolean applyDeferredWrites(String dbName, String collName) throws IOException {
-        return writeAheadLog.requireApplied(dbName, collName);
+        final var replayed = writeAheadLog.requireApplied(dbName, collName);
+        return writeIntentRecovery.recoverBehindAVacuum(dbName, collName) || replayed;
     }
 
     public void onDeferredApply(DeferredApplyListener listener) {

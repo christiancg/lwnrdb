@@ -211,6 +211,7 @@ final class PageVacuum {
             pkIndexStore.appendReplacements(dbName, collName, moved);
         } catch (IOException e) {
             pkIndexStore.markBehindAVacuum(dbName, collName);
+            DeferredApplies.flag(dbName, collName);
             logger.error("Vacuumed " + page.getName() + " but could not record where its records moved; its intent is"
                     + " kept and the next startup re-derives the rows from the page", e);
             throw e;

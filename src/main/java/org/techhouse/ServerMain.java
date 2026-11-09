@@ -1,6 +1,7 @@
 package org.techhouse;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -99,7 +100,22 @@ public class ServerMain {
         }
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) {
+        final SocketServer server;
+        try {
+            server = start(args);
+        } catch (IOException | UncheckedIOException e) {
+            logger.fatal("The server will not start: " + e.getMessage());
+            exit.accept(STARTUP_FAILURE_STATUS);
+            return;
+        }
+        registerShutdownHook(server);
+        if (!server.serve()) {
+            exit.accept(BIND_FAILURE_STATUS);
+        }
+    }
+
+    private static SocketServer start(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
         AdminPasswordGuard.refuseWeakPassword();
         FetchPinningGuard.refuseUnpinnedFetch();
@@ -109,14 +125,7 @@ public class ServerMain {
         installDurableShadowIfConfigured();
         fs.createAdminDatabase();
         StartupWarnings.retainAndReportUncleanStops();
-        final List<PageOccupancyReconciler.ReplayedCollection> replayed;
-        try {
-            replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());
-        } catch (IOException e) {
-            logger.fatal("The server will not start: " + e.getMessage());
-            exit.accept(STARTUP_FAILURE_STATUS);
-            return;
-        }
+        final var replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());
         DeferredWrites.install();
         fs.recoverWriteIntents();
         cache.loadAdminData();
@@ -159,12 +168,7 @@ public class ServerMain {
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();
         TriggerRunRecovery.recoverLocal(startupTriggerRuns);
-        final var sslServerSocketFactory = createTlsFactory();
-        final var server = new SocketServer(port, config.getBindAddress(), sslServerSocketFactory);
-        registerShutdownHook(server);
-        if (!server.serve()) {
-            exit.accept(BIND_FAILURE_STATUS);
-        }
+        return new SocketServer(port, config.getBindAddress(), createTlsFactory());
     }
 
     private static void startTriggerRunSweepIfStandalone() {

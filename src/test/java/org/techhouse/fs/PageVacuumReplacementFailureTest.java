@@ -48,6 +48,8 @@ public class PageVacuumReplacementFailureTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        DeferredApplies.clear(DB, COLL);
+        PkIndexStore.forgetUnder(fx.paths.collectionFolder(DB, COLL));
         TestUtils.standardTearDown();
     }
 
@@ -83,6 +85,34 @@ public class PageVacuumReplacementFailureTest {
                 "a live record survives a delete of another: " + text);
         assertEquals(1, fx.openIntents());
         assertThrows(IOException.class, () -> fx.store.readWholePkIndexFile(DB, COLL));
+    }
+
+    @Test
+    public void theNextUseRederivesTheRowsOnceTheReplacementCanBeRecorded() throws Exception {
+        assertThrows(IOException.class, () -> vacuum.vacuum(DB, COLL, 0, liveRows()));
+        assertTrue(DeferredApplies.pending(DB + "|" + COLL), "the collection is flagged for its next use");
+
+        assertTrue(new WriteIntentRecovery(fx.paths, fx.store, fx.journal).recoverBehindAVacuum(DB, COLL));
+
+        assertEquals(0, fx.openIntents());
+        final var rows = fx.store.rowsFor(DB, COLL, Set.of("b", "c"));
+        assertEquals(StorageFixture.record("b", "old-b"), fx.readAt(rows.get("b")));
+        assertEquals(StorageFixture.record("c", "old-c"), fx.readAt(rows.get("c")));
+    }
+
+    @Test
+    public void aRecoveryThatStillCannotRecordKeepsThePkIndexBehind() throws Exception {
+        assertThrows(IOException.class, () -> vacuum.vacuum(DB, COLL, 0, liveRows()));
+        final var stillFailing = spy(fx.store);
+        doThrow(new IOException("No space left on device")).when(stillFailing).appendReplacements(anyString(),
+                anyString(), any());
+
+        assertThrows(IOException.class,
+                () -> new WriteIntentRecovery(fx.paths, stillFailing, fx.journal).recoverBehindAVacuum(DB, COLL));
+
+        assertThrows(IOException.class, () -> fx.store.readWholePkIndexFile(DB, COLL));
+        assertTrue(DeferredApplies.pending(DB + "|" + COLL));
+        assertEquals(1, fx.openIntents());
     }
 
     @Test

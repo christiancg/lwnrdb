@@ -289,11 +289,15 @@ final class PkIndexStore {
         behindAVacuum.add(paths.pkIndexFile(dbName, collectionName).getAbsolutePath());
     }
 
+    boolean clearBehindAVacuum(String dbName, String collectionName) {
+        return behindAVacuum.remove(paths.pkIndexFile(dbName, collectionName).getAbsolutePath());
+    }
+
     private static void requireCurrent(String dbName, String collectionName, File indexFile) throws IOException {
         if (!behindAVacuum.isEmpty() && behindAVacuum.contains(indexFile.getAbsolutePath())) {
             throw new IOException("The PK index of " + dbName + "|" + collectionName + " is behind a page vacuum whose"
-                    + " moved rows could not be recorded, so its positions are stale; restart the server, whose"
-                    + " startup re-derives them from the vacuum's open intent");
+                    + " moved rows could not be recorded, so its positions are stale; the collection's next use, or a"
+                    + " restart, re-derives them from the vacuum's open intent");
         }
     }
 
