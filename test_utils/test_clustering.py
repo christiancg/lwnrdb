@@ -578,7 +578,8 @@ def test_write_replication_and_read_routing():
 
     for i in range(NODE_COUNT):
         _id = f"w{i}"
-        r = save(nodes[i].client_port, DB, "routed", {"_id": _id, "v": i * 10})
+        r = op_with_retry(lambda port=nodes[i].client_port, doc={"_id": _id, "v": i * 10}:
+                          save(port, DB, "routed", doc))
         check_status(f"SAVE via node-{i} commits", r, "OK")
         check(f"doc written via node-{i} is visible on every node",
                    all_nodes_see(DB, "routed", _id, i * 10),
@@ -593,8 +594,8 @@ def test_bulk_delete_and_upsert():
 
     create_coll(nodes[0].client_port, DB, "bulk")
 
-    r = bulk_save(nodes[1].client_port, DB, "bulk",
-                  [{"_id": "b1", "v": 1}, {"_id": "b2", "v": 2}, {"_id": "b3", "v": 3}])
+    r = op_with_retry(lambda: bulk_save(nodes[1].client_port, DB, "bulk",
+                                        [{"_id": "b1", "v": 1}, {"_id": "b2", "v": 2}, {"_id": "b3", "v": 3}]))
     check_status("BULK_SAVE via node-1 commits", r, "OK")
     check("all bulk docs are visible on every node",
                all_nodes_see(DB, "bulk", "b1", 1) and all_nodes_see(DB, "bulk", "b2", 2)

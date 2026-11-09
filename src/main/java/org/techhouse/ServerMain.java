@@ -76,6 +76,7 @@ public class ServerMain {
     private static final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private static final Logger logger = Logger.logFor(ServerMain.class);
     private static final int BIND_FAILURE_STATUS = 1;
+    private static final int STARTUP_FAILURE_STATUS = 1;
     @SuppressWarnings("FieldMayBeFinal")
     private static volatile IntConsumer exit = System::exit;
 
@@ -108,7 +109,14 @@ public class ServerMain {
         installDurableShadowIfConfigured();
         fs.createAdminDatabase();
         StartupWarnings.retainAndReportUncleanStops();
-        final var replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());
+        final List<PageOccupancyReconciler.ReplayedCollection> replayed;
+        try {
+            replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());
+        } catch (IOException e) {
+            logger.fatal("The server will not start: " + e.getMessage());
+            exit.accept(STARTUP_FAILURE_STATUS);
+            return;
+        }
         DeferredWrites.install();
         fs.recoverWriteIntents();
         cache.loadAdminData();

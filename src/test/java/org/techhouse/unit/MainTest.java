@@ -1,14 +1,17 @@
 package org.techhouse.unit;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.ServerSocket;
+import java.nio.file.Files;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 import org.junit.jupiter.api.AfterEach;
@@ -184,6 +187,32 @@ public class MainTest {
             assertEquals(1, status.get());
         } finally {
             exitField.set(null, original);
+        }
+    }
+
+    @Test
+    public void aLogThatCannotBeReplayedRefusesStartWithOneFatalLineInsteadOfAnException() throws Exception {
+        TestUtils.standardTearDown();
+        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
+        final var folder = new File(TestGlobals.PATH, "unreplayable/docs");
+        assertTrue(folder.mkdirs());
+        final var log = new File(folder, "docs.wal");
+        Files.write(log.toPath(), new byte[]{1, 2, 3});
+        assertTrue(log.setReadable(false, false));
+        assumeFalse(log.canRead(), "the process can still read an unreadable file (root)");
+        final var exitField = ServerMain.class.getDeclaredField("exit");
+        exitField.setAccessible(true);
+        final var original = exitField.get(null);
+        final var status = new AtomicInteger(-1);
+        exitField.set(null, (IntConsumer) status::set);
+        try {
+            assertDoesNotThrow(() -> Main.main(new String[]{}));
+            assertEquals(1, status.get());
+        } finally {
+            exitField.set(null, original);
+            assertTrue(log.setReadable(true, false));
+            TestUtils.standardTearDown();
         }
     }
 
