@@ -161,9 +161,30 @@ Fill the disk until a `SAVE` answers `500-34`, keep it full, then count the coll
 
 Free the disk and the same request answers normally (the read applies the log first).
 
-A connection whose response write makes no progress for `clientWriteStallTimeoutMs` (30000 by default, at least
+Running pipelines together past `aggregateTotalHeldBytes` (a quarter of the heap by default; start a server with
+`aggregateMaxResultBytes=16mb` and `aggregateTotalHeldBytes=14mb` over 15000 documents of ~200 bytes) → `503-20` for the
+pipeline that would cross it. Run the same `GROUP_BY` from two connections at once: one answers, the other gets
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The server holds the maximum bytes of running aggregations; retry shortly", "errorCode": "503-20"}
+```
+
+and the same request answers once it runs alone.
+
+Open transactions together past `transactionTotalMaxBytes` (a quarter of the heap by default; start a server with
+`transactionTotalMaxBytes=200kb`) → `503-21` for the buffered write that would cross it. Buffer three 60 KB documents
+in one transaction, then save one in a second transaction on another collection:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly", "errorCode": "503-21"}
+```
+
+The second transaction stays usable: commit the first and the retried `SAVE` buffers.
+
+A connection whose response write moves less than 64 KB in `clientWriteStallTimeoutMs` (30000 by default, at least
 1000) is closed by the server and its transaction rolled back; the three non-readers above are closed once it
-passes, which frees the budget for the fourth.
+passes, which frees the budget for the fourth, and so is a connection that reads a large response 16 KB at a time with
+a pause of half the timeout between reads.
 
 With `authVerifierCacheEnabled=true` (the default) a second `AUTHENTICATE` with the same password answers without
 recomputing the password hash; a wrong password after a cached success is still refused and still counts toward

@@ -179,7 +179,11 @@ public enum ErrorCode {
     COLLECTION_FENCED("503-18", "The collection is held by a committed transaction that has not finished applying;"
             + " retry shortly", OperationStatus.ERROR),
     WRITES_NOT_APPLIED("503-19", "The collection holds logged writes that could not be applied yet, so it cannot be"
-            + " read consistently; retry shortly", OperationStatus.ERROR);
+            + " read consistently; retry shortly", OperationStatus.ERROR),
+    AGGREGATE_BUDGET_EXHAUSTED("503-20", "The server holds the maximum bytes of running aggregations; retry shortly",
+            OperationStatus.ERROR),
+    TRANSACTION_BUDGET_EXHAUSTED("503-21", "The server holds the maximum bytes of buffered transactions; the write was"
+            + " not buffered, retry shortly", OperationStatus.ERROR);
     // @formatter:on
 
     private final String code;

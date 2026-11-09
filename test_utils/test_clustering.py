@@ -2811,6 +2811,45 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
           f"{ran} run(s) recorded")
 
 
+def exec_client(port: int, request: dict) -> subprocess.CompletedProcess:
+    with tempfile.TemporaryDirectory() as cwd:
+        return subprocess.run(["java", "-jar", bu.JAR_PATH, "--exec", json.dumps(request), "--host", HOST, "--port",
+                               str(port), "--user", ADMIN_USERNAME], cwd=cwd, capture_output=True, timeout=300,
+                              env={**os.environ, "LWNRDB_PASSWORD": ADMIN_PASSWORD})
+
+
+def test_the_client_does_not_resend_a_replication_timeout():
+    section("The jar client reports 503-3 for a SAVE without an _id instead of resending it")
+    owners = collections_by_owner(nodes[0].client_port, DB, "noresend", count=3)
+    if not check("found the owner of a fresh collection", bool(owners), f"owners={owners}"):
+        return
+    host_index, names = next(iter(owners.items()))
+    host = nodes[host_index]
+    coll = names[0]
+    frozen = [node for node in nodes if node is not host]
+    marker = None
+    for attempt in range(5):
+        candidate = f"noresend-{attempt}"
+        for node in frozen:
+            node.suspend()
+        try:
+            ran = exec_client(host.client_port, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                                 "object": {"marker": candidate}})
+        finally:
+            for node in frozen:
+                node.resume()
+            wait_until_cluster_is_healthy()
+        if b"503-3" in ran.stdout:
+            marker = candidate
+            break
+    if not check("the client's SAVE timed out on its replication quorum, so the case under test was reached",
+                 marker is not None, "the peers kept acknowledging within replicationAckTimeoutMs"):
+        return
+    stored = ids_of(aggregate(host.client_port, DB, coll, [filter_step("marker", "EQUALS", marker)]))
+    check("exactly one document holds the marker, so the client did not resend the committed write",
+          len(stored) == 1, f"stored={stored}")
+
+
 STARTUP_REPLAY_SETTLE_S = 10
 
 
@@ -4241,6 +4280,7 @@ GROUPS = {
         test_a_post_prepare_write_survives_2pc_recovery,
         test_a_participant_killed_mid_commit_finishes_without_its_coordinator,
         test_a_trigger_fires_once_despite_a_replication_timeout,
+        test_the_client_does_not_resend_a_replication_timeout,
         test_a_trigger_writing_only_to_another_owner_consumes_its_run,
         test_cluster_delete_batch_forces_once,
         test_cluster_port_reset_flood_is_rate_limited,

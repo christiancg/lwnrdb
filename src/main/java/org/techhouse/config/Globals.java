@@ -124,6 +124,10 @@ public final class Globals {
     public static final double AUTO_MAX_MEMORY_HEAP_FRACTION = 0.40;
     public static final double MAX_MEMORY_HEAP_CEILING = 0.60;
     public static final double AUTO_AGGREGATE_RESULT_HEAP_FRACTION = 0.25;
+    public static final double AUTO_AGGREGATE_TOTAL_HEAP_FRACTION = 0.25;
+    public static final double AUTO_TRANSACTION_TOTAL_HEAP_FRACTION = 0.25;
+    public static final int WRITE_STALL_MIN_PROGRESS_BYTES = 64 * 1024;
+    public static final int CLIENT_MAX_REPLY_DEPTH = 512;
     public static final double TRANSIENT_LOAD_HEAP_FRACTION = 0.25;
     public static final int SAME_TIER_EVICTION_RATIO = 4;
     public static final int REFUSED_INDEX_FOLD_DIVISOR = 8;

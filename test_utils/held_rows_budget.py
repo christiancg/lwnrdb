@@ -215,3 +215,82 @@ if __name__ == "__main__":
     test_group_by_over_budget_is_refused_not_oom()
     test_skewed_rows_and_an_indexed_join_fan_in_are_refused()
     bu.summary()
+
+
+POOL_BUDGET = "14mb"
+POOL_PER_REQUEST = "16mb"
+POOL_DOCS = 15_000
+POOL_TRIES = 10
+BOUNDED_COLL = "held_bounded"
+BOUNDED_DOCS = 300
+BOUNDED_PAD = 200_000
+
+
+def concurrent_group_bys(port: int) -> list:
+    start = threading.Barrier(2)
+    answers = [None, None]
+
+    def run(slot: int):
+        with Conn(port=port) as c:
+            c.authenticate(bu.USERNAME, bu.PASSWORD)
+            start.wait(30)
+            answers[slot] = aggregate(c, [{"type": "GROUP_BY", "fieldName": "cat"}])
+
+    threads = [threading.Thread(target=run, args=(slot,), daemon=True) for slot in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(300)
+    return [answer.get("errorCode") or answer.get("status") for answer in answers if answer is not None]
+
+
+def test_concurrent_aggregations_share_one_budget():
+    section(f"Concurrent pipelines share aggregateTotalHeldBytes={POOL_BUDGET}; a bounded SORT is charged too")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-held-pool-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, HELD_PORT, aggregateMaxResultBytes=POOL_PER_REQUEST,
+                    aggregateTotalHeldBytes=POOL_BUDGET, syncWrites=False)
+    proc = None
+    try:
+        proc = bu.start_server(work_dir, log_path, xmx=HELD_XMX, port=HELD_PORT)
+        with Conn(port=HELD_PORT) as c:
+            c.authenticate(bu.USERNAME, bu.PASSWORD)
+            check_status("create the pool database", c.send({"type": "CREATE_DATABASE", "databaseName": HELD_DB}),
+                         "OK")
+            check_status("create the pool collection", send(c, {"type": "CREATE_COLLECTION"}), "OK")
+            refused = load_in_batches(c, HELD_COLL, [
+                {"_id": f"q{i:06d}", "cat": f"c{i % HELD_GROUPS}", "pad": "p" * 200} for i in range(POOL_DOCS)], BULK)
+            check(f"every BULK_SAVE of {POOL_DOCS} documents succeeds", not refused, detail=str(refused[:5]))
+            check_status("one GROUP_BY alone fits both budgets",
+                         aggregate(c, [{"type": "GROUP_BY", "fieldName": "cat"}]), "OK")
+            outcomes = []
+            for _ in range(POOL_TRIES):
+                outcomes = concurrent_group_bys(HELD_PORT)
+                if "503-20" in outcomes:
+                    break
+            check("two concurrent GROUP_BYs that each fit alone pass the shared pool and one answers 503-20",
+                  "503-20" in outcomes and "OK" in outcomes, detail=str(outcomes))
+            check_status("the refused GROUP_BY answers once it runs alone",
+                         aggregate(c, [{"type": "GROUP_BY", "fieldName": "cat"}]), "OK")
+            check_status("create the bounded-sort collection", send(c, {"type": "CREATE_COLLECTION",
+                                                                         "collectionName": BOUNDED_COLL}), "OK")
+            refused = load_in_batches(c, BOUNDED_COLL, [
+                {"_id": f"b{i:04d}", "n": i, "pad": "p" * BOUNDED_PAD} for i in range(BOUNDED_DOCS)], 20)
+            check(f"every BULK_SAVE of {BOUNDED_DOCS} large documents succeeds", not refused,
+                  detail=str(refused[:5]))
+            bounded = send(c, {"type": "AGGREGATE", "collectionName": BOUNDED_COLL, "aggregationSteps": [
+                {"type": "SORT", "fieldName": "n", "ascending": True}, {"type": "LIMIT", "limit": BOUNDED_DOCS}]})
+            check(f"[SORT, LIMIT {BOUNDED_DOCS}] over 200 KB documents is refused by a budget, not held",
+                  bounded.get("errorCode") in ("400-36", "503-20"), detail=str(bounded.get("errorCode")))
+            check_status("[SORT, LIMIT 10] over the same documents answers",
+                         send(c, {"type": "AGGREGATE", "collectionName": BOUNDED_COLL, "aggregationSteps": [
+                             {"type": "SORT", "fieldName": "n", "ascending": True},
+                             {"type": "LIMIT", "limit": 10}]}), "OK")
+            check("the server never ran out of heap", "OutOfMemoryError" not in bu.read_log(log_path))
+            c.send({"type": "DROP_DATABASE", "databaseName": HELD_DB}, timeout=120)
+    finally:
+        bu.stop_server(proc, port=HELD_PORT, wait_for_port=False)
+        if bu.failure_count():
+            bu.dump_log(log_path)
+    shutil.rmtree(work_dir, ignore_errors=True)

@@ -58,6 +58,7 @@ final class ReplyReader {
         try {
             ended = endsBeforeNextLine(line, null);
         } catch (UncheckedIOException e) {
+            skipRestOfLine();
             throw e.getCause();
         }
         if (ended) {
@@ -84,6 +85,20 @@ final class ReplyReader {
             if (end < limit) {
                 position = end + 1;
                 return false;
+            }
+            position = limit;
+        }
+    }
+
+    private void skipRestOfLine() throws IOException {
+        while (position < limit || fill()) {
+            var end = position;
+            while (end < limit && buffer[end] != '\n') {
+                end++;
+            }
+            if (end < limit) {
+                position = end + 1;
+                return;
             }
             position = limit;
         }

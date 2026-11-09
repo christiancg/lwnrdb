@@ -3,6 +3,7 @@ package org.techhouse.cluster.admin;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -48,7 +49,7 @@ public final class AdminRecordMerge {
     public static Result apply(List<AdminRecord> records, boolean live) {
         final Map<String, Long> tombstones;
         try {
-            tombstones = AdminStamp.tombstones();
+            tombstones = new HashMap<>(AdminStamp.tombstones());
         } catch (IOException unreadable) {
             logger.warning("Merging no admin records this round: the admin tombstones could not be read: "
                     + unreadable.getMessage());
@@ -66,6 +67,9 @@ public final class AdminRecordMerge {
                     continue;
                 }
                 final var applied = record.isTombstone() ? remove(record, live) : install(record, live, tombstones);
+                if (applied && record.isTombstone()) {
+                    buried(tombstones, record);
+                }
                 complete &= applied;
                 changed |= applied;
             } catch (InterruptedException interrupted) {
@@ -158,10 +162,15 @@ public final class AdminRecordMerge {
         }
         try {
             bury(record.key(), record.version());
+            buried(tombstones, record);
         } catch (IOException failure) {
             logger.warning("Could not record the superseded admin tombstone " + record.key().id()
                     + "; the next round offers it again: " + failure.getMessage());
         }
+    }
+
+    private static void buried(Map<String, Long> tombstones, AdminRecord record) {
+        tombstones.merge(record.key().id(), record.version(), Math::max);
     }
 
     private static AdminRecordKey caseVariantOf(AdminRecordKey key) {

@@ -52,6 +52,10 @@ public final class HeldRows {
         }
     }
 
+    public void holdOverhead(long bytes) {
+        context.chargeHeld(bytes);
+    }
+
     public boolean keptWhen(boolean kept, JsonBaseElement row) {
         if (kept) {
             hold(row);

@@ -21,6 +21,7 @@ public final class Dump {
     public static final long PAGE_TARGET_BYTES = 4L * 1024 * 1024;
     private static final String NO_RESULTS = "404-3";
     private static final String NO_SCHEMA = "404-12";
+    private static final String RESPONSE_BUDGET_EXHAUSTED = "503-17";
     private static final Set<String> SKIPPABLE_LISTINGS = Set.of("403-2", "403-6");
     private static final int SIZE_HINT = 256;
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -94,15 +95,7 @@ public final class Dump {
         var skip = 0;
         var limit = PAGE_SIZE;
         while (true) {
-            final var request = Requests.aggregatePage(database, collection, skip, limit);
-            final var reply = connection.send(request);
-            if (NO_RESULTS.equals(Connection.errorCodeOf(reply))) {
-                break;
-            }
-            if (!Connection.isOk(reply)) {
-                throw Connection.refused(request, reply);
-            }
-            final var documents = DumpScope.objectsOf(reply, "results");
+            final var documents = pageOf(database, collection, skip, limit);
             if (documents.isEmpty()) {
                 break;
             }
@@ -115,6 +108,41 @@ public final class Dump {
         }
         flushBatch(database, collection);
         err.println(database + "." + collection + ": " + skip + " documents");
+    }
+
+    private List<JsonObject> pageOf(String database, String collection, int skip, int firstLimit) {
+        var limit = firstLimit;
+        var reply = pageReply(database, collection, skip, limit);
+        while (reply == null || limit > 1 && RESPONSE_BUDGET_EXHAUSTED.equals(Connection.errorCodeOf(reply))) {
+            limit = Math.max(1, limit / 2);
+            reply = pageReply(database, collection, skip, limit);
+        }
+        return documentsOf(Requests.aggregatePage(database, collection, skip, limit), reply);
+    }
+
+    private JsonObject pageReply(String database, String collection, int skip, int limit) {
+        try {
+            return connection.send(Requests.aggregatePage(database, collection, skip, limit));
+        } catch (ClientException failure) {
+            if (!Connection.isReplyTooLong(failure)) {
+                throw failure;
+            }
+            if (limit == 1) {
+                throw new ClientException("the document of " + database + "." + collection + " at position " + skip
+                        + " is larger than the client's reply limit", ClientException.FAILED, failure);
+            }
+            return null;
+        }
+    }
+
+    private static List<JsonObject> documentsOf(JsonObject request, JsonObject reply) {
+        if (NO_RESULTS.equals(Connection.errorCodeOf(reply))) {
+            return List.of();
+        }
+        if (!Connection.isOk(reply)) {
+            throw Connection.refused(request, reply);
+        }
+        return DumpScope.objectsOf(reply, "results");
     }
 
     public static int nextPageSize(long pageBytes, int documents) {
@@ -143,8 +171,11 @@ public final class Dump {
     private void dumpSchema(String database, String collection) throws IOException {
         final var request = Requests.getSchema(database, collection);
         final var reply = connection.send(request);
-        if (Connection.isOk(reply)) {
-            emit(Requests.saveSchema(database, collection, reply.get("schema").asJsonObject()));
+        final var schema = reply.get("schema");
+        if (Connection.isOk(reply) && schema != null && schema.isJsonObject()) {
+            emit(Requests.saveSchema(database, collection, schema.asJsonObject()));
+        } else if (Connection.isOk(reply)) {
+            throw Connection.refused(request, reply);
         } else if (!NO_SCHEMA.equals(Connection.errorCodeOf(reply))) {
             throw Connection.refused(request, reply);
         }

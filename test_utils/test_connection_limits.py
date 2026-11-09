@@ -8,6 +8,7 @@ import time
 import weakref
 
 import base_utils as bu
+import connection_budgets
 from base_utils import Conn, check, check_code, check_status, section
 
 HOST = "127.0.0.1"
@@ -33,7 +34,7 @@ BUDGET_DOC_CHARS = 50_000
 BUDGET_NON_READERS = 3
 UNSENT_RESPONSE_BYTES = 10 * 1024 * 1024
 WRITE_STALL_TIMEOUT_S = 2.0
-STALL_LOG = "made no progress for"
+STALL_LOG = "writing its response moved less than"
 PIPELINED_FINDS = 500
 
 bu.configure(host=HOST, port=PORT)
@@ -491,7 +492,8 @@ def test_an_unauthenticated_request_is_answered_401_1_without_validation():
 def write_budget_config(work_dir: str):
     bu.write_config(work_dir, PORT, maxRequestSize="128Kb", maxEntrySize="64Kb",
                     maxUnsentResponseBytes=f"{UNSENT_RESPONSE_BYTES}",
-                    clientWriteStallTimeoutMs=int(WRITE_STALL_TIMEOUT_S * 1000))
+                    clientWriteStallTimeoutMs=int(WRITE_STALL_TIMEOUT_S * 1000),
+                    transactionTotalMaxBytes=connection_budgets.TRANSACTION_POOL)
 
 
 def budget_aggregate() -> dict:
@@ -572,6 +574,9 @@ def run_budget_phase():
         setup_budget_collection()
         test_unread_large_reads_exhaust_the_response_budget(log_path)
         test_pipelined_small_requests_answer_in_order()
+        connection_budgets.test_a_drip_reader_is_closed_and_frees_the_response_budget(
+            log_path, budget_aggregate(), WRITE_STALL_TIMEOUT_S, STALL_LOG)
+        connection_budgets.test_buffered_transactions_share_one_budget(DB, BUDGET_COLL)
     finally:
         bu.stop_server(proc, port=PORT, wait_for_port=True)
     return log_path

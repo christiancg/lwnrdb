@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Set;
 import javax.net.ssl.SSLSocket;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -25,8 +26,8 @@ public final class Connection implements Closeable {
     public static final String MESSAGE = "message";
     public static final String ERROR_CODE = "errorCode";
     public static final int HELD_REPLY_BYTES = 64 * 1024;
-    private static final Set<String> RETRYABLE = Set.of("503-2", "503-3", "503-4", "503-5", "503-9", "503-10", "503-16",
-            "503-17", "503-18", "503-19");
+    private static final Set<String> RETRYABLE = Set.of("503-2", "503-4", "503-5", "503-9", "503-10", "503-16",
+            "503-17", "503-18", "503-19", "503-20", "503-21");
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     private final Socket socket;
@@ -52,7 +53,7 @@ public final class Connection implements Closeable {
     public static Connection open(ClientOptions options) {
         final var socket = connect(options);
         try {
-            return new Connection(socket, BACKOFF_STEP);
+            return new Connection(socket, BACKOFF_STEP, READ_TIMEOUT, options.maxReplyBytes());
         } catch (IOException e) {
             closeQuietly(socket);
             throw unreachable(options, e);
@@ -178,7 +179,7 @@ public final class Connection implements Closeable {
     }
 
     private ClientException failed(IOException e) {
-        broken = true;
+        broken = !(e instanceof ReplyReader.ReplyTooLongException);
         if (e instanceof SocketTimeoutException) {
             return new ClientException("no reply from the server within " + secondsOf(readTimeout) + " s",
                     ClientException.UNREACHABLE, e);
@@ -208,10 +209,14 @@ public final class Connection implements Closeable {
         }
     }
 
+    public static boolean isReplyTooLong(ClientException failure) {
+        return failure.getCause() instanceof ReplyReader.ReplyTooLongException;
+    }
+
     public static JsonObject parseReply(String raw) {
         try {
-            return eJson.fromJson(raw, JsonObject.class);
-        } catch (RuntimeException e) {
+            return eJson.fromJson(raw, JsonObject.class, Globals.CLIENT_MAX_REPLY_DEPTH);
+        } catch (RuntimeException | StackOverflowError e) {
             final var error = new JsonObject();
             error.add(STATUS, new JsonString("ERROR"));
             error.add(MESSAGE, new JsonString(raw));

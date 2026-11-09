@@ -252,4 +252,46 @@ public class ConnectionTest {
         }
         assertTrue(Connection.READ_TIMEOUT.toMillis() > 0);
     }
+
+    @Test
+    public void aReplicationTimeoutIsReportedNotResent() throws IOException {
+        server.reply("SAVE", FakeLineServer.error("SAVE", "ERROR", "503-3"), FakeLineServer.ok("SAVE"));
+        try (var connection = server.connect()) {
+            assertEquals("503-3", Connection.errorCodeOf(connection.sendLine("{\"type\":\"SAVE\"}")));
+        }
+        assertEquals(1, server.types().stream().filter("SAVE"::equals).count());
+    }
+
+    @Test
+    public void theBudgetRefusalsAreRetried() throws IOException {
+        server.reply("AGGREGATE", FakeLineServer.error("AGGREGATE", "ERROR", "503-20"), FakeLineServer.ok("AGGREGATE"));
+        server.reply("SAVE", FakeLineServer.error("SAVE", "ERROR", "503-21"), FakeLineServer.ok("SAVE"));
+        try (var connection = server.connect()) {
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"AGGREGATE\"}")));
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"SAVE\"}")));
+        }
+        assertEquals(2, server.types().stream().filter("AGGREGATE"::equals).count());
+        assertEquals(2, server.types().stream().filter("SAVE"::equals).count());
+    }
+
+    @Test
+    public void aDeeplyNestedReplyIsAnErrorReplyNotACrash() {
+        final var reply = Connection.parseReply("[".repeat(1_000_000));
+
+        assertFalse(Connection.isOk(reply));
+        assertEquals("ERROR", Connection.stringOf(reply, Connection.STATUS));
+    }
+
+    @Test
+    public void anOverlongReplyLeavesTheConnectionUsable() throws IOException {
+        server.reply("LIST_DATABASES", FakeLineServer.ok("LIST_DATABASES", "\"blob\":\"" + "x".repeat(100_000) + "\""));
+        try (var connection = new Connection(new Socket(InetAddress.getLoopbackAddress(), server.port()), Duration.ZERO,
+                Duration.ofSeconds(10), 1024)) {
+            final var failure = assertThrows(ClientException.class, () -> connection.send(Requests.listDatabases()));
+            assertTrue(Connection.isReplyTooLong(failure));
+
+            assertTrue(Connection.isOk(connection.sendLine("{\"type\":\"LIST_COLLECTIONS\"}")),
+                    "the next exchange reads the next line, not the rest of the overlong one");
+        }
+    }
 }

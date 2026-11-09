@@ -90,7 +90,7 @@ public final class FakeSource {
                 "\"schedules\":[" + String.join(",", schedules.getOrDefault(database(request), List.of())) + "]"));
     }
 
-    private String page(JsonObject request) {
+    public String page(JsonObject request) {
         final var steps = request.get("aggregationSteps").asJsonArray();
         final var skip = steps.get(0).asJsonObject().get("skip").asJsonNumber().getValue().intValue();
         final var limit = steps.get(1).asJsonObject().get("limit").asJsonNumber().getValue().intValue();

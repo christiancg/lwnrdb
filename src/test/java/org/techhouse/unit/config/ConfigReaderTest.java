@@ -283,6 +283,7 @@ public class ConfigReaderTest {
         expectedConfig.put("maxLogFileSize", "100Mb");
         expectedConfig.put("transactionMaxOps", "100000");
         expectedConfig.put("transactionMaxBytes", "256Mb");
+        expectedConfig.put("transactionTotalMaxBytes", "auto");
         expectedConfig.put("transactionMaxAgeMs", "600000");
         expectedConfig.put("maxListensPerConnection", "64");
         expectedConfig.put("maxListens", "10000");
@@ -295,6 +296,7 @@ public class ConfigReaderTest {
         expectedConfig.put("maxVectorDimensions", "16384");
         expectedConfig.put("aggregateTimeoutMs", "300000");
         expectedConfig.put("aggregateMaxResultBytes", "auto");
+        expectedConfig.put("aggregateTotalHeldBytes", "auto");
         expectedConfig.put("indexScanFallbackPercent", "25");
         expectedConfig.put("backgroundQueueMaxEvents", "200000");
         expectedConfig.put("backgroundBacklogWaitMs", "5000");

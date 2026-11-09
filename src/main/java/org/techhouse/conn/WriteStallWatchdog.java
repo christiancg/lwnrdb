@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -49,8 +50,9 @@ public class WriteStallWatchdog {
             final var stalled = outbound.stalledForMillis(nowNanos);
             if (stalled > timeout && outbound.abortStalled()) {
                 logger.warning("Closing the connection from " + clientTracker.addressOf(clientId)
-                        + ": writing its response made no progress for " + stalled + " ms ("
-                        + ConfigKey.CLIENT_WRITE_STALL_TIMEOUT_MS.key() + "=" + timeout + ")");
+                        + ": writing its response moved less than " + Globals.WRITE_STALL_MIN_PROGRESS_BYTES / 1024
+                        + " KB in " + stalled + " ms (" + ConfigKey.CLIENT_WRITE_STALL_TIMEOUT_MS.key() + "=" + timeout
+                        + ")");
                 aborted[0]++;
             }
         });

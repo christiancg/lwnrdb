@@ -1036,7 +1036,8 @@ recursion to bound. Memory is charged per document and released after the call, 
 release a million-document scan would exhaust the budget on document count alone; a `REDUCE`'s
 final accumulator is measured against `scriptMaxResultBytes`. A `MAP` script's value is
 retained in the row, so it is charged as its JSON text to the same budgets a `CONCAT` pays: the
-row's `maxEntrySize` (`400-28`) and the pipeline's `aggregateMaxResultBytes` (`400-36`). Without
+row's `maxEntrySize` (`400-28`) and the pipeline's `aggregateMaxResultBytes` (`400-36`), and to the
+server-wide `aggregateTotalHeldBytes` every running pipeline shares (`503-20`). Without
 that charge, each distinct script source would bring its own memory budget and a pipeline with many
 of them could retain far more than the result cap. A `REDUCE` script sees each row (and an object
 accumulator) as a lazy view: its keys are copied when the call starts, but a field is converted to
