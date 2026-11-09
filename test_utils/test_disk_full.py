@@ -9,6 +9,7 @@ import base_utils as bu
 from base_utils import check, section
 from disk_full.container import DATA, DATA_BALLAST, LOGS, LOGS_BALLAST
 from disk_full.scenario import PORT, Run, connect
+from durability import oracles
 from durability.workload import BULK_SAVE, SAVE, Divergence
 
 HEADROOMS = [0, 100, 4096, 65536, 1048576]
@@ -25,6 +26,10 @@ D5_SETTINGS = {"authTimeoutMs": 300}
 PARTIAL_COPY_SUFFIXES = (".repair", ".vacuum")
 COLLECTION_FENCED = "503-18"
 FENCE_HELD_MARKER = "its collections stay locked"
+LISTEN_STEPS = [{"type": "COUNT"}]
+LISTEN_DRAIN_S = 30.0
+LISTEN_QUIET_S = 3.0
+WRITE_BACK_REFUSED = "Could not write the page-occupancy rows"
 
 
 def fill_during_workload(run: Run):
@@ -215,6 +220,86 @@ def logs_full(run: Run):
     run.check_stranded()
 
 
+def listen_while_full(run: Run):
+    section(f"D6 listen_while_full (seed {run.seed}): a LISTEN whose client does not read while the disk fills under"
+            f" the workload; once space is back its last push matches the query")
+    workload = run.prepare()
+    coll = run.schema.collections[0]
+    listener = connect()
+    registered = listener.send(listen_count(run, coll))
+    found = [] if registered.get("status") == "OK" else [
+        Divergence("D6", run.seed, f"LISTEN answered {registered.get('errorCode')}")]
+    workload.start(connect)
+    time.sleep(0.5)
+    run.container.fill_to(DATA, DATA_BALLAST, 0)
+    time.sleep(HOLD_FULL_S)
+    run.container.free(DATA_BALLAST)
+    history = workload.stop()
+    run.note(f"outcomes: {run.outcomes(history)}")
+    found += listen_converged(run, listener, coll, registered.get("results"))
+    listener.close()
+    run.report("D6 the LISTEN's last push matches the query once space is back", found)
+    run.check_stranded()
+    run.recover_and_check(history)
+
+
+def listen_count(run: Run, coll: str) -> dict:
+    return {"type": "LISTEN", "databaseName": run.schema.db, "collectionName": coll,
+            "aggregationSteps": LISTEN_STEPS}
+
+
+def counted(run: Run, coll: str):
+    with connect() as conn:
+        answer = conn.send({"type": "AGGREGATE", "databaseName": run.schema.db, "collectionName": coll,
+                            "aggregationSteps": LISTEN_STEPS})
+        bu.wait_until(lambda: oracles.background_idle(conn), timeout_s=oracles.IDLE_DEADLINE_S, interval_s=0.25)
+    return answer.get("results")
+
+
+def listen_converged(run: Run, listener, coll: str, last: list) -> list:
+    counted(run, coll)
+    pushes = 0
+    deadline = time.time() + LISTEN_DRAIN_S
+    while time.time() < deadline:
+        frame = listener.recv(timeout=LISTEN_QUIET_S)
+        if frame is None:
+            break
+        if frame.get("isUpdate") is True:
+            pushes += 1
+            last = frame.get("results")
+    expected = counted(run, coll)
+    run.note(f"{pushes} LISTEN push(es) drained; last pushed {last}, the query answers {expected}")
+    return [] if last == expected else [
+        Divergence("D6", run.seed, f"the last LISTEN push was {last} while the query answers {expected}")]
+
+
+def shutdown_while_full(run: Run):
+    section(f"D7 shutdown_while_full (seed {run.seed}): SIGTERM with the disk full, so the shutdown's page-row "
+            f"write-back cannot land")
+    workload = run.prepare()
+    workload.start(connect)
+    time.sleep(1.0)
+    run.container.fill_to(DATA, DATA_BALLAST, 0)
+    history = workload.stop()
+    run.note(f"outcomes: {run.outcomes(history)}")
+    run.offset = len(run.container.output())
+    if not run.container.stop_server():
+        run.report("D7 the server stops within its shutdown timeout on a full disk",
+                   [Divergence("O7", run.seed, "SIGTERM did not stop the server within 40 s; killed it")])
+    refused = run.since().count(WRITE_BACK_REFUSED)
+    run.note(f"{refused} page-row write-back(s) could not land while stopping")
+    if refused == 0:
+        bu.warn("D7 every page-row write-back landed before the disk filled, so the shutdown flush exercised nothing")
+    run.container.free(DATA_BALLAST)
+    run.offset = len(run.container.output())
+    if not run.container.start_server():
+        run.report("D7 the server starts once space is freed", [Divergence(
+            "O5", run.seed, f"no start after freeing: {run.since()[-1500:]}")])
+        return
+    run.check_clean_start()
+    run.recover_and_check(history)
+
+
 def d5_document(rng: random.Random, doc_id: str) -> dict:
     return {"_id": doc_id, "n": rng.randint(0, 50), "w": f"d5-{rng.random()}", "pad": "y" * rng.randint(100, 700)}
 
@@ -238,6 +323,8 @@ SCENARIOS = {
     "d3": ("full_at_background_work", full_at_background_work, {}),
     "d4": ("full_at_startup", full_at_startup, {}),
     "d5": ("logs_full", logs_full, D5_SETTINGS),
+    "d6": ("listen_while_full", listen_while_full, {}),
+    "d7": ("shutdown_while_full", shutdown_while_full, {}),
 }
 
 
@@ -253,7 +340,7 @@ def selected(names: list) -> list:
 
 def main():
     parser = argparse.ArgumentParser(description="disk-full harness: a 48 MB tmpfs filled with a ballast file")
-    parser.add_argument("--scenario", action="append", default=[], help="d1..d5 or a scenario name; repeatable")
+    parser.add_argument("--scenario", action="append", default=[], help="d1..d7 or a scenario name; repeatable")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--keep", action="store_true", help="leave the last container running")
     parser.add_argument("--report", help="write the divergences as JSON to this path")

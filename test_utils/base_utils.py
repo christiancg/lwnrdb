@@ -235,10 +235,21 @@ class Conn:
                 unparsed[UNPARSED] = True
             return unparsed
 
+    def holds_a_line(self) -> bool:
+        blocking = self.s.gettimeout()
+        self.s.setblocking(False)
+        try:
+            return b"\n" in self.f.peek(1)
+        except OSError:
+            return False
+        finally:
+            self.s.settimeout(blocking)
+
     def recv(self, timeout: float = 2.0) -> Optional[dict]:
-        ready, _, _ = select.select([self.s], [], [], timeout)
-        if not ready:
-            return None
+        if not self.holds_a_line():
+            ready, _, _ = select.select([self.s], [], [], timeout)
+            if not ready:
+                return None
         try:
             raw = self.f.readline().decode().strip()
         except OSError:
