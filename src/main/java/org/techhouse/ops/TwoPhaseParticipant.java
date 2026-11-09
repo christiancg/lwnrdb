@@ -85,6 +85,23 @@ public final class TwoPhaseParticipant {
         return true;
     }
 
+    public static boolean redriveOnLiveSession(String txId, long timeoutMillis) throws Exception {
+        final var entry = liveSessionFor(txId);
+        if (entry == null) {
+            return false;
+        }
+        final var session = entry.getValue();
+        final var future = session.submit(() -> TransactionOperationHelper.redriveFenced(session.clientId()));
+        final var finished = timeoutMillis > 0 ? future.get(timeoutMillis, TimeUnit.MILLISECONDS) : future.get();
+        if (clientTracker.getActiveTransaction(session.clientId()) == null) {
+            clientTracker.removeTxSession(entry.getKey());
+        }
+        if (!finished) {
+            throw new DurableReplayIncompleteException(txId, "its commit still cannot finish applying");
+        }
+        return true;
+    }
+
     public static boolean resolved(OperationResponse response) {
         return response.getStatus() == OperationStatus.OK
                 || ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode());

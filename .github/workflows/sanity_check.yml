@@ -299,7 +299,7 @@ jobs:
           - name: power-loss
             start_server: false
             run: |
-              python3 test_utils/test_power_loss.py --seeds regression --mode all --budget 300
+              python3 test_utils/test_power_loss.py --seeds regression --mode all --budget 720
 
           - name: disk-full
             start_server: false

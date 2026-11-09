@@ -27,6 +27,8 @@ final class WalLogState {
     volatile long pendingFrameBytes;
     WalWriteGroup group;
     volatile long lastWriteMillis;
+    int checkpointFailures;
+    volatile long checkpointRetryAtMillis;
     private volatile boolean seeded;
 
     private WalLogState(String dbName, String collName, String path) {

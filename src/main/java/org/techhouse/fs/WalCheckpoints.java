@@ -87,17 +87,18 @@ final class WalCheckpoints {
             }
             if (!status.dirty() || status.grouped() || now - status.lastWriteMillis() < idleMillis
                     || WriteAheadLog.holdsIndexWork(status.dbName(), status.collName())
+                    || CheckpointBackoff.waiting(stateOf(status.dbName(), status.collName()), now)
                     || !collectionLocks.tryLock(status.dbName(), status.collName())) {
                 continue;
             }
             try {
                 if (writeAheadLog.checkpointIfIdle(status.dbName(), status.collName(), idleMillis)) {
                     checkpointed++;
+                    succeeded(status.dbName(), status.collName());
                 }
             } catch (IOException e) {
-                logger.error("Could not checkpoint the idle write-ahead log of "
-                        + WriteAheadLog.subject(status.dbName(), status.collName())
-                        + "; it keeps its records and a later pass retries", e);
+                failed(status.dbName(), status.collName(), e, "the idle write-ahead log",
+                        "it keeps its records and a later pass retries");
             } finally {
                 collectionLocks.unlock(status.dbName(), status.collName());
             }
@@ -110,22 +111,49 @@ final class WalCheckpoints {
         for (final var request : WalCheckpointRequests.takeAll()) {
             final var dbName = request.dbName();
             final var collName = request.collName();
-            if (!paths.collectionFolder(dbName, collName).isDirectory() || !collectionLocks.tryLock(dbName, collName)) {
+            if (!paths.collectionFolder(dbName, collName).isDirectory()
+                    || CheckpointBackoff.waiting(stateOf(dbName, collName), System.currentTimeMillis())
+                    || !collectionLocks.tryLock(dbName, collName)) {
                 continue;
             }
             try {
                 if (writeAheadLog.checkpointRequested(dbName, collName)) {
                     checkpointed++;
+                    succeeded(dbName, collName);
                 }
             } catch (IOException e) {
-                logger.error("Could not checkpoint the full write-ahead log of "
-                        + WriteAheadLog.subject(dbName, collName) + " in the background; it keeps its records and"
-                        + " the next write past its size retries", e);
+                failed(dbName, collName, e, "the full write-ahead log",
+                        "it keeps its records and the next write past its size retries");
             } finally {
                 collectionLocks.unlock(dbName, collName);
             }
         }
         return checkpointed;
+    }
+
+    private WalLogState stateOf(String dbName, String collName) {
+        return WalLogState.known(paths.writeAheadLog(dbName, collName).getAbsolutePath());
+    }
+
+    private void succeeded(String dbName, String collName) {
+        final var streak = CheckpointBackoff.succeeded(stateOf(dbName, collName));
+        if (streak > 0) {
+            logger.info("Checkpointed the write-ahead log of " + WriteAheadLog.subject(dbName, collName) + " after "
+                    + streak + " failed attempt(s)");
+        }
+    }
+
+    private void failed(String dbName, String collName, IOException failure, String what, String consequence) {
+        final var state = stateOf(dbName, collName);
+        final var delay = CheckpointBackoff.failed(state, System.currentTimeMillis());
+        final var subject = WriteAheadLog.subject(dbName, collName);
+        if (state == null || state.checkpointFailures == 1) {
+            logger.error("Could not checkpoint " + what + " of " + subject + " in the background; " + consequence,
+                    failure);
+            return;
+        }
+        logger.warning("Still cannot checkpoint " + what + " of " + subject + " after " + state.checkpointFailures
+                + " attempts; next try in " + delay / 1000 + " s: " + failure.getMessage());
     }
 
     static boolean replayedAtStartup(String dbName) {

@@ -1,9 +1,11 @@
 import argparse
 import json
 import random
+import re
 import socket
 import threading
 import time
+from collections import Counter
 
 import base_utils as bu
 from base_utils import check, section
@@ -26,6 +28,8 @@ D5_SETTINGS = {"authTimeoutMs": 300}
 PARTIAL_COPY_SUFFIXES = (".repair", ".vacuum")
 COLLECTION_FENCED = "503-18"
 FENCE_HELD_MARKER = "its collections stay locked"
+CHECKPOINT_ERROR = re.compile(r"-ERROR-.*Could not checkpoint .* of (\S+) in the background")
+MAX_CHECKPOINT_ERRORS_PER_LOG = 2
 LISTEN_STEPS = [{"type": "COUNT"}]
 LISTEN_DRAIN_S = 30.0
 LISTEN_QUIET_S = 3.0
@@ -91,6 +95,12 @@ def background_failures(output: str) -> str:
     return ", ".join(f"{marker}={output.count(marker)}" for marker in BACKGROUND_MARKERS)
 
 
+def checkpoint_floods(run: Run, output: str) -> list:
+    errors = Counter(match.group(1) for match in CHECKPOINT_ERROR.finditer(output))
+    return [Divergence("D3", run.seed, f"{subject}: {count} background checkpoint errors while the disk was full")
+            for subject, count in sorted(errors.items()) if count > MAX_CHECKPOINT_ERRORS_PER_LOG]
+
+
 def full_at_background_work(run: Run):
     section(f"D3 full_at_background_work (seed {run.seed}): the disk fills while checkpoints, vacuums and index "
             f"folds are due")
@@ -109,6 +119,8 @@ def full_at_background_work(run: Run):
     history = workload.history()
     run.note(f"outcomes: {run.outcomes(history)}")
     run.note(f"background failures while full: {background_failures(run.since())}")
+    run.report("D3 a failing background checkpoint backs off instead of logging every scan",
+               checkpoint_floods(run, run.since()))
     run.check_stranded()
     run.recover_and_check(history)
 

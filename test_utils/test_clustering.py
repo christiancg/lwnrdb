@@ -2343,25 +2343,31 @@ def test_a_participant_killed_mid_commit_finishes_without_its_coordinator():
                                                          timeout_s=60.0))
 
 
-def tombstone_line_count(node, db, coll) -> int:
+def live_tombstone_lines(node, db, coll) -> list:
     path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
     if not os.path.isfile(path):
-        return 0
-    with open(path, encoding="utf-8") as fp:
-        return sum(1 for line in fp if line.strip())
-
-
-def tombstone_ids(node, db, coll):
-    path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
-    if not os.path.isfile(path):
-        return set()
-    ids = set()
+        return []
+    entries, retracted = [], set()
     with open(path, encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
-            if line and "\x1f" in line:
-                ids.add(bu.unescape_index_token(line.split("\x1f", 1)[0]))
-    return ids
+            if not line or "\x1f" not in line:
+                continue
+            escaped, version = line.split("\x1f", 1)
+            key = bu.unescape_index_token(escaped)
+            if version.startswith("-"):
+                retracted.add((key, version[1:]))
+            else:
+                entries.append((key, version))
+    return [entry for entry in entries if entry not in retracted]
+
+
+def tombstone_line_count(node, db, coll) -> int:
+    return len(live_tombstone_lines(node, db, coll))
+
+
+def tombstone_ids(node, db, coll):
+    return {key for key, _ in live_tombstone_lines(node, db, coll)}
 
 
 def test_a_fresh_tombstone_survives_anti_entropy_sweeps():

@@ -81,4 +81,20 @@ public class JournalForceFailureTest {
         assertFalse(ForceFailures.hasFailed(log.toPath()));
         assertEquals(List.of(held, next), journal.openIntents(DB, COLL));
     }
+
+    @Test
+    public void aRetractAfterAFailedForceRenewsTheInodeFirst() throws Exception {
+        final var file = paths.tombstoneFile(DB, COLL);
+        TombstoneStore.appendResident(file, List.of("a", "a"), List.of(1L, 4L), true);
+        recorder.failingFor(Globals.TOMBSTONE_FILE_NAME + ".idx");
+        assertThrows(IOException.class, () -> TombstoneStore.appendResident(file, List.of("b"), List.of(2L), true));
+        recorder.failingFor(null);
+        final var failedInode = inodeOf(file);
+
+        TombstoneStore.retract(file, "a", 4L);
+
+        assertNotEquals(failedInode, inodeOf(file), "the retract never re-forces the inode whose force failed");
+        assertFalse(TombstoneStore.read(file).containsKey("a"),
+                "the renewal keeps one line per id, as compaction does, so the retract leaves no older tombstone");
+    }
 }

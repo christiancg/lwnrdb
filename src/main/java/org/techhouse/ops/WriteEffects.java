@@ -182,7 +182,7 @@ public final class WriteEffects {
                 takeBack.run();
             } catch (Exception e) {
                 logger.error("Could not retract a delete tombstone of a taken-back write group on " + subject
-                        + "; anti-entropy settles it", e);
+                        + "; it is held back from reads and digests and retried", e);
             }
         }
     }
