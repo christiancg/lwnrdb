@@ -32,7 +32,31 @@ final class WriteIntentRecovery {
         }
     }
 
-    private void recoverIntent(WriteIntentJournal.Intent intent) throws IOException {
+    boolean recoverBehindAVacuum(String dbName, String collName) throws IOException {
+        if (!pkIndexStore.clearBehindAVacuum(dbName, collName)) {
+            return false;
+        }
+        var recovered = true;
+        try {
+            for (final var intent : journal.openIntents(dbName, collName)) {
+                recovered &= recoverIntent(intent);
+            }
+        } catch (IOException | RuntimeException e) {
+            stayBehind(dbName, collName);
+            throw e;
+        }
+        if (!recovered) {
+            stayBehind(dbName, collName);
+        }
+        return true;
+    }
+
+    private void stayBehind(String dbName, String collName) {
+        pkIndexStore.markBehindAVacuum(dbName, collName);
+        DeferredApplies.flag(dbName, collName);
+    }
+
+    private boolean recoverIntent(WriteIntentJournal.Intent intent) throws IOException {
         final var label = intent.dbName() + Globals.COLL_IDENTIFIER_SEPARATOR + intent.collName();
         final var rows = pkIndexStore.readRecognisedPkIndex(intent.dbName(), intent.collName());
         if (rows.isEmpty()) {
@@ -40,7 +64,7 @@ final class WriteIntentRecovery {
                     + " of its pk index could be read. Run REINDEX with \"primaryKey\": true on the collection, which"
                     + " recovers this intent and rebuilds the pk index, or repair or restore the pk index; the intent"
                     + " is recovered at the next startup");
-            return;
+            return false;
         }
         final var byId = byId(rows.get());
         final var corrections = new ArrayList<PkIndexEntry>();
@@ -53,7 +77,7 @@ final class WriteIntentRecovery {
                         logger.error("Leaving the interrupted vacuum " + intent.label() + " of " + label
                                 + " unrecovered: a page it rewrote holds one _id twice. Repair the page, then restart"
                                 + " or run REINDEX with \"primaryKey\": true");
-                        return;
+                        return false;
                     }
                     corrections.addAll(rederived);
                 }
@@ -63,6 +87,7 @@ final class WriteIntentRecovery {
         journal.end(intent);
         logger.warning("Recovered the interrupted vacuum " + intent.label() + " of " + label + ": the pk index now"
                 + " names where its records are");
+        return true;
     }
 
     int recoverPagesOf(String dbName, String collName) throws IOException {

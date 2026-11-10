@@ -39,7 +39,8 @@ public final class AdminOperationHelper {
 
     private AdminOperationHelper() {
     }
-    private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -395,6 +396,25 @@ public final class AdminOperationHelper {
 
     public static void deleteTransactionOps(List<String> opIds) throws IOException, InterruptedException {
         writeTransactionRecords(List.of(), opIds);
+    }
+
+    public static void applyDeferredTransactionRecords(long timeoutMillis) {
+        final var collName = Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME;
+        try {
+            if (!locks.tryLockWrite(Globals.ADMIN_DB_NAME, collName, timeoutMillis)) {
+                return;
+            }
+            try {
+                fs.applyDeferredWrites(Globals.ADMIN_DB_NAME, collName);
+            } finally {
+                releaseAdmin(collName);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            logger.warning("Could not apply the logged transaction records an earlier write could not; retrying"
+                    + " later: " + e.getMessage());
+        }
     }
 
     public static void writeTransactionRecords(List<AdminTransactionEntry> inserts, List<String> deleteIds)

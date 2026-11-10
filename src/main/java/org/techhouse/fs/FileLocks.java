@@ -26,6 +26,7 @@ import org.techhouse.log.Logger;
 // The finer tier below ResourceLocking's collection locks, and what makes dirty reads safe: a
 // dirty read skips the collection lock but still serializes against each file's physical write.
 final class FileLocks {
+    static final long ABSENT = -1L;
     private static final Logger logger = Logger.logFor(FileLocks.class);
 
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
@@ -283,6 +284,9 @@ final class FileLocks {
             content.writeTo(out);
             out.flush();
             SyncedWrites.content(file.getChannel(), tmp);
+        } catch (IOException | RuntimeException e) {
+            discardTemporary(tmp, e);
+            throw e;
         }
         moveIntoPlace(tmp, path);
     }
@@ -293,8 +297,19 @@ final class FileLocks {
         try (var out = new FileOutputStream(tmp.toFile())) {
             out.write(content);
             SyncedWrites.content(out.getChannel(), tmp);
+        } catch (IOException | RuntimeException e) {
+            discardTemporary(tmp, e);
+            throw e;
         }
         moveIntoPlace(tmp, path);
+    }
+
+    private static void discardTemporary(Path tmp, Exception cause) {
+        try {
+            Files.deleteIfExists(tmp);
+        } catch (IOException e) {
+            cause.addSuppressed(e);
+        }
     }
 
     static void moveIntoPlace(Path tmp, Path path) throws IOException {
@@ -310,6 +325,8 @@ final class FileLocks {
             // ATOMIC_MOVE is not supported across filesystems or on every platform.
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
+        ForceFailures.cleared(tmp);
+        ForceFailures.cleared(path);
     }
 
     static String separatorBeforeAppend(File file) throws IOException {
@@ -365,6 +382,27 @@ final class FileLocks {
                 end = start;
             }
             return 0;
+        }
+    }
+
+    static boolean cutBackTo(File file, long length, String failureMessage) {
+        if (length == ABSENT) {
+            return removeCreated(file, failureMessage);
+        }
+        return !file.exists() || file.length() == length || truncateTo(file, length, failureMessage);
+    }
+
+    private static boolean removeCreated(File file, String failureMessage) {
+        PageLengths.forget(file);
+        try {
+            if (Files.deleteIfExists(file.toPath())) {
+                SyncedWrites.entriesOfLanded(file.getAbsoluteFile().getParentFile().toPath(),
+                        "Removing " + file.getName());
+            }
+            return true;
+        } catch (IOException e) {
+            logger.error(failureMessage, e);
+            return false;
         }
     }
 

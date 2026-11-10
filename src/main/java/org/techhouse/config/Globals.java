@@ -117,6 +117,8 @@ public final class Globals {
     public static final int WAL_CHECKPOINT_PARALLELISM = 32;
     public static final int WAL_IDLE_CHECKPOINT_MAX_LOGS = 16;
     public static final long WAL_IDLE_CHECKPOINT_SCAN_MS = 1000L;
+    public static final long WAL_CHECKPOINT_RETRY_BASE_MS = 1000L;
+    public static final long WAL_CHECKPOINT_RETRY_MAX_MS = 60_000L;
     public static final int LOG_RATE_LIMIT_PER_SECOND = 20;
     public static final int INLINE_FRAME_MAX_BYTES = 16 * 1024;
     public static final long RESPONSE_BUDGET_FLOOR_BYTES = 64L * 1024;
@@ -124,6 +126,10 @@ public final class Globals {
     public static final double AUTO_MAX_MEMORY_HEAP_FRACTION = 0.40;
     public static final double MAX_MEMORY_HEAP_CEILING = 0.60;
     public static final double AUTO_AGGREGATE_RESULT_HEAP_FRACTION = 0.25;
+    public static final double AUTO_AGGREGATE_TOTAL_HEAP_FRACTION = 0.25;
+    public static final double AUTO_TRANSACTION_TOTAL_HEAP_FRACTION = 0.25;
+    public static final int WRITE_STALL_MIN_PROGRESS_BYTES = 64 * 1024;
+    public static final int CLIENT_MAX_REPLY_DEPTH = 512;
     public static final double TRANSIENT_LOAD_HEAP_FRACTION = 0.25;
     public static final int SAME_TIER_EVICTION_RATIO = 4;
     public static final int REFUSED_INDEX_FOLD_DIVISOR = 8;
@@ -133,6 +139,10 @@ public final class Globals {
     public static final List<Integer> LAZY_CANDIDATE_CHUNKS = List.of(256, 1024, 4096, 16384);
     public static final int REPAIR_PASS_CHUNK = 4096;
     public static final long WAL_BACKGROUND_CHECKPOINT_LOCK_WAIT_MS = 1000L;
+    public static final long DEFERRED_APPLY_LOCK_WAIT_MS = 1000L;
+    public static final long FENCE_REDRIVE_INITIAL_MS = 100L;
+    public static final long FENCE_REDRIVE_MAX_MS = 5000L;
+    public static final long FENCE_RECHECK_MS = 200L;
     public static final long REFUSAL_MIN_SPACING_MS = 1000L;
     public static final long TRANSIENT_SORT_WALK_MAX_INDEX_BYTES = 1024L * 1024L;
 }

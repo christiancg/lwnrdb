@@ -28,6 +28,8 @@ public final class PendingForce {
             SyncedWrites.content(file);
         } catch (IOException e) {
             failure.set(e);
+        } catch (RuntimeException | Error e) {
+            failure.set(new IOException("The deferred force of " + file + " failed", e));
         }
     }
 

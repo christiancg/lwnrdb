@@ -12,6 +12,9 @@ from base_utils import Conn, check, check_code, check_status, section
 HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 PORT = int(os.environ.get("INDEX_TEST_PORT", "8989"))
 DEADLINE_PORT = int(os.environ.get("INDEX_DEADLINE_TEST_PORT", "9449"))
+LARGE_ENTRY_PORT = int(os.environ.get("INDEX_LARGE_ENTRY_TEST_PORT", "9459"))
+LARGE_ENTRY_CROWD = int(os.environ.get("INDEX_TEST_LARGE_ENTRY_CROWD", "90000"))
+LARGE_ENTRY_MATCHING = int(os.environ.get("INDEX_TEST_LARGE_ENTRY_MATCHING", "10000"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = bu.PASSWORD
@@ -54,6 +57,8 @@ COLLIDING_STRINGS = "idxagg_colliding_strings"
 COLLIDING_OBJECTS = "idxagg_colliding_objects"
 COLLIDING_BLOCKS = int(os.environ.get("INDEX_TEST_COLLIDING_BLOCKS", "15"))
 COLLIDING_BUDGET_S = float(os.environ.get("INDEX_TEST_COLLIDING_BUDGET_S", "3"))
+SELF_PAIRS = "idxagg_self_pairs"
+SELF_PAIR_DOCS = int(os.environ.get("INDEX_TEST_SELF_PAIR_DOCS", "20000"))
 GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
@@ -2538,6 +2543,25 @@ def test_colliding_values_group_exactly_and_fast(c: Conn):
     check_colliding_groups(c, COLLIDING_OBJECTS, [{key: 1} for key in keys], "objects")
 
 
+def test_self_pair_documents_dedupe_fast(c: Conn):
+    section(f"DISTINCT and GROUP_BY over {SELF_PAIR_DOCS} self-pair and swapped-pair documents stay fast")
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SELF_PAIRS})
+    half = SELF_PAIR_DOCS // 2
+    bulk_load(c, SELF_PAIRS, ({"_id": f"s{i:05d}", f"k{i}": f"k{i}", "v": {f"k{i}": f"k{i}"}} for i in range(half)))
+    bulk_load(c, SELF_PAIRS, ({"_id": f"w{i:05d}", f"a{i}": f"b{i}", "v": {f"b{i}": f"a{i}"}} for i in range(half)))
+    for label, steps in (("DISTINCT without a field", [{"type": "DISTINCT"}]),
+                         ("DISTINCT on an object field", [{"type": "DISTINCT", "fieldName": "v"}]),
+                         ("GROUP_BY on an object field", [{"type": "GROUP_BY", "fieldName": "v"}])):
+        started = time.perf_counter()
+        answer = agg(c, SELF_PAIRS, steps + [{"type": "COUNT"}])
+        elapsed = time.perf_counter() - started
+        check_status(f"{label} over self pairs (OK)", answer, "OK")
+        check(f"{label}: every document is its own row", bu.count_of(answer) == SELF_PAIR_DOCS,
+              detail=f"count={bu.count_of(answer)}")
+        check(f"{label} answered in {elapsed:.2f}s, under {COLLIDING_BUDGET_S:.0f}s", elapsed < COLLIDING_BUDGET_S)
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": SELF_PAIRS})
+
+
 def test_materialising_steps_obey_the_deadline():
     section("Index-built GROUP_BY and a NOR over 50k documents stop at aggregateTimeoutMs")
     bu.require_jar()
@@ -2561,6 +2585,48 @@ def test_materialising_steps_obey_the_deadline():
             c.send({"type": "DROP_DATABASE", "databaseName": DB})
     finally:
         bu.stop_server(proc, port=DEADLINE_PORT)
+
+
+def test_a_large_entry_range_top_k_is_sorted_once():
+    total = LARGE_ENTRY_CROWD + LARGE_ENTRY_MATCHING
+    section(f"FILTER range + indexed leg, SORT, LIMIT 20 through one {total}-id index entry completes quickly")
+    bu.require_jar()
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-idxagg-large-entry-")
+    log_path = os.path.join(work_dir, "server.log")
+    coll = "idxagg_large_entry"
+    bu.write_config(work_dir, LARGE_ENTRY_PORT, syncWrites=False)
+    proc = bu.start_server(work_dir, log_path, port=LARGE_ENTRY_PORT)
+    try:
+        with Conn(port=LARGE_ENTRY_PORT) as c:
+            check_status("authenticate", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+            c.send({"type": "CREATE_DATABASE", "databaseName": DB})
+            c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+            bulk_load(c, coll, ({"_id": f"a{i:07d}", "ts": 1, "cat": "crowd"} for i in range(LARGE_ENTRY_CROWD)))
+            bulk_load(c, coll, ({"_id": f"z{i:07d}", "ts": 1, "cat": "x"} for i in range(LARGE_ENTRY_MATCHING)))
+            build_index(c, coll, "ts", "cat")
+            bu.wait_until(lambda: documents_scanned(c, coll, large_entry_top_k()) == 20, timeout_s=30)
+            steps = large_entry_top_k()
+            expected = [f"z{i:07d}" for i in range(20)]
+            check("the top-K answers the first 20 matching ids", agg_ids(c, coll, steps) == expected)
+            check("the [SKIP 0] spelling answers the same rows", agg_ids(c, coll, forced_scan(steps)) == expected)
+            read = documents_scanned(c, coll, steps)
+            check(f"the walk fetches only the 20 rows it returns (read {read})", read == 20)
+            scan_time, index_time, _ = timed_scan_and_index(c, coll, steps, forced_scan(steps))
+            check("the walk sorts the large entry once, so it stays within 10x the forced scan plus 20 ms",
+                  index_time < 10 * scan_time + 0.02,
+                  detail=f"scan_best={scan_time * 1000:.2f}ms  indexed_best={index_time * 1000:.2f}ms")
+            c.send({"type": "DROP_DATABASE", "databaseName": DB})
+    finally:
+        bu.stop_server(proc, port=LARGE_ENTRY_PORT)
+        if bu.failure_count():
+            bu.dump_log(log_path)
+
+
+def large_entry_top_k() -> list:
+    return [{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+        {"fieldOperatorType": "GREATER_THAN_EQUALS", "field": "ts", "value": 0},
+        {"fieldOperatorType": "EQUALS", "field": "cat", "value": "x"}]}},
+            {"type": "SORT", "fieldName": "ts", "ascending": True}, {"type": "LIMIT", "limit": 20}]
 
 
 MANY_LEFT = "idxagg_many_left"
@@ -2966,6 +3032,7 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         test_colliding_values_group_exactly_and_fast(c)
+        test_self_pair_documents_dedupe_fast(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
@@ -2992,6 +3059,8 @@ def main():
         teardown_fixtures(c)
 
     test_materialising_steps_obey_the_deadline()
+
+    test_a_large_entry_range_top_k_is_sorted_once()
 
     bu.summary()
 

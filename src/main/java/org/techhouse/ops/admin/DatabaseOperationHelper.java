@@ -37,7 +37,8 @@ public final class DatabaseOperationHelper {
     private static final Logger logger = Logger.logFor(DatabaseOperationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
-    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
@@ -197,9 +198,9 @@ public final class DatabaseOperationHelper {
             return dropFailed(exception);
         } finally {
             if (barrierHeld) {
+                locks.removeLock(dbName, Globals.COLLECTION_NAMES_LOCK);
                 locks.releaseDatabaseExclusive(dbName);
                 locks.removeDatabaseLock(dbName);
-                locks.removeLock(dbName, Globals.COLLECTION_NAMES_LOCK);
             }
         }
     }

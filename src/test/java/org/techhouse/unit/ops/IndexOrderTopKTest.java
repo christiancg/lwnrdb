@@ -112,6 +112,21 @@ public class IndexOrderTopKTest {
     }
 
     @Test
+    public void test_a_range_with_an_unindexed_leg_has_a_finite_budget() {
+        final var filter = new FilterAggregationStep(new ConjunctionOperator(ConjunctionOperatorType.AND,
+                List.of(TopKFixture.tsCompared(FieldOperatorType.GREATER_THAN_EQUALS, 0),
+                        new FieldOperator(FieldOperatorType.EQUALS, "region", new JsonString("r99")))));
+        final var steps = topK(filter, true, 0);
+
+        final var answer = fixture.run(steps);
+
+        assertEquals(List.of(), answer.ids());
+        assertEquals(fixture.scanned(steps), answer.ids());
+        assertTrue(answer.scanned() > TopKFixture.DOCUMENTS, "the walk gave up and the collection was scanned");
+        assertTrue(answer.scanned() <= TopKFixture.DOCUMENTS + BUDGET, "read " + answer.scanned());
+    }
+
+    @Test
     public void test_pending_writes_on_the_sort_field_keep_the_scan_path() {
         fixture.save(TopKFixture.document("late", 2, -1));
         fixture.save(TopKFixture.document("d0002", 2, -2));

@@ -7,7 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.techhouse.test.TestUtils;
 
 public class ApplyTrackerTest {
     private static final List<String> KEYS = List.of("db|coll");
@@ -131,5 +133,17 @@ public class ApplyTrackerTest {
         assertNotNull(after);
         assertEquals(0L, after.epochs().get("db|a"));
         assertTrue(after.epochs().get("dbx|a") > 0L);
+    }
+
+    @Test
+    public void aDropDuringAnActiveApplyLeavesNoStateOnceItEnds() throws Exception {
+        tracker.begin(KEYS);
+
+        tracker.forget("db|coll");
+        tracker.end(KEYS);
+
+        final Map<?, ?> states = TestUtils.getPrivateField(tracker, "states", Map.class);
+        assertFalse(states.containsKey("db|coll"), "a key dropped while applying must not outlive its apply");
+        assertFalse(tracker.anyActive(KEYS));
     }
 }

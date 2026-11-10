@@ -27,6 +27,8 @@ public final class HeapShares {
         return switch (key) {
             case MAX_MEMORY -> Globals.AUTO_MAX_MEMORY_HEAP_FRACTION;
             case AGGREGATE_MAX_RESULT_BYTES -> Globals.AUTO_AGGREGATE_RESULT_HEAP_FRACTION;
+            case AGGREGATE_TOTAL_HELD_BYTES -> Globals.AUTO_AGGREGATE_TOTAL_HEAP_FRACTION;
+            case TRANSACTION_TOTAL_MAX_BYTES -> Globals.AUTO_TRANSACTION_TOTAL_HEAP_FRACTION;
             default -> throw new IllegalArgumentException(key.key() + " has no auto value");
         };
     }

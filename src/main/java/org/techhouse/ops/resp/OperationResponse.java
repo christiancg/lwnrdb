@@ -1,5 +1,6 @@
 package org.techhouse.ops.resp;
 
+import org.techhouse.ex.LoggedWriteNotAppliedException;
 import org.techhouse.ops.AggregateLimitException;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
@@ -53,8 +54,11 @@ public class OperationResponse {
             ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
             return new OperationResponse(type, errorCode);
         } catch (Exception e) {
-            ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
-            return new OperationResponse(type, errorCode);
+            final var answered = LoggedWriteNotAppliedException.isCauseOf(e)
+                    ? ErrorCode.WRITE_LOGGED_NOT_APPLIED
+                    : errorCode;
+            ResponseLog.LOGGER.error(type + " failed with " + answered.getCode(), e);
+            return new OperationResponse(type, answered);
         }
     }
 

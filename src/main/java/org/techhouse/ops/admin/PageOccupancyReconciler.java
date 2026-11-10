@@ -20,7 +20,8 @@ import org.techhouse.log.Logger;
 
 public final class PageOccupancyReconciler {
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static FileSystem fs = IocContainer.get(FileSystem.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     @SuppressWarnings("FieldMayBeFinal")
     private static BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
@@ -139,7 +140,10 @@ public final class PageOccupancyReconciler {
     }
 
     public static boolean reconcileAdminRows(String collName) throws Exception {
-        final var dbName = Globals.ADMIN_DB_NAME;
+        return reconcileRows(Globals.ADMIN_DB_NAME, collName);
+    }
+
+    public static boolean reconcileRows(String dbName, String collName) throws Exception {
         final var pages = fs.pageFileLengths(dbName, collName).keySet();
         final var occupancy = occupancyByPage(fs.readWholePkIndexFile(dbName, collName));
         final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
@@ -250,6 +254,9 @@ public final class PageOccupancyReconciler {
             Map<Long, long[]> occupancy) {
         for (final var page : pages) {
             final var row = rows.get(page);
+            if (row == null && !rows.isEmpty()) {
+                return false;
+            }
             final var recordedSize = row == null ? 0L : row.getPageSize();
             if (recordedSize != occupancy.getOrDefault(page, NOTHING_LIVE)[LIVE_BYTES]) {
                 return false;

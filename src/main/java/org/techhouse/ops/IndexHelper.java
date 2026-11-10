@@ -17,6 +17,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ex.CollectionBusyException;
+import org.techhouse.ex.IndexLockBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.CanonicalIds;
@@ -113,6 +114,7 @@ public class IndexHelper {
             return;
         }
         final var folds = new ArrayList<DeferredFold>(0);
+        IndexLockBusyException indexBusy = null;
         lockCollectionForMaintenance(dbName, collName, lockBudgetMs);
         try {
             final var existingIndexes = MaintainedIndexes.of(dbName, collName);
@@ -129,10 +131,15 @@ public class IndexHelper {
                 folds.addAll(FieldMaintenance.maintain(dbName, collName, fieldName, ids, byId,
                         priors.forField(fieldName), canonicalIds));
             }
+        } catch (IndexLockBusyException busy) {
+            indexBusy = busy;
         } finally {
             rl.releaseRead(dbName, collName);
         }
         FieldIndexFolds.runAfterUnlock(folds);
+        if (indexBusy != null) {
+            throw indexBusy;
+        }
     }
 
     public static void updateIndexes(String dbName, String collName, String id)

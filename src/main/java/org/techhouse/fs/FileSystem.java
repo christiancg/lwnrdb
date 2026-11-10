@@ -72,33 +72,24 @@ public class FileSystem {
         SyncedWrites.verifyFolderSync(new File(paths.dbPath()).toPath());
     }
 
+    public void installDurableShadow(Path shadowRoot) throws IOException {
+        SyncedWrites.useForcer(DurableShadow.install(Path.of(paths.dbPath()), shadowRoot));
+    }
+
     public void createAdminDatabase() throws IOException {
         createDatabaseFolder(Globals.ADMIN_DB_NAME);
         createAdminPagesFolder();
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        final var pagesDatabases = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        final var pagesCollections = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        final var pagesUsers = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_USERS_COLLECTION_NAME);
-        final var pagesCollectionUsage = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTION_USAGE_NAME);
-        final var pagesTransactions = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        final var pagesTriggerRuns = AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME,
+        final var adminCollections = List.of(Globals.ADMIN_DATABASES_COLLECTION_NAME,
+                Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
+                Globals.ADMIN_COLLECTION_USAGE_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
                 Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesDatabases);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollections);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesUsers);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollectionUsage);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTransactions);
-        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTriggerRuns);
+        for (final var collName : adminCollections) {
+            createCollectionFile(Globals.ADMIN_DB_NAME, collName);
+        }
+        for (final var collName : adminCollections) {
+            createCollectionFile(Globals.ADMIN_PAGES_DB_NAME,
+                    AdminPageEntry.pagesCollectionName(Globals.ADMIN_DB_NAME, collName));
+        }
     }
 
     private void createAdminPagesFolder() {
@@ -458,8 +449,25 @@ public class FileSystem {
         return tombstones.forcedBeside(deleteTombstones, writeAheadLog.forceGroup(dbName, collName), dbName, collName);
     }
 
+    public boolean forceGroupTombstones(String dbName, String collName) {
+        return tombstones.forcedBeside(tombstones.startGroupForce(dbName, collName), true, dbName, collName);
+    }
+
     public boolean settleWriteGroup(String dbName, String collName) throws IOException {
-        return writeAheadLog.closeGroup(dbName, collName);
+        try {
+            return writeAheadLog.closeGroup(dbName, collName);
+        } finally {
+            DeferredApplies.flagIfUnapplied(paths, dbName, collName);
+        }
+    }
+
+    public boolean applyDeferredWrites(String dbName, String collName) throws IOException {
+        final var replayed = writeAheadLog.requireApplied(dbName, collName);
+        return writeIntentRecovery.recoverBehindAVacuum(dbName, collName) || replayed;
+    }
+
+    public void onDeferredApply(DeferredApplyListener listener) {
+        DeferredApplies.listenWith(listener);
     }
 
     public PkRebuild planPkRebuild(String dbName, String collName) throws IOException {
@@ -467,22 +475,13 @@ public class FileSystem {
         if (pkIndexStore.readRecognisedPkIndex(dbName, collName).isEmpty()) {
             writeIntentRecovery.recoverPagesOf(dbName, collName);
         } else {
-            refuseStaleWriteIntents(dbName, collName);
+            PkIndexRebuild.refuseStaleWriteIntents(writeIntentRecovery, dbName, collName);
         }
         return PkIndexRebuild.plan(paths, pkIndexStore, dbName, collName, pageFileLengths(dbName, collName).keySet());
     }
 
     public void applyPkRebuild(String dbName, String collName, PkRebuild rebuild) throws IOException {
         PkIndexRebuild.apply(pkIndexStore, dbName, collName, rebuild);
-    }
-
-    private void refuseStaleWriteIntents(String dbName, String collName) throws IOException {
-        final var stale = writeIntentRecovery.replayableIntentsOf(dbName, collName);
-        if (!stale.isEmpty()) {
-            throw PkIndexRebuild.refused(dbName, collName, "write intent(s) " + stale + " were left by writes this"
-                    + " process could not clean up after, and a rebuild would freeze whatever half of each write the"
-                    + " pages hold. Restart the server, which recovers them");
-        }
     }
 
     public List<DbEntry> adoptOrphanedRecords(PkRowsSession session) throws IOException {

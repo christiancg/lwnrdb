@@ -13,6 +13,7 @@ import org.techhouse.client.ClientException;
 import org.techhouse.client.ClientMode;
 import org.techhouse.client.ClientOptions;
 import org.techhouse.client.ClientOptions.CollectionRef;
+import org.techhouse.client.Connection;
 import org.techhouse.config.ConfigKey;
 
 public class ClientOptionsTest {
@@ -152,5 +153,19 @@ public class ClientOptionsTest {
         assertUsageError("--restore", "--databases", "shop");
         assertUsageError("--shell", "--collections", "shop.orders");
         assertUsageError("--exec", "{}", "--compress");
+    }
+
+    @Test
+    public void theReplyCapDefaultsToTheConnectionsAndCanBeLowered() {
+        assertEquals(Connection.MAX_REPLY_BYTES, parse("--dump").maxReplyBytes());
+        assertEquals(2048, parse("--dump", "--max-reply-bytes", "2048").maxReplyBytes());
+    }
+
+    @Test
+    public void aReplyCapMustBeAPositiveNumberOfBytes() {
+        for (final var value : new String[]{"0", "-1", "64mb", "99999999999"}) {
+            final var error = assertThrows(ClientException.class, () -> parse("--dump", "--max-reply-bytes", value));
+            assertEquals(ClientException.USAGE, error.exitCode(), value);
+        }
     }
 }

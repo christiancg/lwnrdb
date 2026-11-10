@@ -7,6 +7,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -107,7 +108,7 @@ final class GroupByOperatorHelper {
         try (var documents = context.source(resultStream, dbName, collName)) {
             documents.filter(path::isIn).forEach(document -> {
                 held.hold(document);
-                grouped.computeIfAbsent(new SaltedKey(path.valueIn(document)), _ -> new ArrayList<>()).add(document);
+                groupOf(grouped, new SaltedKey(path.valueIn(document)), held).add(document);
             });
         }
         return grouped.entrySet().stream().map(jsonElementListEntry -> {
@@ -116,6 +117,17 @@ final class GroupByOperatorHelper {
             groupedEntry.add(GROUP_FIELD_NAME, groupArray(jsonElementListEntry.getValue(), demand, context));
             return groupedEntry;
         });
+    }
+
+    private static List<JsonObject> groupOf(Map<SaltedKey, List<JsonObject>> grouped, SaltedKey key, HeldRows held) {
+        final var group = grouped.get(key);
+        if (group != null) {
+            return group;
+        }
+        held.holdOverhead(GroupOverhead.BYTES);
+        final var created = new ArrayList<JsonObject>();
+        grouped.put(key, created);
+        return created;
     }
 
     private static Stream<JsonObject> indexedGroupKeys(List<Object> values, FieldPath path) {

@@ -58,6 +58,9 @@ final class WriteIntentJournal {
         final var lock = FileLocks.lockWrite(log);
         try {
             final var state = stateOf(log);
+            if (log.exists() && ForceFailures.hasFailed(log.toPath())) {
+                compact(log, state);
+            }
             intent = new Intent(log, state.nextSeq, dbName, collName, List.copyOf(items));
             append(log, state, IntentLogCodec.encode(intent));
             state.nextSeq++;

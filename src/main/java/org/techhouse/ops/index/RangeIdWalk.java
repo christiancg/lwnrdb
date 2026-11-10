@@ -13,6 +13,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IdSet;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.RangeBounds;
 import org.techhouse.utils.SearchUtils;
@@ -31,8 +32,12 @@ public final class RangeIdWalk implements Iterator<String> {
     private int at;
     private boolean lastPage;
     private boolean started;
+    private boolean opened;
     private double lastValue;
     private String lastId;
+    private FieldIndexEntry<Number> heldEntry;
+    private int heldModifications;
+    private List<String> heldIds;
 
     private RangeIdWalk(String dbName, String collName, RangeBounds bounds, boolean ascending, int firstPage) {
         this.dbName = dbName;
@@ -101,6 +106,10 @@ public final class RangeIdWalk implements Iterator<String> {
             page = new ArrayList<>();
             at = 0;
             if (entries == null) {
+                if (opened) {
+                    throw new IOException("The index on " + fieldName + " of " + dbName + "|" + collName
+                            + " could not be read in the middle of a walk");
+                }
                 lastPage = true;
                 return false;
             }
@@ -110,6 +119,7 @@ public final class RangeIdWalk implements Iterator<String> {
             } else {
                 collect(entries, slice[0], slice[1]);
             }
+            opened = true;
             return true;
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
@@ -122,7 +132,7 @@ public final class RangeIdWalk implements Iterator<String> {
         while (index >= from && index < to && page.size() < pageSize) {
             final var entry = entries.get(index);
             final var value = entry.getValue().doubleValue();
-            final var ids = IndexEntryReader.sortedIds(entry);
+            final var ids = sortedIdsOf(entry);
             var next = 0;
             if (started && FieldIndexEntry.compareIndexedNumbers(value, lastValue) == 0) {
                 final var found = Collections.binarySearch(ids, lastId);
@@ -135,11 +145,32 @@ public final class RangeIdWalk implements Iterator<String> {
                 page.add(lastId);
             }
             if (next < ids.size()) {
+                hold(entry, ids);
                 return;
             }
             index += step;
         }
+        heldEntry = null;
+        heldIds = null;
         lastPage = index < from || index >= to;
+    }
+
+    private List<String> sortedIdsOf(FieldIndexEntry<Number> entry) {
+        if (entry == heldEntry && entry.getIds() instanceof IdSet idSet && idSet.modifications() == heldModifications) {
+            return heldIds;
+        }
+        return IndexEntryReader.sortedIds(entry);
+    }
+
+    private void hold(FieldIndexEntry<Number> entry, List<String> ids) {
+        if (entry.getIds() instanceof IdSet idSet) {
+            heldEntry = entry;
+            heldModifications = idSet.modifications();
+            heldIds = ids;
+        } else {
+            heldEntry = null;
+            heldIds = null;
+        }
     }
 
     private int resumeIndex(List<FieldIndexEntry<Number>> entries, int from, int to) {

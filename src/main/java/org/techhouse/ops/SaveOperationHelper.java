@@ -382,7 +382,7 @@ public final class SaveOperationHelper {
 
     private static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
             PkIndexEntry idxEntry, WriterPkRows pkRows, byte[] encodedLine, boolean followOn) throws Exception {
-        final var oldEntry = cache.getById(dbName, collName, idxEntry);
+        final var oldEntry = detachedCopy(cache.getById(dbName, collName, idxEntry));
         final var priorFields = PriorIndexedValues.fieldsOf(dbName, collName);
         oldEntry.setPage(idxEntry.getPage());
         oldEntry.setVersion(idxEntry.getVersion());
@@ -402,7 +402,7 @@ public final class SaveOperationHelper {
         cache.updatePageSizeInMemory(dbName, collName, idxEntry.getPage(), -idxEntry.getLength(), -1);
         cache.evictEntry(dbName, collName, entry.get_id());
         submit(new EntityEvent(EventType.DELETED, dbName, collName,
-                EntityRef.of(detachedCopy(oldEntry), PriorIndexedValues.of(priorFields, oldEntry)),
+                EntityRef.of(oldEntry, PriorIndexedValues.of(priorFields, oldEntry)),
                 CollectionIncarnation.current(dbName, collName), deleteGeneration), followOn);
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
                 relocatedPkIndexEntry.getLength());

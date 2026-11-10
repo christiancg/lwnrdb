@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -69,6 +70,17 @@ public class WalPlanTest {
     }
 
     @Test
+    public void test_an_aborted_write_removes_the_page_file_it_created() throws Exception {
+        final var created = rf.fx.page(1);
+        makeReadOnly(rf.fx.paths.pkIndexFile(DB, COLL));
+
+        assertThrows(IOException.class, () -> rf.replace("b", "new-b", 1, PagePlacement.APPEND));
+
+        assertFalse(created.exists(), "a page the aborted write created is removed, not left empty without a row");
+        assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(rf.fx.indexed("b")));
+    }
+
+    @Test
     public void test_the_write_after_an_aborted_one_lands_where_the_log_says() throws Exception {
         makeReadOnly(rf.fx.page(0));
         assertThrows(IOException.class, () -> rf.replace("b", "new-b", 0, PagePlacement.APPEND));
@@ -92,9 +104,11 @@ public class WalPlanTest {
         assertEquals(StorageFixture.record("b", "old-b"), rf.fx.readAt(old), "the old copy is not blanked yet");
         assertTrue(readOnly.setWritable(true, true));
 
+        assertThrows(IOException.class, () -> rf.replace("c", "new-c", 1, PagePlacement.APPEND),
+                "the next write applies the logged blank first and is refused, having read before it");
         rf.replace("c", "new-c", 1, PagePlacement.APPEND);
 
-        assertTrue(rf.fx.readAt(old).isBlank(), "the next write applies the logged blank first");
+        assertTrue(rf.fx.readAt(old).isBlank(), "the logged blank was applied");
         assertTrue(rf.fx.everyRowReadsItsOwnRecord());
     }
 

@@ -83,7 +83,7 @@ final class IndexOrderTopK {
         final var unindexed = resolved == null && split.walkRange() == null;
         final var budget = resolved != null
                 ? 2 * WALK_PER_CANDIDATE * matched + bound
-                : unindexed ? unindexedBudget(documents, bound) : Long.MAX_VALUE;
+                : unindexedBudget(documents, bound);
         final var firstPage = unindexed
                 ? Math.min(budget + 1, MAX_FIRST_PAGE)
                 : (long) Math.clamp(Math.max(expectedWalk, bound) * 2, MIN_PAGE, MAX_FIRST_PAGE);

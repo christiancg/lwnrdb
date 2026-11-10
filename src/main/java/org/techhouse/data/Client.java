@@ -24,6 +24,7 @@ public class Client {
     private volatile boolean hasLocalSlice;
     private volatile boolean remoteSliceFenced;
     private final AtomicReference<TransactionReap> transactionReaped = new AtomicReference<>();
+    private volatile boolean commitRedriven;
     private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
     private final Map<String, Set<String>> transactionWriteHolders = new ConcurrentHashMap<>();
     private final AtomicInteger failedAuthentications = new AtomicInteger();
@@ -110,6 +111,16 @@ public class Client {
 
     public TransactionReap consumeTransactionReaped() {
         return transactionReaped.getAndSet(null);
+    }
+
+    public void markCommitRedriven() {
+        commitRedriven = true;
+    }
+
+    public boolean consumeCommitRedriven() {
+        final var redriven = commitRedriven;
+        commitRedriven = false;
+        return redriven;
     }
 
     public Set<String> getTransactionParticipants() {

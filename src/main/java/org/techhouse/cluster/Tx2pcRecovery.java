@@ -165,10 +165,11 @@ public class Tx2pcRecovery implements MembershipListener {
 
     private void recoverCommitting() {
         for (final var txId : TxCommitLog.localCommitTxIds()) {
-            if (clientTracker.hasActiveTransaction(txId)) {
-                continue;
-            }
             try {
+                if (clientTracker.hasActiveTransaction(txId)) {
+                    TwoPhaseParticipant.redriveOnLiveSession(txId, clusterConfig.replicationAckTimeoutMs());
+                    continue;
+                }
                 TwoPhaseParticipant.resolveFromDurable(txId, true, clusterConfig.replicationAckTimeoutMs());
             } catch (CollectionBusyException | TimeoutException | DurableReplayIncompleteException busy) {
                 logger.warning("Skipped finishing decided transaction " + txId + " this round: " + busy.getMessage());

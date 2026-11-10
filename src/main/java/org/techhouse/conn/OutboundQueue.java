@@ -39,6 +39,7 @@ public class OutboundQueue {
     private boolean closed;
     private volatile boolean writing;
     private volatile long lastProgressNanos;
+    private long bytesSinceProgress;
     private final AtomicBoolean aborted = new AtomicBoolean();
 
     @FunctionalInterface
@@ -249,6 +250,7 @@ public class OutboundQueue {
     }
 
     private void writeTracked(Frame frame) throws IOException {
+        bytesSinceProgress = 0L;
         lastProgressNanos = System.nanoTime();
         writing = true;
         try {
@@ -270,7 +272,16 @@ public class OutboundQueue {
         }
         final var length = segment.length();
         for (var offset = 0; offset < length; offset += WRITE_CHUNK_BYTES) {
-            out.write(segment.bytes(), offset, Math.min(WRITE_CHUNK_BYTES, length - offset));
+            final var chunk = Math.min(WRITE_CHUNK_BYTES, length - offset);
+            out.write(segment.bytes(), offset, chunk);
+            progressed(chunk);
+        }
+    }
+
+    private void progressed(int bytes) {
+        bytesSinceProgress += bytes;
+        if (bytesSinceProgress >= Globals.WRITE_STALL_MIN_PROGRESS_BYTES) {
+            bytesSinceProgress = 0L;
             lastProgressNanos = System.nanoTime();
         }
     }

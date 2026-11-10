@@ -8,18 +8,20 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-public final class SaltedKey {
+public final class SaltedKey implements Comparable<SaltedKey> {
     private static final long SEED = seedFrom(new SecureRandom());
     private static final long MULTIPLIER = 0x9E3779B97F4A7C15L;
     private static final long WORD_KEY = mix(SEED) | 1L;
+    private static final long KEY_SEED = seedFrom(new SecureRandom());
+    private static final long KEY_WORD_KEY = mix(KEY_SEED) | 1L;
     private static final int ARRAY_STEP = 31;
     private static final int CHARS_PER_ROUND = 4;
     private final JsonBaseElement element;
-    private final int hash;
+    private final long hash;
 
     public SaltedKey(JsonBaseElement element) {
         this.element = element;
-        this.hash = Long.hashCode(saltedHash(element));
+        this.hash = saltedHash(element);
     }
 
     private static long seedFrom(SecureRandom random) {
@@ -30,8 +32,12 @@ public final class SaltedKey {
         return element;
     }
 
-    public static int memberHash(String key, JsonBaseElement value) {
-        return Long.hashCode(mix(stringHash(key) ^ saltedHash(value)));
+    public static long memberHash(String key, JsonBaseElement value) {
+        return mix(keyHash(key) ^ saltedHash(value));
+    }
+
+    private static long keyHash(String key) {
+        return seededStringHash(KEY_SEED, KEY_WORD_KEY, key);
     }
 
     private static long saltedHash(JsonBaseElement element) {
@@ -49,7 +55,6 @@ public final class SaltedKey {
         return value == null ? SEED : seededStringHash(SEED, WORD_KEY, value);
     }
 
-    @SuppressWarnings("SameParameterValue")
     private static long seededStringHash(long seed, long wordKey, String value) {
         final var length = value.length();
         var hash = seed ^ length;
@@ -88,7 +93,7 @@ public final class SaltedKey {
     private static long objectHash(JsonObject object) {
         var hash = SEED;
         for (var member : object.entrySet()) {
-            hash += mix(stringHash(member.getKey()) ^ saltedHash(member.getValue()));
+            hash += memberHash(member.getKey(), member.getValue());
         }
         return hash;
     }
@@ -107,6 +112,11 @@ public final class SaltedKey {
 
     @Override
     public int hashCode() {
-        return hash;
+        return Long.hashCode(hash);
+    }
+
+    @Override
+    public int compareTo(SaltedKey other) {
+        return Long.compare(hash, other.hash);
     }
 }

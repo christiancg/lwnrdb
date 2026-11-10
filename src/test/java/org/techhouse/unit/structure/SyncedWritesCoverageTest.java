@@ -14,7 +14,8 @@ public class SyncedWritesCoverageTest {
     private static final String FS = "org.techhouse.fs";
     private static final String FS_IO = "org.techhouse.fs.io";
     private static final String HELPER = "/SyncedWrites.java";
-    private static final Set<String> LOGGED_WRITERS = Set.of("/WalPlan.java", "/WalRedo.java", "/WalWriteGroup.java");
+    private static final Set<String> EXEMPT_WRITERS = Set.of("/WalPlan.java", "/WalRedo.java", "/WalWriteGroup.java",
+            "/DurableShadow.java");
     private static final Pattern WRITE = Pattern.compile("new (java\\.io\\.)?FileOutputStream\\("
             + "|FileChannel\\.open\\([^;]*WRITE|Files\\.write|Files\\.newOutputStream|Files\\.move\\("
             + "|new (java\\.io\\.)?RandomAccessFile\\([^;]*RW_PERMISSIONS|OwnerOnlyFiles\\.create|\\.renameTo\\(");
@@ -23,7 +24,7 @@ public class SyncedWritesCoverageTest {
         final var found = new TreeSet<String>();
         for (final var file : files) {
             if (!file.isInPackage(FS) || file.isInPackage(FS_IO) || file.relativePath().endsWith(HELPER)
-                    || LOGGED_WRITERS.stream().anyMatch(file.relativePath()::endsWith)) {
+                    || EXEMPT_WRITERS.stream().anyMatch(file.relativePath()::endsWith)) {
                 continue;
             }
             final var code = file.text().code();

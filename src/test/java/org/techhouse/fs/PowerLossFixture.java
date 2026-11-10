@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,6 +11,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.config.Configuration;
 import org.techhouse.test.TestUtils;
@@ -18,6 +20,7 @@ final class PowerLossFixture implements Forcer, AutoCloseable {
     private final Map<Object, byte[]> forcedContent = new ConcurrentHashMap<>();
     private final Map<Path, Map<String, Object>> forcedEntries = new ConcurrentHashMap<>();
     private final Map<Object, FileChannel> pinnedFiles = new ConcurrentHashMap<>();
+    private final Set<Object> frozen = ConcurrentHashMap.newKeySet();
     private final String previousSyncWrites = String.valueOf(Configuration.getInstance().isSyncWrites());
 
     private PowerLossFixture() {
@@ -42,7 +45,19 @@ final class PowerLossFixture implements Forcer, AutoCloseable {
             forcedEntries.put(path.toAbsolutePath().normalize(), entries);
             return;
         }
-        forcedContent.put(pinnedKeyOf(path), Files.readAllBytes(path));
+        final var key = pinnedKeyOf(path);
+        if (!frozen.contains(key)) {
+            forcedContent.put(key, Files.readAllBytes(path));
+        }
+    }
+
+    @Override
+    public void forceFailed(Path path) {
+        try {
+            frozen.add(pinnedKeyOf(path));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     void powerLoss() throws IOException {

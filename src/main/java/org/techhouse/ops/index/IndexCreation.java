@@ -1,6 +1,7 @@
 package org.techhouse.ops.index;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.ConfigKey;
@@ -29,6 +30,10 @@ final class IndexCreation {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         final var targets = request.targetFieldNames();
+        final var tooMany = tooManyIndexes(targets.size());
+        if (tooMany != null) {
+            return tooMany;
+        }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_INDEX,
                 ErrorCode.ERROR_CREATING_INDEX, () -> {
                     final var readinessError = CollectionReadinessGuard.check(OperationType.CREATE_INDEX, dbName,
@@ -63,23 +68,32 @@ final class IndexCreation {
     }
 
     private static OperationResponse refusalOf(String dbName, String collName, List<String> missing) {
-        for (var i = 0; i < missing.size(); i++) {
-            final var fieldName = missing.get(i);
+        final var tooMany = tooManyIndexes(cache.getIndexesForCollection(dbName, collName).size() + missing.size());
+        if (tooMany != null) {
+            return tooMany;
+        }
+        final var byOnDiskKey = new HashMap<String, String>();
+        for (final var fieldName : missing) {
             var colliding = OnDiskNameRegistry.collidingIndexField(dbName, collName, fieldName);
             if (colliding == null) {
-                colliding = OnDiskNameRegistry.collidingDefinition(missing.subList(0, i), fieldName);
+                final var earlier = byOnDiskKey.putIfAbsent(OnDiskNameRegistry.onDiskKey(fieldName), fieldName);
+                colliding = earlier == null || earlier.equals(fieldName) ? null : earlier;
             }
             if (colliding != null) {
                 return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
             }
         }
-        final var maxIndexes = configuration.intValue(ConfigKey.MAX_INDEXES_PER_COLLECTION);
-        if (cache.getIndexesForCollection(dbName, collName).size() + missing.size() > maxIndexes) {
-            return new OperationResponse(OperationType.CREATE_INDEX,
-                    ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION.getDefaultMessage() + " (" + maxIndexes + ")",
-                    ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION);
-        }
         return null;
+    }
+
+    private static OperationResponse tooManyIndexes(int indexCount) {
+        final var maxIndexes = configuration.intValue(ConfigKey.MAX_INDEXES_PER_COLLECTION);
+        if (indexCount <= maxIndexes) {
+            return null;
+        }
+        return new OperationResponse(OperationType.CREATE_INDEX,
+                ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION.getDefaultMessage() + " (" + maxIndexes + ")",
+                ErrorCode.TOO_MANY_INDEXES_FOR_COLLECTION);
     }
 
     private static String createdMessage(List<String> targets, List<String> missing) {

@@ -635,6 +635,8 @@ def main():
     test_auto_max_memory_follows_heap()
 
     held_rows_budget.test_group_by_over_budget_is_refused_not_oom()
+    held_rows_budget.test_skewed_rows_and_an_indexed_join_fan_in_are_refused()
+    held_rows_budget.test_concurrent_aggregations_share_one_budget()
 
     refused_index_writes.run_refused_index_phase()
 

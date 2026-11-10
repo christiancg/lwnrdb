@@ -10,10 +10,8 @@ import java.util.Map;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
-import org.techhouse.log.Logger;
 
 final class FieldIndexStore {
-    private static final Logger logger = Logger.logFor(FieldIndexStore.class);
     private static final byte[] EMPTY_FILE = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
 
     private final FilePaths paths;
@@ -102,8 +100,14 @@ final class FieldIndexStore {
             throws IOException {
         FieldIndexLog.replaced(indexFile);
         if (entries.isEmpty()) {
-            deleteIndexFile(indexFile);
-            deleteIndexFile(logFile);
+            if (couldNotDelete(indexFile)) {
+                FileLocks.rewriteFileAtomically(indexFile.toPath(), _ -> {
+                });
+            }
+            if (couldNotDelete(logFile)) {
+                throw new IOException("Could not delete the index log " + logFile.getName()
+                        + " of a type that no document holds any more");
+            }
             return;
         }
         FileLocks.rewriteFileAtomically(indexFile.toPath(), out -> {
@@ -184,16 +188,15 @@ final class FieldIndexStore {
         }
     }
 
-    private static void deleteIndexFile(File indexFile) {
-        if (!indexFile.exists()) {
-            return;
+    private static boolean couldNotDelete(File file) {
+        if (!file.exists()) {
+            return false;
         }
-        if (indexFile.delete()) {
-            syncFolderOf(indexFile);
-        } else {
-            logger.warning("Could not delete the now-empty index file " + indexFile.getName()
-                    + "; while it exists CONTAINS and NOT_IN decline this field's index until a REINDEX");
+        if (!file.delete()) {
+            return true;
         }
+        syncFolderOf(file);
+        return false;
     }
 
     private static void syncFolderOf(File file) {

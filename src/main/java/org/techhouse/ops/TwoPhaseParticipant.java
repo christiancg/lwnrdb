@@ -34,7 +34,8 @@ public final class TwoPhaseParticipant {
         try {
             Tx2pcLog.recordParticipantPrepared(transaction.getTransactionId().toString(), coordinatorAddress,
                     participants, new ArrayList<>(transaction.getHeldLocks()),
-                    transaction.areOpsDurable() ? List.of() : transaction.getPendingOps());
+                    transaction.areOpsDurable() ? List.of() : transaction.getPendingOps(),
+                    List.copyOf(transaction.getBufferedOpIds()));
             transaction.markOpsDurable();
             return true;
         } catch (Exception e) {
@@ -80,6 +81,23 @@ public final class TwoPhaseParticipant {
         }
         if (!resolved(result)) {
             throw new DurableReplayIncompleteException(dtxId, result.getMessage());
+        }
+        return true;
+    }
+
+    public static boolean redriveOnLiveSession(String txId, long timeoutMillis) throws Exception {
+        final var entry = liveSessionFor(txId);
+        if (entry == null) {
+            return false;
+        }
+        final var session = entry.getValue();
+        final var future = session.submit(() -> TransactionOperationHelper.redriveFenced(session.clientId()));
+        final var finished = timeoutMillis > 0 ? future.get(timeoutMillis, TimeUnit.MILLISECONDS) : future.get();
+        if (clientTracker.getActiveTransaction(session.clientId()) == null) {
+            clientTracker.removeTxSession(entry.getKey());
+        }
+        if (!finished) {
+            throw new DurableReplayIncompleteException(txId, "its commit still cannot finish applying");
         }
         return true;
     }

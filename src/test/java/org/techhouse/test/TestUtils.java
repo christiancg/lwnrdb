@@ -47,6 +47,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.auth.AuthFailureThrottle;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.resp.OperationResponse;
@@ -61,6 +62,7 @@ public class TestUtils {
         fs.createAdminDatabase();
         final var cache = IocContainer.get(Cache.class);
         cache.loadAdminData();
+        DeferredWrites.install();
     }
 
     public static void standardTearDown() throws NoSuchFieldException, IllegalAccessException {
@@ -336,6 +338,12 @@ public class TestUtils {
             }
         }
         locks.clear();
+        try {
+            TestUtils.getPrivateStaticField(Class.forName("org.techhouse.concurrency.CollectionFences"), "fenced",
+                    Set.class).clear();
+        } catch (ClassNotFoundException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     public static List<String> dirtyIndexCollections() {

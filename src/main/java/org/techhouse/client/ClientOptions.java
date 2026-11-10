@@ -9,12 +9,13 @@ import org.techhouse.config.ConfigKey;
 
 public record ClientOptions(ClientMode mode, String host, int port, String user, String password, boolean tls,
         boolean insecure, boolean compress, List<String> commands, List<String> databases,
-        List<CollectionRef> collections) {
+        List<CollectionRef> collections, int maxReplyBytes) {
     public static final String PASSWORD_ENV = "LWNRDB_PASSWORD";
     public static final String DEFAULT_HOST = "127.0.0.1";
     public static final String DEFAULT_USER = "admin";
     private static final int MAX_PORT = 65_535;
     private static final Pattern PORT_DIGITS = Pattern.compile("\\d{1,5}");
+    private static final Pattern BYTES_DIGITS = Pattern.compile("\\d{1,10}");
 
     public record CollectionRef(String database, String collection) {
         static CollectionRef parse(String item) {
@@ -53,6 +54,7 @@ public record ClientOptions(ClientMode mode, String host, int port, String user,
         private final LinkedHashSet<CollectionRef> collections = new LinkedHashSet<>();
         private boolean databasesGiven;
         private boolean collectionsGiven;
+        private int maxReplyBytes = Connection.MAX_REPLY_BYTES;
 
         int accept(String[] args, int index) {
             final var flag = args[index];
@@ -74,6 +76,7 @@ public record ClientOptions(ClientMode mode, String host, int port, String user,
                 case "--port" -> port = portOf(valueOf(args, index));
                 case "--user" -> user = valueOf(args, index);
                 case "--password" -> password = valueOf(args, index);
+                case "--max-reply-bytes" -> maxReplyBytes = positiveBytesOf(valueOf(args, index));
                 case "--databases" -> {
                     databasesGiven = true;
                     databases.addAll(itemsOf(flag, valueOf(args, index)));
@@ -91,7 +94,8 @@ public record ClientOptions(ClientMode mode, String host, int port, String user,
 
         private static boolean takesValue(String flag) {
             return switch (flag) {
-                case "--host", "--port", "--user", "--password", "--databases", "--collections" -> true;
+                case "--host", "--port", "--user", "--password", "--databases", "--collections", "--max-reply-bytes" ->
+                    true;
                 default -> false;
             };
         }
@@ -120,6 +124,16 @@ public record ClientOptions(ClientMode mode, String host, int port, String user,
             throw usage("--port must be a number between 1 and " + MAX_PORT + ", got '" + value + "'");
         }
 
+        private static int positiveBytesOf(String value) {
+            if (BYTES_DIGITS.matcher(value).matches()) {
+                final var parsed = Long.parseLong(value);
+                if (parsed > 0 && parsed <= Integer.MAX_VALUE) {
+                    return (int) parsed;
+                }
+            }
+            throw usage("--max-reply-bytes must be a positive number of bytes, got '" + value + "'");
+        }
+
         private static List<String> itemsOf(String flag, String value) {
             final var items = new ArrayList<String>();
             for (final var item : value.split(",", -1)) {
@@ -146,7 +160,7 @@ public record ClientOptions(ClientMode mode, String host, int port, String user,
             }
             final var resolvedPassword = password != null ? password : env.get(PASSWORD_ENV);
             return new ClientOptions(mode, host, port, user, resolvedPassword, tls, insecure, compress,
-                    List.copyOf(commands), List.copyOf(databases), List.copyOf(collections));
+                    List.copyOf(commands), List.copyOf(databases), List.copyOf(collections), maxReplyBytes);
         }
     }
 }

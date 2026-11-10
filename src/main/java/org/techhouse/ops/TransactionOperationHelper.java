@@ -18,6 +18,7 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
+import org.techhouse.ex.LoggedWriteNotAppliedException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -94,7 +95,31 @@ public final class TransactionOperationHelper {
     }
 
     private static boolean isFenced(Transaction transaction) {
-        return SliceStateMachine.isFenced(transaction.getTransactionId().toString());
+        return transaction.isCommitFenced() || SliceStateMachine.isFenced(transaction.getTransactionId().toString());
+    }
+
+    public static boolean holdsRedrivableCommit(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        return transaction != null && transaction.isCommitFenced();
+    }
+
+    public static boolean redriveFenced(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        if (transaction == null || !transaction.isCommitFenced()) {
+            return true;
+        }
+        final var txId = transaction.getTransactionId().toString();
+        AdminOperationHelper.applyDeferredTransactionRecords(configuration.getTransactionLockTimeoutMs());
+        if (!TxCommitLog.isLocallyCommitted(txId)) {
+            return false;
+        }
+        commit(clientId);
+        if (clientTracker.getActiveTransaction(clientId) == transaction) {
+            return false;
+        }
+        clientTracker.markCommitRedriven(clientId);
+        logger.info("Finished transaction " + txId + " in the background after it could not apply at commit");
+        return true;
     }
 
     public static OperationResponse abort(UUID clientId) {
@@ -142,7 +167,9 @@ public final class TransactionOperationHelper {
             List<AdminTransactionEntry> decision) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
-            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
+            return clientTracker.consumeCommitRedriven(clientId)
+                    ? OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed")
+                    : new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
         }
         if (transaction.isAborted()) {
             clientTracker.clearActiveTransaction(clientId);
@@ -179,10 +206,13 @@ public final class TransactionOperationHelper {
                     : OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception | StackOverflowError e) {
             logger.error(OperationType.COMMIT_TRANSACTION + " failed", e);
+            fenced |= LoggedWriteNotAppliedException.isCauseOf(e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION,
                     fenced ? ErrorCode.TRANSACTION_HALF_APPLIED : ErrorCode.ERROR_TRANSACTION);
         } finally {
-            if (!fenced) {
+            if (fenced) {
+                transaction.markCommitFenced();
+            } else {
                 releaseAndDeregister(transaction, clientId);
             }
         }

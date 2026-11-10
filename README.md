@@ -74,7 +74,7 @@ Each request is one line terminated by `\n`; a single `\r` right before it is st
 - **Authentication deadline.** A connection must authenticate within `authTimeoutMs` (default `10000`) of being accepted. The deadline is absolute: traffic, blank lines and failed `AUTHENTICATE` attempts do not extend it. When it expires the server answers one `CLOSE_CONNECTION` frame with `408-4` and closes the connection. With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that stalls or drips its handshake is closed at `authTimeoutMs` plus one second. A TLS connection over `maxConnections` or `maxUnauthenticatedConnectionsPerAddress` is closed before its handshake, with no frame (the refusal could only be sent after the handshake it would cost). Once authenticated, a connection is never closed for being idle.
 - **Unauthenticated connections per address.** One remote address may hold at most `maxUnauthenticatedConnectionsPerAddress` (default `16`) connections that have not authenticated yet; the next one is answered `503-14` and closed. Authenticating frees the slot. Clients behind one NAT address share the allowance.
 - **Invalid requests before authentication.** A connection that sends `maxUnauthenticatedInvalidRequests` (default `5`) requests before it authenticates that are not a successful `AUTHENTICATE` (unparseable lines, requests answered `401-1`, failed attempts) is closed after the last answer.
-- **Slow readers.** Every response and LISTEN update goes through a per-connection outbound queue, so a client that stops reading never blocks a LISTEN worker or another connection. A response of at most 16Kb to a connection that sends one request at a time is written by the connection's own thread; anything larger, every LISTEN update, and every response on a connection that has ever sent a request before the previous one was answered (pipelining) is written by a separate writer thread, so such a connection keeps reading and its open transaction is still rolled back after `transactionIdleTimeoutMs`. A response write that makes no progress for `clientWriteStallTimeoutMs` (default `30000`) closes the connection, which rolls back its open transaction. Once the unread backlog passes `clientOutboundQueueMaxBytes` (default `16Mb`, counted in UTF-8 bytes as written to the socket) the backlog is dropped, the connection's listens end, one `CLOSE_CONNECTION` frame with `413-1` is queued and the connection is closed. A single response larger than the cap is still delivered when nothing is waiting behind it. Across all connections the encoded responses waiting to be written are bounded by `maxUnsentResponseBytes` (default a quarter of the heap): a read whose response of 64Kb or more would pass it is answered `503-17` instead, and retrying it is safe.
+- **Slow readers.** Every response and LISTEN update goes through a per-connection outbound queue, so a client that stops reading never blocks a LISTEN worker or another connection. A response of at most 16Kb to a connection that sends one request at a time is written by the connection's own thread; anything larger, every LISTEN update, and every response on a connection that has ever sent a request before the previous one was answered (pipelining) is written by a separate writer thread, so such a connection keeps reading and its open transaction is still rolled back after `transactionIdleTimeoutMs`. A response write that moves less than 64Kb in `clientWriteStallTimeoutMs` (default `30000`) closes the connection, which rolls back its open transaction, so a client that reads a large response a few kilobytes at a time is closed like one that stopped reading. Once the unread backlog passes `clientOutboundQueueMaxBytes` (default `16Mb`, counted in UTF-8 bytes as written to the socket) the backlog is dropped, the connection's listens end, one `CLOSE_CONNECTION` frame with `413-1` is queued and the connection is closed. A single response larger than the cap is still delivered when nothing is waiting behind it. Across all connections the encoded responses waiting to be written are bounded by `maxUnsentResponseBytes` (default a quarter of the heap): a read whose response of 64Kb or more would pass it is answered `503-17` instead, and retrying it is safe.
 - **Idle transactions.** A connection holding an open transaction must send its next request within `transactionIdleTimeoutMs` (default `30000`), and a transaction is rolled back once it is older than `transactionMaxAgeMs` (default `600000`) however busy it is; see [Transactions](#transactions).
 - `maxConnections` counts client sockets only; forwarded cluster requests and transaction sessions no longer take a slot.
 
@@ -192,7 +192,7 @@ Read operations accept an optional `"dirtyRead": true` (default `false`); see [C
 #### `AGGREGATE`
 Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
 Also accepts an optional top-level `"analyze": true` (default `false`); see [Explain / Analyze](#explain--analyze).
-A pipeline is stopped with `408-6` once it has run for `aggregateTimeoutMs` (default `300000`, `0` = no limit). An `IN`/`NOT_IN` list or a `within` polygon may hold at most `maxFilterOperands` (default `10000`) operands, refused with `400-27` past it; the same limit caps the operands of one conjunction (`AND`/`OR`/…), the total operator nodes of one `FILTER` step, and the operators plus mid-operator operands of one `MAP` step. A `MAP` `fieldName` may nest at most 128 levels. One output row of a `JOIN` may carry a joined array of at most `maxEntrySize` bytes, refused with `400-28` past it (the same refusal whether the remote field is indexed or scanned). The whole pipeline may build at most `aggregateMaxResultBytes` (default `auto`, a quarter of the JVM's max heap): the strings every `MAP` adds through `CONCAT` and string `CAST`s, the values its `SCRIPT` mid-operators add (measured as their JSON text), each `JOIN` row's joined array (counted once per row, even when rows share it), the modelled heap of every document a step holds while it works (the rows a `GROUP_BY`, an unbounded `SORT`, a `JOIN`'s two sides and `DISTINCT`'s seen values keep) and the modelled heap of every result row are totalled per request, and past it the pipeline stops with `400-36` instead of running the server out of heap. The heap of the first 64 rows of a step is measured exactly, then every 64th row is measured and the others are charged the running average. A `LISTEN` re-run and a read inside a transaction are held to the same budget. A `GROUP_BY` followed directly by `COUNT` only counts the distinct values (from the index when the field has one), without holding the documents. A `JOIN` on an unindexed remote field streams the remote collection and keeps only the documents whose value one of the local rows names. `GROUP_BY`, `DISTINCT` and `JOIN` key their lookups on a hash seeded per process, and so do the index reads and the `CREATE_INDEX` build behind them, so values that collide under Java's string hash cannot pile into one bucket.
+A pipeline is stopped with `408-6` once it has run for `aggregateTimeoutMs` (default `300000`, `0` = no limit). An `IN`/`NOT_IN` list or a `within` polygon may hold at most `maxFilterOperands` (default `10000`) operands, refused with `400-27` past it; the same limit caps the operands of one conjunction (`AND`/`OR`/…), the total operator nodes of one `FILTER` step, and the operators plus mid-operator operands of one `MAP` step. A `MAP` `fieldName` may nest at most 128 levels. One output row of a `JOIN` may carry a joined array of at most `maxEntrySize` bytes, refused with `400-28` past it (the same refusal whether the remote field is indexed or scanned). The whole pipeline may build at most `aggregateMaxResultBytes` (default `auto`, a quarter of the JVM's max heap): the strings every `MAP` adds through `CONCAT` and string `CAST`s, the values its `SCRIPT` mid-operators add (measured as their JSON text), each `JOIN` row's joined array (counted once per row, even when rows share it), the modelled heap of every document a step holds while it works (the rows a `GROUP_BY`, an unbounded `SORT`, a `JOIN`'s two sides and `DISTINCT`'s seen values keep) and the modelled heap of every result row are totalled per request, and past it the pipeline stops with `400-36` instead of running the server out of heap. The rows a bounded `SORT` (one followed by a `LIMIT` of at most 4096) keeps are charged while it keeps them, and every group a `GROUP_BY` builds is charged its map entry, key, list and output row as well as its documents. Every running pipeline together may hold at most `aggregateTotalHeldBytes` (default `auto`, a quarter of the heap), counted the same way; a pipeline that would pass it stops with `503-20`, and retrying it is safe. The heap of the first 64 rows of a step is measured exactly, then every 64th row is measured and the others are charged the running average. A `LISTEN` re-run and a read inside a transaction are held to the same budget. A `GROUP_BY` followed directly by `COUNT` only counts the distinct values (from the index when the field has one), without holding the documents. A `JOIN` on an unindexed remote field streams the remote collection and keeps only the documents whose value one of the local rows names. `GROUP_BY`, `DISTINCT` and `JOIN` key their lookups on a hash seeded per process, and so do the index reads and the `CREATE_INDEX` build behind them, so values that collide under Java's string hash cannot pile into one bucket.
 
 ```json
 {
@@ -570,7 +570,7 @@ If the connection closes with a transaction still open, it is automatically roll
 
 **Maximum age.** A transaction older than `transactionMaxAgeMs` (default `600000`, `0` = no limit) is rolled back the same way however busy the connection is, so a client cannot hold its write locks forever by sending a request every few seconds. Its next request is answered `408-5` once and not executed, exactly like the idle case.
 
-**Size.** One transaction may buffer at most `transactionMaxOps` operations (default `100000`; a `BULK_SAVE` counts one per document) and `transactionMaxBytes` of documents (default `256Mb`). A buffered `DELETE` counts the bytes of what it buffers: its id, plus the whole deleted document when a `DELETED` trigger will receive it. The write that would pass either is refused with `400-26`; nothing of it is buffered and the transaction stays usable, so the client can still commit what it buffered or roll back.
+**Size.** One transaction may buffer at most `transactionMaxOps` operations (default `100000`; a `BULK_SAVE` counts one per document) and `transactionMaxBytes` of documents (default `256Mb`). A buffered `DELETE` counts the bytes of what it buffers: its id, plus the whole deleted document when a `DELETED` trigger will receive it. The write that would pass either is refused with `400-26`; nothing of it is buffered and the transaction stays usable, so the client can still commit what it buffered or roll back. Every open transaction together may buffer at most `transactionTotalMaxBytes` (default `auto`, a quarter of the heap); a write that would pass it answers `503-21`, buffers nothing and leaves its transaction usable, and retrying it is safe once another transaction has ended.
 
 **Grants are checked again at commit.** Every operation is authorized when it is buffered, and `COMMIT_TRANSACTION` authorizes every collection the transaction writes once more against the user's current grants. If a grant was revoked in between, the commit is refused with `403-1`, the whole transaction is rolled back and nothing is applied.
 
@@ -1306,23 +1306,26 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `PK_ROW_COMMITTED` | An update, relocation, bulk update or delete wrote everything its logged record describes: the new copies, the `pk.idx` rows and the blanks of the copies they supersede | `<db>\|<collection>` |
 | `WAL_REWRITE_BEGUN` | A page vacuum logged its forced `REWRITE_BEGIN` frame and has not written its intent, rewritten or truncated the page yet | `<db>\|<collection>` |
 | `PAGE_VACUUM_RENAMED` | A page vacuum moved its rewritten page into place and has not appended the moved records' rows to `pk.idx` yet | `<db>\|<collection>` |
-| `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log (and forced it with `syncWrites`) and has not written the pages or `pk.idx` yet | `<db>\|<collection>` |
+| `WAL_APPENDED` | Any write appended its record to the collection's write-ahead log and has not written the pages or `pk.idx` yet; with `syncWrites` an ungrouped write has forced the record by then, while a write inside a write group (a grouped `SAVE`/`DELETE`, or a transaction commit's group) appends it unforced and the group forces it later | `<db>\|<collection>` |
 | `WAL_CHECKPOINT_FORCED` | A checkpoint forced the pages and `pk.idx` the log touched and has not rewritten the log as a single checkpoint yet | `<db>\|<collection>` |
 | `WAL_GROUP_APPENDED` | A write group appended its records to the log, unforced, and has not forced it yet | `<db>\|<collection>` |
 | `WAL_GROUP_FORCED` | A write group forced its records and has not applied the blanks they wait for yet | `<db>\|<collection>` |
 | `GROUP_RUNS_STAGED` | A write group recorded the after-trigger runs of all its writes in one forced record and has not appended any write yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
+| `FILE_FORCED` | Any file or folder is about to be forced to the device. The only point that can `FAIL`: the force then throws `injected force failure` instead of syncing, as a failed `fsync` would | the file name, e.g. `orders.wal`, or a folder name followed by `/`, e.g. `orders/` |
 
 | Action | Effect |
 |---|---|
 | `PAUSE` | Parks the thread until `RELEASE_FAULT`, for at most 120 seconds |
 | `HALT` | Stops the process at that statement with exit status `137`, skipping shutdown hooks, like `kill -9` |
 | `DROP` | Skips writing the reply (`PEER_REPLY` only) |
+| `FAIL` | Fails the force with an `IOException` (`FILE_FORCED` only). With `powerLossShadowPath` set, the file is also frozen: no later force of it counts as durable, which models a kernel that drops the dirty pages of a failed `fsync` |
 
 #### `ARM_FAULT` (admin only, testing only)
 `match` is optional; without it any subject fires the fault. Arming a point that is already armed releases the previous arm first.
 ```json
 {"type":"ARM_FAULT","point":"PEER_REPLY","action":"DROP","match":"COMMIT_TX"}
+{"type":"ARM_FAULT","point":"FILE_FORCED","action":"FAIL","match":"orders.wal"}
 ```
 
 #### `AWAIT_FAULT` (admin only, testing only)
@@ -1337,7 +1340,7 @@ Lets a paused thread continue and disarms the point. Without `point` it does so 
 {"type":"RELEASE_FAULT","point":"WRITE_OWNERSHIP_RECHECKED"}
 ```
 
-- **Errors**: `403-3` fault injection is disabled, `403-1` not an admin, `400-1` an unknown point or action, `DROP` on a point other than `PEER_REPLY`, or a `timeoutMs` out of range, `408-3` the point was not reached in time.
+- **Errors**: `403-3` fault injection is disabled, `403-1` not an admin, `400-1` an unknown point or action, `DROP` on a point other than `PEER_REPLY`, `FAIL` on a point other than `FILE_FORCED`, or a `timeoutMs` out of range, `408-3` the point was not reached in time.
 
 ### Error codes
 
@@ -1480,6 +1483,9 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-15` | `ERROR` | The server's listen registrations already keep `listenMaxRetainedBytes` of requests; retry once some end |
 | `503-16` | `ERROR` | The background index queue is full and nothing was written; retry shortly *(a `SAVE`, `BULK_SAVE`, `DELETE` or `COMMIT_TRANSACTION` that found `backgroundQueueMaxEvents` events queued and no room within `backgroundBacklogWaitMs`; a write forwarded to a full owner gets it at once. Writes inside a transaction are buffered and enqueue nothing, so only their commit is held back, and the transaction stays open)* |
 | `503-17` | `ERROR` | The server holds the maximum bytes of unsent responses; retry shortly *(the response would have pushed the encoded responses waiting to be written, across every connection, past `maxUnsentResponseBytes`; a response under 64Kb and the response to a write are never refused, so only a read gets it, and repeating the read is safe)* |
+| `503-20` | `ERROR` | The server holds the maximum bytes of running aggregations; retry shortly *(every running pipeline together reached `aggregateTotalHeldBytes`; this one stopped and gave back what it held, so repeating it is safe)* |
+| `503-21` | `ERROR` | The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly *(every open transaction together reached `transactionTotalMaxBytes`; nothing was buffered and the transaction stays usable)* |
+| `503-19` | `ERROR` | The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly *(a write to it answered `500-34` and applying its log before the read still failed, typically because the disk is still full; nothing was read, and repeating the read is safe)* |
 
 ### Quickstart
 
@@ -1568,7 +1574,7 @@ java -jar lwnrdb.jar --restore [connection] < backup.ldump
 | `--user <user>` | `admin` | |
 | `--password <password>` | | or the `LWNRDB_PASSWORD` environment variable; `--shell` on a terminal prompts for it |
 | `--tls` | off | TLS, verified against the JVM trust store with hostname verification |
-| `--insecure` | off | with `--tls`, trust any certificate, e.g. the server's dev-only self-signed one |
+| `--insecure` | off | with `--tls`, trust any certificate, e.g. the server's dev-only self-signed one; the client prints a `WARNING: --insecure is active` line on standard error, since anyone on the network path can then read the password and the data |
 
 - **`--shell`** prints a `lwnrdb> ` prompt, sends each line (one JSON request) as it is and pretty-prints the reply.
   `exit`, `quit` or end of input ends the session. There is no line editing, history or multi-line input.
@@ -1584,6 +1590,16 @@ java -jar lwnrdb.jar --restore [connection] < backup.ldump
 Exit codes: `0` success; `1` a command answered non-OK, or the dump or restore stopped (the restore names the line);
 `2` usage error; `3` the server cannot be reached, TLS failed, or authentication was refused. The client never reads
 `lwnrdb.cfg` and never creates `db/` or `logs/` in its working directory.
+
+The client waits at most 10 seconds to connect and finish the TLS handshake, and at most 10 minutes for each reply;
+a server silent for longer ends the run with `no reply from the server within 600 s` (exit code `3`). A reply the
+client parses (`--shell`, the dump, the restore, authentication) is capped at 256 MB: a longer one ends the run with
+`the server's reply is longer than 268435456 bytes` (exit code `1`). `--exec` streams its replies and has no such cap.
+A dump page whose reply passes the cap, or that is still refused with `503-17` after the retries, is asked for again
+at half the size from the same position, down to one document; only a single document larger than the cap stops the
+dump, naming its position. The client retries `503-2`, `503-4`, `503-5`, `503-9`, `503-10` and `503-16` through
+`503-21` up to five times with a growing pause, because each means nothing was applied. It never resends after
+`503-3`: that write committed on the node it reached, and resending a `SAVE` without an `_id` would store it twice.
 
 **The dump format is the restore script.** Every line is one ordinary request: `CREATE_DATABASE`,
 `CREATE_COLLECTION`, `BULK_SAVE` (at most 4 MB of documents per line), `SAVE_SCHEMA`, `CREATE_INDEX` (one line per
@@ -1677,7 +1693,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxRequestSize` | Human-readable size (default `64Mb`), at least `maxEntrySize` and at most `1Gb`. Largest request line an authenticated connection may send; a longer one is answered `400-22` and the connection closed. Before authenticating a line is capped at 64Kb whatever this says |
 | `clientOutboundQueueMaxBytes` | Human-readable size (default `16Mb`). Largest unread backlog of responses and LISTEN updates one connection may hold, counted in the UTF-8 bytes they take on the wire (line terminators included, so a CJK character counts 3); past it the connection's listens end, `413-1` is queued and the connection is closed. A single larger response is still delivered when nothing waits behind it |
 | `maxUnsentResponseBytes` | Human-readable size (default `0`, a quarter of the JVM's maximum heap). Largest total of encoded responses the server holds, across every connection, while they wait to be written or are being written; a read whose response would pass it is answered `503-17`. A response under 64Kb and the response to a write are always delivered, and LISTEN updates are bounded by `listenMaxRetainedBytes` instead |
-| `clientWriteStallTimeoutMs` | Valid number ≥ 1000 (default `30000`). Milliseconds writing a response to a connection may make no progress before the server closes it (rolling back its open transaction), which frees what it held for a client that stopped reading |
+| `clientWriteStallTimeoutMs` | Valid number ≥ 1000 (default `30000`). Milliseconds in which writing a response to a connection must move at least 64Kb before the server closes it (rolling back its open transaction), which frees what it held for a client that stopped reading |
 | `authTimeoutMs` | Valid number ≥ 1 (default `10000`). Milliseconds a new connection has to authenticate, counted from accept and never extended; then `408-4` and the connection is closed |
 | `maxListensPerUser` | Valid number ≥ 0 (default `256`). `LISTEN` registrations one user may hold across all of their connections; past it, `400-38`. `0` means unlimited and is warned at startup |
 | `listenMaxRequestBytes` | Human-readable size (default `1Mb`). Largest `LISTEN` request line; a longer one is answered `400-37` before it runs |
@@ -1695,7 +1711,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
 | `syncWrites` | `true` or `false` (default `true`). Sync every write's record in the collection's write-ahead log to the device before acknowledging it, so an acknowledged write survives a power loss (see [Durability](#durability)). `false` acknowledges once the OS has the write and logs a startup DURABILITY WARNING. With `true`, a platform that cannot sync a directory (Windows, for one) logs that warning and falls back to `false` instead of refusing to start |
 | `walCheckpointBytes` | Size (default `8Mb`). Once a collection's write-ahead log passes it, a background worker syncs the pages and `pk.idx` its records touched together and rewrites the log as a single checkpoint, holding only the collection's read lock; a writer does it itself only past twice this size. Larger means fewer checkpoints and a longer replay after a crash |
-| `walIdleCheckpointMs` | Long (default `60000`). A background worker checkpoints a collection's log once it has sat this long with records past its checkpoint, no open write group and no pending field-index work, so an idle collection is not replayed after a crash. `0` turns it off |
+| `walIdleCheckpointMs` | Long (default `60000`). A background worker checkpoints a collection's log once it has sat this long with records past its checkpoint, no open write group and no pending field-index work, so an idle collection is not replayed after a crash. A background checkpoint that fails (a full disk) is retried after 1 s, then 2, 4 … up to once a minute, and logs its stack trace only the first time. `0` turns it off |
 | `schemaValidationBudget` | Valid number ≥ 1000 (default `5000000`). Evaluation steps one write request may spend against its collection's JSON Schema (one per schema node evaluated, one per regex matcher step), shared by every document of a `BULK_SAVE`; a request that exhausts it is refused with `400-23`. A large `BULK_SAVE` against an expensive schema may need it raised. The check runs before the collection lock and is reused under it when the schema has not changed; when it has, validation runs again under the collection write lock, so raising it raises the worst-case time one write holds that lock |
 | `schemaMaxPatternLength` | Valid number > 0 (default `4096`). Longest `pattern` value or `patternProperties` key, in characters, that `SAVE_SCHEMA` accepts; a longer one is refused with `400-31`. A schema stored before the limit still loads. Keep it equal on every node of a cluster, since the node that runs `SAVE_SCHEMA` decides |
 | `schemaMaxPatterns` | Valid number > 0 (default `256`). Most regular expressions (`pattern` values plus `patternProperties` keys, counted through `$ref`s) one schema may hold; `SAVE_SCHEMA` refuses more with `400-39` before compiling any. A stored or replicated schema with more still loads, with a warning. Keep it equal on every node of a cluster |
@@ -1786,6 +1802,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scheduleMaxTotalPerUser` | Valid number ≥ 1 (default `500`). Cap on the schedules one user defines across every database, so `MANAGE` on many databases cannot multiply `scheduleMaxPerDatabase`; past it `400-33` |
 | `scheduleMinIntervalMs` | Valid number ≥ 1 (default `1000`). Smallest `intervalMs` a `SAVE_SCHEDULE` may ask for (`400-35` below it); a stored or replicated definition below it fires at this interval |
 | `faultInjectionEnabled` | `true` or `false` (default `false`). **Testing and debugging only — never in production.** Lets an admin arm the [fault injection](#fault-injection-testing-and-debugging-only) points over the wire, which can pause or halt the node. While off, those operations answer `403-3` and every point costs one field read. A node started with it on logs a `SECURITY WARNING` |
+| `powerLossShadowPath` | A folder path (default blank). **Power-loss harness only.** With `faultInjectionEnabled=true`, every force also records what it made durable into this folder: a copy of the forced file, or the forced folder's listing. `test_utils/test_power_loss.py` rebuilds the data folder from it after a `kill -9`, as a power loss would leave it. It must lie outside `filePath`; set without `faultInjectionEnabled=true`, or inside `filePath`, the server refuses to start. Every synced write gets slower by a copy of the file it forced |
 
 ```
 # the port the server listens on
@@ -1838,6 +1855,8 @@ transactionIdleTimeoutMs=30000
 transactionMaxOps=100000
 transactionMaxBytes=256Mb
 transactionMaxAgeMs=600000
+# bytes every open transaction together may buffer (503-21); auto = a quarter of the heap
+transactionTotalMaxBytes=auto
 # LISTEN registrations per connection and per server (400-25), per user (400-38), request line (400-37),
 # request bytes kept server-wide (503-15), the re-run wall clock and the re-run workers
 maxListensPerConnection=64
@@ -1853,6 +1872,8 @@ maxFilterOperands=10000
 maxVectorDimensions=16384
 aggregateTimeoutMs=300000
 aggregateMaxResultBytes=auto
+# bytes every running AGGREGATE together may hold (503-20); auto = a quarter of the heap
+aggregateTotalHeldBytes=auto
 # share of a large collection an index match may cover before the query reads the collection instead
 indexScanFallbackPercent=25
 # TLS: when enabled, plaintext clients are rejected at the handshake

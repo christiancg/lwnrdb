@@ -1,9 +1,12 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
@@ -86,5 +89,36 @@ public class AggregationSaltedKeyTest {
         assertEquals(2, AggregationOperationHelper
                 .processStepsOnStream(List.of(new DistinctAggregationStep(null)), Stream.of(first, second, third))
                 .size());
+    }
+
+    private static final int SELF_PAIRS = 20_000;
+
+    private static JsonObject selfPair(int i) {
+        final var document = new JsonObject();
+        document.add(Globals.PK_FIELD, new JsonString("d" + i));
+        document.addProperty("k" + i, "k" + i);
+        return document;
+    }
+
+    private static JsonObject selfPairValue(int i) {
+        final var value = new JsonObject();
+        value.addProperty("k" + i, "k" + i);
+        return keyed("d" + i, value);
+    }
+
+    @Test
+    public void distinctRowsOverSelfPairDocumentsStayLinear() {
+        final var rows = assertTimeoutPreemptively(Duration.ofSeconds(1),
+                () -> AggregationOperationHelper.processStepsOnStream(List.of(new DistinctAggregationStep(null)),
+                        IntStream.range(0, SELF_PAIRS).mapToObj(AggregationSaltedKeyTest::selfPair)).size());
+        assertEquals(SELF_PAIRS, rows);
+    }
+
+    @Test
+    public void distinctAndGroupByOnSelfPairValuesStayLinear() {
+        final var documents = IntStream.range(0, SELF_PAIRS).mapToObj(AggregationSaltedKeyTest::selfPairValue)
+                .toArray(JsonObject[]::new);
+        assertEquals(SELF_PAIRS, assertTimeoutPreemptively(Duration.ofSeconds(1), () -> distinctValues(documents)));
+        assertEquals(SELF_PAIRS, assertTimeoutPreemptively(Duration.ofSeconds(1), () -> groups(documents)));
     }
 }

@@ -29,6 +29,17 @@ public final class JsonSizeEstimator {
         return total;
     }
 
+    public static long estimateStrings(List<String> values) {
+        if (values == null) {
+            return NULL_CHARS;
+        }
+        long total = 2;
+        for (final var value : values) {
+            total += lengthOf(value) + 3;
+        }
+        return total;
+    }
+
     public static long estimate(JsonBaseElement element) {
         return switch (element) {
             case JsonObject object -> estimateObject(object);

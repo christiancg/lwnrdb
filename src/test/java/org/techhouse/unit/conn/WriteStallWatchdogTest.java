@@ -110,10 +110,8 @@ public class WriteStallWatchdogTest {
         assertTrue(queue.isOpen());
     }
 
-    @Test
-    public void aSlowlyProgressingWriteIsNotClosed() {
-        final var chunks = new AtomicInteger();
-        final var queue = register(new OutputStream() {
+    private static OutputStream pacedSink(AtomicInteger chunks, long pauseMillis) {
+        return new OutputStream() {
             @Override
             public void write(int b) {
             }
@@ -123,24 +121,46 @@ public class WriteStallWatchdogTest {
             public void write(byte[] bytes, int offset, int length) throws InterruptedIOException {
                 chunks.incrementAndGet();
                 try {
-                    Thread.sleep(TIMEOUT_MS / 4);
+                    Thread.sleep(pauseMillis);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new InterruptedIOException();
                 }
             }
-        });
-        queue.offerResponse(frame('p', Globals.INLINE_FRAME_MAX_BYTES * 6), 0, true).write();
+        };
+    }
 
+    private int abortsWhileDraining(OutboundQueue queue) {
         final var aborted = new AtomicInteger();
         final var deadline = later(10 * TIMEOUT_MS);
         while (!queue.awaitDrained(50) && System.nanoTime() < deadline) {
             aborted.addAndGet(watchdog.scan(System.nanoTime()));
         }
+        return aborted.get();
+    }
 
-        assertTrue(chunks.get() >= 6, "the frame was written chunk by chunk: " + chunks.get());
-        assertEquals(0, aborted.get(), "each chunk counted as progress although the whole write took longer");
+    @Test
+    public void aSlowlyProgressingWriteIsNotClosed() {
+        final var chunks = new AtomicInteger();
+        final var queue = register(pacedSink(chunks, TIMEOUT_MS / 8));
+        queue.offerResponse(frame('p', Globals.INLINE_FRAME_MAX_BYTES * 16), 0, true).write();
+
+        final var aborted = abortsWhileDraining(queue);
+
+        assertTrue(chunks.get() >= 16, "the frame was written chunk by chunk: " + chunks.get());
+        assertEquals(0, aborted, "a write moving more than the floor per window is progress although it took longer");
         assertTrue(queue.isOpen());
+    }
+
+    @Test
+    public void aDripBelowTheProgressFloorIsClosed() {
+        final var chunks = new AtomicInteger();
+        final var queue = register(pacedSink(chunks, TIMEOUT_MS / 2));
+        queue.offerResponse(frame('d', Globals.INLINE_FRAME_MAX_BYTES * 16), 0, true).write();
+
+        final var aborted = abortsWhileDraining(queue);
+
+        assertEquals(1, aborted, "one 16 KB chunk per half timeout never moves the floor's bytes within a window");
     }
 
     @Test

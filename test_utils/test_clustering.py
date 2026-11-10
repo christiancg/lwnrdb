@@ -578,7 +578,8 @@ def test_write_replication_and_read_routing():
 
     for i in range(NODE_COUNT):
         _id = f"w{i}"
-        r = save(nodes[i].client_port, DB, "routed", {"_id": _id, "v": i * 10})
+        r = op_with_retry(lambda port=nodes[i].client_port, doc={"_id": _id, "v": i * 10}:
+                          save(port, DB, "routed", doc))
         check_status(f"SAVE via node-{i} commits", r, "OK")
         check(f"doc written via node-{i} is visible on every node",
                    all_nodes_see(DB, "routed", _id, i * 10),
@@ -593,8 +594,8 @@ def test_bulk_delete_and_upsert():
 
     create_coll(nodes[0].client_port, DB, "bulk")
 
-    r = bulk_save(nodes[1].client_port, DB, "bulk",
-                  [{"_id": "b1", "v": 1}, {"_id": "b2", "v": 2}, {"_id": "b3", "v": 3}])
+    r = op_with_retry(lambda: bulk_save(nodes[1].client_port, DB, "bulk",
+                                        [{"_id": "b1", "v": 1}, {"_id": "b2", "v": 2}, {"_id": "b3", "v": 3}]))
     check_status("BULK_SAVE via node-1 commits", r, "OK")
     check("all bulk docs are visible on every node",
                all_nodes_see(DB, "bulk", "b1", 1) and all_nodes_see(DB, "bulk", "b2", 2)
@@ -2342,25 +2343,31 @@ def test_a_participant_killed_mid_commit_finishes_without_its_coordinator():
                                                          timeout_s=60.0))
 
 
-def tombstone_line_count(node, db, coll) -> int:
+def live_tombstone_lines(node, db, coll) -> list:
     path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
     if not os.path.isfile(path):
-        return 0
-    with open(path, encoding="utf-8") as fp:
-        return sum(1 for line in fp if line.strip())
-
-
-def tombstone_ids(node, db, coll):
-    path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
-    if not os.path.isfile(path):
-        return set()
-    ids = set()
+        return []
+    entries, retracted = [], set()
     with open(path, encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
-            if line and "\x1f" in line:
-                ids.add(bu.unescape_index_token(line.split("\x1f", 1)[0]))
-    return ids
+            if not line or "\x1f" not in line:
+                continue
+            escaped, version = line.split("\x1f", 1)
+            key = bu.unescape_index_token(escaped)
+            if version.startswith("-"):
+                retracted.add((key, version[1:]))
+            else:
+                entries.append((key, version))
+    return [entry for entry in entries if entry not in retracted]
+
+
+def tombstone_line_count(node, db, coll) -> int:
+    return len(live_tombstone_lines(node, db, coll))
+
+
+def tombstone_ids(node, db, coll):
+    return {key for key, _ in live_tombstone_lines(node, db, coll)}
 
 
 def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
@@ -2810,6 +2817,45 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
           f"{ran} run(s) recorded")
 
 
+def exec_client(port: int, request: dict) -> subprocess.CompletedProcess:
+    with tempfile.TemporaryDirectory() as cwd:
+        return subprocess.run(["java", "-jar", bu.JAR_PATH, "--exec", json.dumps(request), "--host", HOST, "--port",
+                               str(port), "--user", ADMIN_USERNAME], cwd=cwd, capture_output=True, timeout=300,
+                              env={**os.environ, "LWNRDB_PASSWORD": ADMIN_PASSWORD})
+
+
+def test_the_client_does_not_resend_a_replication_timeout():
+    section("The jar client reports 503-3 for a SAVE without an _id instead of resending it")
+    owners = collections_by_owner(nodes[0].client_port, DB, "noresend", count=3)
+    if not check("found the owner of a fresh collection", bool(owners), f"owners={owners}"):
+        return
+    host_index, names = next(iter(owners.items()))
+    host = nodes[host_index]
+    coll = names[0]
+    frozen = [node for node in nodes if node is not host]
+    marker = None
+    for attempt in range(5):
+        candidate = f"noresend-{attempt}"
+        for node in frozen:
+            node.suspend()
+        try:
+            ran = exec_client(host.client_port, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                                 "object": {"marker": candidate}})
+        finally:
+            for node in frozen:
+                node.resume()
+            wait_until_cluster_is_healthy()
+        if b"503-3" in ran.stdout:
+            marker = candidate
+            break
+    if not check("the client's SAVE timed out on its replication quorum, so the case under test was reached",
+                 marker is not None, "the peers kept acknowledging within replicationAckTimeoutMs"):
+        return
+    stored = ids_of(aggregate(host.client_port, DB, coll, [filter_step("marker", "EQUALS", marker)]))
+    check("exactly one document holds the marker, so the client did not resend the committed write",
+          len(stored) == 1, f"stored={stored}")
+
+
 STARTUP_REPLAY_SETTLE_S = 10
 
 
@@ -2893,6 +2939,24 @@ def test_cluster_port_reset_flood_is_rate_limited():
           f"{logged} lines for {CLUSTER_RESET_FLOOD} resets in {elapsed:.1f}s (ceiling {ceiling})")
     with Conn(port=victim.client_port) as conn:
         check_status("the node still serves clients", conn.authenticate(), "OK")
+
+
+def test_a_malformed_peer_frame_does_not_drop_the_connection():
+    section("A malformed peer frame after HELLO is skipped and the next frame on the connection is answered")
+    victim = nodes[0]
+    marker = "Skipped a malformed cluster frame"
+    before = bu.read_log(victim.log_path).count(marker)
+    session = PeerSession(victim)
+    try:
+        session.write_line('{"type":"GOSSIP","secret":')
+        session.write_line("{}")
+        ack = session.frame({"type": "GOSSIP"})
+        check("the gossip after the malformed frames is answered on the same connection",
+              ack.get("type") == "GOSSIP_ACK", f"got {ack}")
+    finally:
+        session.close()
+    check("the skipped frames are logged", wait_until(
+        lambda: bu.read_log(victim.log_path).count(marker) - before >= 2, timeout_s=10.0))
 
 
 def test_a_trigger_writing_only_to_another_owner_consumes_its_run():
@@ -4222,9 +4286,11 @@ GROUPS = {
         test_a_post_prepare_write_survives_2pc_recovery,
         test_a_participant_killed_mid_commit_finishes_without_its_coordinator,
         test_a_trigger_fires_once_despite_a_replication_timeout,
+        test_the_client_does_not_resend_a_replication_timeout,
         test_a_trigger_writing_only_to_another_owner_consumes_its_run,
         test_cluster_delete_batch_forces_once,
         test_cluster_port_reset_flood_is_rate_limited,
+        test_a_malformed_peer_frame_does_not_drop_the_connection,
     ],
     "recreate": [
         test_formation_and_quorum_writes,

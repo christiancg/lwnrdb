@@ -27,7 +27,12 @@ final class WalRewriteBarrier {
         return new Begun(dbName, collName, page, wal.beginRewrite(dbName, collName, page, lengthBefore, alongside));
     }
 
+    void renamed(Begun begun) {
+        wal.rewriteLanded(begun.dbName(), begun.collName(), begun.page());
+    }
+
     boolean landed(Begun begun, Path folder) {
+        renamed(begun);
         try {
             SyncedWrites.entries(folder);
             return true;

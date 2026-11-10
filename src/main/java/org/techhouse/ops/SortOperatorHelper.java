@@ -39,7 +39,7 @@ public final class SortOperatorHelper {
     private SortOperatorHelper() {
     }
 
-    private record Keyed(JsonObject document, JsonBaseElement key, int seq) {
+    private record Keyed(JsonObject document, JsonBaseElement key, int seq, long heldBytes) {
     }
 
     record Sorted(Stream<JsonObject> rows, boolean skipApplied) {
@@ -63,7 +63,7 @@ public final class SortOperatorHelper {
         final var source = context.source(resultStream, dbName, collName);
         final var comparator = keyComparator(ascending);
         if (bound > 0 && bound <= MAX_BOUNDED_SORT) {
-            return new Sorted(boundedSort(source, fieldName, comparator, (int) bound), false);
+            return new Sorted(boundedSort(source, fieldName, comparator, (int) bound, context), false);
         }
         return new Sorted(fullSort(source, fieldName, comparator, new HeldRows(context)), false);
     }
@@ -98,18 +98,18 @@ public final class SortOperatorHelper {
     }
 
     private static Stream<JsonObject> boundedSort(Stream<JsonObject> source, String fieldName,
-            Comparator<Keyed> comparator, int bound) {
+            Comparator<Keyed> comparator, int bound, PipelineContext context) {
         final var heap = new PriorityQueue<>(comparator.reversed());
         final var seq = new int[]{0};
         final var path = FieldPath.of(fieldName);
         try (var documents = source) {
             documents.forEach(document -> {
-                final var keyed = new Keyed(document, path.valueIn(document), seq[0]++);
+                final var keyed = new Keyed(document, path.valueIn(document), seq[0]++, 0L);
                 if (heap.size() < bound) {
-                    heap.offer(keyed);
+                    heap.offer(held(keyed, context));
                 } else if (comparator.compare(heap.peek(), keyed) > 0) {
-                    heap.poll();
-                    heap.offer(keyed);
+                    context.releaseHeld(heap.remove().heldBytes());
+                    heap.offer(held(keyed, context));
                 }
             });
         }
@@ -118,13 +118,19 @@ public final class SortOperatorHelper {
         return Arrays.stream(retained).map(Keyed::document);
     }
 
+    private static Keyed held(Keyed keyed, PipelineContext context) {
+        final var bytes = HeldRows.bytesAtMost(keyed.document());
+        context.chargeHeld(bytes);
+        return new Keyed(keyed.document(), keyed.key(), keyed.seq(), bytes);
+    }
+
     private static Keyed[] decorate(Stream<JsonObject> source, String fieldName, HeldRows held) {
         final var decorated = new ArrayList<Keyed>();
         final var path = FieldPath.of(fieldName);
         try (var documents = source) {
             documents.forEach(document -> {
                 held.hold(document);
-                decorated.add(new Keyed(document, path.valueIn(document), decorated.size()));
+                decorated.add(new Keyed(document, path.valueIn(document), decorated.size(), 0L));
             });
         }
         return decorated.toArray(Keyed[]::new);

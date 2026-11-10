@@ -38,6 +38,7 @@ public final class TransactionBuffer {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
+    private static final TransactionBudget transactionBudget = IocContainer.get(TransactionBudget.class);
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
 
     private TransactionBuffer() {
@@ -81,8 +82,9 @@ public final class TransactionBuffer {
                 return sizeError;
             }
             final long bytes = entry.byteSize();
-            if (exceedsLimits(transaction, 1, bytes)) {
-                return new OperationResponse(OperationType.SAVE, ErrorCode.TRANSACTION_TOO_LARGE);
+            final var sizeRefusal = sizeRefusal(transaction, OperationType.SAVE, 1, bytes);
+            if (sizeRefusal != null) {
+                return sizeRefusal;
             }
             final var version = hybridClock.next();
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_SAVE, dbName, collName,
@@ -144,8 +146,9 @@ public final class TransactionBuffer {
                     overlayUpdates.put(id, effective);
                 }
             }
-            if (exceedsLimits(transaction, overlayUpdates.size(), bulkBytes)) {
-                return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.TRANSACTION_TOO_LARGE);
+            final var sizeRefusal = sizeRefusal(transaction, OperationType.BULK_SAVE, overlayUpdates.size(), bulkBytes);
+            if (sizeRefusal != null) {
+                return sizeRefusal;
             }
             payload.add(AdminTransactionEntry.OBJECTS_FIELD, array);
             final var versions = new ArrayList<Long>();
@@ -189,8 +192,9 @@ public final class TransactionBuffer {
                 payload.add(DELETED_DOCUMENT_FIELD, deletedDocument);
             }
             final var bytes = byteSizeOf(dbName, collName, payload);
-            if (exceedsLimits(transaction, 1, bytes)) {
-                return new OperationResponse(OperationType.DELETE, ErrorCode.TRANSACTION_TOO_LARGE);
+            final var sizeRefusal = sizeRefusal(transaction, OperationType.DELETE, 1, bytes);
+            if (sizeRefusal != null) {
+                return sizeRefusal;
             }
             final var version = hybridClock.next();
             bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload, List.of(),
@@ -215,6 +219,16 @@ public final class TransactionBuffer {
 
     private static long byteSizeOf(String dbName, String collName, JsonObject document) {
         return DbEntry.fromJsonObject(dbName, collName, document).byteSize();
+    }
+
+    private static OperationResponse sizeRefusal(Transaction transaction, OperationType type, int ops, long bytes) {
+        if (exceedsLimits(transaction, ops, bytes)) {
+            return new OperationResponse(type, ErrorCode.TRANSACTION_TOO_LARGE);
+        }
+        if (!transactionBudget.tryReserveFor(transaction, bytes)) {
+            return new OperationResponse(type, ErrorCode.TRANSACTION_BUDGET_EXHAUSTED);
+        }
+        return null;
     }
 
     private static boolean exceedsLimits(Transaction transaction, int ops, long bytes) {

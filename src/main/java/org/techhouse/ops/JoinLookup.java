@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,6 +20,7 @@ import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SaltedKey;
 
 final class JoinLookup {
+    private static final int FETCH_CHUNK = 1024;
     private static final Cache cache = IocContainer.get(Cache.class);
 
     private JoinLookup() {
@@ -29,9 +31,7 @@ final class JoinLookup {
             throws IOException {
         final var localValues = new SaltedElementSet();
         final var localPath = FieldPath.of(localField);
-        final var heldLeft = new HeldRows(context);
         for (var left : leftEntries) {
-            heldLeft.hold(left);
             final var localValue = localPath.resolve(left);
             if (localValue != null) {
                 localValues.add(localValue);
@@ -44,14 +44,17 @@ final class JoinLookup {
             final var matchingIds = PrimaryKeyIndexResolver.existingIds(localValues, dbName, joinCollectionName,
                     context);
             return lookupFromMatches(
-                    OverlayRead.withBuffered(overlay, fetchMatches(dbName, joinCollectionName, matchingIds, context)),
+                    OverlayRead.withBuffered(overlay,
+                            fetchMatches(dbName, joinCollectionName, matchingIds, KeptRows.ALL, context)),
                     remoteField, context);
         }
         final var matchingIds = IndexHelper.getMatchingIdsForJoin(dbName, joinCollectionName, remoteField, localValues,
                 context);
         if (matchingIds != null) {
             return lookupFromMatches(
-                    OverlayRead.withBuffered(overlay, fetchMatches(dbName, joinCollectionName, matchingIds, context)),
+                    OverlayRead.withBuffered(overlay,
+                            fetchMatches(dbName, joinCollectionName, matchingIds,
+                                    new KeptRows(FieldPath.of(remoteField), localValues), context)),
                     remoteField, context);
         }
         if (localValues.isEmpty()) {
@@ -63,18 +66,54 @@ final class JoinLookup {
                 : committed, remoteField, localValues, context);
     }
 
+    private record KeptRows(FieldPath remotePath, SaltedElementSet localValues) {
+        static final KeptRows ALL = new KeptRows(null, null);
+
+        boolean keeps(JsonObject document) {
+            if (remotePath() == null) {
+                return true;
+            }
+            final var remoteValue = remotePath.resolve(document);
+            return remoteValue != null && localValues.containsKey(new SaltedKey(remoteValue));
+        }
+    }
+
     private static List<JsonObject> fetchMatches(String dbName, String joinCollectionName, Set<String> matchingIds,
-            PipelineContext context) throws IOException {
+            KeptRows kept, PipelineContext context) throws IOException {
         if (matchingIds.isEmpty()) {
             return List.of();
         }
-        final var matchedDocs = cache.getEntriesByIds(dbName, joinCollectionName, matchingIds, context::pinnedPkIndex);
-        context.scanned(matchedDocs.size());
-        final var documents = new ArrayList<JsonObject>(matchedDocs.size());
-        for (final var entry : matchedDocs) {
-            documents.add(entry.getData());
+        final var held = new HeldRows(context);
+        final var documents = new ArrayList<JsonObject>(Math.min(matchingIds.size(), FETCH_CHUNK));
+        if (matchingIds.size() <= FETCH_CHUNK) {
+            fetchChunk(dbName, joinCollectionName, matchingIds, kept, documents, held, context);
+            return documents;
+        }
+        final var chunk = new HashSet<String>(FETCH_CHUNK * 2);
+        for (final var id : matchingIds) {
+            chunk.add(id);
+            if (chunk.size() == FETCH_CHUNK) {
+                fetchChunk(dbName, joinCollectionName, chunk, kept, documents, held, context);
+                chunk.clear();
+            }
+        }
+        if (!chunk.isEmpty()) {
+            fetchChunk(dbName, joinCollectionName, chunk, kept, documents, held, context);
         }
         return documents;
+    }
+
+    private static void fetchChunk(String dbName, String joinCollectionName, Set<String> ids, KeptRows kept,
+            List<JsonObject> documents, HeldRows held, PipelineContext context) throws IOException {
+        final var matchedDocs = cache.getEntriesByIds(dbName, joinCollectionName, ids, context::pinnedPkIndex);
+        context.scanned(matchedDocs.size());
+        for (final var entry : matchedDocs) {
+            final var data = entry.getData();
+            if (kept.keeps(data)) {
+                held.hold(data);
+                documents.add(data);
+            }
+        }
     }
 
     private static Map<SaltedKey, JsonArray> lookupFromMatches(List<JsonObject> matchedDocs, String remoteField,

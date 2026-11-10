@@ -257,8 +257,9 @@ public final class AggregationOperationHelper {
         final var joinCollectionRemoteField = joinStep.getRemoteField();
         final var as = joinStep.getAsField();
         final List<JsonObject> leftEntries;
+        final var heldLeft = new HeldRows(context);
         try (var documents = context.source(resultStream, dbName, collName)) {
-            leftEntries = context.watch(documents).toList();
+            leftEntries = context.watch(documents).peek(heldLeft::hold).toList();
         }
         final var joinedCollection = JoinLookup.build(dbName, joinCollectionName, joinCollectionRemoteField,
                 leftEntries, joinCollectionLocalField, transaction, context);
@@ -355,13 +356,13 @@ public final class AggregationOperationHelper {
         return resultStream.skip(skip);
     }
 
-    private static final class RowWithoutId {
+    private static final class RowWithoutId implements Comparable<RowWithoutId> {
         private final JsonObject row;
-        private final int hash;
+        private final long hash;
 
         private RowWithoutId(JsonObject row) {
             this.row = row;
-            var membersHash = 0;
+            var membersHash = 0L;
             for (var entry : row.entrySet()) {
                 if (!Globals.PK_FIELD.equals(entry.getKey())) {
                     membersHash += SaltedKey.memberHash(entry.getKey(), entry.getValue());
@@ -390,7 +391,12 @@ public final class AggregationOperationHelper {
 
         @Override
         public int hashCode() {
-            return hash;
+            return Long.hashCode(hash);
+        }
+
+        @Override
+        public int compareTo(RowWithoutId other) {
+            return Long.compare(hash, other.hash);
         }
     }
 }

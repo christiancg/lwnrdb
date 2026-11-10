@@ -1155,6 +1155,13 @@ def test_create_index_field_names(c):
     check("neither refused request built tier", "tier" not in registered_indexes(c, "multi_idx"))
     check_status("CREATE_INDEX fieldNames of registered fields stays idempotent",
                  create_indexes(c, "multi_idx", ["sku", "price"]), "OK")
+    started = time.monotonic()
+    huge = create_indexes(c, "multi_idx", [f"f{i}" for i in range(100_000)])
+    elapsed = time.monotonic() - started
+    check_code("100k fieldNames are refused -> 400-42", huge, "ERROR", "400-42")
+    check("the 100k fieldNames refusal answers quickly", elapsed < 5.0, f"{elapsed:.2f}s")
+    check("the collection keeps answering after the huge request",
+          len(ids_of(aggregate(c, "multi_idx", [filter_step("sku", "EQUALS", "s7")]))) == 1)
     drop_coll(c, "multi_idx")
 
 
@@ -1246,6 +1253,19 @@ def test_fault_operations_are_disabled_by_default(c):
         rc.authenticate("api_reader", "api_reader1234")
         check_code("a non-admin ARM_FAULT -> 403-1",
                    rc.send({"type": "ARM_FAULT", "point": "PEER_REPLY", "action": "DROP"}), "FORBIDDEN", "403-1")
+
+
+def test_arm_fault_fail_on_a_non_failable_point_answers_400_1(c):
+    section("FAIL is valid only on a failable point")
+
+    check_code("FAIL on WAL_APPENDED, which cannot fail -> 400-1",
+               c.send({"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "FAIL"}), "ERROR", "400-1")
+    check_code("FAIL on PEER_REPLY, which can only drop -> 400-1",
+               c.send({"type": "ARM_FAULT", "point": "PEER_REPLY", "action": "FAIL", "match": "COMMIT_TX"}),
+               "ERROR", "400-1")
+    check_code("FAIL on FILE_FORCED passes validation and meets the disabled seam -> 403-3",
+               c.send({"type": "ARM_FAULT", "point": "FILE_FORCED", "action": "FAIL", "match": "orders.wal"}),
+               "FORBIDDEN", "403-3")
 
 
 def test_name_case_collisions(c):
@@ -1738,6 +1758,7 @@ def main():
         test_flows,
         test_operation_permissions,
         test_fault_operations_are_disabled_by_default,
+        test_arm_fault_fail_on_a_non_failable_point_answers_400_1,
     ]
     for group in groups:
         with Conn() as c:

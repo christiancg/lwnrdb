@@ -424,6 +424,10 @@ WIDE = "client_wide"
 WIDE_ROWS = 160
 WIDE_ROW_BYTES = 60_000
 WIDE_LINE_BYTES = 1_000_000
+HALVED = "client_halved"
+HALVED_ROWS = 40
+HALVED_ROW_BYTES = 200_000
+HALVED_REPLY_CAP = 2_000_000
 
 
 def registered_indexes(port: int, db: str, coll: str) -> list:
@@ -524,6 +528,33 @@ def test_dump_restore_of_multi_megabyte_lines(cwd: str):
         send(port, {"type": "DROP_DATABASE", "databaseName": WIDE})
 
 
+def test_dump_halves_a_page_past_the_reply_cap(cwd: str):
+    section(f"--dump halves a page whose reply passes the client's cap ({HALVED_REPLY_CAP} bytes)")
+    with admin(SOURCE_PORT) as c:
+        check_status(f"create {HALVED}", c.send({"type": "CREATE_DATABASE", "databaseName": HALVED}), "OK")
+        check_status(f"create {HALVED}.{BIG}", c.send({"type": "CREATE_COLLECTION", "databaseName": HALVED,
+                                                       "collectionName": BIG}), "OK")
+        for start in range(0, HALVED_ROWS, 5):
+            check_status(f"save halved rows {start}..", c.send({
+                "type": "BULK_SAVE", "databaseName": HALVED, "collectionName": BIG,
+                "objects": [{"_id": f"h{i:03d}", "body": "h" * HALVED_ROW_BYTES, "n": i}
+                            for i in range(start, start + 5)]}), "OK")
+    dumped = client(cwd, "--dump", "--databases", HALVED, "--max-reply-bytes", str(HALVED_REPLY_CAP))
+    check("--dump with a small reply cap exits 0", dumped.returncode == 0, dumped.stderr.decode())
+    check("it reports every document", f"{HALVED}.{BIG}: {HALVED_ROWS} documents" in dumped.stderr.decode(),
+          dumped.stderr.decode())
+    restored = client(cwd, "--restore", port=TARGET_PORT, stdin=dumped.stdout)
+    check("--restore of the halved dump exits 0", restored.returncode == 0, restored.stderr.decode())
+    check("every document is restored byte for byte",
+          documents_of_port(TARGET_PORT, HALVED, BIG) == documents_of_port(SOURCE_PORT, HALVED, BIG)
+          and len(documents_of_port(TARGET_PORT, HALVED, BIG)) == HALVED_ROWS)
+    too_small = client(cwd, "--dump", "--databases", HALVED, "--max-reply-bytes", str(HALVED_ROW_BYTES // 2))
+    check("a document larger than the cap fails the dump and names its position",
+          too_small.returncode != 0 and "at position 0" in too_small.stderr.decode(), too_small.stderr.decode())
+    for port in (SOURCE_PORT, TARGET_PORT):
+        send(port, {"type": "DROP_DATABASE", "databaseName": HALVED})
+
+
 def test_hygiene(cwd: str, plain_dump: bytes):
     section("Hygiene")
     check("the client working directory stays empty", os.listdir(cwd) == [], str(os.listdir(cwd)))
@@ -540,8 +571,15 @@ def test_tls(cwd: str, work_dir: str, log_path: str):
         trusted = bu.wait_until(lambda: client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
                                 .returncode == 0, 30.0)
         check("--tls --insecure exits 0", bool(trusted))
+        insecure = client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
+        check("--insecure warns on stderr", insecure.stderr.decode().startswith("WARNING: --insecure is active"),
+              insecure.stderr.decode())
+        check("and keeps stdout to the reply alone", json.loads(insecure.stdout.decode()).get("status") == "OK",
+              insecure.stdout.decode()[:200])
         verified = client(cwd, "--tls", "--exec", '{"type":"LIST_DATABASES"}')
         check("--tls against the self-signed certificate exits 3", verified.returncode == 3, verified.stderr.decode())
+        check("a verified --tls prints no insecure warning", "--insecure" not in verified.stderr.decode(),
+              verified.stderr.decode())
     finally:
         bu.stop_server(proc, port=SOURCE_PORT)
 
@@ -578,6 +616,7 @@ def main():
         test_dump_restore_multi_field_index_round_trip(client_dir)
         test_exec_large_result_small_client_heap(client_dir)
         test_dump_restore_of_multi_megabyte_lines(client_dir)
+        test_dump_halves_a_page_past_the_reply_cap(client_dir)
         test_hygiene(client_dir, plain_dump)
         bu.stop_server(source, port=SOURCE_PORT)
         source = None

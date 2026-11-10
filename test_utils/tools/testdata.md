@@ -138,9 +138,53 @@ result is ~3 MB without reading it, then send the same `AGGREGATE` from a fourth
 {"type": "AGGREGATE", "status": "ERROR", "message": "The server holds the maximum bytes of unsent responses; retry shortly", "errorCode": "503-17"}
 ```
 
-A connection whose response write makes no progress for `clientWriteStallTimeoutMs` (30000 by default, at least
+A read of a collection held by a committed transaction that could not finish applying (a `500-33` fence, or a
+startup replay that hit a full disk) → `503-18` once `transactionLockTimeoutMs` passes, instead of waiting until the
+fence clears. Fill the disk, kill the server while a transaction commits, start it on the full disk, then count the
+collection:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The collection is held by a committed transaction that has not finished applying; retry shortly", "errorCode": "503-18"}
+```
+
+A read is also refused with `503-18` when the commit fences the collection while the read is already waiting for
+it: the waiting read re-checks the fence every 200 ms instead of waiting out the whole commit.
+
+A read (scan, `FIND_BY_ID` or `AGGREGATE`, not a dirty read) of a collection holding a forced write that could neither be
+applied nor taken back (the write answered `500-34`) first applies the logged writes; while that still fails, because
+the disk is still full, it answers `503-19` instead of scanning pages that may hold a copy the write meant to blank.
+Fill the disk until a `SAVE` answers `500-34`, keep it full, then count the collection:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly", "errorCode": "503-19"}
+```
+
+Free the disk and the same request answers normally (the read applies the log first).
+
+Running pipelines together past `aggregateTotalHeldBytes` (a quarter of the heap by default; start a server with
+`aggregateMaxResultBytes=16mb` and `aggregateTotalHeldBytes=14mb` over 15000 documents of ~200 bytes) → `503-20` for the
+pipeline that would cross it. Run the same `GROUP_BY` from two connections at once: one answers, the other gets
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The server holds the maximum bytes of running aggregations; retry shortly", "errorCode": "503-20"}
+```
+
+and the same request answers once it runs alone.
+
+Open transactions together past `transactionTotalMaxBytes` (a quarter of the heap by default; start a server with
+`transactionTotalMaxBytes=200kb`) → `503-21` for the buffered write that would cross it. Buffer three 60 KB documents
+in one transaction, then save one in a second transaction on another collection:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly", "errorCode": "503-21"}
+```
+
+The second transaction stays usable: commit the first and the retried `SAVE` buffers.
+
+A connection whose response write moves less than 64 KB in `clientWriteStallTimeoutMs` (30000 by default, at least
 1000) is closed by the server and its transaction rolled back; the three non-readers above are closed once it
-passes, which frees the budget for the fourth.
+passes, which frees the budget for the fourth, and so is a connection that reads a large response 16 KB at a time with
+a pause of half the timeout between reads.
 
 With `authVerifierCacheEnabled=true` (the default) a second `AUTHENTICATE` with the same password answers without
 recomputing the password hash; a wrong password after a cached success is still refused and still counts toward
@@ -3213,7 +3257,13 @@ An unknown point → `400-1`
 {"type": "ARM_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "action": "DROP"}
 ```
 
-An unknown action (anything but `PAUSE`, `HALT` or `DROP`) → `400-1`
+`FAIL` on a point that cannot fail (anything but `FILE_FORCED`) → `400-1`
+
+```json
+{"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "FAIL"}
+```
+
+An unknown action (anything but `PAUSE`, `HALT`, `DROP` or `FAIL`) → `400-1`
 
 ```json
 {"type": "ARM_FAULT", "point": "ANTI_ENTROPY_SNAPSHOTTED", "action": "DELAY"}
@@ -3248,6 +3298,14 @@ nothing.
 {"type": "ARM_FAULT", "point": "WAL_APPENDED", "action": "HALT", "match": "test|testCollection"}
 ```
 
+`FILE_FORCED` with `FAIL` makes the next force of the named file throw, as a failed `fsync` would: its `match` is a
+file name, or a folder name followed by `/`. Arm it on the collection's log and send a `SAVE`: the write whose
+force failed answers a `500-*` and is not acknowledged
+
+```json
+{"type": "ARM_FAULT", "point": "FILE_FORCED", "action": "FAIL", "match": "testCollection.wal"}
+```
+
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not
 be read — and cannot be provoked from this playbook; the server log names the cause. That includes a
 `DELETE_PROCEDURE`, `DELETE_SCHEDULE`, `DELETE_TRIGGER` or `DELETE_SCHEMA` whose file could not be removed
@@ -3256,4 +3314,14 @@ back on the next load. One of them changes what a
 client does next: `500-33` is a commit that failed after its commit point. The transaction stays open and keeps
 its locks, and re-sending `COMMIT_TRANSACTION` finishes it once the fault is gone. Until then a `SAVE`,
 `BULK_SAVE` or `DELETE` sent on that connection answers `500-33` too and is not buffered: an op added after the
-commit point would be applied by recovery although the client never committed it, and could never be rolled back.
+commit point would be applied by recovery although the client never committed it, and could never be rolled back. The
+server also re-drives that commit by itself, with a backoff from 100 ms up to 5 s, on the connection's own thread
+(the one that holds the locks), both while the client is idle and after it disconnects, so freeing the space
+unblocks the collections without a restart; a `COMMIT_TRANSACTION` re-sent after such a background finish answers
+`OK`.
+
+`500-34` is the single-document counterpart: a `SAVE`, `BULK_SAVE` or `DELETE` (or any other write) whose
+write-ahead-log record was forced but which could neither be applied nor taken back, because the disk filled
+between the two. The record is the commit point, so the write may already have taken effect: it is applied before
+the collection is next read or written (marking its documents pending for the indexes and evicting their cached
+copies), or at the next startup. Treat it like `503-8`: retrying is only safe for an idempotent write.

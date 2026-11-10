@@ -1,6 +1,8 @@
 package org.techhouse;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -44,6 +46,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.admin.AdminStamp;
+import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
 import org.techhouse.simplejs.host.ScriptHeapGuard;
 
@@ -74,6 +77,7 @@ public class ServerMain {
     private static final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private static final Logger logger = Logger.logFor(ServerMain.class);
     private static final int BIND_FAILURE_STATUS = 1;
+    private static final int STARTUP_FAILURE_STATUS = 1;
     @SuppressWarnings("FieldMayBeFinal")
     private static volatile IntConsumer exit = System::exit;
 
@@ -89,16 +93,40 @@ public class ServerMain {
         }
     }
 
-    public static void main(String[] args) throws IOException {
+    private static void installDurableShadowIfConfigured() throws IOException {
+        final var shadow = config.getPowerLossShadowPath();
+        if (config.isFaultInjectionEnabled() && !shadow.isBlank()) {
+            fs.installDurableShadow(Path.of(shadow));
+        }
+    }
+
+    public static void main(String[] args) {
+        final SocketServer server;
+        try {
+            server = start(args);
+        } catch (IOException | UncheckedIOException e) {
+            logger.fatal("The server will not start: " + e.getMessage());
+            exit.accept(STARTUP_FAILURE_STATUS);
+            return;
+        }
+        registerShutdownHook(server);
+        if (!server.serve()) {
+            exit.accept(BIND_FAILURE_STATUS);
+        }
+    }
+
+    private static SocketServer start(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
         AdminPasswordGuard.refuseWeakPassword();
         FetchPinningGuard.refuseUnpinnedFetch();
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
         DeviceSyncGuard.fallBackWhenUnsyncable(fs);
+        installDurableShadowIfConfigured();
         fs.createAdminDatabase();
         StartupWarnings.retainAndReportUncleanStops();
         final var replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());
+        DeferredWrites.install();
         fs.recoverWriteIntents();
         cache.loadAdminData();
         AdminPasswordGuard.refuseUnsetPasswordWhenBootstrapping(cache);
@@ -140,12 +168,7 @@ public class ServerMain {
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();
         TriggerRunRecovery.recoverLocal(startupTriggerRuns);
-        final var sslServerSocketFactory = createTlsFactory();
-        final var server = new SocketServer(port, config.getBindAddress(), sslServerSocketFactory);
-        registerShutdownHook(server);
-        if (!server.serve()) {
-            exit.accept(BIND_FAILURE_STATUS);
-        }
+        return new SocketServer(port, config.getBindAddress(), createTlsFactory());
     }
 
     private static void startTriggerRunSweepIfStandalone() {

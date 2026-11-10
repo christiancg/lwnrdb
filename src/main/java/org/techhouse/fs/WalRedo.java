@@ -26,7 +26,13 @@ final class WalRedo {
     static List<PkIndexEntry> redoAll(FilePaths paths) throws IOException {
         final var completedDeletes = new ArrayList<PkIndexEntry>();
         for (final var log : findLogs(paths)) {
-            completedDeletes.addAll(redo(paths, log));
+            try {
+                completedDeletes.addAll(redo(paths, log));
+            } catch (IOException e) {
+                throw new IOException("Could not replay the write-ahead log " + log.getPath() + ": " + e.getMessage()
+                        + ". The server does not start rather than serve that collection half replayed; restore its"
+                        + " folder, or move it aside to start without it", e);
+            }
         }
         return completedDeletes;
     }
@@ -68,7 +74,7 @@ final class WalRedo {
                 logger.warning(message);
             }
         }
-        return withPendingIds(dbName, collName, writtenIds(dbName, collName, records), decoded.pendingIds());
+        return withPendingIds(dbName, collName, writtenRows(dbName, collName, records), decoded.pendingIds());
     }
 
     private static List<PkIndexEntry> withPendingIds(String dbName, String collName, List<PkIndexEntry> written,
@@ -103,7 +109,7 @@ final class WalRedo {
         PkIndexStore.forgetState(paths.pkIndexFile(dbName, collName));
     }
 
-    private static boolean skipped(WalCodec.Decoded decoded, WalRecord record, WalChange change) {
+    static boolean skipped(WalCodec.Decoded decoded, WalRecord record, WalChange change) {
         final var rewrite = change.target() == WalTarget.PK_WRITE ? null : decoded.rewrites().get(change.page());
         return rewrite != null && rewrite.skips(record, change);
     }
@@ -166,7 +172,7 @@ final class WalRedo {
                 + ": they were written by a write whose log record never became durable");
     }
 
-    private static List<PkIndexEntry> writtenIds(String dbName, String collName, List<WalRecord> records) {
+    static List<PkIndexEntry> writtenRows(String dbName, String collName, List<WalRecord> records) {
         final var written = new LinkedHashMap<String, PkIndexEntry>();
         for (final var record : records) {
             final var blankedPage = blankedPageOf(record);

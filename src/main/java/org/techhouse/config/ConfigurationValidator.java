@@ -37,6 +37,7 @@ public final class ConfigurationValidator {
             validateEnabledClusterConstraints(configs, errors);
         }
         validateScriptZoneAndLocale(configs, errors);
+        validatePowerLossShadow(configs, errors);
         return errors;
     }
 
@@ -81,6 +82,24 @@ public final class ConfigurationValidator {
         } catch (RuntimeException ignored) {
             return null;
         }
+    }
+
+    private static void validatePowerLossShadow(Map<String, String> configs, List<String> errors) {
+        final var shadow = configs.get(ConfigKey.POWER_LOSS_SHADOW_PATH.key());
+        if (isBlank(shadow)) {
+            return;
+        }
+        if (!Boolean.parseBoolean(configs.getOrDefault("faultInjectionEnabled", "false").trim())) {
+            errors.add("powerLossShadowPath requires faultInjectionEnabled=true");
+        }
+        final var filePath = configs.get("filePath");
+        if (!isBlank(filePath) && isInside(Path.of(shadow.trim()), Path.of(filePath.trim()))) {
+            errors.add("powerLossShadowPath (" + shadow + ") must lie outside filePath (" + filePath + ")");
+        }
+    }
+
+    private static boolean isInside(Path candidate, Path folder) {
+        return candidate.toAbsolutePath().normalize().startsWith(folder.toAbsolutePath().normalize());
     }
 
     private static void validateScriptZoneAndLocale(Map<String, String> configs, List<String> errors) {

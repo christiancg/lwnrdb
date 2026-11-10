@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.Random;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.SaltedKey;
@@ -112,5 +113,55 @@ public class SaltedKeyTest {
         assertNotEquals(new SaltedKey(new JsonString("abcd")), new SaltedKey(new JsonString("ABCD")));
         assertNotEquals(new SaltedKey(new JsonString("1")), new SaltedKey(new JsonNumber(1)));
         assertEquals(new SaltedKey(new JsonString("abcdefg")), new SaltedKey(new JsonString("abcdefg")));
+    }
+
+    private static JsonObject pair(String key, String value) {
+        final var object = new JsonObject();
+        object.addProperty(key, value);
+        return object;
+    }
+
+    @Test
+    public void selfPairObjectsHashDifferently() {
+        final var hashes = new HashSet<Integer>();
+        final var pairs = 4096;
+        for (var i = 0; i < pairs; i++) {
+            hashes.add(new SaltedKey(pair("k" + i, "k" + i)).hashCode());
+        }
+
+        assertTrue(hashes.size() >= pairs - 16, () -> hashes.size() + " distinct hashes");
+    }
+
+    @Test
+    public void swappedPairsHashDifferently() {
+        for (var i = 0; i < 1024; i++) {
+            final var forward = new SaltedKey(pair("a" + i, "b" + i));
+            final var swapped = new SaltedKey(pair("b" + i, "a" + i));
+
+            assertNotEquals(forward, swapped);
+            assertNotEquals(forward.hashCode(), swapped.hashCode(), "pair " + i);
+        }
+    }
+
+    @Test
+    public void memberHashesAreAsymmetric() {
+        final var hashes = new HashSet<Long>();
+        for (var i = 0; i < 1024; i++) {
+            hashes.add(SaltedKey.memberHash("k" + i, new JsonString("k" + i)));
+            hashes.add(SaltedKey.memberHash("a" + i, new JsonString("b" + i)));
+            hashes.add(SaltedKey.memberHash("b" + i, new JsonString("a" + i)));
+        }
+
+        assertTrue(hashes.size() >= 3 * 1024 - 4, () -> hashes.size() + " distinct member hashes");
+    }
+
+    @Test
+    public void equalKeysCompareEqualAndOrderIsConsistent() {
+        final var first = new SaltedKey(pair("a", "b"));
+        final var same = new SaltedKey(pair("a", "b"));
+        final var other = new SaltedKey(pair("b", "a"));
+
+        assertEquals(0, first.compareTo(same));
+        assertEquals(Integer.signum(first.compareTo(other)), -Integer.signum(other.compareTo(first)));
     }
 }

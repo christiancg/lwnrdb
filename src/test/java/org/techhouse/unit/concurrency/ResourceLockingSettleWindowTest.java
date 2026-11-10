@@ -86,6 +86,18 @@ public class ResourceLockingSettleWindowTest {
     }
 
     @Test
+    public void test_a_writer_also_holding_a_read_lock_keeps_its_lock_exclusive() throws Exception {
+        rl.lock(DB, COLL);
+        rl.lockRead(DB, COLL);
+        try (var window = rl.openSettleWindow(DB, COLL)) {
+            assertFalse(window.shared(), "downgrading would leave the read hold counted twice");
+        } finally {
+            rl.releaseRead(DB, COLL);
+            rl.release(DB, COLL);
+        }
+    }
+
+    @Test
     public void test_a_scan_read_waits_until_the_window_closes() throws Exception {
         final CompletableFuture<Boolean> scan;
         try (var ignored = openWindow()) {

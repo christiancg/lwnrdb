@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,6 +23,7 @@ public final class TombstoneStore {
             + " tombstone file may hold a torn line, and nothing rebuilds it";
     private static final Map<String, ResidentTombstones> residents = new ConcurrentHashMap<>();
     private static final Set<String> awaitingGroupForce = ConcurrentHashMap.newKeySet();
+    private static final Map<String, Set<TombstoneRetract>> pendingRetracts = new ConcurrentHashMap<>();
 
     private final FilePaths paths;
     private final WriteAheadLog writeAheadLog;
@@ -104,15 +106,58 @@ public final class TombstoneStore {
     }
 
     public Map<String, Long> read(String dbName, String collName) throws IOException {
-        return Collections.unmodifiableMap(residentOf(paths.tombstoneFile(dbName, collName)).copy());
+        final var file = paths.tombstoneFile(dbName, collName);
+        final var held = heldBack(file);
+        final var copy = residentOf(file).copy();
+        copy.entrySet().removeIf(entry -> held.contains(new TombstoneRetract(entry.getKey(), entry.getValue())));
+        return Collections.unmodifiableMap(copy);
     }
 
     public long versionOf(String dbName, String collName, String id) throws IOException {
-        return residentOf(paths.tombstoneFile(dbName, collName)).versionOf(id);
+        final var file = paths.tombstoneFile(dbName, collName);
+        final var held = heldBack(file);
+        final var version = residentOf(file).versionOf(id);
+        return held.contains(new TombstoneRetract(id, version)) ? 0L : version;
     }
 
     public TombstoneView view(String dbName, String collName) throws IOException {
-        return residentOf(paths.tombstoneFile(dbName, collName)).view();
+        final var file = paths.tombstoneFile(dbName, collName);
+        final var held = heldBack(file);
+        final var view = residentOf(file).view();
+        return held.isEmpty() ? view : view.without(held);
+    }
+
+    private static Set<TombstoneRetract> heldBack(File file) {
+        retryPendingRetracts(file);
+        final var held = pendingRetracts.get(file.getAbsolutePath());
+        return held == null ? Set.of() : Set.copyOf(held);
+    }
+
+    static void retryPendingRetracts(File file) {
+        final var key = file.getAbsolutePath();
+        if (pendingRetracts.isEmpty() || !pendingRetracts.containsKey(key)) {
+            return;
+        }
+        final var lock = FileLocks.lockWrite(file);
+        try {
+            final var pending = pendingRetracts.get(key);
+            if (pending == null || pending.isEmpty()) {
+                return;
+            }
+            final var lines = pending.stream().map(held -> TombstoneFile.retractLineOf(held.id(), held.version()))
+                    .toList();
+            try {
+                renewedAfterFailedForce(file, loadLocked(file));
+                FileLocks.appendLines(file, lines, line -> line, TOMBSTONE_ROLLBACK_FAILURE);
+            } catch (IOException stillFailing) {
+                return;
+            }
+            pendingRetracts.remove(key);
+            residents.remove(key);
+            logger.info("Retracted " + lines.size() + " held-back delete tombstone(s) in " + file.getName());
+        } finally {
+            lock.unlock();
+        }
     }
 
     public long highestVersion(String dbName, String collName) throws IOException {
@@ -149,6 +194,7 @@ public final class TombstoneStore {
     static void forgetUnder(File folder) {
         final var prefix = folder.getAbsolutePath() + File.separator;
         residents.keySet().removeIf(path -> path.startsWith(prefix));
+        pendingRetracts.keySet().removeIf(path -> path.startsWith(prefix));
         awaitingGroupForce.removeIf(path -> path.startsWith(prefix));
     }
 
@@ -160,9 +206,10 @@ public final class TombstoneStore {
         if (ids.isEmpty()) {
             return;
         }
+        retryPendingRetracts(file);
         final var lock = FileLocks.lockWrite(file);
         try {
-            final var resident = loadLocked(file);
+            final var resident = renewedAfterFailedForce(file, loadLocked(file));
             final var lines = new ArrayList<String>(ids.size());
             for (var i = 0; i < ids.size(); i++) {
                 lines.add(lineOf(ids.get(i), versions.get(i)));
@@ -178,6 +225,20 @@ public final class TombstoneStore {
         } finally {
             lock.unlock();
         }
+    }
+
+    private static ResidentTombstones renewedAfterFailedForce(File file, ResidentTombstones resident)
+            throws IOException {
+        if (resident == null || !ForceFailures.hasFailed(file.toPath())) {
+            return resident;
+        }
+        final var kept = resident.merged();
+        final var key = file.getAbsolutePath();
+        residents.remove(key);
+        TombstoneFile.rewrite(file, kept);
+        final var renewed = ResidentTombstones.of(kept, kept.size(), FileState.of(file));
+        residents.put(key, renewed);
+        return renewed;
     }
 
     static Map<String, Long> read(File file) throws IOException {
@@ -255,6 +316,7 @@ public final class TombstoneStore {
         if (!file.exists()) {
             return;
         }
+        retryPendingRetracts(file);
         final var lock = FileLocks.lockWrite(file);
         try {
             final var resident = loadLocked(file);
@@ -275,42 +337,38 @@ public final class TombstoneStore {
         if (!file.exists()) {
             return;
         }
+        final var key = file.getAbsolutePath();
         final var lock = FileLocks.lockWrite(file);
         try {
-            final var parsed = parseTombstones(file);
-            if (parsed.unrecognised()) {
-                residents.remove(file.getAbsolutePath());
+            final var resident = loadLocked(file);
+            if (resident == null) {
                 logger.error("No line in " + file.getName() + " could be read as a tombstone entry; leaving it"
                         + " untouched rather than retracting from it");
                 return;
             }
-            final var retracted = lineOf(id, version);
-            final var kept = parsed.lines().stream().filter(line -> !line.equals(retracted)).toList();
-            if (kept.size() != parsed.lines().size()) {
-                publishRewrite(file, kept);
+            try {
+                renewedAfterFailedForce(file, resident);
+                FileLocks.appendLines(file, List.of(TombstoneFile.retractLineOf(id, version)), line -> line,
+                        TOMBSTONE_ROLLBACK_FAILURE);
+            } catch (IOException failed) {
+                pendingRetracts.computeIfAbsent(key, _ -> ConcurrentHashMap.newKeySet())
+                        .add(new TombstoneRetract(id, version));
+                logger.warning("Could not append the retract of the delete tombstone of " + id + " to " + file.getName()
+                        + "; it is held back from every read and digest and retried: " + failed.getMessage());
+                return;
             }
+            residents.remove(key);
         } finally {
             lock.unlock();
         }
-    }
-
-    private static void publishRewrite(File file, List<String> lines) throws IOException {
-        final var key = file.getAbsolutePath();
-        residents.remove(key);
-        FileLocks.rewriteFileAtomically(file.toPath(), lines);
-        final var builder = new TombstoneChunks.Builder(lines.size());
-        for (final var line : lines) {
-            final var sep = line.indexOf(Globals.ID_SEPARATOR);
-            builder.add(FieldIndexEntry.unescapeIndexToken(line.substring(0, sep)),
-                    Long.parseLong(line.substring(sep + Globals.ID_SEPARATOR.length())));
-        }
-        residents.put(key, ResidentTombstones.of(builder.build(), lines.size(), FileState.of(file)));
     }
 
     private static Parsed<Map<String, Long>> parseTombstones(File file) throws IOException {
         final var entries = new HashMap<String, Long>();
         final var lines = new ArrayList<String>();
         var dropped = false;
+        final var parsed = new ArrayList<TombstoneRetract>();
+        final var retracted = new HashSet<TombstoneRetract>();
         for (final var line : FileLocks.decodeLines(Files.readAllBytes(file.toPath()))) {
             final var cleaned = line.replace("\r", "").replace("\n", "");
             if (cleaned.isEmpty()) {
@@ -325,13 +383,18 @@ public final class TombstoneStore {
             try {
                 final var id = FieldIndexEntry.unescapeIndexToken(cleaned.substring(0, sep));
                 final var version = Long.parseLong(cleaned.substring(sep + Globals.ID_SEPARATOR.length()));
-                entries.merge(id, version, Math::max);
+                (version < 0 ? retracted : parsed).add(new TombstoneRetract(id, Math.abs(version)));
                 lines.add(cleaned);
             } catch (NumberFormatException e) {
                 dropped = true;
                 logger.warning("Removing malformed tombstone entry in " + file.getName() + ": " + e.getMessage());
             }
         }
-        return new Parsed<>(entries, lines, dropped, dropped && entries.isEmpty());
+        for (final var entry : parsed) {
+            if (!retracted.contains(entry)) {
+                entries.merge(entry.id(), entry.version(), Math::max);
+            }
+        }
+        return new Parsed<>(entries, lines, dropped, dropped && lines.isEmpty());
     }
 }

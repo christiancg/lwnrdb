@@ -21,6 +21,8 @@ public class LogWriter {
     private static final Configuration config = Configuration.getInstance();
     private static final ReentrantLock WRITER_LOCK = new ReentrantLock();
     private static final String ROLLED_SUFFIX = ".1";
+    private static final int MAX_HELD_ENTRIES = 256;
+    private static final List<String> HELD_ENTRIES = new ArrayList<>();
     private static AppendingFile openWriter;
     private static String openPath;
     private static boolean needsLeadingNewline;
@@ -123,6 +125,11 @@ public class LogWriter {
     }
 
     public static void writeLogEntry(String logEntry) {
+        if (config.getLogPath() == null) {
+            holdUntilConfigured(logEntry);
+            System.out.println(logEntry);
+            return;
+        }
         try {
             appendToLogFile(logEntry);
             System.out.println(logEntry);
@@ -131,29 +138,51 @@ public class LogWriter {
         }
     }
 
-    private static void appendToLogFile(String logEntry) throws IOException {
+    private static void holdUntilConfigured(String logEntry) {
         WRITER_LOCK.lock();
         try {
-            final var today = LocalDate.now(clock);
-            final var file = logFileOf(today);
-            final var path = file.toAbsolutePath().toString();
-            ensureWriterFor(file, path);
-            pruneOnDateChange(file, today);
-            if (openBytes > 0 && openBytes + logEntry.length() > config.sizeValue(ConfigKey.MAX_LOG_FILE_SIZE)) {
-                roll(file);
-                ensureWriterFor(file, path);
+            if (HELD_ENTRIES.size() < MAX_HELD_ENTRIES) {
+                HELD_ENTRIES.add(logEntry);
             }
-            if (needsLeadingNewline) {
-                openWriter.append(Globals.NEWLINE);
-                openBytes += Globals.NEWLINE.length();
-            }
-            openWriter.append(logEntry);
-            openWriter.flush();
-            openBytes += logEntry.length();
-            needsLeadingNewline = true;
         } finally {
             WRITER_LOCK.unlock();
         }
+    }
+
+    private static void appendToLogFile(String logEntry) throws IOException {
+        WRITER_LOCK.lock();
+        try {
+            if (!HELD_ENTRIES.isEmpty()) {
+                final var held = List.copyOf(HELD_ENTRIES);
+                HELD_ENTRIES.clear();
+                for (final var entry : held) {
+                    appendLocked(entry);
+                }
+            }
+            appendLocked(logEntry);
+        } finally {
+            WRITER_LOCK.unlock();
+        }
+    }
+
+    private static void appendLocked(String logEntry) throws IOException {
+        final var today = LocalDate.now(clock);
+        final var file = logFileOf(today);
+        final var path = file.toAbsolutePath().toString();
+        ensureWriterFor(file, path);
+        pruneOnDateChange(file, today);
+        if (openBytes > 0 && openBytes + logEntry.length() > config.sizeValue(ConfigKey.MAX_LOG_FILE_SIZE)) {
+            roll(file);
+            ensureWriterFor(file, path);
+        }
+        if (needsLeadingNewline) {
+            openWriter.append(Globals.NEWLINE);
+            openBytes += Globals.NEWLINE.length();
+        }
+        openWriter.append(logEntry);
+        openWriter.flush();
+        openBytes += logEntry.length();
+        needsLeadingNewline = true;
     }
 
     private static void pruneOnDateChange(Path file, LocalDate today) {

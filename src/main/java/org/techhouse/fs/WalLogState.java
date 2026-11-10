@@ -16,6 +16,7 @@ final class WalLogState {
     final String collName;
     final String path;
     final Set<Long> touchedPages = new HashSet<>();
+    final Set<Long> openRewrites = ConcurrentHashMap.newKeySet();
     long nextSeq = 1L;
     volatile long knownLength;
     long allocatedLength;
@@ -23,14 +24,28 @@ final class WalLogState {
     boolean unapplied;
     boolean groupBaseLogged;
     boolean pendingLogged;
+    volatile long pendingFrameBytes;
     WalWriteGroup group;
     volatile long lastWriteMillis;
+    int checkpointFailures;
+    volatile long checkpointRetryAtMillis;
     private volatile boolean seeded;
 
     private WalLogState(String dbName, String collName, String path) {
         this.dbName = dbName;
         this.collName = collName;
         this.path = path;
+    }
+
+    void refuseWhileRewriting(String subject) throws RewriteOpenException {
+        if (!openRewrites.isEmpty()) {
+            throw new RewriteOpenException("Did not checkpoint " + subject + " while page(s) " + openRewrites
+                    + " are rewritten: it would drop their REWRITE_BEGIN");
+        }
+    }
+
+    long lengthBeyondPending() {
+        return knownLength - pendingFrameBytes;
     }
 
     boolean endGroup() {
@@ -80,6 +95,7 @@ final class WalLogState {
         if (decoded == null || decoded.checkpoint() == null) {
             recordsSinceCheckpoint = 0;
             pendingLogged = false;
+            pendingFrameBytes = 0L;
             knownLength = 0L;
             allocatedLength = 0L;
             seeded = true;
@@ -101,6 +117,7 @@ final class WalLogState {
         recordsSinceCheckpoint = decoded.framesSinceCheckpoint();
         groupBaseLogged = decoded.groupBase() != WalCodec.NO_GROUP_BASE;
         pendingLogged = decoded.pendingLogged();
+        pendingFrameBytes = pendingLogged ? WalCodec.encodePending(0L, decoded.pendingIds()).length : 0L;
         nextSeq = Math.max(nextSeq, decoded.lastSeq() + 1);
         knownLength = cleanLength;
         allocatedLength = bytes.length;

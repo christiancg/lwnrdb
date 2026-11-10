@@ -15,6 +15,7 @@ final class ApplyTracker {
     private static final class ApplyState {
         private final AtomicInteger active = new AtomicInteger();
         private final AtomicLong epoch = new AtomicLong();
+        private boolean forgotten;
     }
 
     private final Map<String, ApplyState> states = new ConcurrentHashMap<>();
@@ -33,11 +34,14 @@ final class ApplyTracker {
 
     void end(Collection<String> keys) {
         for (final var key : keys) {
-            final var state = states.get(key);
-            if (state != null) {
+            states.computeIfPresent(key, (_, state) -> {
                 state.epoch.incrementAndGet();
-                state.active.decrementAndGet();
-            }
+                if (state.active.decrementAndGet() > 0 || !state.forgotten) {
+                    return state;
+                }
+                generation.incrementAndGet();
+                return null;
+            });
         }
     }
 
@@ -105,6 +109,7 @@ final class ApplyTracker {
         final var removed = new boolean[1];
         states.computeIfPresent(key, (_, state) -> {
             if (state.active.get() > 0) {
+                state.forgotten = true;
                 return state;
             }
             removed[0] = true;

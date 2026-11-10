@@ -33,6 +33,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     private static final CompiledScriptCache compiledScriptCache = IocContainer.get(CompiledScriptCache.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final AggregateHeldBudget heldBudget = IocContainer.get(AggregateHeldBudget.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     private final Map<String, ScriptCallable> callables = new HashMap<>();
@@ -41,6 +42,8 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     private int transientPins;
     private final long scriptDeadline = System.currentTimeMillis() + configuration.getAggregationScriptTimeoutMs();
     private final boolean scriptsAllowed;
+    private final boolean sharesBudget;
+    private long reservedShared;
     private final boolean timed;
     private final long deadlineNanos;
     private final long maxResultBytes;
@@ -52,16 +55,18 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     private long deferredHeldBytes;
     private boolean pointHold;
 
-    private PipelineContext(long timeoutMs, long maxResultBytes, AnalyzeContext analyze, boolean scriptsAllowed) {
+    private PipelineContext(long timeoutMs, long maxResultBytes, AnalyzeContext analyze, boolean scriptsAllowed,
+            boolean sharesBudget) {
         this.timed = timeoutMs > 0;
         this.deadlineNanos = timed ? System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs) : 0L;
         this.maxResultBytes = maxResultBytes;
         this.analyze = analyze;
         this.scriptsAllowed = scriptsAllowed;
+        this.sharesBudget = sharesBudget;
     }
 
     public static PipelineContext of(long timeoutMs, long maxResultBytes, AnalyzeContext analyze) {
-        return new PipelineContext(timeoutMs, maxResultBytes, analyze, true);
+        return new PipelineContext(timeoutMs, maxResultBytes, analyze, true, true);
     }
 
     public static PipelineContext fromConfiguration(AnalyzeContext analyze) {
@@ -69,7 +74,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     }
 
     public static PipelineContext withoutScripts() {
-        return new PipelineContext(0L, Long.MAX_VALUE, null, false);
+        return new PipelineContext(0L, Long.MAX_VALUE, null, false, false);
     }
 
     public PipelineContext holdingPoint() {
@@ -133,6 +138,34 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
         if (resultBytes > maxResultBytes) {
             throw new AggregateLimitException(ErrorCode.AGGREGATE_RESULT_TOO_LARGE);
         }
+        if (sharedPoolRefuses(bytes)) {
+            resultBytes -= bytes;
+            throw new AggregateLimitException(ErrorCode.AGGREGATE_BUDGET_EXHAUSTED);
+        }
+    }
+
+    public void releaseHeld(long bytes) {
+        resultBytes -= bytes;
+        releaseShared(bytes);
+    }
+
+    private boolean sharedPoolRefuses(long bytes) {
+        if (!sharesBudget || bytes <= 0) {
+            return false;
+        }
+        if (!heldBudget.tryReserve(bytes)) {
+            return true;
+        }
+        reservedShared += bytes;
+        return false;
+    }
+
+    private void releaseShared(long bytes) {
+        final var released = Math.min(bytes, reservedShared);
+        if (released > 0) {
+            reservedShared -= released;
+            heldBudget.release(released);
+        }
     }
 
     public void chargeHeld(long bytes) {
@@ -140,7 +173,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
     }
 
     boolean defersHeld(HeldRows held, long atMostBytes) {
-        if (resultBytes + deferredHeldBytes + atMostBytes > maxResultBytes) {
+        if (resultBytes + deferredHeldBytes + atMostBytes > maxResultBytes || sharedPoolRefuses(atMostBytes)) {
             return false;
         }
         if (!deferringHeld.contains(held)) {
@@ -152,6 +185,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
 
     void settledHeld(long atMostBytes) {
         deferredHeldBytes -= atMostBytes;
+        releaseShared(atMostBytes);
     }
 
     private void settleDeferredHeld() {
@@ -260,6 +294,7 @@ public final class PipelineContext implements ReadObserver, AutoCloseable {
             callable.close();
         }
         callables.clear();
+        releaseShared(reservedShared);
         pinnedPk.clear();
         while (transientPins > 0) {
             transientPins--;

@@ -1,5 +1,6 @@
 package org.techhouse.ejson.internal;
 
+import java.security.SecureRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReferenceArray;
@@ -10,8 +11,9 @@ import org.techhouse.ejson.elements.KeyShape;
 public final class ShapeTable {
     private static final ShapeTable SHARED = new ShapeTable(Globals.SHAPE_TABLE_SLOTS, Globals.SHAPE_TABLE_MAX_PINNED,
             Globals.KEY_TABLE_PIN_HITS);
-    private static final int MIX = 0x9E3779B9;
-    private static final int HALF_WORD = 16;
+    private static final long PLACEMENT_SEED = seedFrom(new SecureRandom());
+    private static final long PLACEMENT_KEY = seedFrom(new SecureRandom()) | 1L;
+    private static final int CHARS_PER_ROUND = 4;
 
     private final AtomicReferenceArray<KeyShape> shapes;
     private final AtomicIntegerArray recentlyUsed;
@@ -43,7 +45,7 @@ public final class ShapeTable {
         if (!isShareable(keys, from, to)) {
             return null;
         }
-        final var home = homeOf(KeyShape.hashOf(keys, from, to));
+        final var home = homeOf(keys, from, to);
         for (var probe = 0; probe < window; probe++) {
             final var slot = (home + probe) & mask;
             final var shape = shapes.get(slot);
@@ -109,8 +111,33 @@ public final class ShapeTable {
         }
     }
 
-    private int homeOf(int hash) {
-        final var mixed = hash * MIX;
-        return (mixed ^ (mixed >>> HALF_WORD)) & mask;
+    private static long seedFrom(SecureRandom random) {
+        return random.nextLong();
+    }
+
+    private int homeOf(String[] keys, int from, int to) {
+        var hash = PLACEMENT_SEED ^ (to - from);
+        for (var i = from; i < to; i++) {
+            hash = keyedHash(hash, keys[i]);
+        }
+        return (int) (hash >>> Integer.SIZE) & mask;
+    }
+
+    private static long keyedHash(long state, String key) {
+        final var length = key.length();
+        var hash = absorb(state ^ length);
+        var i = 0;
+        for (; i + CHARS_PER_ROUND <= length; i += CHARS_PER_ROUND) {
+            hash = absorb(hash ^ (key.charAt(i) | (long) key.charAt(i + 1) << Character.SIZE
+                    | (long) key.charAt(i + 2) << 2 * Character.SIZE | (long) key.charAt(i + 3) << 3 * Character.SIZE));
+        }
+        for (; i < length; i++) {
+            hash = absorb(hash ^ key.charAt(i));
+        }
+        return hash;
+    }
+
+    private static long absorb(long input) {
+        return input * PLACEMENT_KEY ^ Math.unsignedMultiplyHigh(input, PLACEMENT_KEY);
     }
 }

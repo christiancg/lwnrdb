@@ -257,8 +257,9 @@ public class TombstoneStoreTest extends FileSystemTestBase {
 
         fs.tombstones().retract(TestGlobals.DB, TestGlobals.COLL, "a", 9L);
 
-        assertEquals(5L, (long) unreadable(() -> fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a")),
-                "the retract publishes the lines it kept");
+        assertEquals(5L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a"));
+        assertEquals(3, java.nio.file.Files.readAllLines(tombstoneFile().toPath()).size(),
+                "the retract is an appended line, never a rewrite of the file");
     }
 
     @Test

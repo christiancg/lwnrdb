@@ -16,6 +16,8 @@ import java.util.function.BiConsumer;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
 import org.techhouse.data.Transaction;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.tx.TransactionBudget;
 
 public class ClientTracker {
     private static final String UNKNOWN_ADDRESS = "unknown";
@@ -25,6 +27,7 @@ public class ClientTracker {
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
     private final AtomicInteger socketClients = new AtomicInteger();
     private final Configuration configuration = Configuration.getInstance();
+    private final TransactionBudget transactionBudget = IocContainer.get(TransactionBudget.class);
 
     public UUID addClient(Socket socket) {
         final var maxConnections = configuration.getMaxConnections();
@@ -39,13 +42,17 @@ public class ClientTracker {
     }
 
     public void removeById(UUID clientId) {
-        clients.remove(clientId);
-        if (disconnectSignals.remove(clientId) != null) {
-            socketClients.decrementAndGet();
-        }
+        releaseBudgetOf(clients.remove(clientId));
+        releaseSocketSlot(clientId);
         final var departure = departures.remove(clientId);
         if (departure != null) {
             departure.countDown();
+        }
+    }
+
+    public void releaseSocketSlot(UUID clientId) {
+        if (disconnectSignals.remove(clientId) != null) {
+            socketClients.decrementAndGet();
         }
     }
 
@@ -85,7 +92,7 @@ public class ClientTracker {
     public void removeTxSession(String sessionId) {
         final var session = txSessions.remove(sessionId);
         if (session != null) {
-            clients.remove(session.clientId());
+            releaseBudgetOf(clients.remove(session.clientId()));
             session.shutdown();
         }
     }
@@ -115,6 +122,18 @@ public class ClientTracker {
     public Client.TransactionReap consumeTransactionReaped(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
         return client != null ? client.consumeTransactionReaped() : null;
+    }
+
+    public void markCommitRedriven(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.markCommitRedriven();
+        }
+    }
+
+    public boolean consumeCommitRedriven(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null && client.consumeCommitRedriven();
     }
 
     public void markRemoteSliceFenced(UUID clientId) {
@@ -282,7 +301,17 @@ public class ClientTracker {
             return;
         final var client = clients.get(clientId);
         if (client != null) {
+            final var previous = client.getActiveTransaction();
             client.setActiveTransaction(transaction);
+            if (previous != transaction) {
+                transactionBudget.releaseOf(previous);
+            }
+        }
+    }
+
+    private void releaseBudgetOf(Client removed) {
+        if (removed != null) {
+            transactionBudget.releaseOf(removed.getActiveTransaction());
         }
     }
 

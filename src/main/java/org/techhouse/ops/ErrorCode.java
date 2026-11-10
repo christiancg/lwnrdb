@@ -146,6 +146,10 @@ public enum ErrorCode {
     TRANSACTION_HALF_APPLIED("500-33",
             "A committed transaction could not be fully applied; its collections are fenced until it is finished",
             OperationStatus.ERROR),
+    WRITE_LOGGED_NOT_APPLIED("500-34",
+            "The write was logged durably but could not be applied; it is applied before the collection is next used,"
+                    + " or at the next startup, so it may already have taken effect",
+            OperationStatus.ERROR),
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR),
     NO_QUORUM("503-2", "Cluster does not have a write quorum", OperationStatus.ERROR),
     REPLICATION_TIMEOUT("503-3", "Timed out waiting for the replication quorum", OperationStatus.ERROR),
@@ -171,7 +175,15 @@ public enum ErrorCode {
     BACKGROUND_BACKLOG("503-16", "The background index queue is full and nothing was written; retry shortly",
             OperationStatus.ERROR),
     RESPONSE_BUDGET_EXHAUSTED("503-17", "The server holds the maximum bytes of unsent responses; retry shortly",
-            OperationStatus.ERROR);
+            OperationStatus.ERROR),
+    COLLECTION_FENCED("503-18", "The collection is held by a committed transaction that has not finished applying;"
+            + " retry shortly", OperationStatus.ERROR),
+    WRITES_NOT_APPLIED("503-19", "The collection holds logged writes that could not be applied yet, so it cannot be"
+            + " read consistently; retry shortly", OperationStatus.ERROR),
+    AGGREGATE_BUDGET_EXHAUSTED("503-20", "The server holds the maximum bytes of running aggregations; retry shortly",
+            OperationStatus.ERROR),
+    TRANSACTION_BUDGET_EXHAUSTED("503-21", "The server holds the maximum bytes of buffered transactions; the write was"
+            + " not buffered, retry shortly", OperationStatus.ERROR);
     // @formatter:on
 
     private final String code;
