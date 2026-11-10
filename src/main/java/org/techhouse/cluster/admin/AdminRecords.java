@@ -98,6 +98,26 @@ public final class AdminRecords {
         return records;
     }
 
+    public static boolean stillOutranks(AdminRecord record) throws IOException {
+        return record.outranks(current(record.key(), AdminStamp.tombstones()));
+    }
+
+    public static List<AdminRecord> shadowed() throws IOException {
+        final var tombstones = AdminStamp.tombstones();
+        final var shadowed = new ArrayList<AdminRecord>();
+        for (final var key : liveKeys().stream().distinct().toList()) {
+            final var tombstoneVersion = tombstones.get(key.id());
+            if (tombstoneVersion == null) {
+                continue;
+            }
+            final var live = live(key);
+            if (live != null && tombstoneVersion >= live.version()) {
+                shadowed.add(AdminRecord.tombstone(key, tombstoneVersion));
+            }
+        }
+        return shadowed;
+    }
+
     public static AdminRecord current(AdminRecordKey key, Map<String, Long> tombstones) {
         final var live = live(key);
         final var tombstoneVersion = tombstones.getOrDefault(key.id(), 0L);

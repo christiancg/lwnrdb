@@ -463,4 +463,16 @@ public class AdminAntiEntropyServiceTest {
         assertTrue(shippedTombstones(AdminSnapshotPayload.request(empty.bucketCount(), empty.summaries()))
                 .contains(key.id()), "a peer lacking the superseded tombstone is sent it");
     }
+
+    @Test
+    public void test_a_round_heals_a_user_its_own_tombstone_already_deleted() throws Exception {
+        AdminOperationHelper
+                .saveUserEntry(new AdminUserEntry("zed", "hash", false, Set.of(), new HashMap<>(), new HashMap<>()));
+        AdminStamp.tombstoneAt(AdminRecordKey.user("zed"), clock.next());
+        stubSnapshot();
+
+        service.reconcile();
+
+        assertNull(cache.getAdminUserEntry("zed"));
+    }
 }

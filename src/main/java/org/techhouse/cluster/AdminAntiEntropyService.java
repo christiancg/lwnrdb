@@ -87,7 +87,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             final var generation = syncGeneration.get();
             final var peers = membershipService.membershipView().peers(membershipService.getSelf());
             var completePeers = 0;
-            var changed = false;
+            var changed = AdminRecordMerge.removeShadowed();
             for (final var member : peers) {
                 if (Thread.currentThread().isInterrupted()) {
                     return;

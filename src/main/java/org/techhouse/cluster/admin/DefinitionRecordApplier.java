@@ -1,5 +1,6 @@
 package org.techhouse.cluster.admin;
 
+import java.io.IOException;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
@@ -33,34 +34,50 @@ final class DefinitionRecordApplier {
 
     static boolean install(AdminRecord record) throws Exception {
         final var key = record.key();
-        final var json = eJson.toJson(record.body());
         return underLock(key, () -> {
-            switch (key.kind()) {
-                case SCHEMA -> {
-                    fs.metadataFiles().writeCollectionSchema(key.dbName(), key.name(), json);
-                    SchemaPatternCaps.warnWhenOver(
-                            "Stored the replicated schema of "
-                                    + Cache.getCollectionIdentifier(key.dbName(), key.name()),
-                            AdminStamp.unwrappedSchema(record.body()));
-                }
-                case TRIGGERS -> fs.metadataFiles().writeTriggers(key.dbName(), key.name(), json);
-                case PROCEDURE -> fs.metadataFiles().writeProcedure(key.dbName(), key.name(), json);
-                default -> fs.metadataFiles().writeSchedule(key.dbName(), key.name(), json);
+            if (!AdminRecords.stillOutranks(record)) {
+                return;
             }
+            writeFile(record);
             invalidate(key);
         });
     }
 
-    static boolean remove(AdminRecordKey key) throws Exception {
+    static boolean remove(AdminRecord tombstone) throws Exception {
+        final var key = tombstone.key();
         return underLock(key, () -> {
-            switch (key.kind()) {
-                case SCHEMA -> fs.metadataFiles().deleteCollectionSchema(key.dbName(), key.name());
-                case TRIGGERS -> fs.metadataFiles().deleteTriggers(key.dbName(), key.name());
-                case PROCEDURE -> fs.metadataFiles().deleteProcedure(key.dbName(), key.name());
-                default -> fs.metadataFiles().deleteSchedule(key.dbName(), key.name());
+            AdminStamp.tombstoneAt(key, tombstone.version());
+            if (!tombstone.outranks(AdminRecords.live(key))) {
+                return;
             }
+            deleteFile(key);
             invalidate(key);
         });
+    }
+
+    private static void writeFile(AdminRecord record) throws IOException {
+        final var key = record.key();
+        final var json = eJson.toJson(record.body());
+        switch (key.kind()) {
+            case SCHEMA -> {
+                fs.metadataFiles().writeCollectionSchema(key.dbName(), key.name(), json);
+                SchemaPatternCaps.warnWhenOver(
+                        "Stored the replicated schema of " + Cache.getCollectionIdentifier(key.dbName(), key.name()),
+                        AdminStamp.unwrappedSchema(record.body()));
+            }
+            case TRIGGERS -> fs.metadataFiles().writeTriggers(key.dbName(), key.name(), json);
+            case PROCEDURE -> fs.metadataFiles().writeProcedure(key.dbName(), key.name(), json);
+            default -> fs.metadataFiles().writeSchedule(key.dbName(), key.name(), json);
+        }
+    }
+
+    private static void deleteFile(AdminRecordKey key) throws IOException {
+        switch (key.kind()) {
+            case SCHEMA -> fs.metadataFiles().deleteCollectionSchema(key.dbName(), key.name());
+            case TRIGGERS -> fs.metadataFiles().deleteTriggers(key.dbName(), key.name());
+            case PROCEDURE -> fs.metadataFiles().deleteProcedure(key.dbName(), key.name());
+            default -> fs.metadataFiles().deleteSchedule(key.dbName(), key.name());
+        }
     }
 
     private static void invalidate(AdminRecordKey key) {

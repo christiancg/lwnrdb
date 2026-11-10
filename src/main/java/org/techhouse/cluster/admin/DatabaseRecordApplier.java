@@ -13,6 +13,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
 import org.techhouse.ops.admin.GrantPruner;
 import org.techhouse.ops.admin.GrantRewrite;
@@ -64,6 +65,9 @@ final class DatabaseRecordApplier {
     }
 
     private static boolean installUnderLocks(AdminRecord record) throws Exception {
+        if (!AdminRecords.stillOutranks(record)) {
+            return true;
+        }
         final var dbName = record.key().dbName();
         final var local = cache.getAdminDbEntry(dbName);
         if (local == null && !LeftoverFolders.moveAsideUnregisteredDatabase(dbName)) {
@@ -86,8 +90,11 @@ final class DatabaseRecordApplier {
         return AdminRecordKey.database(sibling);
     }
 
-    static boolean remove(String dbName, boolean live) throws Exception {
-        if (cache.getAdminDbEntry(dbName) == null) {
+    static boolean remove(AdminRecord tombstone, boolean live) throws Exception {
+        final var key = tombstone.key();
+        final var dbName = key.dbName();
+        AdminStamp.tombstoneAt(key, tombstone.version());
+        if (cache.getAdminDbEntry(dbName) == null || !tombstone.outranks(AdminRecords.live(key))) {
             return true;
         }
         if (live) {
