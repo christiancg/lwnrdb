@@ -524,6 +524,22 @@ def test_formation_and_quorum_writes():
                  op_with_retry(lambda: save(p0, DB, "docs", {"_id": "q1", "v": 1})), "OK")
 
 
+def test_server_info_reports_each_node():
+    section("SERVER_INFO describes the node it was sent to")
+
+    for node in nodes:
+        info = op(node.client_port, {"type": "SERVER_INFO"})
+        check_status(f"SERVER_INFO on node {node.index}", info, "OK")
+        server = info.get("server", {})
+        node_info = server.get("node", {})
+        check(f"node {node.index} is READY", server.get("state") == "READY", str(server))
+        check(f"node {node.index} names itself, not a peer", node_info.get("nodeId") == node_id_of(node),
+              str(node_info))
+        check(f"node {node.index} sees every member alive",
+              node_info.get("clusterEnabled") is True and node_info.get("aliveMembers") == NODE_COUNT
+              and node_info.get("expectedSize") == NODE_COUNT, str(node_info))
+
+
 RETRYABLE_CODES = {"503-2", "503-5", "503-9", "503-10"}
 
 
@@ -4234,6 +4250,7 @@ def test_a_write_inside_an_anti_entropy_round_trip_is_not_undone():
 GROUPS = {
     "replication": [
         test_formation_and_quorum_writes,
+        test_server_info_reports_each_node,
         test_ddl_replication,
         test_write_replication_and_read_routing,
         test_bulk_delete_and_upsert,

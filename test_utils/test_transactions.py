@@ -276,6 +276,19 @@ def test_control_operation_errors(c):
     check_status("ROLLBACK_TRANSACTION (cleanup)", rollback_txn(c), "OK")
 
 
+def test_server_info_answers_inside_a_transaction(c):
+    section("SERVER_INFO is answered inside an open transaction")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("SAVE inside the transaction", save(c, {"_id": "info1", "total": 7}), "OK")
+    info = c.send({"type": "SERVER_INFO"})
+    check_status("SERVER_INFO during txn returns OK", info, "OK")
+    check_field("the node is READY", info, "server.state", "READY")
+    check_status("COMMIT_TRANSACTION after SERVER_INFO", commit_txn(c), "OK")
+    with authed_conn() as oc:
+        check_field("the transaction committed its write", find_by_id(oc, "info1"), "object.total", 7)
+
+
 def test_ddl_forbidden_during_transaction(c):
     section("DDL / non-data operations are rejected during a transaction (409-6)")
 
@@ -831,6 +844,8 @@ def main():
         test_several_ops_on_one_id_commit_in_buffer_order(c)
     with authed_conn() as (c):
         test_control_operation_errors(c)
+    with authed_conn() as (c):
+        test_server_info_answers_inside_a_transaction(c)
     with authed_conn() as (c):
         test_ddl_forbidden_during_transaction(c)
     with authed_conn() as (c):

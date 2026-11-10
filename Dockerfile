@@ -33,6 +33,7 @@ WORKDIR /app
 
 COPY lwnrdb.cfg /app
 COPY --chmod=755 docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY --chmod=755 healthcheck.sh /app/healthcheck.sh
 
 RUN addgroup -S lwnrdb && adduser -S -G lwnrdb lwnrdb \
     && mkdir -p /app/db /app/logs /app/certs \
@@ -44,6 +45,8 @@ VOLUME /app/db
 VOLUME /app/logs
 
 EXPOSE ${PORT}
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 CMD ["/app/healthcheck.sh"]
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["java", "-XX:+UseG1GC", "-XX:MaxRAMPercentage=70", "-XX:G1PeriodicGCInterval=60000", "-Djdk.nio.maxCachedBufferSize=262144", "-jar", "app.jar"]

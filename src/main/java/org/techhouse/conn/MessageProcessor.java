@@ -36,6 +36,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.req.ServerInfoRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -351,6 +352,10 @@ public class MessageProcessor implements Runnable {
 
     private Handled dispatch(OperationRequest parsedMessage, RequestLine rawMessage) {
         final var type = parsedMessage.getType();
+        if (parsedMessage instanceof ServerInfoRequest info) {
+            info.markShuttingDown(shuttingDown.getAsBoolean());
+            return admitted(parsedMessage, () -> publicOperation(parsedMessage));
+        }
         if (isRefusedDuringShutdown(type)) {
             return refusal(type, ErrorCode.SERVER_SHUTTING_DOWN);
         }
@@ -406,7 +411,7 @@ public class MessageProcessor implements Runnable {
     }
 
     private ErrorCode firstRequestAfterReap(OperationType type) {
-        if (type == OperationType.CLOSE_CONNECTION) {
+        if (type == OperationType.CLOSE_CONNECTION || type == OperationType.SERVER_INFO) {
             return null;
         }
         final var reaped = clientTracker.consumeTransactionReaped(clientId);

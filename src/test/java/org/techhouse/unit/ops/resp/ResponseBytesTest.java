@@ -54,6 +54,7 @@ import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SaveScheduleResponse;
 import org.techhouse.ops.resp.SaveSchemaResponse;
 import org.techhouse.ops.resp.SaveTriggerResponse;
+import org.techhouse.ops.resp.ServerInfoResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 import org.techhouse.ops.resp.StopListenResponse;
 import org.techhouse.ops.resp.TestTriggerResponse;
@@ -111,7 +112,7 @@ public class ResponseBytesTest {
                 new PrimaryKeyReindexResponse("ok", List.of("f"),
                         new PkRebuild(List.of(), 2, true, List.of(), List.of())),
                 new ReindexResponse("ok", List.of("f", "g")), new ResolveTriggerRunResponse("ok", false),
-                new RunScriptResponse("ok", doc, logs, true, "run-3"),
+                new ServerInfoResponse("ok", doc), new RunScriptResponse("ok", doc, logs, true, "run-3"),
                 new RunScriptResponse("failed", ErrorCode.ERROR_RETRIEVING, logs, false, "run-4"),
                 new SaveProcedureResponse("ok", 3L), new SaveResponse("ok", "doc-1", true),
                 new SaveScheduleResponse("ok", 5L), new SaveSchemaResponse("ok", List.of("warning 界")),

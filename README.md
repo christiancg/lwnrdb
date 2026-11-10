@@ -50,7 +50,7 @@ JSON socket protocol — optionally [TLS](#tls--secure-connections). On top of t
 | Integrity | [per-collection JSON Schema](#schema-validation), [transactions](#transactions), [users and permissions](#users--permissions) |
 | Scripting | a built-in JS engine — [ad-hoc scripts](#run_script), [stored procedures](#save_procedure), [triggers](#save_trigger) (after and before the write), [scheduled procedures](#save_schedule), [pipeline operators](#script-operators-simplejs-in-the-pipeline), and shared code via `import … from "procedures/<name>"`. See [docs/simplejs.md](docs/simplejs.md) |
 | Clustering | fully-replicated nodes, no master, per-collection ownership, quorum writes, anti-entropy, cross-node transactions and script placement. See [docs/clustering.md](docs/clustering.md) |
-| Operations | [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
+| Operations | [`SERVER_INFO`](#server_info) and a Docker health check, [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
 
 **Known non-goals.** No compound indexes (a pipeline uses as many single-field indexes as
 apply), no sharding (every node holds a complete copy), no compression, and no attempt to
@@ -562,7 +562,7 @@ If a buffered write cannot take a collection's write lock within `transactionLoc
 
 If the connection closes with a transaction still open, it is automatically rolled back.
 
-**Idle transactions.** A transaction's write locks block every other connection on its collections, so a connection may not sit silent while it holds one. If no complete request arrives within `transactionIdleTimeoutMs` (default `30000`; a line dribbled in byte by byte does not count until it ends), the server rolls the transaction back on the connection's own thread: its buffered writes are discarded and its locks released, so blocked writers proceed. The connection stays open. Its **next request, whatever it is, is answered `409-16` once and not executed** — including `COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` — so a client that still believes it is inside the transaction cannot have a write run on its own by mistake. Only `CLOSE_CONNECTION` is exempt. After that one answer the connection behaves normally and a new `START_TRANSACTION` works. A transaction whose commit is half-applied (`500-33`) or that was already aborted (`409-5`) is never rolled back this way. The timeout only runs while the server waits for the next request: a long-running request is never cut short.
+**Idle transactions.** A transaction's write locks block every other connection on its collections, so a connection may not sit silent while it holds one. If no complete request arrives within `transactionIdleTimeoutMs` (default `30000`; a line dribbled in byte by byte does not count until it ends), the server rolls the transaction back on the connection's own thread: its buffered writes are discarded and its locks released, so blocked writers proceed. The connection stays open. Its **next request, whatever it is, is answered `409-16` once and not executed** — including `COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` — so a client that still believes it is inside the transaction cannot have a write run on its own by mistake. Only `CLOSE_CONNECTION` and `SERVER_INFO` are exempt: `SERVER_INFO` is answered normally and leaves the `409-16` for the next request. After that one answer the connection behaves normally and a new `START_TRANSACTION` works. A transaction whose commit is half-applied (`500-33`) or that was already aborted (`409-5`) is never rolled back this way. The timeout only runs while the server waits for the next request: a long-running request is never cut short.
 
 ```json
 {"type":"SAVE","status":"ERROR","message":"The transaction was rolled back after being idle too long","errorCode":"409-16"}
@@ -1199,6 +1199,44 @@ they describe the whole node and every tenant on it.
     "collections":[{"name":"orders","indexCount":1,"indexes":["customer"],"pageCount":2,"entryCount":2495,"sizeBytes":800000}]}]}}
 ```
 
+#### `SERVER_INFO`
+
+Says which build a client is talking to and whether the node is ready. It is the one operation besides
+`AUTHENTICATE` and `CLOSE_CONNECTION` that is answered **before authentication**, and it is still answered while the
+server shuts down, so a load balancer or a container health check can use it without a password. It takes no fields.
+
+```json
+{"type":"SERVER_INFO"}
+```
+
+What comes back depends on who asks:
+
+- **Anyone**, authenticated or not, gets `state` alone, so an anonymous connection learns nothing that identifies the
+  build:
+  ```json
+  {"type":"SERVER_INFO","status":"OK","message":"Ok","server":{"state":"READY"}}
+  ```
+- **Any authenticated user** also gets `version` (the release, or `dev` for a server not run from a packaged jar),
+  `protocolVersion` (raised whenever a wire field changes; `1` today), `startedAtMs` (epoch milliseconds) and
+  `uptimeMs`.
+- **An admin** also gets `node`: `clusterEnabled`, `syncWrites` and `tlsEnabled`, plus `nodeId`, `aliveMembers` (this
+  node included) and `expectedSize` when clustering is on.
+  ```json
+  {"type":"SERVER_INFO","status":"OK","message":"Ok","server":{"state":"READY","version":"0.1.0",
+    "protocolVersion":1,"startedAtMs":1762790400000,"uptimeMs":5231,
+    "node":{"clusterEnabled":true,"nodeId":"n1","aliveMembers":3,"expectedSize":3,"syncWrites":true,"tlsEnabled":false}}}
+  ```
+
+| `state` | Meaning |
+|---|---|
+| `READY` | Serving requests |
+| `SYNCING` | A cluster node that has not finished its first admin sync; admin changes answer `503-5` until it has |
+| `SHUTTING_DOWN` | The server is stopping; every other request answers `503-13` |
+
+`SERVER_INFO` always describes the node it was sent to: it is never forwarded to another node, it is allowed inside a
+transaction, and it is never refused for a full background queue or the response budget. The server also logs
+`LWNRDB <version> starting` as its first line. **Errors**: `500-35` on an internal failure.
+
 #### `LIST_USERS` (admin only)
 Returns all users with their permissions. `passwordHash` is never included in the response. `aggregationSteps` is optional; when omitted all users are returned.
 
@@ -1466,6 +1504,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-30` | `ERROR` | Error while deleting the trigger |
 | `500-31` | `ERROR` | Error while saving the schedule |
 | `500-32` | `ERROR` | Error while deleting the schedule |
+| `500-35` | `ERROR` | Error while gathering server info |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
 | `421-3` | `ERROR` | This read joins collections the transaction wrote on different nodes |
 | `503-1` | `ERROR` | Max number of connections reached; sent as a `CLOSE_CONNECTION` frame and the connection is closed (with `tlsEnabled=true` it is closed before its handshake, with no frame) |
@@ -1516,6 +1555,9 @@ java -jar lwnrdb.jar \
   --exec '{"type":"AGGREGATE","databaseName":"my_db","collectionName":"people","aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"GREATER_THAN","field":"age","value":30}}]}'
 ```
 
+`java -jar lwnrdb.jar --health` tells you whether the server is up without a password: it prints the
+[`SERVER_INFO`](#server_info) reply and exits `0` once the state is `READY`.
+
 With Docker the client is already inside the container, so run the same thing through `docker exec -e LWNRDB_PASSWORD=<the-password-you-chose> lwnrdb java -jar app.jar` instead of `java -jar lwnrdb.jar`. Each request goes in its own `--exec`. Every reply is printed on its own line and the client stops at the first one that is not `OK`. If you would rather talk to the server directly, any TCP client works, since each request is one line of JSON. The full list of operations starts in the [Wire Protocol](#wire-protocol--message-reference) section.
 
 ### Running the server
@@ -1547,6 +1589,11 @@ docker build -t lwnrdb .
 docker run -p 8989:8989 -v ./db:/app/db -v ./lwnrdb.cfg:/app/lwnrdb.cfg:ro lwnrdb
 ```
 
+The image declares a `HEALTHCHECK` that runs `/app/healthcheck.sh` every 30 seconds (after a 60-second start period):
+it reads `port` and `tlsEnabled` from `/app/lwnrdb.cfg` and runs the jar's own `--health` client, adding
+`--tls --insecure` when TLS is on, so `docker ps` shows the container as `healthy` once the server answers `READY`.
+It needs no password.
+
 The image runs as the unprivileged `lwnrdb` user, not root. A host directory mounted over `/app/db`, `/app/logs` or
 `/app/certs` must be writable by that user's uid (`docker run --rm --entrypoint id lwnrdb` prints it).
 
@@ -1565,6 +1612,7 @@ java -jar lwnrdb.jar --exec '<json>' [--exec '<json>' ...] [connection]
 java -jar lwnrdb.jar --exec [connection] < commands.jsonl
 java -jar lwnrdb.jar --dump [--databases a,b | --collections db.coll,...] [--compress] [connection] > backup.ldump
 java -jar lwnrdb.jar --restore [connection] < backup.ldump
+java -jar lwnrdb.jar --health [connection]
 ```
 
 | Connection flag | Default | |
@@ -1586,8 +1634,11 @@ java -jar lwnrdb.jar --restore [connection] < backup.ldump
   documents and each next page sizes itself from the previous page's bytes per document (at most 100,000 documents).
 - **`--restore`** reads a backup from standard input, plain or gzipped (detected by its first two bytes), and prints
   `restored N requests` to standard error every 1000 requests and at the end.
+- **`--health`** sends [`SERVER_INFO`](#server_info) without authenticating, so it needs no password, prints the
+  reply and exits `0` when the state is `READY` and `1` for any other state.
 
-Exit codes: `0` success; `1` a command answered non-OK, or the dump or restore stopped (the restore names the line);
+Exit codes: `0` success; `1` a command answered non-OK, the dump or restore stopped (the restore names the line), or
+`--health` found the server not `READY`;
 `2` usage error; `3` the server cannot be reached, TLS failed, or authentication was refused. The client never reads
 `lwnrdb.cfg` and never creates `db/` or `logs/` in its working directory.
 

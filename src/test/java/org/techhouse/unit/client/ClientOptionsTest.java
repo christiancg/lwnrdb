@@ -32,6 +32,16 @@ public class ClientOptionsTest {
         assertEquals(ClientMode.EXEC, parse("--exec", "{}").mode());
         assertEquals(ClientMode.DUMP, parse("--dump").mode());
         assertEquals(ClientMode.RESTORE, parse("--restore").mode());
+        assertEquals(ClientMode.HEALTH, parse("--health").mode());
+    }
+
+    @Test
+    public void test_health_takes_the_connection_flags_but_not_the_dump_ones() {
+        final var options = parse("--health", "--port", "9000", "--tls", "--insecure");
+        assertEquals(9000, options.port());
+        assertTrue(options.tls());
+        assertUsageError("--health", "--compress");
+        assertUsageError("--health", "--dump");
     }
 
     @Test

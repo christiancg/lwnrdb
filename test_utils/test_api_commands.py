@@ -1255,6 +1255,29 @@ def test_fault_operations_are_disabled_by_default(c):
                    rc.send({"type": "ARM_FAULT", "point": "PEER_REPLY", "action": "DROP"}), "FORBIDDEN", "403-1")
 
 
+def test_server_info(c):
+    section("SERVER_INFO as an admin")
+
+    first = c.send({"type": "SERVER_INFO"})
+    check_status("SERVER_INFO (admin, OK)", first, "OK")
+    server = first.get("server", {})
+    check_field("state is READY", server, "state", "READY")
+    check_field("protocolVersion is 1", server, "protocolVersion", 1)
+    check("version is a non-empty string", isinstance(server.get("version"), str) and server.get("version") != "",
+          str(server))
+    check("startedAtMs is a past epoch", 0 < server.get("startedAtMs", 0) <= time.time() * 1000, str(server))
+    node = server.get("node", {})
+    check_field("a standalone node reports clusterEnabled false", node, "clusterEnabled", False)
+    check("a standalone node names no nodeId", "nodeId" not in node, str(node))
+    check("syncWrites and tlsEnabled are booleans",
+          isinstance(node.get("syncWrites"), bool) and isinstance(node.get("tlsEnabled"), bool), str(node))
+    time.sleep(0.05)
+    second = c.send({"type": "SERVER_INFO", "databaseName": "ignored"})
+    check_status("SERVER_INFO ignores fields it does not take", second, "OK")
+    check("uptimeMs grows between two calls",
+          second.get("server", {}).get("uptimeMs", 0) > server.get("uptimeMs", 0), str(second))
+
+
 def test_arm_fault_fail_on_a_non_failable_point_answers_400_1(c):
     section("FAIL is valid only on a failable point")
 
@@ -1758,6 +1781,7 @@ def main():
         test_flows,
         test_operation_permissions,
         test_fault_operations_are_disabled_by_default,
+        test_server_info,
         test_arm_fault_fail_on_a_non_failable_point_answers_400_1,
     ]
     for group in groups:

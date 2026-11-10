@@ -62,6 +62,7 @@ public record ClientOptions(ClientMode mode, String host, int port, String user,
                 case "--shell" -> selectMode(ClientMode.SHELL);
                 case "--dump" -> selectMode(ClientMode.DUMP);
                 case "--restore" -> selectMode(ClientMode.RESTORE);
+                case "--health" -> selectMode(ClientMode.HEALTH);
                 case "--exec" -> {
                     selectMode(ClientMode.EXEC);
                     if (index + 1 < args.length && !args[index + 1].startsWith("--")) {
@@ -147,7 +148,7 @@ public record ClientOptions(ClientMode mode, String host, int port, String user,
 
         ClientOptions build(Map<String, String> env) {
             if (mode == null) {
-                throw usage("one of --shell, --exec, --dump or --restore is required");
+                throw usage("one of --shell, --exec, --dump, --restore or --health is required");
             }
             if (insecure && !tls) {
                 throw usage("--insecure only applies together with --tls");

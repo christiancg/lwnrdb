@@ -27,6 +27,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.ServerVersion;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.conn.tls.TlsContextFactory;
@@ -117,6 +118,7 @@ public class ServerMain {
 
     private static SocketServer start(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
+        logger.info("LWNRDB " + ServerVersion.current() + " starting");
         AdminPasswordGuard.refuseWeakPassword();
         FetchPinningGuard.refuseUnpinnedFetch();
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));

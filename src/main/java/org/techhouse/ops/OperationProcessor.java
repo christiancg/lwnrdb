@@ -56,6 +56,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
+import org.techhouse.ops.req.ServerInfoRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
@@ -113,6 +114,7 @@ public class OperationProcessor {
             case DELETE_SCHEMA -> processDeleteSchema((DeleteSchemaRequest) operationRequest);
             case GET_SCHEMA -> processGetSchema((GetSchemaRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
+            case SERVER_INFO -> processServerInfo((ServerInfoRequest) operationRequest, actingUser);
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
             case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
@@ -154,6 +156,10 @@ public class OperationProcessor {
             case RELEASE_FAULT -> FaultOperationHelper.release((ReleaseFaultRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, response, restamped);
+    }
+
+    private OperationResponse processServerInfo(ServerInfoRequest request, String actingUser) {
+        return ServerInfoHelper.process(request, actingUser);
     }
 
     private OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {

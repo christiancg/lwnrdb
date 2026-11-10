@@ -2116,6 +2116,32 @@ sees the database with an empty `collections`, and one with no grant at all gets
 {"type": "GET_DATABASE_STATS", "status": "OK", "message": "Ok", "stats": {"totals": {"databaseCount": 1, "collectionCount": 1, "indexCount": 0, "pageCount": 1, "entryCount": 3, "sizeBytes": 120}, "databases": [{"name": "test", "collectionCount": 1, "indexCount": 0, "pageCount": 1, "entryCount": 3, "sizeBytes": 120, "collections": [{"name": "testCollection", "indexCount": 0, "indexes": [], "pageCount": 1, "entryCount": 3, "sizeBytes": 120}]}]}}
 ```
 
+Ask which build the node runs and whether it is ready — `SERVER_INFO` is answered before `AUTHENTICATE` too, and
+while the server shuts down (`state` `SHUTTING_DOWN` instead of `503-13`)
+
+```json
+{"type": "SERVER_INFO"}
+```
+
+Before authenticating, only the state
+
+```json
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY"}}
+```
+
+As any authenticated user, the build too (`version` is `dev` when the server does not run from a packaged jar)
+
+```json
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231}}
+```
+
+As an admin, the node as well (`nodeId`, `aliveMembers` and `expectedSize` only when clustering is on); an internal
+failure answers `500-35`
+
+```json
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231, "node": {"clusterEnabled": false, "syncWrites": true, "tlsEnabled": false}}}
+```
+
 Custom types
 
 ```json
@@ -2639,7 +2665,7 @@ the rollback answers `409-16` instead (see below).
 
 A transaction left idle longer than `transactionIdleTimeoutMs` (30 s by default) is rolled back by the server:
 its buffered writes are discarded, its locks released, and the connection stays open. The next request on
-that connection, whatever it is except `CLOSE_CONNECTION`, → `409-16` once and is not executed; the one after
+that connection, whatever it is except `CLOSE_CONNECTION` or `SERVER_INFO`, → `409-16` once and is not executed; the one after
 is served normally. Start a transaction and buffer a write
 
 ```json

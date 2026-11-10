@@ -50,7 +50,7 @@ public final class TransactionOperationHelper {
     public static boolean isAllowedDuringTransaction(OperationType type) {
         return switch (type) {
             case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, SAVE, BULK_SAVE, DELETE, FIND_BY_ID,
-                    AGGREGATE, CLOSE_CONNECTION ->
+                    AGGREGATE, CLOSE_CONNECTION, SERVER_INFO ->
                 true;
             default -> false;
         };
@@ -58,7 +58,7 @@ public final class TransactionOperationHelper {
 
     public static boolean isAllowedOnAbortedTransaction(OperationType type) {
         return switch (type) {
-            case ROLLBACK_TRANSACTION, COMMIT_TRANSACTION, CLOSE_CONNECTION -> true;
+            case ROLLBACK_TRANSACTION, COMMIT_TRANSACTION, CLOSE_CONNECTION, SERVER_INFO -> true;
             default -> false;
         };
     }
