@@ -1,0 +1,78 @@
+name: Release TypeScript client
+on:
+  push:
+    tags:
+      - 'typescript-client-v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  verify:
+    name: Verify against the server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '27'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Package the server jar from the same commit
+        working-directory: .
+        run: mvn -B --no-transfer-progress -DskipTests package
+      - name: Install
+        run: npm ci
+      - name: Unit tests, coverage, style, API docs and build
+        run: npm run verify
+      - name: Consumers
+        run: npm run consumers
+      - name: Integration tests
+        run: LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" npm run test:it
+
+  publish:
+    name: Publish to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Set the version from the tag
+        run: npm version "${VERSION#typescript-client-v}" --no-git-tag-version
+      - name: Build
+        run: npm run build
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          DIST_TAG="latest"
+          case "${VERSION}" in *-*) DIST_TAG="next" ;; esac
+          npm publish --provenance --access public --tag "${DIST_TAG}"
+      - name: GitHub release
+        run: |
+          PRERELEASE=""
+          case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "${VERSION}" --title "TypeScript client ${VERSION#typescript-client-v}" --generate-notes ${PRERELEASE}

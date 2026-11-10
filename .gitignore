@@ -41,6 +41,12 @@ build/
 CLAUDE.md
 .claude/
 
+### Node ###
+node_modules/
+clients/typescript/dist/
+clients/typescript/coverage/
+clients/typescript/*.tgz
+
 ### Plans (local-only, not tracked) ###
 plans/
 
