@@ -1,0 +1,12 @@
+{
+  "area": "data",
+  "cases": [
+    {"name":"data.save_with_id","request":{"type":"SAVE","databaseName":"shop","collectionName":"orders","object":{"_id":"o-1","status":"active","total":120}}},
+    {"name":"data.save_without_id","request":{"type":"SAVE","databaseName":"shop","collectionName":"orders","object":{"status":"new"}}},
+    {"name":"data.save_nested","request":{"type":"SAVE","databaseName":"shop","collectionName":"orders","object":{"_id":"o-2","customer":{"name":"Ana","tags":["vip",null,true,1.5]}}}},
+    {"name":"data.bulk_save","request":{"type":"BULK_SAVE","databaseName":"shop","collectionName":"orders","objects":[{"_id":"o-1","total":1},{"total":2}]}},
+    {"name":"data.find_by_id","request":{"type":"FIND_BY_ID","databaseName":"shop","collectionName":"orders","_id":"o-1"}},
+    {"name":"data.find_by_id_dirty","request":{"type":"FIND_BY_ID","databaseName":"shop","collectionName":"orders","_id":"o-1","dirtyRead":true}},
+    {"name":"data.delete","request":{"type":"DELETE","databaseName":"shop","collectionName":"orders","_id":"o-1"}}
+  ]
+}

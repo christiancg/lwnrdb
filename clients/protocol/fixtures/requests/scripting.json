@@ -1,0 +1,32 @@
+{
+  "area": "scripting",
+  "cases": [
+    {"name":"scripting.run_script","request":{"type":"RUN_SCRIPT","databaseName":"shop","script":"return 1;","args":{"id":"o-1"}}},
+    {"name":"scripting.run_script_no_args","request":{"type":"RUN_SCRIPT","databaseName":"shop","script":"return 1;"}},
+    {"name":"scripting.save_procedure","request":{"type":"SAVE_PROCEDURE","databaseName":"shop","name":"recalc","script":"return 1;","description":"totals","enabled":true,"ifVersion":3}},
+    {"name":"scripting.save_procedure_minimal","request":{"type":"SAVE_PROCEDURE","databaseName":"shop","name":"recalc","script":"return 1;"}},
+    {"name":"scripting.delete_procedure","request":{"type":"DELETE_PROCEDURE","databaseName":"shop","name":"recalc"}},
+    {"name":"scripting.list_procedures","request":{"type":"LIST_PROCEDURES","databaseName":"shop","includeSource":true}},
+    {"name":"scripting.list_procedures_default","request":{"type":"LIST_PROCEDURES","databaseName":"shop"}},
+    {"name":"scripting.call_procedure","request":{"type":"CALL_PROCEDURE","databaseName":"shop","procedureName":"recalc","args":{"id":"o-1"}}},
+    {"name":"scripting.call_procedure_no_args","request":{"type":"CALL_PROCEDURE","databaseName":"shop","procedureName":"recalc"}},
+    {"name":"scripting.save_trigger","request":{"type":"SAVE_TRIGGER","databaseName":"shop","collectionName":"orders","name":"audit","events":["CREATED","UPDATED","DELETED"],"procedureName":"recalc","timing":"after","mode":"document","allowCascade":false,"enabled":true,"ifVersion":1}},
+    {"name":"scripting.save_trigger_before","request":{"type":"SAVE_TRIGGER","databaseName":"shop","collectionName":"orders","name":"normalize","events":["CREATED"],"procedureName":"normalize","timing":"before"}},
+    {"name":"scripting.save_trigger_batch","request":{"type":"SAVE_TRIGGER","databaseName":"shop","collectionName":"orders","name":"rollup","events":["CREATED"],"procedureName":"rollup","mode":"batch"}},
+    {"name":"scripting.delete_trigger","request":{"type":"DELETE_TRIGGER","databaseName":"shop","collectionName":"orders","name":"audit"}},
+    {"name":"scripting.list_triggers_collection","request":{"type":"LIST_TRIGGERS","databaseName":"shop","collectionName":"orders"}},
+    {"name":"scripting.list_triggers_database","request":{"type":"LIST_TRIGGERS","databaseName":"shop"}},
+    {"name":"scripting.test_trigger","request":{"type":"TEST_TRIGGER","databaseName":"shop","collectionName":"orders","name":"normalize","event":"CREATED","document":{"_id":"o-1","qty":2}}},
+    {"name":"scripting.save_schedule_cron","request":{"type":"SAVE_SCHEDULE","databaseName":"shop","name":"nightly","procedureName":"rollup","cron":"0 3 * * *","args":{"days":1},"timeoutMs":60000,"description":"rollup","enabled":true,"ifVersion":2}},
+    {"name":"scripting.save_schedule_interval","request":{"type":"SAVE_SCHEDULE","databaseName":"shop","name":"poll","procedureName":"poll","intervalMs":60000}},
+    {"name":"scripting.delete_schedule","request":{"type":"DELETE_SCHEDULE","databaseName":"shop","name":"nightly"}},
+    {"name":"scripting.list_schedules","request":{"type":"LIST_SCHEDULES","databaseName":"shop","includeArgs":true}},
+    {"name":"scripting.list_schedules_default","request":{"type":"LIST_SCHEDULES","databaseName":"shop"}},
+    {"name":"scripting.list_scripts","request":{"type":"LIST_SCRIPTS"}},
+    {"name":"scripting.cancel_script","request":{"type":"CANCEL_SCRIPT","runId":"3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83"}},
+    {"name":"scripting.list_trigger_runs","request":{"type":"LIST_TRIGGER_RUNS"}},
+    {"name":"scripting.list_trigger_runs_dead","request":{"type":"LIST_TRIGGER_RUNS","status":"DEAD"}},
+    {"name":"scripting.resolve_trigger_run_replay","request":{"type":"RESOLVE_TRIGGER_RUN","runId":"8f0e1a2b","decision":"replay"}},
+    {"name":"scripting.resolve_trigger_run_discard","request":{"type":"RESOLVE_TRIGGER_RUN","runId":"8f0e1a2b","decision":"discard"}}
+  ]
+}
