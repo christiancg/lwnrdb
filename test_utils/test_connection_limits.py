@@ -370,6 +370,20 @@ def test_close_connection_is_always_accepted_after_a_reap():
         holder.close()
 
 
+def test_server_info_after_a_reap_leaves_the_notice_for_the_next_request():
+    section("SERVER_INFO after a reap is answered and the next request still gets 409-16")
+    holder = open_transaction_with_one_write("info-1")
+    try:
+        time.sleep(IDLE_TIMEOUT_S + 1)
+        info = holder.send({"type": "SERVER_INFO"})
+        check_status("SERVER_INFO is answered, not 409-16", info, "OK")
+        check("It reports READY", info.get("server", {}).get("state") == "READY", f"got={info}")
+        check_code("The next SAVE -> 409-16", holder.send(save("lost-info")), "ERROR", "409-16")
+        check_status("It was not written as a standalone save", holder.send(find("lost-info")), "NOT_FOUND")
+    finally:
+        holder.close()
+
+
 def test_a_transaction_past_its_operation_limit_is_refused():
     section("A transaction refuses the write that would take it past transactionMaxOps")
     with Conn.authenticated() as holder:
@@ -644,6 +658,7 @@ def main():
         test_a_busy_transaction_is_not_reaped()
         test_a_dribbling_transaction_holder_is_reaped()
         test_close_connection_is_always_accepted_after_a_reap()
+        test_server_info_after_a_reap_leaves_the_notice_for_the_next_request()
         test_a_transaction_past_its_operation_limit_is_refused()
         test_a_busy_transaction_is_still_reaped_at_its_maximum_age()
         test_unparseable_lines_before_authentication_close_the_connection()

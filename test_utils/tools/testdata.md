@@ -2665,7 +2665,7 @@ the rollback answers `409-16` instead (see below).
 
 A transaction left idle longer than `transactionIdleTimeoutMs` (30 s by default) is rolled back by the server:
 its buffered writes are discarded, its locks released, and the connection stays open. The next request on
-that connection, whatever it is except `CLOSE_CONNECTION`, → `409-16` once and is not executed; the one after
+that connection, whatever it is except `CLOSE_CONNECTION` or `SERVER_INFO`, → `409-16` once and is not executed; the one after
 is served normally. Start a transaction and buffer a write
 
 ```json

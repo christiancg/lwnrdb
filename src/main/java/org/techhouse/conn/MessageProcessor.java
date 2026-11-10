@@ -411,7 +411,7 @@ public class MessageProcessor implements Runnable {
     }
 
     private ErrorCode firstRequestAfterReap(OperationType type) {
-        if (type == OperationType.CLOSE_CONNECTION) {
+        if (type == OperationType.CLOSE_CONNECTION || type == OperationType.SERVER_INFO) {
             return null;
         }
         final var reaped = clientTracker.consumeTransactionReaped(clientId);
