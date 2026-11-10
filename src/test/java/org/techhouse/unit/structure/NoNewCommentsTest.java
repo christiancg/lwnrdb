@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -38,7 +39,7 @@ public class NoNewCommentsTest {
 
     @Test
     public void test_no_file_has_more_comments_than_its_baseline_and_the_baseline_is_exact() throws Exception {
-        final var commentsByFile = commentsByFile(JavaSources.under(JavaSources.MAIN, JavaSources.TEST));
+        final var commentsByFile = commentsByFile(JavaSources.under(JavaSources.serverAndClientSources()));
         final var current = counts(commentsByFile);
         if (!Files.exists(BASELINE)) {
             fail(BASELINE + " is missing; create it with exactly these lines:\n" + render(current));
@@ -144,5 +145,14 @@ public class NoNewCommentsTest {
         } finally {
             Files.delete(file);
         }
+    }
+
+    @Test
+    public void test_client_sources_are_scanned_and_generated_copies_are_not() {
+        final var roots = Arrays.stream(JavaSources.serverAndClientSources())
+                .map(path -> path.toString().replace('\\', '/')).toList();
+        assertTrue(roots.contains("clients/java/lwnrdb-client/src/main/java"), roots.toString());
+        assertTrue(roots.contains("clients/java/lwnrdb-client/src/test/java"), roots.toString());
+        assertTrue(roots.stream().noneMatch(root -> root.contains("/target/")), roots.toString());
     }
 }

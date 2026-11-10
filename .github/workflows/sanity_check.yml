@@ -150,6 +150,35 @@ jobs:
       - name: Run Spotless, Checkstyle, CPD and PMD
         run: mvn -B --no-transfer-progress -DskipTests -Dspotbugs.skip verify
 
+  java-client:
+    name: Java client (JDK ${{ matrix.jdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ['17', '27']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: ${{ matrix.jdk }}
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Verify the client (unit tests, coverage, style, PMD, SpotBugs, API docs)
+        run: mvn -B --no-transfer-progress -f clients/java/pom.xml verify
+      - name: Build the Javadoc and sources jars
+        run: mvn -B --no-transfer-progress -f clients/java/pom.xml -P javadoc -DskipTests -Djacoco.skip=true package
+      - name: Install the snapshot for the consumers
+        run: mvn -B --no-transfer-progress -f clients/java/pom.xml -DskipTests -Djacoco.skip=true install
+      - name: Compile the Maven consumer
+        run: mvn -B --no-transfer-progress -f clients/java/consumers/maven/pom.xml compile
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.3.1'
+      - name: Build the Gradle consumer
+        run: gradle -p clients/java/consumers/gradle build --no-daemon
+
   integration:
     name: ${{ matrix.name }}
     needs: package
@@ -230,6 +259,13 @@ jobs:
             start_server: false
             run: |
               python3 test_utils/test_client.py
+
+          - name: client-java
+            start_server: false
+            run: |
+              mvn -B --no-transfer-progress -f clients/java/pom.xml verify -Pintegration -Dtest=NONE \
+                -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true \
+                -Dlwnrdb.jar="$GITHUB_WORKSPACE/target/lwnrdb.jar"
 
           - name: metadata-limits
             start_server: false
@@ -402,7 +438,8 @@ jobs:
 
   verify:
     name: Verify
-    needs: [package, unit-tests, unit-tests-serial, coverage, static-spotbugs, static-style, integration, test262]
+    needs: [package, unit-tests, unit-tests-serial, coverage, static-spotbugs, static-style, java-client, integration,
+      test262]
     if: always()
     runs-on: ubuntu-latest
     steps:

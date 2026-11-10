@@ -185,7 +185,8 @@ def test_a_flat_array_over_the_token_budget_is_refused_and_the_connection_surviv
     with Conn.authenticated() as conn:
         refused = conn.send_raw(line)
         check("A 100 000-byte flat array -> The command is not valid",
-              refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid",
+              refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid"
+              and refused.get("errorCode") == "400-43" and "type" in refused and refused["type"] is None,
               f"got={str(refused)[:200]}")
         check_status("The next LIST_DATABASES on the same connection", conn.send({"type": "LIST_DATABASES"}), "OK")
 

@@ -312,7 +312,9 @@ public class MessageProcessor implements Runnable {
             } catch (InvalidCommandException exception) {
                 ConnectionLog.warn(logger,
                         "Refused an unparseable request from " + remoteAddress() + ": " + causeMessageOf(exception));
-                response = ResponseFrames.encodeText(null, exception.getMessage());
+                requestType = exception.getRequestType();
+                response = ResponseFrames.encode(requestType,
+                        new OperationResponse(requestType, ErrorCode.INVALID_COMMAND));
             } catch (RuntimeException exception) {
                 logger.error("Request handling failed unexpectedly", exception);
                 response = ResponseFrames.encode(requestType,

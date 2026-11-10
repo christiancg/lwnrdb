@@ -2150,7 +2150,8 @@ def limits_suite(c):
     refused = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
                       "object": {"_id": "vec-over", "embedding": over}})
     check("A vector past maxVectorDimensions is not a valid command",
-          refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid",
+          refused.get("status") == "ERROR" and refused.get("message") == "The command is not valid"
+          and refused.get("errorCode") == "400-43",
           f"got={str(refused)[:200]}")
     check_status("It was never stored",
                  c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "vec-over"}),

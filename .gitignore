@@ -67,3 +67,7 @@ certs/
 ### Python ###
 .venv/
 __pycache__/
+
+### Client library builds ###
+.flattened-pom.xml
+.gradle/

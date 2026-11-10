@@ -65,9 +65,11 @@ public final class RequestParser {
     }
 
     private static OperationRequest parseRoot(final Supplier<JsonObject> rootParser) throws InvalidCommandException {
+        OperationType parsedType = null;
         try {
             final var root = rootParser.get();
             final var type = OperationType.valueOf(root.get("type").asJsonString().getValue());
+            parsedType = type;
             return switch (type) {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);
                 case SAVE -> {
@@ -130,7 +132,7 @@ public final class RequestParser {
                 case RELEASE_FAULT -> eJson.fromJson(root, ReleaseFaultRequest.class);
             };
         } catch (Exception e) {
-            throw new InvalidCommandException(e);
+            throw new InvalidCommandException(parsedType, e);
         }
     }
 

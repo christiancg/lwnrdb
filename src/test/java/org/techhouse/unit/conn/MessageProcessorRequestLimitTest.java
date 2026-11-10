@@ -99,7 +99,9 @@ public class MessageProcessorRequestLimitTest {
 
         final var refused = connection.exchange(flatArrayListDatabases(100_000));
 
-        assertTrue(refused.contains("The command is not valid"), refused);
+        assertTrue(refused.contains("\"status\":\"ERROR\""), refused);
+        assertTrue(refused.contains("\"message\":\"The command is not valid\""), refused);
+        assertTrue(refused.contains("\"errorCode\":\"400-43\""), refused);
         assertTrue(connection.exchange(LIST_DATABASES).contains("\"OK\""));
         assertTrue(connection.exchange(flatArrayListDatabases(1_000)).contains("\"OK\""),
                 "a small array stays within the budget");

@@ -8,7 +8,6 @@ import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Set;
 import javax.net.ssl.SSLSocket;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
@@ -26,8 +25,6 @@ public final class Connection implements Closeable {
     public static final String MESSAGE = "message";
     public static final String ERROR_CODE = "errorCode";
     public static final int HELD_REPLY_BYTES = 64 * 1024;
-    private static final Set<String> RETRYABLE = Set.of("503-2", "503-4", "503-5", "503-9", "503-10", "503-16",
-            "503-17", "503-18", "503-19", "503-20", "503-21");
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     private final Socket socket;
@@ -156,7 +153,7 @@ public final class Connection implements Closeable {
     }
 
     private static boolean isRetryable(String errorCode) {
-        return errorCode != null && RETRYABLE.contains(errorCode);
+        return errorCode != null && Globals.RETRYABLE_ERROR_CODES.contains(errorCode);
     }
 
     private String exchange(byte[] payload) {
