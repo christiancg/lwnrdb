@@ -38,8 +38,9 @@ public class ListensTest {
 
         @Override
         public void onUpdate(ListenUpdate<Document> update) {
+            final var fail = throwOnUpdate;
             events.add(update);
-            if (throwOnUpdate) {
+            if (fail) {
                 throw new IllegalStateException("handler failed");
             }
         }

@@ -26,6 +26,7 @@ public class ConnectionPoolTest {
             try (var lease = pool.borrow()) {
                 assertSame(first, lease.connection());
             }
+            server.awaitSession(0);
             assertEquals(1, server.acceptedConnections());
             assertEquals(1, pool.idleConnections());
         }
@@ -60,6 +61,7 @@ public class ConnectionPoolTest {
             try (var lease = pool.borrow()) {
                 assertTrue(lease.connection().isOpen());
             }
+            server.awaitSession(2);
             assertEquals(3, server.acceptedConnections());
         }
     }
