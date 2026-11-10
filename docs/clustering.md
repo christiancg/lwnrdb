@@ -470,6 +470,21 @@ anti-entropy round, and it is decided per record:
 - **The higher version wins; at an equal version a tombstone beats a live record.** A record
   that does not outrank the local one is skipped, which is what makes a re-sent or reordered
   `REPLICATE_ADMIN` harmless: there is no lane and no ordering requirement on the wire.
+- **The decision is repeated under the record's lock.** The check above runs first as a cheap filter
+  against the tombstones read at the start of the round, which a concurrent push can make stale. Each
+  applier (databases, collections, users, definitions) checks again once it holds the record's own
+  lock, against fresh tombstones, and does nothing when the record no longer outranks what is there.
+  Without that, an anti-entropy snapshot taken just before a delete could write the deleted record
+  back after the delete's push had removed it.
+- **A tombstone is recorded before the removal it describes.** A received tombstone is written to
+  `admin-tombstones.idx` first and only then removes the record (inside the lock for definitions and
+  users, before the drop for databases and collections). A removal that fails, because its lock stayed
+  held for example, leaves the record **shadowed**: live, under a tombstone at or above its version.
+  The same tombstone arriving again still removes it, and every admin round starts by removing any
+  shadowed record (`AdminRecordMerge.removeShadowed`, collections and databases by quarantine). That
+  also repairs a node where a local drop, whose tombstone is written after the drop releases its locks,
+  raced an install. A shadowed record must be removed locally: the node already holds the tombstone, so
+  its tombstone digest matches its peers' and nobody ships the tombstone to it again.
 - **Every received version is observed by the clock** before it is applied, and the clock is
   seeded at startup from every admin record and tombstone on disk, so a later local write or
   delete is always stamped above anything this node holds.

@@ -6,25 +6,18 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.HybridClock;
-import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
-import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.admin.AdminRecordKey;
 import org.techhouse.ops.admin.AdminStamp;
-import org.techhouse.ops.admin.GrantPruner;
-import org.techhouse.ops.admin.GrantRewrite;
 
 public final class AdminRecordMerge {
     private static final Logger logger = Logger.logFor(AdminRecordMerge.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
-    private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final Comparator<AdminRecord> APPLY_ORDER = Comparator
             .comparingInt(record -> record.key().kind().ordinal());
@@ -62,7 +55,7 @@ public final class AdminRecordMerge {
             try {
                 hybridClock.observe(record.version());
                 final var local = AdminRecords.current(record.key(), tombstones);
-                if (!record.outranks(local)) {
+                if (!record.outranks(local) && !shadowsLiveRecord(record)) {
                     keepSuperseded(record, local, tombstones);
                     continue;
                 }
@@ -81,6 +74,42 @@ public final class AdminRecordMerge {
             }
         }
         return new Result(complete, changed);
+    }
+
+    private static boolean shadowsLiveRecord(AdminRecord record) {
+        if (!record.isTombstone()) {
+            return false;
+        }
+        final var live = AdminRecords.live(record.key());
+        return live != null && record.outranks(live);
+    }
+
+    public static boolean removeShadowed() {
+        final List<AdminRecord> shadowed;
+        try {
+            shadowed = AdminRecords.shadowed();
+        } catch (IOException unreadable) {
+            logger.warning("Healing no shadowed admin records this round: the admin tombstones could not be read: "
+                    + unreadable.getMessage());
+            return false;
+        }
+        var removed = false;
+        for (final var tombstone : shadowed) {
+            try {
+                if (remove(tombstone, false)) {
+                    logger.info("Removed " + tombstone.key().id() + ": its own tombstone at version "
+                            + tombstone.version() + " had already deleted it");
+                    removed = true;
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return removed;
+            } catch (Exception failure) {
+                logger.warning("Could not remove the shadowed admin record " + tombstone.key().id() + ": "
+                        + failure.getMessage());
+            }
+        }
+        return removed;
     }
 
     private static Screened screenInApplyOrder(List<AdminRecord> records) {
@@ -150,7 +179,7 @@ public final class AdminRecordMerge {
         return switch (key.kind()) {
             case DATABASE -> DatabaseRecordApplier.install(record);
             case COLLECTION -> CollectionRecordApplier.install(record);
-            case USER -> installUser(record);
+            case USER -> UserRecordApplier.install(record);
             case SCHEMA, TRIGGERS, PROCEDURE, SCHEDULE -> DefinitionRecordApplier.install(record);
         };
     }
@@ -185,37 +214,13 @@ public final class AdminRecordMerge {
         AdminStamp.tombstoneAt(key, version);
     }
 
-    private static boolean installUser(AdminRecord record) throws IOException, InterruptedException {
-        final var user = AdminUserEntry.fromJsonObject(record.body());
-        user.setVersion(record.version());
-        final var previous = cache.getAdminUserEntry(user.get_id());
-        AdminOperationHelper.saveUserEntry(user);
-        if (previous != null && !Objects.equals(previous.getPasswordHash(), user.getPasswordHash())) {
-            clientTracker.deauthenticateUser(user.get_id());
-        }
-        return true;
-    }
-
     private static boolean remove(AdminRecord record, boolean live) throws Exception {
-        final var key = record.key();
-        final var removed = switch (key.kind()) {
-            case DATABASE -> DatabaseRecordApplier.remove(key.dbName(), live);
-            case COLLECTION -> CollectionRecordApplier.remove(key.dbName(), key.name(), live);
-            case USER -> removeUser(key.name());
-            case SCHEMA, TRIGGERS, PROCEDURE, SCHEDULE -> DefinitionRecordApplier.remove(key);
+        return switch (record.key().kind()) {
+            case DATABASE -> DatabaseRecordApplier.remove(record, live);
+            case COLLECTION -> CollectionRecordApplier.remove(record, live);
+            case USER -> UserRecordApplier.remove(record);
+            case SCHEMA, TRIGGERS, PROCEDURE, SCHEDULE -> DefinitionRecordApplier.remove(record);
         };
-        if (removed) {
-            bury(key, record.version());
-        }
-        return removed;
-    }
-
-    private static boolean removeUser(String username) throws IOException, InterruptedException {
-        if (cache.getAdminUserEntry(username) != null) {
-            AdminOperationHelper.deleteUserEntry(username);
-            GrantPruner.forDeletedUser(username, GrantRewrite.KEEP);
-        }
-        return true;
     }
 
     private static Parent parentOf(AdminRecordKey key, long version, Map<String, Long> tombstones) {
