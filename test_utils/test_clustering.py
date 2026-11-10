@@ -3397,6 +3397,35 @@ def test_schedule_replication_and_single_firing():
                                       for n in nodes if n.alive), timeout_s=20.0))
 
 
+
+def schedule_file(node, name, db=SCHEDULE_DB) -> str:
+    return os.path.join(node.work_dir, "db", db, ".schedules", f"{name}.json")
+
+
+def test_a_resurrected_schedule_is_healed():
+    section("Admin records — a deleted schedule written back on one node is removed by the next admin rounds")
+    name = "zombie"
+    revived = nodes[1]
+    check_status("save the schedule via node-0", save_schedule(nodes[0].client_port, name, "sched_marks"), "OK")
+    check("the schedule reaches node-1",
+          wait_until(lambda: os.path.isfile(schedule_file(revived, name)), timeout_s=20.0))
+    with open(schedule_file(revived, name), "rb") as fp:
+        saved = fp.read()
+
+    check_status("delete the schedule", delete_schedule(nodes[0].client_port, name), "OK")
+    check("the deletion replicates to every node",
+          wait_until(lambda: all(name not in schedule_names(n.client_port) for n in nodes if n.alive),
+                     timeout_s=20.0))
+
+    descriptor = os.open(schedule_file(revived, name), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "wb") as fp:
+        fp.write(saved)
+    check("node-1 serves the written-back schedule", name in schedule_names(revived.client_port))
+    check("an admin round removes it again, because its own tombstone is newer",
+          wait_until(lambda: name not in schedule_names(revived.client_port),
+                     timeout_s=4 * ANTI_ENTROPY_INTERVAL_S),
+          detail=str(schedule_names(revived.client_port)))
+
 def test_schedule_failover():
     section("Scheduled procedures — a schedule owned by the dead node fails over")
 
@@ -4271,6 +4300,7 @@ GROUPS = {
         test_formation_and_quorum_writes,
         test_write_replication_and_read_routing,
         test_schedule_replication_and_single_firing,
+        test_a_resurrected_schedule_is_healed,
         arrange_admin_changes_for_a_downed_node,
         test_node_failure_quorum_maintained,
         test_schedule_failover,

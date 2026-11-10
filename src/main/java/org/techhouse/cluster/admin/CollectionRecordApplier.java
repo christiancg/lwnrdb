@@ -17,6 +17,7 @@ import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.GrantPruner;
 import org.techhouse.ops.admin.GrantRewrite;
@@ -80,6 +81,9 @@ final class CollectionRecordApplier {
     }
 
     private static boolean installUnderLocks(AdminRecord record, AdminCollEntry desired) throws Exception {
+        if (!AdminRecords.stillOutranks(record)) {
+            return true;
+        }
         final var dbName = record.key().dbName();
         final var collName = record.key().name();
         final var incarnation = desired.getIncarnation();
@@ -162,8 +166,12 @@ final class CollectionRecordApplier {
         return AdminRecordKey.collection(dbName, sibling);
     }
 
-    static boolean remove(String dbName, String collName, boolean live) throws Exception {
-        if (cache.getAdminCollectionEntry(dbName, collName) == null) {
+    static boolean remove(AdminRecord tombstone, boolean live) throws Exception {
+        final var key = tombstone.key();
+        final var dbName = key.dbName();
+        final var collName = key.name();
+        AdminStamp.tombstoneAt(key, tombstone.version());
+        if (cache.getAdminCollectionEntry(dbName, collName) == null || !tombstone.outranks(AdminRecords.live(key))) {
             return true;
         }
         if (live) {
