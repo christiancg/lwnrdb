@@ -10,7 +10,9 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
@@ -36,6 +38,8 @@ import org.techhouse.test.TestUtils;
 
 public class MainTest {
     private static final long KEYSTORE_WAIT_MS = 10_000L;
+    private static final long STARTUP_WAIT_MS = 30_000L;
+    private static final int CONNECT_ATTEMPT_MS = 200;
     private static final long BIND_FAILURE_WAIT_MS = 30_000L;
     private final Configuration config = Configuration.getInstance();
     private String origPassword;
@@ -88,7 +92,7 @@ public class MainTest {
                 }
             });
             thread.start();
-            Thread.sleep(1000);
+            assertTrue(awaitListening(9090), "the server never started listening");
             assertTrue(thread.isAlive());
         } finally {
             if (thread != null) {
@@ -118,6 +122,7 @@ public class MainTest {
             });
             thread.start();
             assertTrue(awaitFile(new File(TestGlobals.PATH + "/lwnrdb.p12")), "the keystore was never generated");
+            assertTrue(awaitListening(9092), "the server never started listening");
             assertTrue(thread.isAlive());
         } finally {
             if (thread != null) {
@@ -125,6 +130,20 @@ public class MainTest {
             }
             TestUtils.setPrivateField(config, "tlsEnabled", false);
         }
+    }
+
+    @SuppressWarnings("BusyWait")
+    private static boolean awaitListening(int port) throws InterruptedException {
+        final var deadline = System.currentTimeMillis() + STARTUP_WAIT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            try (var socket = new Socket()) {
+                socket.connect(new InetSocketAddress("localhost", port), CONNECT_ATTEMPT_MS);
+                return true;
+            } catch (IOException notYet) {
+                Thread.sleep(20);
+            }
+        }
+        return false;
     }
 
     @SuppressWarnings("BusyWait")
@@ -159,7 +178,7 @@ public class MainTest {
             }
         });
         thread.start();
-        Thread.sleep(500);
+        assertTrue(awaitListening(19099), "the server never started listening");
         thread.interrupt();
         thread.join(2000);
     }

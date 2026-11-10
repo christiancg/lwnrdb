@@ -1,0 +1,57 @@
+{
+    "name": "lwnrdb-client",
+    "version": "0.0.0-dev",
+    "description": "The official Node.js client for LWNRDB: a connection pool, a fluent query builder, transactions and live queries",
+    "license": "MIT",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "files": [
+        "dist",
+        "README.md"
+    ],
+    "sideEffects": false,
+    "engines": {
+        "node": ">=22.12"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/christiancg/lwnrdb.git",
+        "directory": "clients/typescript"
+    },
+    "keywords": [
+        "lwnrdb",
+        "database",
+        "nosql",
+        "client"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.build.json && node build-tools/inject-docs.ts",
+        "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+        "lint": "eslint .",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "test": "vitest run --coverage",
+        "test:it": "vitest run -c vitest.integration.config.ts",
+        "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run clean && npm run build",
+        "consumers": "node build-tools/check-consumers.ts"
+    },
+    "devDependencies": {
+        "@eslint/js": "10.0.1",
+        "@types/node": "22.20.5",
+        "@vitest/coverage-v8": "5.1.0",
+        "eslint": "10.14.0",
+        "prettier": "3.9.10",
+        "typescript": "6.0.3",
+        "typescript-eslint": "8.72.2",
+        "vitest": "5.1.0"
+    }
+}

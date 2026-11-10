@@ -40,7 +40,9 @@ A response case is `{"name", "frame", "expect"}`, where `expect` is `ok`, `push`
   `RequestValidator`, and fails when a client-facing operation, a custom type, a custom operator or a geo comparator
   has no case.
 - Every client keeps a table from case name to the builder call that produces it, and fails when a case is unmapped.
-  Requests are compared as JSON trees, numbers by value.
+  Requests are compared as JSON trees, numbers by value. A custom value (`#geo(...)`, `#vector(...)`, `#datetime(...)`,
+  `#time(...)`) is compared by the value it parses to, because each client writes numbers in its language's shortest
+  form (`#geo(1,2)` from JavaScript, `#geo(1.0,2.0)` from Java) and the server reads both.
 
 A request the server cannot parse is answered like any other refusal, with `400-43` (`errors.400_43*`); its `type`
 is `null` when the parser never reached the request's `type`. Clients must still survive a reply line that is not

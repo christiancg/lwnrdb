@@ -1,0 +1,5 @@
+{
+    "name": "lwnrdb-client-consumer-esm",
+    "private": true,
+    "type": "module"
+}

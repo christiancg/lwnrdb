@@ -1724,6 +1724,9 @@ shared protocol contract in [`clients/protocol`](clients/protocol/README.md).
   [`clients/java`](clients/java/README.md).
 - **Spring Data and Spring Boot**: `lwnrdb-spring-boot-starter` adds repositories with derived queries,
   `@Transactional` and a health indicator, configured from `lwnrdb.*` properties.
+- **TypeScript / JavaScript** (Node.js 22.12+): `lwnrdb-client` on npm, ESM with bundled types, usable from
+  `require` too, with no runtime dependencies. The same pool, query builder, transactions, live queries and custom value
+  types. See [`clients/typescript`](clients/typescript/README.md).
 
 ```java
 try (LwnrdbClient client = LwnrdbClient.connect(ClientSettings.builder()
@@ -1731,6 +1734,12 @@ try (LwnrdbClient client = LwnrdbClient.connect(ClientSettings.builder()
     List<Document> active = client.database("shop").collection("orders").query()
             .filter(field("status").eq("active")).sort("total", Order.DESC).limit(10).toList();
 }
+```
+
+```ts
+await using client = await LwnrdbClient.connect({ credentials: { username: "admin", password } });
+const active = await client.database("shop").collection("orders").query()
+    .filter(field("status").eq("active")).sort("total", Order.DESC).limit(10).toArray();
 ```
 
 ### Bootstrap
