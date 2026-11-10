@@ -37,7 +37,7 @@ public final class AuthorizationChecker {
     private AuthorizationChecker() {
     }
 
-    private static boolean isAdminOnly(OperationType type) {
+    public static boolean isAdminOnly(OperationType type) {
         return ADMIN_ONLY_OPERATIONS.contains(type);
     }
 

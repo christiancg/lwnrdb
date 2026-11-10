@@ -2,11 +2,14 @@ package org.techhouse.config;
 
 import java.nio.file.FileSystems;
 import java.util.List;
+import java.util.Set;
 
 public final class Globals {
     private Globals() {
     }
     public static final String PK_FIELD = "_id";
+    public static final Set<String> RETRYABLE_ERROR_CODES = Set.of("503-2", "503-4", "503-5", "503-9", "503-10",
+            "503-16", "503-17", "503-18", "503-19", "503-20", "503-21");
     public static final String TRIGGER_DEPTH_FIELD = "triggerDepth";
     public static final String INDEX_TYPE_NUMBER = "Number";
     public static final String INDEX_TYPE_STRING = "String";

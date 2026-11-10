@@ -79,8 +79,12 @@ before authenticating, send any line of more than 65 536 bytes, for example
 ```
 
 A line much denser than real data (more than one JSON token per 4 bytes of the line limit, such as a
-`LIST_DATABASES` carrying a flat array of 20 000 ones before authenticating) is answered
-`The command is not valid` instead, and the connection stays open.
+`LIST_DATABASES` carrying a flat array of 20 000 ones before authenticating) is answered `400-43` instead, and the
+connection stays open. The parser stops before it reads `type`, so the reply's `type` is `null`:
+
+```json
+{"type": null, "status": "ERROR", "message": "The command is not valid", "errorCode": "400-43"}
+```
 
 A connection that has not authenticated within `authTimeoutMs` (10 s by default) of being accepted → `408-4`,
 sent as a `CLOSE_CONNECTION` frame, and the connection is closed. Failed `AUTHENTICATE` attempts, blank lines
@@ -303,7 +307,7 @@ row of a large collection, or a `GROUP_BY` over a collection whose documents tak
 ```
 
 A `#vector(...)` literal with more than `maxVectorDimensions` (16 384) components is refused while the request
-is parsed: `The command is not valid`.
+is parsed: `400-43` (`The command is not valid`).
 
 `SAVE_SCHEDULE` with a `timeoutMs` above `scheduleMaxTimeoutMs` (300 000) → `400-29`:
 
@@ -2402,6 +2406,13 @@ Re-creating an index that already exists is always allowed:
 
 ```json
 {"type": "CREATE_INDEX", "status": "ERROR", "message": "The collection has the maximum number of indexes (64)", "errorCode": "400-42"}
+```
+
+A line that is not a valid command (not a JSON object, no known `type`, a field of the wrong shape) → `400-43`. When the
+`type` could be read the reply carries it; otherwise `type` is `null`. The connection stays open:
+
+```json
+{"type": "AGGREGATE", "status": "ERROR", "message": "The command is not valid", "errorCode": "400-43"}
 ```
 
 Comparing a literal or a backreference charges one budget step per 64 characters compared, so `"^(a*)\\1b$"` as a

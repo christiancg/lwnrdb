@@ -1,0 +1,11 @@
+{
+  "area": "indexes",
+  "cases": [
+    {"name":"indexes.create_one","request":{"type":"CREATE_INDEX","databaseName":"shop","collectionName":"orders","fieldName":"email"}},
+    {"name":"indexes.create_many","request":{"type":"CREATE_INDEX","databaseName":"shop","collectionName":"orders","fieldNames":["email","status"]}},
+    {"name":"indexes.drop","request":{"type":"DROP_INDEX","databaseName":"shop","collectionName":"orders","fieldName":"email"}},
+    {"name":"indexes.reindex_all","request":{"type":"REINDEX","databaseName":"shop","collectionName":"orders"}},
+    {"name":"indexes.reindex_fields","request":{"type":"REINDEX","databaseName":"shop","collectionName":"orders","fieldNames":["email"]}},
+    {"name":"indexes.reindex_primary_key","request":{"type":"REINDEX","databaseName":"shop","collectionName":"orders","primaryKey":true}}
+  ]
+}

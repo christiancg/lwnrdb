@@ -1,0 +1,9 @@
+{
+  "area": "info",
+  "cases": [
+    {"name":"info.server_info","request":{"type":"SERVER_INFO"}},
+    {"name":"info.database_stats_all","request":{"type":"GET_DATABASE_STATS"}},
+    {"name":"info.database_stats_one","request":{"type":"GET_DATABASE_STATS","databaseName":"shop"}},
+    {"name":"info.close_connection","request":{"type":"CLOSE_CONNECTION"}}
+  ]
+}

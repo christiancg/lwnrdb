@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.techhouse.utils.ReflectionUtils.getClassFromSimpleName;
 
 import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -67,16 +66,8 @@ public class ReflectionUtilsTest {
             return 0;
         }
         @Override
-        public Set<String> customOperatorNames() {
-            return Set.of();
-        }
-        @Override
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
-        }
-        @Override
-        public Set<String> customRankingOperatorNames() {
-            return Set.of();
         }
         @Override
         public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
@@ -87,8 +78,12 @@ public class ReflectionUtilsTest {
     @Test
     public void test_returns_registered_custom_type_class() {
         CustomTypeFactory.registerCustomType(MyCustomType.class);
-        Class<?> result = getClassFromSimpleName("MyCustomType");
-        assertEquals(MyCustomType.class, result);
+        try {
+            Class<?> result = getClassFromSimpleName("MyCustomType");
+            assertEquals(MyCustomType.class, result);
+        } finally {
+            CustomTypeFactory.getCustomTypes().remove("MyCustomType");
+        }
     }
 
 }

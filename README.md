@@ -70,7 +70,7 @@ A request may nest objects and arrays at most 128 levels deep, counted from the 
 Each request is one line terminated by `\n`; a single `\r` right before it is stripped. A lone `\r` does **not** end a line (it used to): it is kept as part of the request.
 
 - **Line size.** A line may be at most `maxRequestSize` bytes (default `64Mb`) once the connection has authenticated, and at most **64Kb** before that (only `AUTHENTICATE` and `CLOSE_CONNECTION` are served unauthenticated, and each is a few hundred bytes; any other request is answered `401-1` without being validated). The server refuses as soon as the unterminated bytes pass the limit, without waiting for the newline: it answers one `CLOSE_CONNECTION` frame with `400-22` and closes the connection, because the rest of an oversized line cannot be skipped safely.
-- **Token budget.** A line is also refused if it is denser than one JSON token per 4 bytes of the line limit (a 64Kb unauthenticated line may hold 16 384 tokens, a 64Mb one 16 777 216). Real documents, vectors and pipelines average well above 4 bytes per token; a huge flat array such as `[1,1,1,...]` does not. Such a line is answered `The command is not valid` and the connection stays open.
+- **Token budget.** A line is also refused if it is denser than one JSON token per 4 bytes of the line limit (a 64Kb unauthenticated line may hold 16 384 tokens, a 64Mb one 16 777 216). Real documents, vectors and pipelines average well above 4 bytes per token; a huge flat array such as `[1,1,1,...]` does not. Such a line is answered `400-43` and the connection stays open.
 - **Authentication deadline.** A connection must authenticate within `authTimeoutMs` (default `10000`) of being accepted. The deadline is absolute: traffic, blank lines and failed `AUTHENTICATE` attempts do not extend it. When it expires the server answers one `CLOSE_CONNECTION` frame with `408-4` and closes the connection. With `tlsEnabled=true` the TLS handshake runs under the same deadline: a client that stalls or drips its handshake is closed at `authTimeoutMs` plus one second. A TLS connection over `maxConnections` or `maxUnauthenticatedConnectionsPerAddress` is closed before its handshake, with no frame (the refusal could only be sent after the handshake it would cost). Once authenticated, a connection is never closed for being idle.
 - **Unauthenticated connections per address.** One remote address may hold at most `maxUnauthenticatedConnectionsPerAddress` (default `16`) connections that have not authenticated yet; the next one is answered `503-14` and closed. Authenticating frees the slot. Clients behind one NAT address share the allowance.
 - **Invalid requests before authentication.** A connection that sends `maxUnauthenticatedInvalidRequests` (default `5`) requests before it authenticates that are not a successful `AUTHENTICATE` (unparseable lines, requests answered `401-1`, failed attempts) is closed after the last answer.
@@ -1428,6 +1428,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-40` | `ERROR` | The database has the maximum number of collections (`maxCollectionsPerDatabase`); re-creating an existing collection is never refused |
 | `400-41` | `ERROR` | The server has the maximum number of databases (`maxDatabases`) |
 | `400-42` | `ERROR` | The collection has the maximum number of indexes (`maxIndexesPerCollection`); re-creating an existing index is never refused |
+| `400-43` | `ERROR` | The command is not valid: the line is not a JSON object, names no known `type`, is denser than the token budget, nests deeper than 128 levels, holds a custom value past its limits (such as a `#vector` over `maxVectorDimensions`), or has a field of the wrong shape. `type` is the request's own when it could be read, `null` otherwise; the connection stays open |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -1711,6 +1712,25 @@ ignores); add `-i` to feed a restore:
 ```bash
 docker run --rm lwnrdb java -jar app.jar --dump --compress --host db.internal --password … > backup.ldump.gz
 docker run --rm -i lwnrdb java -jar app.jar --restore --host db.internal --password … < backup.ldump.gz
+```
+
+### Client libraries
+
+Official client libraries live under [`clients/`](clients/README.md), one folder per language, all tested against the
+shared protocol contract in [`clients/protocol`](clients/protocol/README.md).
+
+- **Java** (Java 17+): `io.github.christiancg:lwnrdb-client` on Maven Central, for Maven and Gradle. Connection pool,
+  fluent query builder, transactions, live queries, POJO mapping and the custom value types. See
+  [`clients/java`](clients/java/README.md).
+- **Spring Data and Spring Boot**: `lwnrdb-spring-boot-starter` adds repositories with derived queries,
+  `@Transactional` and a health indicator, configured from `lwnrdb.*` properties.
+
+```java
+try (LwnrdbClient client = LwnrdbClient.connect(ClientSettings.builder()
+        .host("localhost", 8989).credentials("admin", password).build())) {
+    List<Document> active = client.database("shop").collection("orders").query()
+            .filter(field("status").eq("active")).sort("total", Order.DESC).limit(10).toList();
+}
 ```
 
 ### Bootstrap

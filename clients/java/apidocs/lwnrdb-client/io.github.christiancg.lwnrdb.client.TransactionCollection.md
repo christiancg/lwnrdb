@@ -1,0 +1,42 @@
+A collection seen from inside a transaction.
+
+@param <T> the type documents are decoded to
+
+## databaseName()
+
+@return the database the collection belongs to
+
+## name()
+
+@return the collection's name
+
+## save(T)
+
+Buffers an insert or replace until commit.
+
+@param value the document
+@return the `_id` and whether it is an insert
+
+## saveAll(List)
+
+Buffers many writes until commit.
+
+@param values the documents
+@return the inserted and updated ids
+
+## findById(String)
+
+Reads one document, seeing this transaction's own writes.
+
+@param id the `_id`
+@return the document, empty when there is none
+
+## delete(String)
+
+Buffers a delete until commit.
+
+@param id the `_id`
+
+## query()
+
+@return a query that sees this transaction's own writes

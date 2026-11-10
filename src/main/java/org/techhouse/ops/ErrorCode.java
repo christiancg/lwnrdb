@@ -1,5 +1,7 @@
 package org.techhouse.ops;
 
+import org.techhouse.config.Globals;
+
 public enum ErrorCode {
     // @formatter:off
     VALIDATION_ERROR("400-1", null, OperationStatus.ERROR),
@@ -47,6 +49,7 @@ public enum ErrorCode {
     TOO_MANY_DATABASES("400-41", "The server has the maximum number of databases", OperationStatus.ERROR),
     TOO_MANY_INDEXES_FOR_COLLECTION("400-42", "The collection has the maximum number of indexes",
             OperationStatus.ERROR),
+    INVALID_COMMAND("400-43", "The command is not valid", OperationStatus.ERROR),
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED),
     USER_NO_LONGER_EXISTS("401-2", "User no longer exists", OperationStatus.UNAUTHENTICATED),
     WRONG_CREDENTIALS("401-3", "The user doesn't exist or the wrong credentials have been provided", OperationStatus.ERROR),
@@ -207,6 +210,10 @@ public enum ErrorCode {
 
     public OperationStatus getStatus() {
         return status;
+    }
+
+    public boolean isRetryable() {
+        return Globals.RETRYABLE_ERROR_CODES.contains(code);
     }
 
     public static ErrorCode byCode(String code) {

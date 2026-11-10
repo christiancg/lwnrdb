@@ -326,6 +326,19 @@ public class RequestParserTest {
     }
 
     @Test
+    public void test_an_invalid_command_names_its_type_only_once_the_type_parsed() {
+        final var unparsed = assertThrows(InvalidCommandException.class,
+                () -> RequestParser.parseRequest("{\"type\":"));
+        assertNull(unparsed.getRequestType());
+        final var unknownType = assertThrows(InvalidCommandException.class,
+                () -> RequestParser.parseRequest("{\"type\":\"NOT_A_TYPE\"}"));
+        assertNull(unknownType.getRequestType());
+        final var badBody = assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(
+                "{\"type\":\"AGGREGATE\",\"databaseName\":\"d\",\"collectionName\":\"c\",\"aggregationSteps\":5}"));
+        assertEquals(OperationType.AGGREGATE, badBody.getRequestType());
+    }
+
+    @Test
     public void test_an_unknown_type_is_an_invalid_command() {
         assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest("{\"type\":\"NOT_A_TYPE\"}"));
     }
