@@ -32,6 +32,7 @@ public class RequestsTest {
         assertEquals("{\"type\":\"CLOSE_CONNECTION\"}", json(Requests.close()));
         assertEquals("{\"type\":\"LIST_DATABASES\"}", json(Requests.listDatabases()));
         assertEquals("{\"type\":\"GET_DATABASE_STATS\"}", json(Requests.stats()));
+        assertEquals("{\"type\":\"SERVER_INFO\"}", json(Requests.serverInfo()));
     }
 
     @Test

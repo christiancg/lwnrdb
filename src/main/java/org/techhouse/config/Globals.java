@@ -72,6 +72,7 @@ public final class Globals {
     public static final String FILE_PAGE_SEPARATOR = "-";
     public static final String NEWLINE = System.lineSeparator();
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
+    public static final int PROTOCOL_VERSION = 1;
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
     public static final double EARTH_RADIUS_METERS = 6371000.0;
     public static final int GEO_HASH_MAX_PRECISION = 9;

@@ -192,4 +192,48 @@ public class ClientMainTest {
 
         assertFalse(err().contains(ClientMain.INSECURE_WARNING), err());
     }
+
+    private int health(String... extra) {
+        final var all = new ArrayList<>(List.of("--health", "--port", String.valueOf(server.port())));
+        all.addAll(List.of(extra));
+        return run("", Map.of(), all.toArray(String[]::new));
+    }
+
+    private void serverState(String state) {
+        server.reply("SERVER_INFO", FakeLineServer.ok("SERVER_INFO", "\"server\":{\"state\":\"" + state + "\"}"));
+    }
+
+    @Test
+    public void test_health_exits_0_on_ready_without_authenticating() {
+        serverState("READY");
+
+        assertEquals(ClientException.OK, health());
+
+        assertTrue(out().contains("READY"), out());
+        assertEquals(List.of("SERVER_INFO", "CLOSE_CONNECTION"), server.types());
+    }
+
+    @Test
+    public void test_health_exits_1_when_not_ready() {
+        serverState("SHUTTING_DOWN");
+
+        assertEquals(ClientException.FAILED, health());
+    }
+
+    @Test
+    public void test_health_exits_1_on_a_reply_without_a_state() {
+        server.reply("SERVER_INFO", FakeLineServer.error("SERVER_INFO", "ERROR", "500-35"));
+
+        assertEquals(ClientException.FAILED, health());
+    }
+
+    @Test
+    public void test_health_exits_3_when_unreachable() throws IOException {
+        final int closedPort;
+        try (var probe = new ServerSocket(0)) {
+            closedPort = probe.getLocalPort();
+        }
+
+        assertEquals(ClientException.UNREACHABLE, run("", Map.of(), "--health", "--port", String.valueOf(closedPort)));
+    }
 }

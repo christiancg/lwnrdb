@@ -51,7 +51,7 @@ public class RequestValidator {
             case DELETE -> DataRequestValidator.validateDelete((DeleteRequest) request);
             case AGGREGATE -> DataRequestValidator.validateAggregate((AggregateRequest) request);
             case CREATE_DATABASE, DROP_DATABASE -> NameValidations.validateDbOnly(request, true);
-            case LIST_DATABASES, CLOSE_CONNECTION, GET_DATABASE_STATS -> ValidationResult.ok();
+            case LIST_DATABASES, CLOSE_CONNECTION, GET_DATABASE_STATS, SERVER_INFO -> ValidationResult.ok();
             case CREATE_COLLECTION, DROP_COLLECTION, DELETE_SCHEMA, GET_SCHEMA ->
                 NameValidations.validateDbAndColl(request, true, true);
             case LIST_COLLECTIONS -> NameValidations.validateDbOnly(request, false);

@@ -31,6 +31,10 @@ public final class Requests {
         return typed("CLOSE_CONNECTION");
     }
 
+    public static JsonObject serverInfo() {
+        return typed("SERVER_INFO");
+    }
+
     public static JsonObject listDatabases() {
         return typed("LIST_DATABASES");
     }

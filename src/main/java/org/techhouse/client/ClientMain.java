@@ -16,13 +16,14 @@ public final class ClientMain {
                     + "  java -jar lwnrdb.jar --exec [connection]                          < commands%n"
                     + "  java -jar lwnrdb.jar --dump [--databases a,b | --collections db.coll,...] [--compress]"
                     + " [connection] > backup.ldump%n"
-                    + "  java -jar lwnrdb.jar --restore [connection]                       < backup.ldump%n" + "%n"
-                    + "Connection:%n" + "  --host <host>          default %s%n"
-                    + "  --port <port>          default %s%n" + "  --user <user>          default %s%n"
+                    + "  java -jar lwnrdb.jar --restore [connection]                       < backup.ldump%n"
+                    + "  java -jar lwnrdb.jar --health [connection]%n" + "%n" + "Connection:%n"
+                    + "  --host <host>          default %s%n" + "  --port <port>          default %s%n"
+                    + "  --user <user>          default %s%n"
                     + "  --password <password>  or the %s environment variable; --shell prompts on a terminal%n"
                     + "  --tls [--insecure]     TLS, verified against the JVM trust store unless --insecure%n" + "%n"
-                    + "Exit codes: 0 success, 1 a command or the dump/restore failed, 2 usage error,"
-                    + " 3 cannot connect or authenticate%n",
+                    + "Exit codes: 0 success, 1 a command or the dump/restore failed or the server is not READY,"
+                    + " 2 usage error," + " 3 cannot connect or authenticate%n",
             ClientOptions.DEFAULT_HOST, ConfigKey.PORT.defaultValue(), ClientOptions.DEFAULT_USER,
             ClientOptions.PASSWORD_ENV);
 
@@ -46,9 +47,11 @@ public final class ClientMain {
             if (options.insecure()) {
                 err.println(INSECURE_WARNING);
             }
-            final var password = passwordFor(options);
+            final var password = needsPassword(options) ? passwordFor(options) : null;
             try (var connection = Connection.open(options)) {
-                connection.authenticate(options.user(), password);
+                if (password != null) {
+                    connection.authenticate(options.user(), password);
+                }
                 return dispatch(options, connection, in, out, err);
             }
         } catch (ClientException e) {
@@ -61,6 +64,10 @@ public final class ClientMain {
             out.flush();
             err.flush();
         }
+    }
+
+    private static boolean needsPassword(ClientOptions options) {
+        return options.mode() != ClientMode.HEALTH;
     }
 
     private static String passwordFor(ClientOptions options) {
@@ -84,6 +91,7 @@ public final class ClientMain {
             case EXEC -> new CommandRunner(connection, out, true, false).run(commandsOf(options, in));
             case DUMP -> new Dump(connection, options, out, err).run();
             case RESTORE -> new Restore(connection, in, err).run();
+            case HEALTH -> Health.check(connection, out);
         };
     }
 

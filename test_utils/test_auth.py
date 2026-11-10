@@ -120,6 +120,11 @@ def test_unauthenticated():
           send_unauthenticated({"type": "CLOSE_CONNECTION"}),
           "OK")
 
+    anonymous = send_unauthenticated({"type": "SERVER_INFO"})
+    check_status("SERVER_INFO is public (must return OK)", anonymous, "OK")
+    check("SERVER_INFO before AUTHENTICATE reveals only the state",
+          anonymous.get("server") == {"state": "READY"}, str(anonymous))
+
 
 def test_bad_credentials(c):
     section("Authentication with wrong credentials — must return ERROR")
@@ -131,6 +136,21 @@ def test_bad_credentials(c):
     check_status("Unknown user",
           c.authenticate("nobody", "whatever123"),
           "ERROR")
+
+
+def test_server_info_tiers():
+    section("SERVER_INFO adds the build once authenticated and the node only for an admin")
+
+    with Conn() as session:
+        check_status("AUTHENTICATE as no_perms", session.authenticate("no_perms", "no_perms1234"), "OK")
+        server = session.send({"type": "SERVER_INFO"}).get("server", {})
+    check("a user without grants sees the build", {"state", "version", "protocolVersion", "startedAtMs",
+                                                   "uptimeMs"} == set(server), str(server))
+
+    with Conn() as session:
+        check_status("AUTHENTICATE as admin", session.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+        server = session.send({"type": "SERVER_INFO"}).get("server", {})
+    check("the admin also sees the node", "node" in server and "version" in server, str(server))
 
 
 def test_list_databases_requires_authentication():
@@ -1174,6 +1194,7 @@ def main():
     with Conn() as c:
         test_bad_credentials(c)
 
+    test_server_info_tiers()
     test_list_databases_requires_authentication()
     test_unknown_type_with_newline_is_refused_cleanly()
 

@@ -93,6 +93,7 @@ public final class RequestParser {
                 case DELETE_SCHEMA -> eJson.fromJson(root, DeleteSchemaRequest.class);
                 case GET_SCHEMA -> eJson.fromJson(root, GetSchemaRequest.class);
                 case CLOSE_CONNECTION -> eJson.fromJson(root, CloseConnectionRequest.class);
+                case SERVER_INFO -> eJson.fromJson(root, ServerInfoRequest.class);
                 case AUTHENTICATE -> eJson.fromJson(root, AuthenticateRequest.class);
                 case CREATE_USER -> eJson.fromJson(root, CreateUserRequest.class);
                 case DELETE_USER -> eJson.fromJson(root, DeleteUserRequest.class);

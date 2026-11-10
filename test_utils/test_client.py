@@ -185,6 +185,20 @@ def test_exec(cwd: str):
     check("a closed port exits 3", client(cwd, "--exec", "{}", port=1).returncode == 3)
 
 
+def test_health(cwd: str, log_path: str):
+    section("--health")
+    ready = client(cwd, "--health", password=None)
+    out = ready.stdout.decode()
+    check("--health exits 0 against a ready server, without a password", ready.returncode == 0,
+          ready.stderr.decode())
+    check("and prints the SERVER_INFO reply", json.loads(out).get("server") == {"state": "READY"}, out)
+    check("--health against a closed port exits 3", client(cwd, "--health", port=1, password=None).returncode == 3)
+    version = send(SOURCE_PORT, {"type": "SERVER_INFO"}).get("server", {}).get("version")
+    with open(log_path, encoding="utf-8", errors="replace") as log:
+        check("the server log names the version SERVER_INFO reports", f"LWNRDB {version} starting" in log.read(),
+              str(version))
+
+
 def test_shell(cwd: str):
     section("--shell")
     script = (json.dumps({"type": "CREATE_DATABASE", "databaseName": "client_shell_db"}) + "\n"
@@ -571,6 +585,8 @@ def test_tls(cwd: str, work_dir: str, log_path: str):
         trusted = bu.wait_until(lambda: client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
                                 .returncode == 0, 30.0)
         check("--tls --insecure exits 0", bool(trusted))
+        health = client(cwd, "--health", "--tls", "--insecure", password=None)
+        check("--health --tls --insecure exits 0", health.returncode == 0, health.stderr.decode())
         insecure = client(cwd, "--tls", "--insecure", "--exec", '{"type":"LIST_DATABASES"}')
         check("--insecure warns on stderr", insecure.stderr.decode().startswith("WARNING: --insecure is active"),
               insecure.stderr.decode())
@@ -608,6 +624,7 @@ def main():
               detail=f"{page_files(source_dir, CRM, NOTES)} page files")
         source_state = snapshot(SOURCE_PORT)
         test_exec(client_dir)
+        test_health(client_dir, source_log)
         test_shell(client_dir)
         plain_dump = test_round_trip(client_dir, source_state)
         test_restore_one_database(client_dir)

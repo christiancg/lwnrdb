@@ -150,6 +150,7 @@ public enum ErrorCode {
             "The write was logged durably but could not be applied; it is applied before the collection is next used,"
                     + " or at the next startup, so it may already have taken effect",
             OperationStatus.ERROR),
+    ERROR_GATHERING_SERVER_INFO("500-35", "Error while gathering server info", OperationStatus.ERROR),
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR),
     NO_QUORUM("503-2", "Cluster does not have a write quorum", OperationStatus.ERROR),
     REPLICATION_TIMEOUT("503-3", "Timed out waiting for the replication quorum", OperationStatus.ERROR),

@@ -20,6 +20,7 @@ public enum OperationType {
     DELETE_SCHEMA(Scope.COLLECTION),
     GET_SCHEMA(Scope.COLLECTION),
     CLOSE_CONNECTION(Scope.NONE),
+    SERVER_INFO(Scope.NONE),
     AUTHENTICATE(Scope.NONE),
     CREATE_USER(Scope.NONE),
     DELETE_USER(Scope.NONE),
