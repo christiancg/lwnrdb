@@ -3,6 +3,7 @@ package io.github.christiancg.lwnrdb.client.testing;
 import io.github.christiancg.lwnrdb.client.internal.RequestChannel;
 import io.github.christiancg.lwnrdb.client.internal.ResponseDecoder;
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
@@ -12,9 +13,8 @@ public final class RecordingChannel implements RequestChannel {
     private final List<ObjectNode> requests = new ArrayList<>();
     private Function<ObjectNode, ObjectNode> replies = FakeServer::ok;
 
-    public RecordingChannel replyWith(Function<ObjectNode, ObjectNode> replies) {
+    public void replyWith(Function<ObjectNode, ObjectNode> replies) {
         this.replies = replies;
-        return this;
     }
 
     @Override

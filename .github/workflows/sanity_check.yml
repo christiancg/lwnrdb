@@ -167,12 +167,18 @@ jobs:
           cache: maven
       - name: Verify the client (unit tests, coverage, style, PMD, SpotBugs, API docs)
         run: mvn -B --no-transfer-progress -f clients/java/pom.xml verify
+      - name: Test the client against Spring Boot's Jackson
+        run: >-
+          mvn -B --no-transfer-progress -f clients/java/pom.xml -Djackson.version=3.1.7 -Djacoco.skip=true
+          -pl lwnrdb-client,lwnrdb-spring-data,lwnrdb-spring-boot-starter -am test
       - name: Build the Javadoc and sources jars
         run: mvn -B --no-transfer-progress -f clients/java/pom.xml -P javadoc -DskipTests -Djacoco.skip=true package
       - name: Install the snapshot for the consumers
         run: mvn -B --no-transfer-progress -f clients/java/pom.xml -DskipTests -Djacoco.skip=true install
       - name: Compile the Maven consumer
         run: mvn -B --no-transfer-progress -f clients/java/consumers/maven/pom.xml compile
+      - name: Compile the Spring Boot consumer
+        run: mvn -B --no-transfer-progress -f clients/java/consumers/spring-boot/pom.xml compile
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.3.1'

@@ -42,6 +42,10 @@ public class ApiDocInjectorTest {
                 public enum Color {
                     RED, BLUE
                 }
+
+                public @interface Marker {
+                    String label() default "";
+                }
             }
             """;
 
@@ -57,9 +61,14 @@ public class ApiDocInjectorTest {
         Files.createDirectories(sources.resolve("demo/api"));
         Files.writeString(sources.resolve("demo/api/Widget.java"), SOURCE, StandardCharsets.UTF_8);
         Files.createDirectories(sources.resolve("demo/internal"));
-        Files.writeString(sources.resolve("demo/internal/Hidden.java"),
-                "package demo.internal;\n\npublic class " + "Hidden {\n    public void secret() {\n    }\n}\n",
-                StandardCharsets.UTF_8);
+        Files.writeString(sources.resolve("demo/internal/Hidden.java"), """
+                package demo.internal;
+
+                public class Hidden {
+                    public void secret() {
+                    }
+                }
+                """, StandardCharsets.UTF_8);
         docs = Files.createDirectories(folder.resolve("docs"));
         output = folder.resolve("out");
     }
@@ -109,6 +118,7 @@ public class ApiDocInjectorTest {
                 The text.
                 """);
         doc("demo.api.Widget.Color", "A colour.\n\n## RED\n\nRed.\n");
+        doc("demo.api.Widget.Marker", "A marker.\n\n## label()\n\nThe label.\n");
         final var text = injected();
         assertTrue(text.contains("<strong>widget</strong>"), text);
         assertTrue(text.contains("<pre><code class=\"language-java\">"), text);
@@ -116,6 +126,7 @@ public class ApiDocInjectorTest {
         assertTrue(text.contains("Resizes and labels."), text);
         assertTrue(text.contains("*&#47; safely"), text);
         assertTrue(text.contains("Red."), text);
+        assertTrue(text.contains("The label."), text);
         assertTrue(text.indexOf("Resizes.") < text.indexOf("public void resize(int width)"), text);
         assertTrue(Files.readString(output.resolve("demo/internal/Hidden.java")).contains("secret"));
         assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, "-d",
@@ -149,6 +160,7 @@ public class ApiDocInjectorTest {
         assertTrue(missing.contains("demo.api.Widget#resize(int, List)"), missing.toString());
         assertTrue(missing.contains("demo.api.Widget.Color"), missing.toString());
         assertTrue(missing.contains("demo.api.Widget.Color#BLUE"), missing.toString());
+        assertTrue(missing.contains("demo.api.Widget.Marker#label()"), missing.toString());
         assertFalse(missing.contains("demo.api.Widget#toString()"), missing.toString());
         assertFalse(missing.contains("demo.api.Widget#LIMIT"), missing.toString());
         assertFalse(missing.stream().anyMatch(item -> item.contains("Hidden")), missing.toString());
@@ -164,5 +176,13 @@ public class ApiDocInjectorTest {
     public void test_markdown_without_block_tags_is_plain_html() {
         assertEquals("<p>Just <em>text</em>.</p>", JavadocText.toJavadoc("Just *text*."));
         assertEquals("@return the {@code x}", JavadocText.toJavadoc("@return the `x`"));
+    }
+
+    @Test
+    public void test_an_annotation_inside_a_code_fence_is_not_a_block_tag() {
+        final var javadoc = JavadocText
+                .toJavadoc("Use it:\n\n```java\n@Marker\n@Marker\nrecord R() {\n}\n```\n\n@see R");
+        assertTrue(javadoc.contains("<pre><code class=\"language-java\">@Marker\n&#64;Marker\nrecord R() {"), javadoc);
+        assertTrue(javadoc.endsWith("</code></pre>\n\n@see R"), javadoc);
     }
 }

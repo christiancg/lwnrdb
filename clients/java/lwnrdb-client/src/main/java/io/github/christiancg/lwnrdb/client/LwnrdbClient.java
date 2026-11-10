@@ -13,6 +13,7 @@ import io.github.christiancg.lwnrdb.client.internal.PooledChannel;
 import io.github.christiancg.lwnrdb.client.internal.RequestEncoder;
 import io.github.christiancg.lwnrdb.client.internal.ResponseDecoder;
 import io.github.christiancg.lwnrdb.client.internal.ScriptRequestEncoder;
+import io.github.christiancg.lwnrdb.client.mapping.JacksonCodec;
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
 import java.util.List;
 import java.util.Objects;
@@ -26,7 +27,7 @@ public final class LwnrdbClient implements AutoCloseable {
 
     private LwnrdbClient(ClientSettings settings, Backoff backoff) {
         this.settings = settings;
-        final var json = new Json(settings.objectMapper(), settings.maxReplyBytes(), settings.temporalZone());
+        final var json = new Json(settings);
         final var encoder = new RequestEncoder(json);
         final var factory = new ConnectionFactory(settings, json, encoder);
         this.pool = new ConnectionPool(factory);
@@ -81,6 +82,10 @@ public final class LwnrdbClient implements AutoCloseable {
                 .orElseThrow(() -> new IllegalStateException("the client has no credentials to change"));
         context.channel().send(Operation.SET_PASSWORD,
                 context.scripts().setPassword(username, Optional.of(currentPassword), newPassword));
+    }
+
+    public <T> DocumentCodec<T> codecFor(Class<T> type) {
+        return new JacksonCodec<>(Objects.requireNonNull(type, "type"), context.json());
     }
 
     public Admin admin() {

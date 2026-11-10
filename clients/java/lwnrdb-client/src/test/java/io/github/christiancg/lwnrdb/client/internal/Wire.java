@@ -1,15 +1,14 @@
 package io.github.christiancg.lwnrdb.client.internal;
 
 import io.github.christiancg.lwnrdb.client.ClientSettings;
-import io.github.christiancg.lwnrdb.client.testing.FakeServer;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.time.Duration;
-import java.util.Optional;
 
 final class Wire {
-    static final Json JSON = new Json(Optional.empty(), 4096, Optional.empty());
+    static final Json JSON = new Json(4096);
 
     private Wire() {
     }
@@ -24,7 +23,7 @@ final class Wire {
     }
 
     static ConnectionFactory factory(ClientSettings settings) {
-        final var json = new Json(Optional.empty(), settings.maxReplyBytes(), Optional.empty());
+        final var json = new Json(settings);
         return new ConnectionFactory(settings, json, new RequestEncoder(json));
     }
 

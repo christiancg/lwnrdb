@@ -3,6 +3,7 @@ package io.github.christiancg.lwnrdb.client.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,7 +11,7 @@ import io.github.christiancg.lwnrdb.client.error.ConnectionLostException;
 import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
 import io.github.christiancg.lwnrdb.client.error.RequestTimeoutException;
 import io.github.christiancg.lwnrdb.client.error.ServerClosedConnectionException;
-import io.github.christiancg.lwnrdb.client.testing.FakeServer;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -36,7 +37,9 @@ public class WireConnectionTest {
             final var second = connection.send(Wire.request("AGGREGATE").put("n", 2));
             assertEquals(1, first.get(5, TimeUnit.SECONDS).get("n").asInt());
             assertEquals(2, second.get(5, TimeUnit.SECONDS).get("n").asInt());
-            assertEquals("x", pushes.poll(5, TimeUnit.SECONDS).get("listenId").asString());
+            final var push = pushes.poll(5, TimeUnit.SECONDS);
+            assertNotNull(push);
+            assertEquals("x", push.get("listenId").asString());
         }
     }
 

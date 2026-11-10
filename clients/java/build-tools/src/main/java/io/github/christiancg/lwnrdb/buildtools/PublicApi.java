@@ -5,6 +5,7 @@ import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Modifier;
 import com.github.javaparser.ast.PackageDeclaration;
+import com.github.javaparser.ast.body.AnnotationMemberDeclaration;
 import com.github.javaparser.ast.body.BodyDeclaration;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.EnumConstantDeclaration;
@@ -18,7 +19,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 public final class PublicApi {
@@ -56,7 +56,7 @@ public final class PublicApi {
     }
 
     private static void collect(String qualifiedName, TypeDeclaration<?> type, List<DocumentedType> types) {
-        if (!isVisible(type, Optional.empty())) {
+        if (!isVisible(type)) {
             return;
         }
         final var overrides = new HashSet<String>();
@@ -76,24 +76,29 @@ public final class PublicApi {
             }
         }
         for (final BodyDeclaration<?> member : type.getMembers()) {
-            if (member instanceof CallableDeclaration<?> callable && isVisible(callable, Optional.of(type))) {
+            if (member instanceof CallableDeclaration<?> callable && isVisibleIn(callable, type)) {
                 final var signature = Signatures.of(callable);
                 members.put(signature, callable);
                 if (callable.isAnnotationPresent(OVERRIDE)) {
                     overrides.add(signature);
                 }
-            } else if (member instanceof FieldDeclaration field && isVisible(field, Optional.of(type))) {
+            } else if (member instanceof AnnotationMemberDeclaration annotationMember) {
+                members.put(annotationMember.getNameAsString() + "()", annotationMember);
+            } else if (member instanceof FieldDeclaration field && isVisibleIn(field, type)) {
                 field.getVariables().forEach(variable -> members.put(variable.getNameAsString(), field));
             }
         }
         return members;
     }
 
-    private static boolean isVisible(NodeWithModifiers<?> declaration, Optional<TypeDeclaration<?>> owner) {
-        if (owner.isPresent() && owner.get().isClassOrInterfaceDeclaration()
-                && owner.get().asClassOrInterfaceDeclaration().isInterface()) {
+    private static boolean isVisibleIn(NodeWithModifiers<?> declaration, TypeDeclaration<?> owner) {
+        if (owner.isClassOrInterfaceDeclaration() && owner.asClassOrInterfaceDeclaration().isInterface()) {
             return !declaration.hasModifier(Modifier.Keyword.PRIVATE);
         }
+        return isVisible(declaration);
+    }
+
+    private static boolean isVisible(NodeWithModifiers<?> declaration) {
         return declaration.hasModifier(Modifier.Keyword.PUBLIC) || declaration.hasModifier(Modifier.Keyword.PROTECTED);
     }
 }

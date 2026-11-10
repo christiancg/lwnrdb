@@ -1722,6 +1722,8 @@ shared protocol contract in [`clients/protocol`](clients/protocol/README.md).
 - **Java** (Java 17+): `io.github.christiancg:lwnrdb-client` on Maven Central, for Maven and Gradle. Connection pool,
   fluent query builder, transactions, live queries, POJO mapping and the custom value types. See
   [`clients/java`](clients/java/README.md).
+- **Spring Data and Spring Boot**: `lwnrdb-spring-boot-starter` adds repositories with derived queries,
+  `@Transactional` and a health indicator, configured from `lwnrdb.*` properties.
 
 ```java
 try (LwnrdbClient client = LwnrdbClient.connect(ClientSettings.builder()

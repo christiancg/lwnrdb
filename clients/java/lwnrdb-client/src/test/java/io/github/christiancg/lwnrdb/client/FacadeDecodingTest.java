@@ -9,7 +9,7 @@ import io.github.christiancg.lwnrdb.client.scripting.ProcedureDefinition;
 import io.github.christiancg.lwnrdb.client.scripting.ScheduleDefinition;
 import io.github.christiancg.lwnrdb.client.scripting.TriggerDefinition;
 import io.github.christiancg.lwnrdb.client.scripting.TriggerEvent;
-import io.github.christiancg.lwnrdb.client.testing.ProtocolFixtures;
+import io.github.christiancg.lwnrdb.testsupport.ProtocolFixtures;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +59,7 @@ public class FacadeDecodingTest {
         assertEquals(List.of("w"), recorder.orders.schema().save(Document.of("type", "object")));
         assertEquals("object", recorder.orders.schema().get().orElseThrow().getString("type").orElseThrow());
         assertEquals(1,
-                recorder.shop.stats().getDocument("memory").orElseThrow().getLong("userCacheBytes").getAsLong());
+                recorder.shop.stats().getDocument("memory").orElseThrow().getLong("userCacheBytes").orElseThrow());
     }
 
     @Test

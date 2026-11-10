@@ -19,8 +19,8 @@ import org.junit.jupiter.api.Test;
 public class AdminIT extends ServerIT {
     private static final String BOB_PASSWORD = "Bob-Secret-1234";
 
-    private LwnrdbClient as(String username, String password) {
-        return LwnrdbClient.connect(server.settings().credentials(username, password).build());
+    private LwnrdbClient asBob() {
+        return LwnrdbClient.connect(ItSettings.of(server).credentials("bob", BOB_PASSWORD).build());
     }
 
     @Test
@@ -29,7 +29,7 @@ public class AdminIT extends ServerIT {
         client.database("admin_it").collection("orders").create();
         client.admin().users().create("bob", BOB_PASSWORD,
                 Permissions.builder().database("admin_it", DataPermission.READ).build());
-        try (var bob = as("bob", BOB_PASSWORD)) {
+        try (var bob = asBob()) {
             final var orders = bob.database("admin_it").collection("orders");
             assertTrue(orders.query().toList().isEmpty());
             final var refused = assertThrows(ForbiddenException.class, () -> orders.save(Document.of("_id", "x")));
@@ -37,11 +37,11 @@ public class AdminIT extends ServerIT {
             assertThrows(ForbiddenException.class, () -> bob.admin().users().list());
             bob.changePassword(BOB_PASSWORD, "Bob-Secret-5678");
         }
-        assertThrows(AuthenticationException.class, () -> as("bob", BOB_PASSWORD));
+        assertThrows(AuthenticationException.class, () -> asBob().close());
         client.admin().users().changePermissions("bob",
                 Permissions.builder().database("admin_it", DataPermission.READ_WRITE).build());
         client.admin().users().setPassword("bob", BOB_PASSWORD);
-        try (var bob = as("bob", BOB_PASSWORD)) {
+        try (var bob = asBob()) {
             bob.database("admin_it").collection("orders").save(Document.of("_id", "y"));
         }
         client.database("admin_it").setOwners(List.of("bob"));

@@ -12,7 +12,7 @@ import io.github.christiancg.lwnrdb.client.ReadMode;
 import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -42,7 +42,7 @@ public class TransactionIT extends ServerIT {
             inside.saveAll(List.of(Document.of("_id", "a2", "balance", 50)));
             assertTrue(accounts.findById("a1", ReadMode.DIRTY).isEmpty());
             assertEquals(1, inside.query().filter(field("_id").eq("a2")).count());
-            return inside.findById("a1").orElseThrow().getLong("balance").getAsLong();
+            return inside.findById("a1").orElseThrow().getLong("balance").orElseThrow();
         });
         assertEquals(100, seen);
         assertTrue(accounts.findById("a1").isPresent());
@@ -78,15 +78,15 @@ public class TransactionIT extends ServerIT {
 
     @Test
     public void test_transactions_on_different_collections_run_concurrently() throws Exception {
-        try (var other = LwnrdbClient.connect(server.settings().build())) {
-            final var executor = Executors.newFixedThreadPool(2);
-            final var first = executor.submit(() -> client.transaction(
+        try (var other = LwnrdbClient.connect(ItSettings.of(server).build())) {
+            final var first = new FutureTask<>(() -> client.transaction(
                     transaction -> transaction.collection("tx_it", "accounts").save(Document.of("_id", "c1"))));
-            final var second = executor.submit(() -> other.transaction(
+            final var second = new FutureTask<>(() -> other.transaction(
                     transaction -> transaction.collection("tx_it", "ledger").save(Document.of("_id", "l1"))));
+            new Thread(first, "tx-it-accounts").start();
+            new Thread(second, "tx-it-ledger").start();
             first.get(30, TimeUnit.SECONDS);
             second.get(30, TimeUnit.SECONDS);
-            executor.shutdown();
         }
         assertTrue(accounts.findById("c1").isPresent());
     }

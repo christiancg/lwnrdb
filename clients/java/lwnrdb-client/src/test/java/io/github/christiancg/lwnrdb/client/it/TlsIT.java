@@ -3,10 +3,12 @@ package io.github.christiancg.lwnrdb.client.it;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.christiancg.lwnrdb.client.ClientSettings;
 import io.github.christiancg.lwnrdb.client.LwnrdbClient;
 import io.github.christiancg.lwnrdb.client.RetryPolicy;
 import io.github.christiancg.lwnrdb.client.TlsSettings;
 import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
+import io.github.christiancg.lwnrdb.testsupport.ServerProcess;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -53,7 +55,7 @@ public class TlsIT {
 
     @Test
     public void test_an_insecure_client_connects_over_tls() {
-        try (var client = LwnrdbClient.connect(server.settings().tls(TlsSettings.insecure()).build())) {
+        try (var client = LwnrdbClient.connect(ItSettings.of(server).tls(TlsSettings.insecure()).build())) {
             assertTrue(client.serverInfo().state().isPresent());
         }
     }
@@ -62,7 +64,7 @@ public class TlsIT {
     public void test_a_client_trusting_the_exported_certificate_connects() throws Exception {
         final var trust = exportedTrustStore();
         try (var client = LwnrdbClient
-                .connect(server.settings().tls(TlsSettings.trustStore(trust, STORE_PASSWORD)).build())) {
+                .connect(ItSettings.of(server).tls(TlsSettings.trustStore(trust, STORE_PASSWORD)).build())) {
             assertTrue(client.serverInfo().version().isPresent());
         }
     }
@@ -70,8 +72,12 @@ public class TlsIT {
     @Test
     public void test_system_trust_and_plaintext_clients_are_refused() {
         assertThrows(LwnrdbException.class,
-                () -> LwnrdbClient.connect(server.settings().tls(TlsSettings.systemTrust()).build()));
-        assertThrows(LwnrdbException.class, () -> LwnrdbClient.connect(
-                server.settings().requestTimeout(Duration.ofSeconds(5)).retryPolicy(RetryPolicy.none()).build()));
+                () -> connectAndClose(ItSettings.of(server).tls(TlsSettings.systemTrust()).build()));
+        assertThrows(LwnrdbException.class, () -> connectAndClose(
+                ItSettings.of(server).requestTimeout(Duration.ofSeconds(5)).retryPolicy(RetryPolicy.none()).build()));
+    }
+
+    private static void connectAndClose(ClientSettings settings) {
+        LwnrdbClient.connect(settings).close();
     }
 }

@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.christiancg.lwnrdb.client.error.AuthenticationException;
 import io.github.christiancg.lwnrdb.client.error.ConflictException;
 import io.github.christiancg.lwnrdb.client.error.UnknownOutcomeException;
-import io.github.christiancg.lwnrdb.client.testing.FakeServer;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -54,13 +54,27 @@ public class LwnrdbClientTest {
             assertEquals(List.of("shop"), client.listDatabases());
             assertEquals("READY", client.serverInfo().state().orElseThrow());
             assertEquals("1.2", client.serverInfo().version().orElseThrow());
-            assertEquals(1, client.databaseStats().getLong("n").getAsLong());
+            assertEquals(1, client.databaseStats().getLong("n").orElseThrow());
             client.changePassword("old", "new");
             final var setPassword = server.nextRequestOfType("SET_PASSWORD");
             assertEquals("alice", setPassword.get("username").asString());
             assertEquals("old", setPassword.get("currentPassword").asString());
             assertEquals(server.port(), client.settings().hosts().get(0).port());
         }
+    }
+
+    @Test
+    public void test_codec_for_maps_a_record_with_the_clients_settings() throws Exception {
+        try (var server = server(); var client = connect(server)) {
+            final var codec = client.codecFor(Pair.class);
+            final var document = codec.encode(new Pair("p1", java.time.LocalTime.of(9, 30)));
+            assertEquals("p1", document.id().orElseThrow());
+            assertEquals("#time(09:30)", document.getString("at").orElseThrow());
+            assertEquals(new Pair("p1", java.time.LocalTime.of(9, 30)), codec.decode(document));
+        }
+    }
+
+    public record Pair(String id, java.time.LocalTime at) {
     }
 
     @Test

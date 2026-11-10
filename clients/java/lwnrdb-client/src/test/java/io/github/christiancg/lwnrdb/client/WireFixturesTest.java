@@ -1,11 +1,12 @@
 package io.github.christiancg.lwnrdb.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
-import io.github.christiancg.lwnrdb.client.testing.JsonTrees;
-import io.github.christiancg.lwnrdb.client.testing.ProtocolFixtures;
+import io.github.christiancg.lwnrdb.testsupport.JsonTrees;
+import io.github.christiancg.lwnrdb.testsupport.ProtocolFixtures;
 import java.util.HashSet;
 import java.util.TreeSet;
 import java.util.stream.Stream;
@@ -19,7 +20,7 @@ public class WireFixturesTest {
         final var cases = WireFixtureCases.all();
         return ProtocolFixtures.requests().stream().map(fixture -> DynamicTest.dynamicTest(fixture.name(), () -> {
             final var call = cases.get(fixture.name());
-            assertTrue(call != null, fixture.name() + " has no builder mapping");
+            assertNotNull(call, fixture.name() + " has no builder mapping");
             final var recorder = new Recorder();
             call.accept(recorder);
             final var expected = fixture.body().get("request");

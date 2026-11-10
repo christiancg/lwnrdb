@@ -26,6 +26,16 @@
                 <artifactId>lwnrdb-client</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <groupId>io.github.christiancg</groupId>
+                <artifactId>lwnrdb-spring-data</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.christiancg</groupId>
+                <artifactId>lwnrdb-spring-boot-starter</artifactId>
+                <version>${project.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 

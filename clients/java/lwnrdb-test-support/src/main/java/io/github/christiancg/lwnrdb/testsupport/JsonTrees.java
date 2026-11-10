@@ -1,4 +1,4 @@
-package io.github.christiancg.lwnrdb.client.testing;
+package io.github.christiancg.lwnrdb.testsupport;
 
 import java.util.HashSet;
 import tools.jackson.databind.JsonNode;

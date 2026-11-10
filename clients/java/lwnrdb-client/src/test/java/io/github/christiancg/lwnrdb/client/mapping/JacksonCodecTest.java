@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.github.christiancg.lwnrdb.client.ClientSettings;
 import io.github.christiancg.lwnrdb.client.Document;
 import io.github.christiancg.lwnrdb.client.error.MappingException;
 import io.github.christiancg.lwnrdb.client.internal.Json;
@@ -18,14 +19,13 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
 public class JacksonCodecTest {
     private static final Json JSON = Json.defaults();
-    private static final Json ZONED = new Json(Optional.empty(), Json.DEFAULT_MAX_REPLY_BYTES,
-            Optional.of(ZoneOffset.UTC));
+    private static final Json ZONED = new Json(
+            ClientSettings.builder().host("localhost", 1).temporalZone(ZoneOffset.UTC).build());
 
     public record Place(String id, LocalDateTime openedAt, LocalTime opensAt, GeoPoint location, Vector embedding,
             Document extra) {
@@ -128,7 +128,7 @@ public class JacksonCodecTest {
     @Test
     public void test_a_callers_mapper_is_extended_not_changed() {
         final var mapper = JsonMapper.builder().build();
-        final var json = new Json(Optional.of(mapper), Json.DEFAULT_MAX_REPLY_BYTES, Optional.empty());
+        final var json = new Json(ClientSettings.builder().host("localhost", 1).objectMapper(mapper).build());
         assertEquals("\"#geo(1.0,2.0)\"", json.text(json.toNode(GeoPoint.of(1, 2))));
         assertTrue(mapper.valueToTree(GeoPoint.of(1, 2)).isObject());
         assertThrows(IllegalArgumentException.class, () -> json.fromNode(json.toNode("x"), Document.class));

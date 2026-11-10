@@ -1,6 +1,5 @@
-package io.github.christiancg.lwnrdb.client.it;
+package io.github.christiancg.lwnrdb.testsupport;
 
-import io.github.christiancg.lwnrdb.client.ClientSettings;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
@@ -65,11 +64,6 @@ public final class ServerProcess implements AutoCloseable {
 
     public Path workDir() {
         return workDir;
-    }
-
-    public ClientSettings.Builder settings() {
-        return ClientSettings.builder().host("localhost", port).credentials(ADMIN, PASSWORD)
-                .requestTimeout(Duration.ofSeconds(60));
     }
 
     @Override

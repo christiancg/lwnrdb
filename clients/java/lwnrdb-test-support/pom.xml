@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.christiancg</groupId>
+        <artifactId>lwnrdb-client-parent</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>lwnrdb-test-support</artifactId>
+    <name>LWNRDB Java client test support</name>
+    <description>Test infrastructure shared by the LWNRDB Java modules; never published.</description>
+
+    <properties>
+        <lwnrdb.root>${project.basedir}/../../..</lwnrdb.root>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <skipPublishing>true</skipPublishing>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+    </dependencies>
+</project>

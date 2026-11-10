@@ -5,13 +5,14 @@ import io.github.christiancg.lwnrdb.client.internal.CustomValues;
 import io.github.christiancg.lwnrdb.client.internal.Documents;
 import io.github.christiancg.lwnrdb.client.values.GeoPoint;
 import io.github.christiancg.lwnrdb.client.values.Vector;
+import java.io.Serial;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.Optional;
+import java.util.Objects;
 import java.util.function.Function;
 import tools.jackson.core.JsonGenerator;
 import tools.jackson.core.JsonParser;
@@ -23,16 +24,24 @@ import tools.jackson.databind.module.SimpleModule;
 import tools.jackson.databind.node.ObjectNode;
 
 public final class LwnrdbModule extends SimpleModule {
+    @Serial
     private static final long serialVersionUID = 1L;
 
-    public LwnrdbModule(Optional<ZoneId> temporalZone) {
+    public LwnrdbModule() {
+        this(new ZoneGate(null));
+    }
+
+    public LwnrdbModule(ZoneId temporalZone) {
+        this(new ZoneGate(Objects.requireNonNull(temporalZone, "temporalZone")));
+    }
+
+    private LwnrdbModule(ZoneGate zone) {
         super("lwnrdb");
         addSerializer(String.class, new TextSerializer());
         text(GeoPoint.class, CustomValues::format, CustomValues::parseGeo);
         text(Vector.class, CustomValues::format, CustomValues::parseVector);
         text(LocalDateTime.class, CustomValues::format, CustomValues::parseDateTime);
         text(LocalTime.class, CustomValues::format, CustomValues::parseTime);
-        final var zone = new ZoneGate(temporalZone.orElse(null));
         text(Instant.class, instant -> CustomValues.format(LocalDateTime.ofInstant(instant, zone.require())),
                 text -> CustomValues.parseDateTime(text).atZone(zone.require()).toInstant());
         text(OffsetDateTime.class,
@@ -52,7 +61,7 @@ public final class LwnrdbModule extends SimpleModule {
 
     private record ZoneGate(ZoneId zone) {
         ZoneId require() {
-            if (zone == null) {
+            if (zone() == null) {
                 throw new IllegalArgumentException("zoned date-times need ClientSettings.temporalZone, because the"
                         + " server's datetime has no zone");
             }

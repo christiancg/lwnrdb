@@ -9,7 +9,7 @@ import io.github.christiancg.lwnrdb.client.error.ConnectionLostException;
 import io.github.christiancg.lwnrdb.client.error.UnavailableException;
 import io.github.christiancg.lwnrdb.client.error.UnknownOutcomeException;
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
-import io.github.christiancg.lwnrdb.client.testing.FakeServer;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;

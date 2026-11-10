@@ -10,7 +10,7 @@ import io.github.christiancg.lwnrdb.client.ServerAddress;
 import io.github.christiancg.lwnrdb.client.error.AuthenticationException;
 import io.github.christiancg.lwnrdb.client.error.ConnectionLostException;
 import io.github.christiancg.lwnrdb.client.error.PoolExhaustedException;
-import io.github.christiancg.lwnrdb.client.testing.FakeServer;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import java.net.ServerSocket;
 import org.junit.jupiter.api.Test;
 

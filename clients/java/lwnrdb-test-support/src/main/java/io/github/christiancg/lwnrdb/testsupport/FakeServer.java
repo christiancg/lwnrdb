@@ -1,4 +1,4 @@
-package io.github.christiancg.lwnrdb.client.testing;
+package io.github.christiancg.lwnrdb.testsupport;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -25,7 +25,6 @@ public final class FakeServer implements AutoCloseable {
     private final BlockingQueue<ObjectNode> requests = new LinkedBlockingQueue<>();
     private final List<Session> sessions = new CopyOnWriteArrayList<>();
     private final AtomicInteger accepted = new AtomicInteger();
-    private final Thread acceptor;
 
     @FunctionalInterface
     public interface Responder {
@@ -35,9 +34,9 @@ public final class FakeServer implements AutoCloseable {
     public FakeServer(Responder responder) throws IOException {
         this.server = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
         this.responder = responder;
-        this.acceptor = new Thread(this::acceptLoop, "fake-server-accept");
-        this.acceptor.setDaemon(true);
-        this.acceptor.start();
+        final var acceptor = new Thread(this::acceptLoop, "fake-server-accept");
+        acceptor.setDaemon(true);
+        acceptor.start();
     }
 
     public static Responder okToEverything() {
@@ -66,6 +65,7 @@ public final class FakeServer implements AutoCloseable {
         return sessions;
     }
 
+    @SuppressWarnings("BusyWait")
     public Session awaitSession(int index) throws InterruptedException {
         final var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (sessions.size() <= index) {

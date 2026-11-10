@@ -46,6 +46,16 @@ Changes the password of the user the client authenticates as.
 @param currentPassword the current password
 @param newPassword the new password
 
+## codecFor(Class)
+
+The codec `Database.collection(name, Class)` uses, built with this client's Jackson settings
+(custom value types, temporal zone, the caller's mapper). Integrations such as Spring Data reuse it so a class is
+stored the same way everywhere.
+
+@param type the class documents map to
+@param <T> the mapped type
+@return the codec
+
 ## admin()
 
 @return the admin-only operations

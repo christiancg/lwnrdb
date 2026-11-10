@@ -1,7 +1,11 @@
 package io.github.christiancg.lwnrdb.client.it;
 
 import io.github.christiancg.lwnrdb.client.LwnrdbClient;
+import io.github.christiancg.lwnrdb.testsupport.ServerProcess;
+import java.time.Duration;
 import java.util.Map;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.TestInstance;
@@ -18,7 +22,7 @@ public abstract class ServerIT {
     @BeforeAll
     public void startServer() {
         server = ServerProcess.start(config());
-        client = LwnrdbClient.connect(server.settings().build());
+        client = LwnrdbClient.connect(ItSettings.of(server).build());
     }
 
     @AfterAll
@@ -31,9 +35,9 @@ public abstract class ServerIT {
         }
     }
 
-    protected static <T> T eventually(java.util.function.Supplier<T> attempt, java.util.function.Predicate<T> done)
-            throws InterruptedException {
-        final var deadline = System.nanoTime() + java.time.Duration.ofSeconds(20).toNanos();
+    @SuppressWarnings("BusyWait")
+    protected static <T> T eventually(Supplier<T> attempt, Predicate<T> done) throws InterruptedException {
+        final var deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
         T last = attempt.get();
         while (!done.test(last) && System.nanoTime() < deadline) {
             Thread.sleep(100);

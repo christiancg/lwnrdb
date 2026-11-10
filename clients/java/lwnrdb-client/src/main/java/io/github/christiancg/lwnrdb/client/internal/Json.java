@@ -1,9 +1,8 @@
 package io.github.christiancg.lwnrdb.client.internal;
 
+import io.github.christiancg.lwnrdb.client.ClientSettings;
 import io.github.christiancg.lwnrdb.client.error.MappingException;
 import io.github.christiancg.lwnrdb.client.mapping.LwnrdbModule;
-import java.time.ZoneId;
-import java.util.Optional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.StreamReadConstraints;
 import tools.jackson.core.json.JsonFactory;
@@ -14,18 +13,26 @@ import tools.jackson.databind.node.ObjectNode;
 public final class Json {
     public static final int MAX_REPLY_DEPTH = 512;
     public static final long DEFAULT_MAX_REPLY_BYTES = 256L * 1024 * 1024;
-    private static final Json DEFAULTS = new Json(Optional.empty(), DEFAULT_MAX_REPLY_BYTES, Optional.empty());
+    private static final Json DEFAULTS = new Json(DEFAULT_MAX_REPLY_BYTES);
 
     private final JsonMapper frames;
     private final JsonMapper values;
 
-    public Json(Optional<JsonMapper> base, long maxReplyBytes, Optional<ZoneId> temporalZone) {
+    public Json(long maxReplyBytes) {
+        this(JsonMapper.builder(), maxReplyBytes, new LwnrdbModule());
+    }
+
+    public Json(ClientSettings settings) {
+        this(settings.objectMapper().map(JsonMapper::rebuild).orElseGet(JsonMapper::builder), settings.maxReplyBytes(),
+                settings.temporalZone().map(LwnrdbModule::new).orElseGet(LwnrdbModule::new));
+    }
+
+    private Json(JsonMapper.Builder values, long maxReplyBytes, LwnrdbModule module) {
         final var constraints = StreamReadConstraints.builder().maxNestingDepth(MAX_REPLY_DEPTH)
                 .maxStringLength((int) Math.min(maxReplyBytes, Integer.MAX_VALUE)).maxDocumentLength(maxReplyBytes)
                 .build();
         this.frames = JsonMapper.builder(JsonFactory.builder().streamReadConstraints(constraints).build()).build();
-        this.values = base.map(JsonMapper::rebuild).orElseGet(JsonMapper::builder)
-                .addModule(new LwnrdbModule(temporalZone)).build();
+        this.values = values.addModule(module).build();
     }
 
     public static Json defaults() {

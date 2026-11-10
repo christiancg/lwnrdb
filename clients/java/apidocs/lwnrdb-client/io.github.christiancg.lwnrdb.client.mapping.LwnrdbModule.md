@@ -2,6 +2,10 @@ The Jackson module the client registers: it writes `GeoPoint`, `Vector`, `LocalD
 and (with a temporal zone) zoned date-times as the server's custom values, and refuses plain strings the server
 would read as custom values.
 
-## LwnrdbModule(Optional)
+## LwnrdbModule()
 
-@param temporalZone the zone zoned date-times are converted to, or empty to refuse them
+Creates the module without a temporal zone: zoned date-times are refused.
+
+## LwnrdbModule(ZoneId)
+
+@param temporalZone the zone zoned date-times are converted to

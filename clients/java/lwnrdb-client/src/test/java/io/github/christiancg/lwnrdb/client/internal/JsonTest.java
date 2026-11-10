@@ -6,18 +6,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.christiancg.lwnrdb.client.error.MappingException;
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import tools.jackson.core.JacksonException;
 
 public class JsonTest {
+    @SuppressWarnings("unused")
     public static final class Exploding {
         public String getValue() {
             throw new IllegalStateException("cannot read");
         }
     }
 
-    private static final Json JSON = new Json(Optional.empty(), 1024, Optional.empty());
+    private static final Json JSON = new Json(1024);
 
     private static String nested(int depth) {
         return "{\"a\":".repeat(depth - 1) + "{}" + "}".repeat(depth - 1);
@@ -25,7 +25,7 @@ public class JsonTest {
 
     @Test
     public void test_a_reply_at_the_depth_limit_parses_and_one_deeper_is_refused() {
-        final var large = new Json(Optional.empty(), Json.DEFAULT_MAX_REPLY_BYTES, Optional.empty());
+        final var large = new Json(Json.DEFAULT_MAX_REPLY_BYTES);
         final var atLimit = nested(Json.MAX_REPLY_DEPTH).getBytes(StandardCharsets.UTF_8);
         assertTrue(large.parseFrame(atLimit, 0, atLimit.length).isObject());
         final var tooDeep = nested(Json.MAX_REPLY_DEPTH + 1).getBytes(StandardCharsets.UTF_8);

@@ -183,10 +183,138 @@ ClientSettings.builder()
 `TlsSettings.systemTrust()` uses the JVM's certificate authorities; `TlsSettings.insecure()` trusts any certificate
 and skips the host-name check (development only, logs a warning).
 
+## Spring Data and Spring Boot
+
+`lwnrdb-spring-data` adds Spring Data repositories, a template and a transaction manager on top of the client;
+`lwnrdb-spring-boot-starter` configures all of it from `lwnrdb.*` properties. Both need Spring Boot 4 (Spring
+Framework 7, Spring Data 2026.0) and Java 17. Import the BOM as above and add the starter:
+
+```xml
+<dependency>
+    <groupId>io.github.christiancg</groupId>
+    <artifactId>lwnrdb-spring-boot-starter</artifactId>
+</dependency>
+```
+
+```properties
+lwnrdb.hosts=db1.example.com:8989,db2.example.com:8989
+lwnrdb.username=app
+lwnrdb.password=${LWNRDB_PASSWORD}
+lwnrdb.database=shop
+```
+
+| Property | Default | |
+|---|---|---|
+| `lwnrdb.hosts` | `localhost:8989` | `host:port` list |
+| `lwnrdb.username`, `lwnrdb.password` | none | no credentials when the username is unset |
+| `lwnrdb.database` | none | the database of an entity whose `@LwnrdbEntity` names none |
+| `lwnrdb.pool-size`, `connect-timeout`, `request-timeout`, `acquire-timeout`, `shutdown-timeout`, `max-reply-bytes`, `temporal-zone` | the client's | the `ClientSettings` of the same name |
+| `lwnrdb.tls.enabled`, `tls.insecure`, `tls.trust-store`, `tls.trust-store-password`, `tls.trust-store-type` | off, `PKCS12` | system trust when enabled without a trust store |
+| `lwnrdb.retry.max-attempts`, `retry.initial-backoff`, `retry.max-backoff` | the client's | the `RetryPolicy` |
+
+The starter uses the application's `JsonMapper` bean when there is one, and every `LwnrdbClientSettingsCustomizer`
+bean may change the settings before the client connects. A client that cannot connect or log in fails the startup with
+a `DataAccessResourceFailureException`.
+
+### Entities
+
+```java
+@LwnrdbEntity(collection = "orders")
+public record Order(String id, String status, double total, LocalDateTime placedAt) {
+}
+```
+
+- `@LwnrdbEntity` is optional: without it, the collection is the class name with a lower-case first letter, in
+  `lwnrdb.database`. The starter scans the application's packages for annotated entities at startup.
+- The id is the property annotated with `@Id`, or the property named `id`. It is stored as `_id`, and it must be a
+  `String`.
+- A `null` id is replaced by a random UUID before the save, so `save` returns the entity with the id it was stored
+  under.
+- `@Transient` properties are left out of the stored document.
+- Documents are converted by the client's Jackson codec, so `@JsonProperty`, the custom value types and
+  `@LwnrdbVector` behave as described above. Query property paths use the stored names.
+
+### Repositories
+
+```java
+public interface OrderRepository extends LwnrdbRepository<Order, String> {
+    List<Order> findByStatusAndTotalGreaterThanOrderByTotalDesc(String status, double total);
+
+    Page<Order> findByStatus(String status, Pageable pageable);
+
+    long countByStatus(String status);
+}
+```
+
+The starter enables the repositories of the application's packages; elsewhere, use `@EnableLwnrdbRepositories`.
+`LwnrdbRepository` adds paging and sorting to the CRUD methods.
+
+| Keyword | Filter |
+|---|---|
+| (none), `Is`, `Equals`, `Not` | `EQUALS`, `NOT_EQUALS` |
+| `IsNull`, `IsNotNull` | `EQUALS null`, `NOT_EQUALS null` |
+| `True`, `False` | `EQUALS true`, `EQUALS false` |
+| `GreaterThan`, `GreaterThanEqual`, `LessThan`, `LessThanEqual`, `After`, `Before`, `Between` | the range operators (`Between` is inclusive) |
+| `In`, `NotIn` | `IN`, `NOT_IN` |
+| `Containing` | `CONTAINS` |
+| `Within` (a list of `GeoPoint`) | geo `within` |
+| `And`, `Or` | `AND`, `OR` |
+
+- `First`/`Top`, a `Limit`, a `Sort` and a `Pageable` parameter become `SORT`, `SKIP` and `LIMIT` steps.
+- `count…By`, `exists…By` and `delete…By`/`remove…By` methods count, check and delete.
+- A `Page` runs a second, counting query; a `Slice` asks for one extra row instead.
+- `IgnoreCase` is accepted because the server already compares strings without case; it is refused on the id, which
+  is compared exactly.
+- Refused when the repository is created: `Like`, `NotLike`, `StartingWith`, `EndingWith`, `NotContaining`, `Regex`,
+  `Exists`, `IsEmpty`, `IsNotEmpty`, `Near` (use the template's `query` and `nearest`), a sort on more than one
+  property (the server's `SORT` step takes one field), and a property that is `@Transient`.
+
+### Transactions
+
+The starter registers a `LwnrdbTransactionManager`, so `@Transactional` works on services:
+
+```java
+@Transactional
+public void replace(Order cancelled, Order placed) {
+    orders.deleteById(cancelled.id());
+    orders.save(placed);
+}
+```
+
+- A Spring transaction is one server transaction on one connection, held from the first call to the commit.
+  Repository and template calls inside it use that connection.
+- The usual server rules apply: writes lock their collections until the commit, and a transaction idle for longer than
+  `transactionIdleTimeoutMs` (30 s by default) is rolled back by the server; its next call fails with a
+  `TransientDataAccessResourceException`.
+- `REQUIRES_NEW` suspends the outer transaction and opens a second connection. `NESTED` is refused, because the server
+  has no savepoints.
+- Server errors are translated to Spring's `DataAccessException`s: `400-3` is a `DuplicateKeyException`, a lock timeout
+  a `PessimisticLockingFailureException`, schema and before-hook refusals `DataIntegrityViolationException`s, lost
+  connections `DataAccessResourceFailureException`s.
+
+### The template
+
+`LwnrdbTemplate` (the `LwnrdbOperations` bean) holds the operations the repositories use, plus ways out to the client:
+
+- `query(Order.class)` returns the client's `Query<Order>` for steps derived queries do not have (`groupBy`, `join`,
+  `map`, `nearest`, scripts). Inside a transaction it reads through the transaction.
+- `collection(Order.class)` returns the plain `Collection<Order>`, and `execute(client -> ...)` runs anything against
+  the `LwnrdbClient`, outside any transaction.
+- `wirePath(Order.class, "address.city")` translates a property path to the stored field names for those queries.
+
+`deleteAll()` and `delete…By` read the matching documents first and delete them one by one, because the server has no
+bulk delete by filter; on a large collection, drop and re-create the collection instead.
+
+### Health
+
+With Spring Boot's actuator on the classpath, `/actuator/health` includes `lwnrdb`: `UP` while the server answers
+`SERVER_INFO` as ready, `OUT_OF_SERVICE` while it is starting or shutting down, `DOWN` when it cannot be reached.
+`management.health.lwnrdb.enabled=false` turns it off.
+
 ## API reference
 
-The published Javadoc covers every public type. Its text lives in [`apidocs/`](apidocs/lwnrdb-client), one Markdown
-file per public type, because the sources carry no comments. At package time `build-tools` copies the sources,
+The published Javadoc covers every public type. Its text lives in [`apidocs/`](apidocs), one folder per module and one
+Markdown file per public type, because the sources carry no comments. At package time `build-tools` copies the sources,
 injects each Markdown section as a Javadoc block, and the Javadoc and sources jars are built from that copy.
 
 To document a new public member, add a `## signature` section to its type's file:
@@ -218,8 +346,8 @@ JDK 21 or newer.
 ## Releasing
 
 Push a `java-client-vX.Y.Z` tag. `.github/workflows/release-java-client.yml` runs the unit and integration tests
-against a server built from the same commit, then signs and deploys the parent, client and BOM to Maven Central and
-creates a GitHub release.
+against a server built from the same commit, then signs and deploys the parent, the client, `lwnrdb-spring-data`,
+`lwnrdb-spring-boot-starter` and the BOM to Maven Central and creates a GitHub release.
 
 It needs these repository secrets:
 

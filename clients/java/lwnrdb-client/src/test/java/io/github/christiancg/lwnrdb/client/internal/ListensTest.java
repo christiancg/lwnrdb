@@ -13,7 +13,7 @@ import io.github.christiancg.lwnrdb.client.ListenUpdate;
 import io.github.christiancg.lwnrdb.client.error.ConnectionLostException;
 import io.github.christiancg.lwnrdb.client.error.ListenEndedException;
 import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
-import io.github.christiancg.lwnrdb.client.testing.FakeServer;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -146,6 +146,7 @@ public class ListensTest {
     }
 
     @Test
+    @SuppressWarnings("BusyWait")
     public void test_a_channel_whose_last_listen_ended_is_never_reused() throws Exception {
         try (var server = listenServer(10, false); var listens = listens(server)) {
             final var handler = new Recorded();

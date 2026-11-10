@@ -1,4 +1,4 @@
-package io.github.christiancg.lwnrdb.client.testing;
+package io.github.christiancg.lwnrdb.testsupport;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;

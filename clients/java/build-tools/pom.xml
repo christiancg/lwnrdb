@@ -43,8 +43,8 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <systemPropertyVariables>
-                        <lwnrdb.clientSources>${lwnrdb.root}/clients/java/lwnrdb-client/src/main/java</lwnrdb.clientSources>
-                        <lwnrdb.apiDocs>${lwnrdb.root}/clients/java/apidocs/lwnrdb-client</lwnrdb.apiDocs>
+                        <lwnrdb.javaRoot>${lwnrdb.root}/clients/java</lwnrdb.javaRoot>
+                        <lwnrdb.apiModules>lwnrdb-client,lwnrdb-spring-data,lwnrdb-spring-boot-starter</lwnrdb.apiModules>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

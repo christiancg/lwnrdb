@@ -2,7 +2,7 @@ package io.github.christiancg.lwnrdb.client.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import io.github.christiancg.lwnrdb.client.testing.FakeServer;
+import io.github.christiancg.lwnrdb.testsupport.FakeServer;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.node.ObjectNode;
 
