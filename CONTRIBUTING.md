@@ -45,4 +45,10 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The release workflow takes it from there. It runs the full build with that version, attaches `lwnrdb-0.1.0.jar` to a GitHub release and publishes the Docker image to `ghcr.io/christiancg/lwnrdb` with the version and `latest` tags.
+The release workflow takes it from there. It runs the full build with that version, attaches `lwnrdb-0.1.0.jar` to a GitHub release and publishes the Docker image to `ghcr.io/christiancg/lwnrdb` with the version and `latest` tags, for `linux/amd64` and `linux/arm64`.
+
+The jar is built once, on the runner's own platform, since it does not depend on the architecture. Only the trimmed JRE (`jlink`) and the runtime layer are built per platform, the arm64 ones under QEMU. To build both images locally:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t lwnrdb .
+```
