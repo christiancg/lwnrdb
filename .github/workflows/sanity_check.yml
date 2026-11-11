@@ -211,6 +211,30 @@ jobs:
       - name: Check type resolution of the packed tarball
         run: npx --yes @arethetypeswrong/cli@0.18.5 --pack --profile esm-only
 
+  python-client:
+    name: Python client (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13', '3.15']
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: clients/python/pyproject.toml
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev -e .
+      - name: Verify the client (format, lint, mypy --strict, unit tests, coverage, API docs, build, consumers)
+        run: python build_tools/verify.py
+
   dotnet-client:
     name: .NET client
     runs-on: ubuntu-latest
@@ -341,6 +365,15 @@ jobs:
             run: |
               LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" dotnet test clients/dotnet/tests/Lwnrdb.Client.IntegrationTests -c Release
 
+          - name: client-python
+            start_server: false
+            python: true
+            run: |
+              python -m pip install --upgrade pip
+              python -m pip install --group dev -e clients/python
+              cd clients/python
+              LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" python -m pytest tests/it -m it
+
           - name: metadata-limits
             start_server: false
             run: |
@@ -454,6 +487,10 @@ jobs:
           dotnet-version: |
             10.0.x
             11.0.x
+      - uses: actions/setup-python@v6
+        if: ${{ matrix.python }}
+        with:
+          python-version: '3.13'
       - name: Download jar
         uses: actions/download-artifact@v8
         with:
@@ -523,7 +560,7 @@ jobs:
   verify:
     name: Verify
     needs: [package, unit-tests, unit-tests-serial, coverage, static-spotbugs, static-style, java-client,
-      typescript-client, dotnet-client, integration, test262]
+      typescript-client, python-client, dotnet-client, integration, test262]
     if: always()
     runs-on: ubuntu-latest
     steps:

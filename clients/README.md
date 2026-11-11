@@ -8,7 +8,7 @@ Official clients for the LWNRDB wire protocol, one folder per language. Each one
 | Java | [`java/`](java/README.md) | Maven Central (`io.github.christiancg:lwnrdb-client`) | Available |
 | Spring Data and Spring Boot | [`java/`](java/README.md#spring-data-and-spring-boot) | Maven Central (`io.github.christiancg:lwnrdb-spring-data`, `lwnrdb-spring-boot-starter`) | Available |
 | TypeScript / JavaScript (Node.js) | [`typescript/`](typescript/README.md) | npm (`lwnrdb-client`) | Available |
-| Python | `python/` | PyPI | Planned |
+| Python (sync and asyncio) | [`python/`](python/README.md) | PyPI (`lwnrdb-client`) | Available |
 | .NET (C#, with LINQ) | [`dotnet/`](dotnet/README.md) | NuGet (`Lwnrdb.Client`) | Available |
 
 ## The shared contract
