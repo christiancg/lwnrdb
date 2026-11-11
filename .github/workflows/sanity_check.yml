@@ -369,9 +369,9 @@ jobs:
             start_server: false
             python: true
             run: |
-              python -m pip install --upgrade pip
-              python -m pip install --group dev -e clients/python
               cd clients/python
+              python -m pip install --upgrade pip
+              python -m pip install --group dev -e .
               LWNRDB_JAR="$GITHUB_WORKSPACE/target/lwnrdb.jar" python -m pytest tests/it -m it
 
           - name: metadata-limits
