@@ -1,0 +1,110 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lwnrdb-client"
+version = "0.0.0.dev0"
+description = "The official Python client for LWNRDB: a connection pool, a fluent query builder, transactions and live queries, sync and asyncio"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["lwnrdb", "database", "nosql", "client", "asyncio"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/christiancg/lwnrdb/tree/main/clients/python"
+Source = "https://github.com/christiancg/lwnrdb"
+Issues = "https://github.com/christiancg/lwnrdb/issues"
+
+[dependency-groups]
+dev = [
+    "build==1.6.1",
+    "coverage==7.17.2",
+    "hatchling==1.33.0",
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1.post1",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.4",
+    "tzdata==2026.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lwnrdb"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/lwnrdb", "apidocs", "build_tools", "hatch_build.py", "README.md", "pyproject.toml"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests", "build_tools", "consumers"]
+extend-exclude = [".venv", "dist", "src/lwnrdb/_catalogue.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PL", "ASYNC", "PT", "PERF", "ANN", "FBT003", "PIE", "RET", "TID"]
+ignore = ["PLR0913", "PLR0917", "PLR2004", "PLR0911", "PLC0415", "ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR0915", "ANN", "FBT003", "PT011", "SIM300"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lwnrdb"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src", "tests", "build_tools", "consumers", "hatch_build.py"]
+mypy_path = "src:build_tools"
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["hatchling.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+check_untyped_defs = true
+warn_unused_ignores = false
+disable_error_code = ["index", "arg-type", "dict-item", "call-overload", "comparison-overlap", "func-returns-value", "assignment", "operator", "attr-defined", "union-attr"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = ["it: integration tests against a real server (LWNRDB_JAR)"]
+addopts = "-m 'not it' -p no:cacheprovider"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["lwnrdb"]
+omit = ["*/lwnrdb/_catalogue.py"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "@overload", "\\.\\.\\.$"]
