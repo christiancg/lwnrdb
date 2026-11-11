@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.TxSession;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
@@ -266,11 +268,21 @@ public class ClusterRouterForwardedTxTest extends RemoteOwnerTxTestBase {
 
     private void awaitTheOwnersLateFinish() throws Exception {
         for (final var session : clientTracker.txSessionsSnapshot().values()) {
-            session.submit(() -> null).get(10, TimeUnit.SECONDS);
+            awaitTheSessionIdle(session);
         }
         final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
         assertTrue(org.techhouse.ops.Tx2pcLog.hasOutcome(txId),
                 "the owner finished the commit it stopped waiting for and recorded how it ended");
+    }
+
+    private static void awaitTheSessionIdle(TxSession session) throws Exception {
+        try {
+            session.submit(() -> null).get(10, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException alreadyShutDown) {
+            //noinspection resource
+            assertTrue(session.executor().awaitTermination(10, TimeUnit.SECONDS),
+                    "a session removed after the owner's late finish ends its queued work");
+        }
     }
 
     @Test
