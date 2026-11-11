@@ -147,6 +147,7 @@ public class BackgroundLanesTest {
     }
 
     private static final class Stuck extends Recorded {
+        private final java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         private final java.util.concurrent.CountDownLatch release;
 
         private Stuck(String collName, List<String> seen, java.util.concurrent.CountDownLatch release) {
@@ -156,6 +157,7 @@ public class BackgroundLanesTest {
 
         @Override
         public String toString() {
+            entered.countDown();
             try {
                 if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
                     seen.add("never released");
@@ -200,11 +202,12 @@ public class BackgroundLanesTest {
         final var idleSignal = new org.techhouse.bckg_ops.IdleSignal();
         final var workerCount = new java.util.concurrent.atomic.AtomicInteger(2);
         final var parked = new java.util.concurrent.atomic.AtomicInteger();
-        lanes.add(new Stuck(stuckCollection, seen, release));
+        final var stuck = new Stuck(stuckCollection, seen, release);
+        lanes.add(stuck);
         final var owner = new Thread(new org.techhouse.bckg_ops.BackgroundProcessorThread(lanes, 0, inFlight, parked,
                 workerCount, idleSignal));
         owner.start();
-        Thread.sleep(20);
+        assertTrue(stuck.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the owner took the stuck event");
         lanes.add(new Recorded(collectionOnLane(lanes, 0), seen, "waiting"));
         final var helper = new Thread(new org.techhouse.bckg_ops.BackgroundProcessorThread(lanes, 1, inFlight, parked,
                 workerCount, idleSignal));
