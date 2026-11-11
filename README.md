@@ -36,7 +36,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 ## Status
 
 LWNRDB is feature-complete for what it set out to be, and experimental in the sense the
-Q&A below means: a learning exercise, not something to put production data in. To try it, jump to the [Quickstart](#quickstart).
+Q&A below means: a learning exercise, not something to put production data in. To try it, follow the [Quickstart](QUICKSTART.md).
 
 **What it does.** Documents are stored as newline-delimited JSON across paged files, queried
 through an [aggregation pipeline](#aggregate) (the one exception is [`FIND_BY_ID`](#find_by_id))
@@ -1529,37 +1529,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 
 ### Quickstart
 
-Docker is the easiest way to try it. The server refuses to start without a password for the admin user (more on that in [Bootstrap](#bootstrap)), so pass one when you run the container:
-
-```bash
-docker run -d --name lwnrdb -p 8989:8989 \
-  -e LWNRDB_ADMIN_PASSWORD=<choose-a-strong-password> \
-  -v lwnrdb-data:/app/db \
-  ghcr.io/christiancg/lwnrdb:latest
-```
-
-If you prefer to skip Docker, download the jar from the latest release and run it with Java 27 or newer. Here the password goes in a `lwnrdb.cfg` next to the jar:
-
-```bash
-echo "defaultAdminPassword=<choose-a-strong-password>" > lwnrdb.cfg
-java -XX:+UseG1GC -XX:G1PeriodicGCInterval=60000 -Djdk.nio.maxCachedBufferSize=262144 -jar lwnrdb.jar
-```
-
-The jar is also its own client, so from another terminal you can create a database and a collection, save a document and read it back without installing anything else. The user is `admin` unless you changed `defaultAdminUsername`:
-
-```bash
-export LWNRDB_PASSWORD=<the-password-you-chose>
-java -jar lwnrdb.jar \
-  --exec '{"type":"CREATE_DATABASE","databaseName":"my_db"}' \
-  --exec '{"type":"CREATE_COLLECTION","databaseName":"my_db","collectionName":"people"}' \
-  --exec '{"type":"SAVE","databaseName":"my_db","collectionName":"people","object":{"_id":"user-1","name":"Alice","age":31}}' \
-  --exec '{"type":"AGGREGATE","databaseName":"my_db","collectionName":"people","aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"GREATER_THAN","field":"age","value":30}}]}'
-```
-
-`java -jar lwnrdb.jar --health` tells you whether the server is up without a password: it prints the
-[`SERVER_INFO`](#server_info) reply and exits `0` once the state is `READY`.
-
-With Docker the client is already inside the container, so run the same thing through `docker exec -e LWNRDB_PASSWORD=<the-password-you-chose> lwnrdb java -jar app.jar` instead of `java -jar lwnrdb.jar`. Each request goes in its own `--exec`. Every reply is printed on its own line and the client stops at the first one that is not `OK`. If you would rather talk to the server directly, any TCP client works, since each request is one line of JSON. The full list of operations starts in the [Wire Protocol](#wire-protocol--message-reference) section.
+[QUICKSTART.md](QUICKSTART.md) takes you from nothing to a running server, a first document saved and read back from
+the command line, and a first query from one of the client libraries.
 
 ### Running the server
 
