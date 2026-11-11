@@ -77,3 +77,9 @@ __pycache__/
 ### Client library builds ###
 .flattened-pom.xml
 .gradle/
+
+### .NET ###
+clients/dotnet/**/bin/
+clients/dotnet/**/obj/
+clients/dotnet/artifacts/
+clients/dotnet/**/TestResults/
