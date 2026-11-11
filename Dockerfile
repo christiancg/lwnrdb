@@ -1,4 +1,4 @@
-FROM maven:3.10.0-eclipse-temurin-27-alpine AS build
+FROM --platform=$BUILDPLATFORM maven:3.10.0-eclipse-temurin-27-alpine AS build
 
 ARG REVISION=1.0-SNAPSHOT
 
@@ -7,6 +7,8 @@ COPY pom.xml /app
 
 WORKDIR /app
 RUN mvn clean package -DskipTests -Drevision=${REVISION}
+
+FROM eclipse-temurin:27-jdk-alpine AS jre
 
 RUN jlink \
         --add-modules java.base,java.management,java.net.http,jdk.crypto.ec,jdk.unsupported \
@@ -26,7 +28,7 @@ RUN apk add --no-cache libstdc++
 ENV JAVA_HOME=/opt/jre
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
-COPY --from=build /jre /opt/jre
+COPY --from=jre /jre /opt/jre
 COPY --from=build /app/target/lwnrdb.jar /app/app.jar
 
 WORKDIR /app
