@@ -1,6 +1,7 @@
 # Protocol contract
 
-The machine-readable contract the LWNRDB clients are tested against.
+The machine-readable contract the LWNRDB clients are tested against. Its readable companion, with the framing, reply
+routing, retry rules and every operation, is the [wire protocol reference](../../docs/protocol.md).
 
 ## Catalogue files
 

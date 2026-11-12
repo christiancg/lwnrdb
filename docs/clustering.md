@@ -727,7 +727,7 @@ named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_EN
 `PK_INDEX_REPLACED`, `INDEX_BATCH_FLUSHED`, `WAL_APPENDED`, `WAL_CHECKPOINT_FORCED`, `PEER_REPLY`, among others) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
 inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
 suite turns it on for its throwaway nodes. See the
-[README](../README.md#fault-injection-testing-and-debugging-only) for the operations.
+[wire protocol reference](protocol.md#fault-injection-testing-and-debugging-only) for the operations.
 
 ## Anti-entropy and versioning
 

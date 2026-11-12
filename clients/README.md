@@ -13,7 +13,9 @@ Official clients for the LWNRDB wire protocol, one folder per language. Each one
 
 ## The shared contract
 
-[`protocol/`](protocol/README.md) is not a client: it is the contract every client is tested against.
+[`protocol/`](protocol/README.md) is not a client: it is the contract every client is tested against. The protocol
+itself, and what a new client must get right, is described in the
+[wire protocol reference](../docs/protocol.md).
 
 - `operations.json`, `error-codes.json` and `custom-types.json` are generated from the server's own enums by the
   server's `ProtocolCatalogueTest`. Each client checks its own enums against them.

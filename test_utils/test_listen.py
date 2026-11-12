@@ -854,6 +854,29 @@ def test_dropping_a_joined_collection_ends_the_listen(writer: Conn, listener: Co
         writer.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": joined})
 
 
+def test_a_push_and_a_reply_on_one_connection_arrive_in_either_order(listener: Conn):
+    section("LISTEN: a listen's end and the reply that caused it share one connection in either order")
+    coll = "listen_same_conn_drop"
+    listener.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    r = listen(listener, [], coll)
+    check_status("LISTEN registered on the collection the same connection drops", r, "OK")
+    listen_id = r.get("listenId")
+    try:
+        bu.send_without_reading(listener, {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+        frames = [listener.recv(timeout=5.0), listener.recv(timeout=5.0)]
+        replies = [f for f in frames if f is not None and f.get("type") == "DROP_COLLECTION"]
+        pushes = [f for f in frames if f is not None and f.get("type") == "LISTEN"]
+        check("the DROP_COLLECTION reply arrives", len(replies) == 1 and replies[0].get("status") == "OK",
+              f"frames: {frames!r}")
+        check("the listen's end arrives on the same connection", len(pushes) == 1
+              and pushes[0].get("errorCode") == "410-1" and pushes[0].get("listenId") == listen_id,
+              f"frames: {frames!r}")
+        pushed = listener.recv(timeout=2.0)
+        check("nothing else follows", pushed is None, f"unexpected frame: {pushed!r}")
+    finally:
+        listener.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
 def test_listener_survives_a_concurrent_bulk_save(writer_conn: Conn, listener_conn: Conn):
     section("A re-run during a bulk save still answers correctly")
     started = listen(listener_conn, [{"type": "FILTER",
@@ -1102,6 +1125,7 @@ def main():
                 test_a_revoked_reader_is_told_its_listen_ended(writer_conn)
                 test_dropping_the_collection_ends_the_listen(writer_conn, listener_conn)
                 test_dropping_a_joined_collection_ends_the_listen(writer_conn, listener_conn)
+                test_a_push_and_a_reply_on_one_connection_arrive_in_either_order(listener_conn)
                 test_disconnect_cleanup(writer_conn)
                 test_a_non_reading_listener_is_disconnected_and_others_still_notified(writer_conn)
 

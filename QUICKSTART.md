@@ -86,7 +86,7 @@ A few things worth knowing before you go further:
 - A collection has to exist before you write to it. Saving into a missing one fails with `404-11`.
 - `SAVE` inserts or updates: saving a document whose `_id` already exists replaces it.
 - An `_id` is a string of 1 to 64 letters, digits, `_` or `-`. Leave it out and the server generates one.
-- Every query except a lookup by `_id` is an [aggregation pipeline](README.md#aggregate) of steps such as `FILTER`,
+- Every query except a lookup by `_id` is an [aggregation pipeline](docs/protocol.md#aggregate) of steps such as `FILTER`,
   `SORT`, `LIMIT` and `GROUP_BY`.
 
 ## 3. Use it from your code
@@ -134,13 +134,13 @@ The full guide for each library, with installation, settings, typed collections,
 | .NET 10+ | `Lwnrdb.Client` on NuGet | [clients/dotnet](clients/dotnet/README.md) |
 
 No library for your language? Any TCP client works: send one JSON request per line and read one JSON reply per line.
-Authenticate first with [`AUTHENTICATE`](README.md#authenticate).
+Authenticate first with [`AUTHENTICATE`](docs/protocol.md#authenticate).
 
 ## 4. Next steps
 
 - [Configuration](README.md#configuration): memory, page size, timeouts and limits, all in `lwnrdb.cfg`.
-- [Indexes](README.md#create_index): queries scan the collection until the fields they filter on are indexed.
-- [Users and permissions](README.md#users--permissions): create a user for your application instead of using `admin`.
+- [Indexes](docs/protocol.md#create_index): queries scan the collection until the fields they filter on are indexed.
+- [Users and permissions](docs/protocol.md#users--permissions): create a user for your application instead of using `admin`.
 - [TLS](README.md#tls--secure-connections): encrypt connections before exposing the server beyond your machine.
 - [Backups](README.md#client-shell-exec-dumprestore): `--dump` and `--restore`. A dump reads each database from one
   consistent snapshot, so you can take it while your application keeps writing.

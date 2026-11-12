@@ -42,6 +42,9 @@ The first release. Protocol version 1, storage format version 1.
   local or remote server, with or without TLS.
 - **Storage format stamp.** `{filePath}/format.json` records the storage format, and the server refuses to start on a
   folder written in another one instead of misreading it.
+- **Documentation.** A wire protocol reference for client authors, [docs/protocol.md](docs/protocol.md): framing,
+  the request and response envelopes, how replies are matched to requests, retry rules, then every operation,
+  permission and error code.
 - **Docker image.** For `linux/amd64` and `linux/arm64`, with a trimmed JRE and a health check, published to
   `ghcr.io/christiancg/lwnrdb`.
 
