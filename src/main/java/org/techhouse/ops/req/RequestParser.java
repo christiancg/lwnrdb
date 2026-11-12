@@ -115,6 +115,9 @@ public final class RequestParser {
                 case CANCEL_SCRIPT -> eJson.fromJson(root, CancelScriptRequest.class);
                 case LIST_TRIGGER_RUNS -> eJson.fromJson(root, ListTriggerRunsRequest.class);
                 case RESOLVE_TRIGGER_RUN -> eJson.fromJson(root, ResolveTriggerRunRequest.class);
+                case START_SNAPSHOT -> eJson.fromJson(root, StartSnapshotRequest.class);
+                case READ_SNAPSHOT -> eJson.fromJson(root, ReadSnapshotRequest.class);
+                case RELEASE_SNAPSHOT -> eJson.fromJson(root, ReleaseSnapshotRequest.class);
                 case RUN_SCRIPT -> eJson.fromJson(root, RunScriptRequest.class);
                 case SAVE_PROCEDURE -> eJson.fromJson(root, SaveProcedureRequest.class);
                 case DELETE_PROCEDURE -> eJson.fromJson(root, DeleteProcedureRequest.class);

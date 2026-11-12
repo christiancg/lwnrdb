@@ -6,6 +6,7 @@ import sys
 import tempfile
 
 import base_utils as bu
+import client_snapshot_cases as snapshots
 from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
@@ -563,8 +564,8 @@ def test_dump_halves_a_page_past_the_reply_cap(cwd: str):
           documents_of_port(TARGET_PORT, HALVED, BIG) == documents_of_port(SOURCE_PORT, HALVED, BIG)
           and len(documents_of_port(TARGET_PORT, HALVED, BIG)) == HALVED_ROWS)
     too_small = client(cwd, "--dump", "--databases", HALVED, "--max-reply-bytes", str(HALVED_ROW_BYTES // 2))
-    check("a document larger than the cap fails the dump and names its position",
-          too_small.returncode != 0 and "at position 0" in too_small.stderr.decode(), too_small.stderr.decode())
+    check("a document larger than the cap fails the dump and names where it was",
+          too_small.returncode != 0 and "after the start" in too_small.stderr.decode(), too_small.stderr.decode())
     for port in (SOURCE_PORT, TARGET_PORT):
         send(port, {"type": "DROP_DATABASE", "databaseName": HALVED})
 
@@ -634,7 +635,14 @@ def main():
         test_exec_large_result_small_client_heap(client_dir)
         test_dump_restore_of_multi_megabyte_lines(client_dir)
         test_dump_halves_a_page_past_the_reply_cap(client_dir)
+        snapshots.test_dump_is_a_point_in_time_cut_under_writes(client_dir, client, SOURCE_PORT, TARGET_PORT)
         test_hygiene(client_dir, plain_dump)
+        bu.stop_server(source, port=SOURCE_PORT)
+        source = None
+        write_config(source_dir, SOURCE_PORT, snapshotMaxBytes="64kb", snapshotMaxOpen=1, snapshotIdleTimeoutMs=2000)
+        source = bu.start_server(source_dir, source_log, port=SOURCE_PORT)
+        snapshots.test_a_snapshot_past_its_budget_is_aborted_and_the_writes_stand(SOURCE_PORT)
+        snapshots.test_snapshots_are_released_on_disconnect_and_when_idle(SOURCE_PORT)
         bu.stop_server(source, port=SOURCE_PORT)
         source = None
         test_tls(client_dir, source_dir, source_log)

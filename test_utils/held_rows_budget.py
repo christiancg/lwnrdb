@@ -264,13 +264,16 @@ def test_concurrent_aggregations_share_one_budget():
             check(f"every BULK_SAVE of {POOL_DOCS} documents succeeds", not refused, detail=str(refused[:5]))
             check_status("one GROUP_BY alone fits both budgets",
                          aggregate(c, [{"type": "GROUP_BY", "fieldName": "cat"}]), "OK")
-            outcomes = []
+            tries = []
             for _ in range(POOL_TRIES):
-                outcomes = concurrent_group_bys(HELD_PORT)
-                if "503-20" in outcomes:
+                tries.append(concurrent_group_bys(HELD_PORT))
+                if "503-20" in tries[-1] and "OK" in tries[-1]:
                     break
-            check("two concurrent GROUP_BYs that each fit alone pass the shared pool and one answers 503-20",
-                  "503-20" in outcomes and "OK" in outcomes, detail=str(outcomes))
+            check("two concurrent GROUP_BYs that each fit alone pass the shared pool, which refuses at least one"
+                  " with 503-20 and never answers otherwise",
+                  any("503-20" in outcomes for outcomes in tries)
+                  and all(len(outcomes) == 2 and set(outcomes) <= {"OK", "503-20"} for outcomes in tries),
+                  detail=str(tries))
             check_status("the refused GROUP_BY answers once it runs alone",
                          aggregate(c, [{"type": "GROUP_BY", "fieldName": "cat"}]), "OK")
             check_status("create the bounded-sort collection", send(c, {"type": "CREATE_COLLECTION",

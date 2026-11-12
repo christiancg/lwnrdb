@@ -795,6 +795,42 @@ def _rows_read_their_own_record(node, coll) -> bool:
     return True
 
 
+def test_a_snapshot_on_a_replica_keeps_the_versions_replicated_writes_replace():
+    section("A snapshot opened on a replica reads its cut while the owner's writes replicate into it")
+    coll = "snapshotted"
+    create_coll(nodes[0].client_port, DB, coll)
+    for _id, value in (("s1", 1), ("s2", 2)):
+        check_status(f"SAVE {_id}", op_with_retry(lambda d={"_id": _id, "v": value}:
+                                                  save(nodes[0].client_port, DB, coll, d)), "OK")
+    check("the seed is on every node", all_nodes_see(DB, coll, "s1", 1) and all_nodes_see(DB, coll, "s2", 2))
+    owner = owner_of(nodes[0].client_port, DB, coll)
+    check("the collection's owner is known", owner is not None)
+    if owner is None:
+        return
+    replica = next(n for n in nodes if n is not owner)
+    conn = authed(replica.client_port)
+    try:
+        started = conn.send({"type": "START_SNAPSHOT", "databaseName": DB, "collectionNames": [coll]})
+        check_status("START_SNAPSHOT on the replica", started, "OK")
+        snapshot_id = started.get("snapshotId")
+        check_status("update s1 through the owner", op_with_retry(
+            lambda: save(owner.client_port, DB, coll, {"_id": "s1", "v": 100})), "OK")
+        check_status("delete s2 through the owner", delete(owner.client_port, DB, coll, "s2"), "OK")
+        check_status("insert s3 through the owner", op_with_retry(
+            lambda: save(owner.client_port, DB, coll, {"_id": "s3", "v": 3})), "OK")
+        check("the writes reached the replica", all_nodes_see(DB, coll, "s1", 100) and all_nodes_see(DB, coll, "s3", 3))
+        page = conn.send({"type": "READ_SNAPSHOT", "databaseName": DB, "collectionName": coll,
+                          "snapshotId": snapshot_id, "limit": 10})
+        check_status("READ_SNAPSHOT on the replica", page, "OK")
+        check("it reads the versions the replicated writes replaced, and not the insert",
+              [(d.get("_id"), d.get("v")) for d in page.get("results") or []] == [("s1", 1), ("s2", 2)],
+              json.dumps(page.get("results")))
+        check_status("RELEASE_SNAPSHOT on the replica", conn.send({"type": "RELEASE_SNAPSHOT", "databaseName": DB,
+                                                                   "snapshotId": snapshot_id}), "OK")
+    finally:
+        conn.close()
+
+
 def test_reindex_primary_key_rebuilds_the_pk_index_on_every_node():
     section("REINDEX primaryKey is cluster-wide: it re-addresses a damaged pk.idx on a node that did not receive it")
 
@@ -4258,6 +4294,7 @@ GROUPS = {
         test_index_replication,
         test_reindex_rebuilds_the_index_on_every_node,
         test_reindex_primary_key_rebuilds_the_pk_index_on_every_node,
+        test_a_snapshot_on_a_replica_keeps_the_versions_replicated_writes_replace,
         test_user_and_permission_replication,
         test_grants_are_pruned_on_every_node,
         test_a_deleted_users_ownership_is_pruned_on_every_node,

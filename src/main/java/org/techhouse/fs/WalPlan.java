@@ -28,6 +28,9 @@ final class WalPlan {
     private final String collName;
     private final TreeMap<Long, PageChanges> pages = new TreeMap<>();
     private final List<PkRow> pkRows = new ArrayList<>();
+    private final RetiredCopies retiredCopies;
+    private final List<RetiredCopies.RetiredCopy> retired;
+    private final List<String> born;
 
     private static final class PageChanges {
         private final File file;
@@ -66,6 +69,10 @@ final class WalPlan {
         this.wal = pkIndexStore.wal();
         this.dbName = dbName;
         this.collName = collName;
+        this.retiredCopies = pkIndexStore.retiredCopies();
+        final var watched = retiredCopies.watches(dbName);
+        this.retired = watched ? new ArrayList<>() : null;
+        this.born = watched ? new ArrayList<>() : null;
         if (wal.requireApplied(dbName, collName)) {
             throw new IOException("Applied the earlier logged writes of " + WriteAheadLog.subject(dbName, collName)
                     + " just before this write, which had read the collection before them; nothing of it was written");
@@ -87,12 +94,18 @@ final class WalPlan {
         return offset;
     }
 
-    void blank(long page, long offset, long length) {
+    void blank(String id, long page, long offset, long length) {
         changesOf(page).blanks.add(new long[]{offset, length});
+        if (retired != null) {
+            retired.add(new RetiredCopies.RetiredCopy(id, page, offset, length));
+        }
     }
 
     void insertRow(PkIndexEntry row) {
         pkRows.add(new PkRow(row, null, 1));
+        if (born != null) {
+            born.add(row.getValue());
+        }
     }
 
     void replaceRow(PkIndexEntry row) {
@@ -110,6 +123,10 @@ final class WalPlan {
     void commit(FaultPoint afterLog, FaultPoint afterApply) throws IOException {
         if (pages.isEmpty() && pkRows.isEmpty()) {
             return;
+        }
+        if (retired != null) {
+            retiredCopies.retiring(dbName, collName, retired, born,
+                    copy -> DocumentPageStore.retiredLineOf(changesOf(copy.page()).file, copy));
         }
         final var pkLock = FileLocks.lockWrite(paths.pkIndexFile(dbName, collName));
         try {

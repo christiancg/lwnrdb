@@ -30,6 +30,7 @@ final class PkIndexStore {
 
     private final FilePaths paths;
     private final WriteAheadLog wal;
+    private volatile RetiredCopies retiredCopies = RetiredCopies.NONE;
 
     record PkFileState(long length, FileTime modified, long liveRows, long deadRows, boolean written) {
         boolean missing() {
@@ -58,6 +59,14 @@ final class PkIndexStore {
 
     WriteAheadLog wal() {
         return wal;
+    }
+
+    RetiredCopies retiredCopies() {
+        return retiredCopies;
+    }
+
+    void onRetiredCopies(RetiredCopies listener) {
+        this.retiredCopies = listener;
     }
 
     record PkAppend(File file, PkFileState before, long offset) {

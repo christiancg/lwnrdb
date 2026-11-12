@@ -56,6 +56,7 @@ public class ClusterServerIntegrationTest {
         pool.closeAll();
         server.stop();
         TestUtils.setPrivateField(Configuration.getInstance(), "clusterSecret", originalSecret);
+        TestUtils.resetMembership();
     }
 
     private NodeAddress serverAddress() {

@@ -2146,6 +2146,59 @@ failure answers `500-35`
 {"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231, "node": {"clusterEnabled": false, "syncWrites": true, "tlsEnabled": false}}}
 ```
 
+Snapshots, what `--dump` reads a database through. Open one, change the collection from a second connection, and the
+snapshot still reads what was there when it opened:
+
+```json
+{"type": "START_SNAPSHOT", "databaseName": "test"}
+```
+
+```json
+{"type": "START_SNAPSHOT", "status": "OK", "message": "Ok", "errorCode": null, "snapshotId": "6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10", "collectionNames": ["testCollection"]}
+```
+
+From another connection update one document, delete another and save a new one, then page the snapshot on the first
+connection (`afterId` is the previous page's `lastId`; leave it out for the first page):
+
+```json
+{"type": "READ_SNAPSHOT", "databaseName": "test", "collectionName": "testCollection", "snapshotId": "6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10", "limit": 2}
+```
+
+```json
+{"type": "READ_SNAPSHOT", "status": "OK", "message": "Ok", "errorCode": null, "results": [{"_id": "a", "aNumber": 1}, {"_id": "b", "aNumber": 2}], "lastId": "b", "done": false}
+```
+
+The updated and the deleted documents come back as they were, the new one never does, and a page can be shorter than
+`limit` while `done` is `false`. Release it when done:
+
+```json
+{"type": "RELEASE_SNAPSHOT", "databaseName": "test", "snapshotId": "6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10"}
+```
+
+The same id from another connection, or after the release, an idle `snapshotIdleTimeoutMs` (5 minutes) or a restart
+→ `404-13`:
+
+```json
+{"type": "READ_SNAPSHOT", "status": "NOT_FOUND", "message": "The snapshot does not exist: it was released or expired, or it belongs to another connection", "errorCode": "404-13"}
+```
+
+Writes past `snapshotMaxBytes` while it is open (start a server with `snapshotMaxBytes=64kb` and bulk-update 400
+documents of 200 bytes), a `DROP_COLLECTION` of one of its collections or a `REINDEX` with `"primaryKey": true` abort it;
+the writes themselves answer `OK`, and every read of the snapshot until it is released → `409-17` with the reason:
+
+```json
+{"type": "READ_SNAPSHOT", "status": "ERROR", "message": "The snapshot was aborted and holds nothing any more; open a new one: it passed snapshotMaxBytes (65536 bytes) keeping the old versions of the documents written since it was opened", "errorCode": "409-17"}
+```
+
+A `START_SNAPSHOT` past `snapshotMaxOpen` (4) open snapshots on the node → `503-22` (retryable); one while a transaction
+on another connection holds a collection of the database for longer than `transactionLockTimeoutMs` → `409-5`; a `START_SNAPSHOT` or
+`READ_SNAPSHOT` on a collection fenced by an unfinished commit → `503-18` without waiting out that timeout; any of the
+three inside a transaction → `409-6`.
+
+```json
+{"type": "START_SNAPSHOT", "status": "ERROR", "message": "The server holds the maximum number of open snapshots; retry shortly", "errorCode": "503-22"}
+```
+
 Custom types
 
 ```json

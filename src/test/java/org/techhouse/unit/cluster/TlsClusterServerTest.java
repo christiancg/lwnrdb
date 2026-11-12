@@ -78,6 +78,7 @@ public class TlsClusterServerTest {
         TestUtils.setPrivateField(config, "tlsKeystorePassword", origKeystorePassword);
         TestUtils.setPrivateField(config, "clusterTlsEnabled", origClusterTls);
         TestUtils.setPrivateField(config, "clusterSecret", origSecret);
+        TestUtils.resetMembership();
     }
 
     @Test

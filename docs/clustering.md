@@ -1102,5 +1102,11 @@ satisfies its own quorum, letting both sides of a partition accept divergent wri
   script load, which attracts placement it should not. The `HELLO` handshake, mutual TLS and the
   32-character secret rule also require the same build everywhere: an older node never sends
   `HELLO`, so a newer node closes its connections and mixed clusters do not form.
+- **Backups:** `--dump` against any node reads each database from a snapshot local to that
+  node (`START_SNAPSHOT`/`READ_SNAPSHOT` are never routed). The snapshot keeps the versions that
+  replicated writes (`REPLICATE`, `REPLICATE_TX`, anti-entropy repairs) replace on that node, and a
+  `REPLICATE_TX` is applied inside one multi-collection lock, so the cut never splits a transaction;
+  it is the state that node had applied when the dump started, which a replica may hold a moment
+  later than the owner.
 - **Removing a node:** drain its traffic at the load balancer first — there is no LEAVE
   message, so peers wait out `deadTimeoutMs` before reassigning its collections.

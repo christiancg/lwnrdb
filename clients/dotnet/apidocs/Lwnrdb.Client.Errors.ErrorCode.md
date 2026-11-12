@@ -194,6 +194,9 @@ Code `404-11` (`COLLECTION_NOT_FOUND`). Collection not found.
 ## SchemaNotFound
 Code `404-12` (`SCHEMA_NOT_FOUND`). The collection has no schema.
 
+## SnapshotNotFound
+Code `404-13` (`SNAPSHOT_NOT_FOUND`). The snapshot does not exist: it was released or expired, or it belongs to another connection.
+
 ## ScriptTimeout
 Code `408-1` (`SCRIPT_TIMEOUT`). Script exceeded its time budget.
 
@@ -259,6 +262,9 @@ Code `409-15` (`PRIMARY_KEY_REBUILD_REFUSED`). The primary-key index cannot be r
 
 ## TransactionIdleTimeout
 Code `409-16` (`TRANSACTION_IDLE_TIMEOUT`). The transaction was rolled back after being idle too long.
+
+## SnapshotAborted
+Code `409-17` (`SNAPSHOT_ABORTED`). The snapshot was aborted and holds nothing any more; open a new one.
 
 ## ListenEnded
 Code `410-1` (`LISTEN_ENDED`). The listen ended.
@@ -377,6 +383,12 @@ Code `500-34` (`WRITE_LOGGED_NOT_APPLIED`). The write was logged durably but cou
 ## ErrorGatheringServerInfo
 Code `500-35` (`ERROR_GATHERING_SERVER_INFO`). Error while gathering server info.
 
+## ErrorStartingSnapshot
+Code `500-36` (`ERROR_STARTING_SNAPSHOT`). Error while opening the snapshot.
+
+## ErrorReadingSnapshot
+Code `500-37` (`ERROR_READING_SNAPSHOT`). Error while reading the snapshot.
+
 ## MaxConnectionsReached
 Code `503-1` (`MAX_CONNECTIONS_REACHED`). Max number of connections reached.
 
@@ -436,6 +448,9 @@ Code `503-20` (`AGGREGATE_BUDGET_EXHAUSTED`). The server holds the maximum bytes
 
 ## TransactionBudgetExhausted
 Code `503-21` (`TRANSACTION_BUDGET_EXHAUSTED`). The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly. Safe to retry.
+
+## SnapshotLimitReached
+Code `503-22` (`SNAPSHOT_LIMIT_REACHED`). The server holds the maximum number of open snapshots; retry shortly. Safe to retry.
 
 ## Of(string)
 Looks a code up in the catalogue.

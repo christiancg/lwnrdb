@@ -131,12 +131,12 @@ public class ProtocolCatalogueTest {
     }
 
     @Test
-    public void test_test_only_operations_are_excluded() {
+    public void test_non_client_operations_are_excluded() {
         final var names = ProtocolFiles.clientFacingOperations().stream().map(Enum::name).toList();
-        for (final var testOnly : ProtocolFiles.TEST_ONLY_OPERATIONS) {
-            assertFalse(names.contains(testOnly.name()), testOnly.name());
+        for (final var nonClient : ProtocolFiles.NON_CLIENT_OPERATIONS) {
+            assertFalse(names.contains(nonClient.name()), nonClient.name());
         }
-        assertEquals(OperationType.values().length - ProtocolFiles.TEST_ONLY_OPERATIONS.size(), names.size());
+        assertEquals(OperationType.values().length - ProtocolFiles.NON_CLIENT_OPERATIONS.size(), names.size());
     }
 
     @Test

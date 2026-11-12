@@ -22,8 +22,10 @@ import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReadSnapshotRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ReleaseFaultRequest;
+import org.techhouse.ops.req.ReleaseSnapshotRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.RunScriptRequest;
@@ -34,6 +36,7 @@ import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.req.StartSnapshotRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
 
@@ -91,6 +94,9 @@ public class RequestValidator {
             case LIST_TRIGGER_RUNS -> ControlRequestValidator.validateListTriggerRuns((ListTriggerRunsRequest) request);
             case RESOLVE_TRIGGER_RUN ->
                 ControlRequestValidator.validateResolveTriggerRun((ResolveTriggerRunRequest) request);
+            case START_SNAPSHOT -> SnapshotRequestValidator.validateStart((StartSnapshotRequest) request);
+            case READ_SNAPSHOT -> SnapshotRequestValidator.validateRead((ReadSnapshotRequest) request);
+            case RELEASE_SNAPSHOT -> SnapshotRequestValidator.validateRelease((ReleaseSnapshotRequest) request);
             case ARM_FAULT -> ControlRequestValidator.validateArmFault((ArmFaultRequest) request);
             case AWAIT_FAULT -> ControlRequestValidator.validateAwaitFault((AwaitFaultRequest) request);
             case RELEASE_FAULT -> ControlRequestValidator.validateReleaseFault((ReleaseFaultRequest) request);

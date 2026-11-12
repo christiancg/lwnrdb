@@ -40,6 +40,7 @@ import org.techhouse.ops.req.ServerInfoRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.snapshot.SnapshotRegistry;
 
 public class MessageProcessor implements Runnable {
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -50,6 +51,7 @@ public class MessageProcessor implements Runnable {
     private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
     private final BackgroundBacklogGate backlogGate = IocContainer.get(BackgroundBacklogGate.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private final SnapshotRegistry snapshotRegistry = IocContainer.get(SnapshotRegistry.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
@@ -134,6 +136,7 @@ public class MessageProcessor implements Runnable {
     private void depart() {
         try {
             listenManager.unregisterAllForClient(clientId);
+            snapshotRegistry.releaseAllOf(clientId);
         } finally {
             clientTracker.releaseSocketSlot(clientId);
             try {

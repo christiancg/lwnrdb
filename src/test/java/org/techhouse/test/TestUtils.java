@@ -32,6 +32,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheResidents;
 import org.techhouse.cache.PartitionedMissCache;
 import org.techhouse.cache.UserCache;
+import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
@@ -322,6 +323,13 @@ public class TestUtils {
             throws NoSuchFieldException, IllegalAccessException {
         setPrivateField(clientTracker, "disconnectSignals", new ConcurrentHashMap<>());
         getPrivateField(clientTracker, "socketClients", AtomicInteger.class).set(0);
+    }
+
+    public static void resetMembership() throws NoSuchFieldException, IllegalAccessException {
+        final var membershipService = IocContainer.get(MembershipService.class);
+        setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
+        setPrivateField(membershipService, "lastSeen", new ConcurrentHashMap<>());
+        setPrivateField(membershipService, "self", null);
     }
 
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {

@@ -119,6 +119,7 @@ class ErrorCode(StrEnum):
     TRIGGER_NOT_FOUND = '404-9'
     COLLECTION_NOT_FOUND = '404-11'
     SCHEMA_NOT_FOUND = '404-12'
+    SNAPSHOT_NOT_FOUND = '404-13'
     SCRIPT_TIMEOUT = '408-1'
     SCRIPT_CANCELLED = '408-2'
     FAULT_NOT_REACHED = '408-3'
@@ -141,6 +142,7 @@ class ErrorCode(StrEnum):
     TRANSACTION_ALREADY_COMMITTED = '409-14'
     PRIMARY_KEY_REBUILD_REFUSED = '409-15'
     TRANSACTION_IDLE_TIMEOUT = '409-16'
+    SNAPSHOT_ABORTED = '409-17'
     LISTEN_ENDED = '410-1'
     OUTBOUND_BACKLOG = '413-1'
     NOT_COLLECTION_OWNER = '421-1'
@@ -180,6 +182,8 @@ class ErrorCode(StrEnum):
     TRANSACTION_HALF_APPLIED = '500-33'
     WRITE_LOGGED_NOT_APPLIED = '500-34'
     ERROR_GATHERING_SERVER_INFO = '500-35'
+    ERROR_STARTING_SNAPSHOT = '500-36'
+    ERROR_READING_SNAPSHOT = '500-37'
     MAX_CONNECTIONS_REACHED = '503-1'
     NO_QUORUM = '503-2'
     REPLICATION_TIMEOUT = '503-3'
@@ -200,6 +204,7 @@ class ErrorCode(StrEnum):
     WRITES_NOT_APPLIED = '503-19'
     AGGREGATE_BUDGET_EXHAUSTED = '503-20'
     TRANSACTION_BUDGET_EXHAUSTED = '503-21'
+    SNAPSHOT_LIMIT_REACHED = '503-22'
 
 
 DETECTION_REGEX = '^#[a-zA-Z0-9]{3,20}\\(.*\\)$'
@@ -331,6 +336,7 @@ ERROR_CODES = (
     ('TRIGGER_NOT_FOUND', '404-9', 'NOT_FOUND', False, 'Trigger not found'),
     ('COLLECTION_NOT_FOUND', '404-11', 'NOT_FOUND', False, 'Collection not found'),
     ('SCHEMA_NOT_FOUND', '404-12', 'NOT_FOUND', False, 'The collection has no schema'),
+    ('SNAPSHOT_NOT_FOUND', '404-13', 'NOT_FOUND', False, 'The snapshot does not exist: it was released or expired, or it belongs to another connection'),
     ('SCRIPT_TIMEOUT', '408-1', 'ERROR', False, 'Script exceeded its time budget'),
     ('SCRIPT_CANCELLED', '408-2', 'ERROR', False, 'Script was cancelled'),
     ('FAULT_NOT_REACHED', '408-3', 'ERROR', False, 'The armed fault point was not reached in time'),
@@ -353,6 +359,7 @@ ERROR_CODES = (
     ('TRANSACTION_ALREADY_COMMITTED', '409-14', 'ERROR', False, 'The transaction already committed on its owner; it can no longer be rolled back'),
     ('PRIMARY_KEY_REBUILD_REFUSED', '409-15', 'ERROR', False, 'The primary-key index cannot be rebuilt from the page files'),
     ('TRANSACTION_IDLE_TIMEOUT', '409-16', 'ERROR', False, 'The transaction was rolled back after being idle too long'),
+    ('SNAPSHOT_ABORTED', '409-17', 'ERROR', False, 'The snapshot was aborted and holds nothing any more; open a new one'),
     ('LISTEN_ENDED', '410-1', 'NOT_FOUND', False, 'The listen ended'),
     ('OUTBOUND_BACKLOG', '413-1', 'ERROR', False, "The connection's outbound buffer overflowed"),
     ('NOT_COLLECTION_OWNER', '421-1', 'ERROR', False, 'This node is not the owner of the target collection'),
@@ -392,6 +399,8 @@ ERROR_CODES = (
     ('TRANSACTION_HALF_APPLIED', '500-33', 'ERROR', False, 'A committed transaction could not be fully applied; its collections are fenced until it is finished'),
     ('WRITE_LOGGED_NOT_APPLIED', '500-34', 'ERROR', False, 'The write was logged durably but could not be applied; it is applied before the collection is next used, or at the next startup, so it may already have taken effect'),
     ('ERROR_GATHERING_SERVER_INFO', '500-35', 'ERROR', False, 'Error while gathering server info'),
+    ('ERROR_STARTING_SNAPSHOT', '500-36', 'ERROR', False, 'Error while opening the snapshot'),
+    ('ERROR_READING_SNAPSHOT', '500-37', 'ERROR', False, 'Error while reading the snapshot'),
     ('MAX_CONNECTIONS_REACHED', '503-1', 'ERROR', False, 'Max number of connections reached'),
     ('NO_QUORUM', '503-2', 'ERROR', True, 'Cluster does not have a write quorum'),
     ('REPLICATION_TIMEOUT', '503-3', 'ERROR', False, 'Timed out waiting for the replication quorum'),
@@ -412,4 +421,5 @@ ERROR_CODES = (
     ('WRITES_NOT_APPLIED', '503-19', 'ERROR', True, 'The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly'),
     ('AGGREGATE_BUDGET_EXHAUSTED', '503-20', 'ERROR', True, 'The server holds the maximum bytes of running aggregations; retry shortly'),
     ('TRANSACTION_BUDGET_EXHAUSTED', '503-21', 'ERROR', True, 'The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly'),
+    ('SNAPSHOT_LIMIT_REACHED', '503-22', 'ERROR', True, 'The server holds the maximum number of open snapshots; retry shortly'),
 )

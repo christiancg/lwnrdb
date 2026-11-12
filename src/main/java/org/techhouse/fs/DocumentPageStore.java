@@ -1,5 +1,6 @@
 package org.techhouse.fs;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
@@ -142,6 +143,28 @@ final class DocumentPageStore {
         try (var pathStream = Files.list(collectionFolder)) {
             return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).count();
         }
+    }
+
+    static byte[] retiredLineOf(File page, RetiredCopies.RetiredCopy copy) throws IOException {
+        final var line = new byte[Math.toIntExact(copy.length())];
+        try (var reader = new RandomAccessFile(page, Globals.R_PERMISSIONS)) {
+            reader.seek(copy.offset());
+            reader.readFully(line);
+        }
+        final var storedId = PageLines.edgeIdOf(line, 0, recordEnd(line));
+        if (!copy.id().equals(storedId)) {
+            throw new IOException("The copy of '" + copy.id() + "' at " + page.getName() + ":" + copy.offset()
+                    + " holds '" + storedId + "'");
+        }
+        return line;
+    }
+
+    private static int recordEnd(byte[] line) {
+        var end = line.length;
+        while (end > 0 && (line[end - 1] == '\n' || line[end - 1] == '\r')) {
+            end--;
+        }
+        return end;
     }
 
     DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {

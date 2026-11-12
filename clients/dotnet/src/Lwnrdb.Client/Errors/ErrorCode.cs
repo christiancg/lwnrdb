@@ -72,6 +72,7 @@ public sealed class ErrorCode
     public static readonly ErrorCode TriggerNotFound = new("404-9", "TRIGGER_NOT_FOUND", Status.NotFound, false, "Trigger not found");
     public static readonly ErrorCode CollectionNotFound = new("404-11", "COLLECTION_NOT_FOUND", Status.NotFound, false, "Collection not found");
     public static readonly ErrorCode SchemaNotFound = new("404-12", "SCHEMA_NOT_FOUND", Status.NotFound, false, "The collection has no schema");
+    public static readonly ErrorCode SnapshotNotFound = new("404-13", "SNAPSHOT_NOT_FOUND", Status.NotFound, false, "The snapshot does not exist: it was released or expired, or it belongs to another connection");
     public static readonly ErrorCode ScriptTimeout = new("408-1", "SCRIPT_TIMEOUT", Status.Error, false, "Script exceeded its time budget");
     public static readonly ErrorCode ScriptCancelled = new("408-2", "SCRIPT_CANCELLED", Status.Error, false, "Script was cancelled");
     public static readonly ErrorCode FaultNotReached = new("408-3", "FAULT_NOT_REACHED", Status.Error, false, "The armed fault point was not reached in time");
@@ -94,6 +95,7 @@ public sealed class ErrorCode
     public static readonly ErrorCode TransactionAlreadyCommitted = new("409-14", "TRANSACTION_ALREADY_COMMITTED", Status.Error, false, "The transaction already committed on its owner; it can no longer be rolled back");
     public static readonly ErrorCode PrimaryKeyRebuildRefused = new("409-15", "PRIMARY_KEY_REBUILD_REFUSED", Status.Error, false, "The primary-key index cannot be rebuilt from the page files");
     public static readonly ErrorCode TransactionIdleTimeout = new("409-16", "TRANSACTION_IDLE_TIMEOUT", Status.Error, false, "The transaction was rolled back after being idle too long");
+    public static readonly ErrorCode SnapshotAborted = new("409-17", "SNAPSHOT_ABORTED", Status.Error, false, "The snapshot was aborted and holds nothing any more; open a new one");
     public static readonly ErrorCode ListenEnded = new("410-1", "LISTEN_ENDED", Status.NotFound, false, "The listen ended");
     public static readonly ErrorCode OutboundBacklog = new("413-1", "OUTBOUND_BACKLOG", Status.Error, false, "The connection's outbound buffer overflowed");
     public static readonly ErrorCode NotCollectionOwner = new("421-1", "NOT_COLLECTION_OWNER", Status.Error, false, "This node is not the owner of the target collection");
@@ -133,6 +135,8 @@ public sealed class ErrorCode
     public static readonly ErrorCode TransactionHalfApplied = new("500-33", "TRANSACTION_HALF_APPLIED", Status.Error, false, "A committed transaction could not be fully applied; its collections are fenced until it is finished");
     public static readonly ErrorCode WriteLoggedNotApplied = new("500-34", "WRITE_LOGGED_NOT_APPLIED", Status.Error, false, "The write was logged durably but could not be applied; it is applied before the collection is next used, or at the next startup, so it may already have taken effect");
     public static readonly ErrorCode ErrorGatheringServerInfo = new("500-35", "ERROR_GATHERING_SERVER_INFO", Status.Error, false, "Error while gathering server info");
+    public static readonly ErrorCode ErrorStartingSnapshot = new("500-36", "ERROR_STARTING_SNAPSHOT", Status.Error, false, "Error while opening the snapshot");
+    public static readonly ErrorCode ErrorReadingSnapshot = new("500-37", "ERROR_READING_SNAPSHOT", Status.Error, false, "Error while reading the snapshot");
     public static readonly ErrorCode MaxConnectionsReached = new("503-1", "MAX_CONNECTIONS_REACHED", Status.Error, false, "Max number of connections reached");
     public static readonly ErrorCode NoQuorum = new("503-2", "NO_QUORUM", Status.Error, true, "Cluster does not have a write quorum");
     public static readonly ErrorCode ReplicationTimeout = new("503-3", "REPLICATION_TIMEOUT", Status.Error, false, "Timed out waiting for the replication quorum");
@@ -153,6 +157,7 @@ public sealed class ErrorCode
     public static readonly ErrorCode WritesNotApplied = new("503-19", "WRITES_NOT_APPLIED", Status.Error, true, "The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly");
     public static readonly ErrorCode AggregateBudgetExhausted = new("503-20", "AGGREGATE_BUDGET_EXHAUSTED", Status.Error, true, "The server holds the maximum bytes of running aggregations; retry shortly");
     public static readonly ErrorCode TransactionBudgetExhausted = new("503-21", "TRANSACTION_BUDGET_EXHAUSTED", Status.Error, true, "The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly");
+    public static readonly ErrorCode SnapshotLimitReached = new("503-22", "SNAPSHOT_LIMIT_REACHED", Status.Error, true, "The server holds the maximum number of open snapshots; retry shortly");
 
     private static readonly FrozenDictionary<string, ErrorCode> ByCode = typeof(ErrorCode)
         .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)

@@ -150,16 +150,14 @@ public class DumpTest {
     }
 
     @Test
-    public void test_pages_until_no_results() throws IOException {
+    public void test_pages_by_last_id_until_done() throws IOException {
         dump("--databases", "shop");
 
-        final var pages = server.requests().stream()
-                .filter(request -> "AGGREGATE".equals(Connection.stringOf(request, "type"))
+        final var afterIds = server.requests().stream()
+                .filter(request -> "READ_SNAPSHOT".equals(Connection.stringOf(request, "type"))
                         && "orders".equals(Connection.stringOf(request, "collectionName")))
-                .map(request -> request.get("aggregationSteps").asJsonArray().get(0).asJsonObject().get("skip")
-                        .asJsonNumber().getValue().intValue())
-                .toList();
-        assertEquals(List.of(0, Dump.PAGE_SIZE, 2500), pages);
+                .map(request -> String.valueOf(Connection.stringOf(request, "afterId"))).toList();
+        assertEquals(List.of("null", source.sortedIds("shop", "orders").get(Dump.PAGE_SIZE - 1)), afterIds);
         assertEquals(2500, documentsIn(emitted()));
     }
 
@@ -396,11 +394,9 @@ public class DumpTest {
         assertEquals(ClientException.OK, dump());
 
         final var limits = server.requests().stream()
-                .filter(request -> "AGGREGATE".equals(Connection.stringOf(request, "type")))
-                .map(request -> request.get("aggregationSteps").asJsonArray().get(1).asJsonObject().get("limit")
-                        .asJsonNumber().getValue().intValue())
-                .toList();
-        assertEquals(List.of(Dump.PAGE_SIZE, 418, 418, 418), limits);
+                .filter(request -> "READ_SNAPSHOT".equals(Connection.stringOf(request, "type")))
+                .map(request -> request.get("limit").asJsonNumber().getValue().intValue()).toList();
+        assertEquals(List.of(Dump.PAGE_SIZE, 418, 418), limits);
         assertEquals(1500, documentsIn(emitted()));
     }
 

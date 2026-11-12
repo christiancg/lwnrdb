@@ -46,8 +46,10 @@ import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReadSnapshotRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ReleaseFaultRequest;
+import org.techhouse.ops.req.ReleaseSnapshotRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.RunScriptRequest;
@@ -59,11 +61,13 @@ import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.ServerInfoRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.req.StartSnapshotRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.resp.CloseConnectionResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.snapshot.SnapshotOperationHelper;
 
 public class OperationProcessor {
     private final Cache cache = IocContainer.get(Cache.class);
@@ -151,11 +155,26 @@ public class OperationProcessor {
             case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
             case LIST_TRIGGER_RUNS -> processListTriggerRuns((ListTriggerRunsRequest) operationRequest);
             case RESOLVE_TRIGGER_RUN -> processResolveTriggerRun((ResolveTriggerRunRequest) operationRequest);
+            case START_SNAPSHOT -> processStartSnapshot((StartSnapshotRequest) operationRequest, clientId, actingUser);
+            case READ_SNAPSHOT -> processReadSnapshot((ReadSnapshotRequest) operationRequest, clientId);
+            case RELEASE_SNAPSHOT -> processReleaseSnapshot((ReleaseSnapshotRequest) operationRequest, clientId);
             case ARM_FAULT -> FaultOperationHelper.arm((ArmFaultRequest) operationRequest);
             case AWAIT_FAULT -> FaultOperationHelper.await((AwaitFaultRequest) operationRequest);
             case RELEASE_FAULT -> FaultOperationHelper.release((ReleaseFaultRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, response, restamped);
+    }
+
+    private OperationResponse processStartSnapshot(StartSnapshotRequest request, UUID clientId, String actingUser) {
+        return SnapshotOperationHelper.start(request, clientId, actingUser);
+    }
+
+    private OperationResponse processReadSnapshot(ReadSnapshotRequest request, UUID clientId) {
+        return SnapshotOperationHelper.read(request, clientId);
+    }
+
+    private OperationResponse processReleaseSnapshot(ReleaseSnapshotRequest request, UUID clientId) {
+        return SnapshotOperationHelper.release(request, clientId);
     }
 
     private OperationResponse processServerInfo(ServerInfoRequest request, String actingUser) {

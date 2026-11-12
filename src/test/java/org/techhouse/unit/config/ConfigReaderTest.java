@@ -285,6 +285,9 @@ public class ConfigReaderTest {
         expectedConfig.put("transactionMaxBytes", "256Mb");
         expectedConfig.put("transactionTotalMaxBytes", "auto");
         expectedConfig.put("transactionMaxAgeMs", "600000");
+        expectedConfig.put("snapshotMaxBytes", "1Gb");
+        expectedConfig.put("snapshotMaxOpen", "4");
+        expectedConfig.put("snapshotIdleTimeoutMs", "300000");
         expectedConfig.put("maxListensPerConnection", "64");
         expectedConfig.put("maxListens", "10000");
         expectedConfig.put("maxListensPerUser", "256");

@@ -27,6 +27,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.config.ServerVersion;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.WriteStallWatchdog;
@@ -49,6 +50,8 @@ import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
+import org.techhouse.ops.snapshot.SnapshotRegistry;
+import org.techhouse.ops.snapshot.SnapshotSweeper;
 import org.techhouse.simplejs.host.ScriptHeapGuard;
 
 public class ServerMain {
@@ -68,6 +71,8 @@ public class ServerMain {
     private static final MetadataCachePruner metadataCachePruner = IocContainer.get(MetadataCachePruner.class);
     private static final ShutdownCoordinator shutdownCoordinator = IocContainer.get(ShutdownCoordinator.class);
     private static final WriteStallWatchdog writeStallWatchdog = IocContainer.get(WriteStallWatchdog.class);
+    private static final SnapshotRegistry snapshotRegistry = IocContainer.get(SnapshotRegistry.class);
+    private static final SnapshotSweeper snapshotSweeper = IocContainer.get(SnapshotSweeper.class);
     private static ClusterServer clusterServer;
     private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
@@ -116,6 +121,14 @@ public class ServerMain {
         }
     }
 
+    private static void clearSnapshotsOfAPreviousProcess() {
+        if (!fs.snapshotFiles().clearSnapshotFolders()) {
+            logger.warning("Could not delete the snapshot images a previous process left under "
+                    + Globals.SNAPSHOT_FOLDER_NAME + "; they hold nothing this process reads");
+        }
+        fs.snapshotFiles().onRetiredCopies(snapshotRegistry);
+    }
+
     private static SocketServer start(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
         logger.info("LWNRDB " + ServerVersion.current() + " starting");
@@ -123,6 +136,7 @@ public class ServerMain {
         FetchPinningGuard.refuseUnpinnedFetch();
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
+        clearSnapshotsOfAPreviousProcess();
         DeviceSyncGuard.fallBackWhenUnsyncable(fs);
         installDurableShadowIfConfigured();
         fs.createAdminDatabase();
@@ -154,6 +168,7 @@ public class ServerMain {
         memoryManagement.startSweepThread();
         scriptRunHistory.startSweep();
         writeStallWatchdog.start();
+        snapshotSweeper.start();
         StartupWarnings.warnIfMaxMemoryClamped();
         StartupWarnings.warnIfXmxExceedsMaxMemory();
         StartupWarnings.warnIfCachesExceedHeap();

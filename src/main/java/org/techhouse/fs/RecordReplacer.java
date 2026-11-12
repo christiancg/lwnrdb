@@ -57,7 +57,7 @@ final class RecordReplacer {
             final var newRow = new PkIndexEntry(dbName, collName, oldRow.getValue(), plan.append(targetPage, line),
                     line.length, targetPage, entry.getVersion());
             plan.replaceRow(newRow);
-            plan.blank(oldRow.getPage(), oldPosition, oldRow.getLength());
+            plan.blank(oldRow.getValue(), oldRow.getPage(), oldPosition, oldRow.getLength());
             plan.commit(FaultPoint.PAGE_COPY_APPENDED, FaultPoint.PK_ROW_COMMITTED);
             entry.setPreviousByteSize(oldRow.getLength());
             if (before != null) {
@@ -85,7 +85,7 @@ final class RecordReplacer {
             final var before = residentRows == null || occupancy == null ? null : occupancy.apply(oldRow.getPage());
             final var plan = new WalPlan(paths, pkIndexStore, dbName, collName).onPage(oldRow.getPage(), page);
             plan.deleteRow(oldRow.getValue());
-            plan.blank(oldRow.getPage(), oldRow.getPosition(), oldRow.getLength());
+            plan.blank(oldRow.getValue(), oldRow.getPage(), oldRow.getPosition(), oldRow.getLength());
             plan.commit(null, FaultPoint.PK_ROW_COMMITTED);
             if (before != null) {
                 final var after = new PageOccupancy(before.liveBytes() - oldRow.getLength(), before.rows() - 1);
@@ -179,7 +179,7 @@ final class RecordReplacer {
                     newRows[index] = new PkIndexEntry(dbName, collName, entry.getIndex().getValue(),
                             plan.append(page, lines[index]), lines[index].length, page, entry.getVersion());
                     plan.replaceRow(newRows[index]);
-                    plan.blank(page, positions[index], entry.getIndex().getLength());
+                    plan.blank(entry.getIndex().getValue(), page, positions[index], entry.getIndex().getLength());
                 }
             }
             plan.commit(FaultPoint.PAGE_COPY_APPENDED, FaultPoint.PK_ROW_COMMITTED);

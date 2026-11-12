@@ -72,6 +72,7 @@ public enum ErrorCode {
     TRIGGER_NOT_FOUND("404-9", Status.NOT_FOUND, false, "Trigger not found"),
     COLLECTION_NOT_FOUND("404-11", Status.NOT_FOUND, false, "Collection not found"),
     SCHEMA_NOT_FOUND("404-12", Status.NOT_FOUND, false, "The collection has no schema"),
+    SNAPSHOT_NOT_FOUND("404-13", Status.NOT_FOUND, false, "The snapshot does not exist: it was released or expired, or it belongs to another connection"),
     SCRIPT_TIMEOUT("408-1", Status.ERROR, false, "Script exceeded its time budget"),
     SCRIPT_CANCELLED("408-2", Status.ERROR, false, "Script was cancelled"),
     FAULT_NOT_REACHED("408-3", Status.ERROR, false, "The armed fault point was not reached in time"),
@@ -94,6 +95,7 @@ public enum ErrorCode {
     TRANSACTION_ALREADY_COMMITTED("409-14", Status.ERROR, false, "The transaction already committed on its owner; it can no longer be rolled back"),
     PRIMARY_KEY_REBUILD_REFUSED("409-15", Status.ERROR, false, "The primary-key index cannot be rebuilt from the page files"),
     TRANSACTION_IDLE_TIMEOUT("409-16", Status.ERROR, false, "The transaction was rolled back after being idle too long"),
+    SNAPSHOT_ABORTED("409-17", Status.ERROR, false, "The snapshot was aborted and holds nothing any more; open a new one"),
     LISTEN_ENDED("410-1", Status.NOT_FOUND, false, "The listen ended"),
     OUTBOUND_BACKLOG("413-1", Status.ERROR, false, "The connection's outbound buffer overflowed"),
     NOT_COLLECTION_OWNER("421-1", Status.ERROR, false, "This node is not the owner of the target collection"),
@@ -133,6 +135,8 @@ public enum ErrorCode {
     TRANSACTION_HALF_APPLIED("500-33", Status.ERROR, false, "A committed transaction could not be fully applied; its collections are fenced until it is finished"),
     WRITE_LOGGED_NOT_APPLIED("500-34", Status.ERROR, false, "The write was logged durably but could not be applied; it is applied before the collection is next used, or at the next startup, so it may already have taken effect"),
     ERROR_GATHERING_SERVER_INFO("500-35", Status.ERROR, false, "Error while gathering server info"),
+    ERROR_STARTING_SNAPSHOT("500-36", Status.ERROR, false, "Error while opening the snapshot"),
+    ERROR_READING_SNAPSHOT("500-37", Status.ERROR, false, "Error while reading the snapshot"),
     MAX_CONNECTIONS_REACHED("503-1", Status.ERROR, false, "Max number of connections reached"),
     NO_QUORUM("503-2", Status.ERROR, true, "Cluster does not have a write quorum"),
     REPLICATION_TIMEOUT("503-3", Status.ERROR, false, "Timed out waiting for the replication quorum"),
@@ -152,7 +156,8 @@ public enum ErrorCode {
     COLLECTION_FENCED("503-18", Status.ERROR, true, "The collection is held by a committed transaction that has not finished applying; retry shortly"),
     WRITES_NOT_APPLIED("503-19", Status.ERROR, true, "The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly"),
     AGGREGATE_BUDGET_EXHAUSTED("503-20", Status.ERROR, true, "The server holds the maximum bytes of running aggregations; retry shortly"),
-    TRANSACTION_BUDGET_EXHAUSTED("503-21", Status.ERROR, true, "The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly");
+    TRANSACTION_BUDGET_EXHAUSTED("503-21", Status.ERROR, true, "The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly"),
+    SNAPSHOT_LIMIT_REACHED("503-22", Status.ERROR, true, "The server holds the maximum number of open snapshots; retry shortly");
     // @formatter:on
 
     private static final Map<String, ErrorCode> BY_CODE = Stream.of(values())
