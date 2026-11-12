@@ -66,6 +66,7 @@ public final class ServerInfoHelper {
         final var runtime = ManagementFactory.getRuntimeMXBean();
         server.addProperty("version", ServerVersion.current());
         server.addProperty("protocolVersion", Globals.PROTOCOL_VERSION);
+        server.addProperty("storageFormatVersion", Globals.STORAGE_FORMAT_VERSION);
         server.addProperty("startedAtMs", runtime.getStartTime());
         server.addProperty("uptimeMs", runtime.getUptime());
     }

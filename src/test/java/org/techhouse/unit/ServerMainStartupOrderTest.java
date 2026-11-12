@@ -46,6 +46,30 @@ public class ServerMainStartupOrderTest {
     }
 
     @Test
+    public void test_the_format_check_runs_before_anything_is_written_or_deleted() throws IOException {
+        final var body = mainBody();
+        final var check = positionOf(body, "StorageFormatGuard.refuseIncompatibleFolder(fs);");
+
+        assertTrue(positionOf(body, "fs.createBaseDbPath();") < check, "the check reads the stamp in the db folder");
+        assertTrue(check < positionOf(body, "clearSnapshotsOfAPreviousProcess();"),
+                "a refused folder must keep its snapshot images, so the check precedes the clean-up that deletes them");
+        assertTrue(check < positionOf(body, "DeviceSyncGuard.fallBackWhenUnsyncable(fs);"),
+                "the sync probe writes into the folder, and a refused folder must be left as it was");
+    }
+
+    @Test
+    public void test_the_folder_is_stamped_after_the_shadow_and_before_the_admin_database() throws IOException {
+        final var body = mainBody();
+        final var stamp = positionOf(body, "StorageFormatGuard.stampIfUnstamped(fs);");
+
+        assertTrue(positionOf(body, "StorageFormatGuard.refuseIncompatibleFolder(fs);") < stamp);
+        assertTrue(positionOf(body, "installDurableShadowIfConfigured();") < stamp,
+                "the shadow must record the stamp's force, or a strict rebuild drops the stamp");
+        assertTrue(stamp < positionOf(body, "fs.createAdminDatabase();"),
+                "an admin database without a stamp must only ever mean a folder written before the stamp existed");
+    }
+
+    @Test
     public void test_the_clock_is_seeded_before_transaction_recovery() throws IOException {
         final var body = mainBody();
 

@@ -7,6 +7,7 @@ import tempfile
 
 import base_utils as bu
 import client_snapshot_cases as snapshots
+import format_version_cases as formats
 from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
@@ -646,6 +647,7 @@ def main():
         bu.stop_server(source, port=SOURCE_PORT)
         source = None
         test_tls(client_dir, source_dir, source_log)
+        formats.run_all(write_config, SOURCE_PORT)
     except Exception as exc:  # noqa: BLE001 - the suite reports rather than propagates
         print(f"\nunexpected failure: {exc}", file=sys.stderr)
         bu.dump_log(source_log)

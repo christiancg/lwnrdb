@@ -109,6 +109,10 @@ final class FilePaths {
                 + Globals.CLUSTER_ADMIN_TOMBSTONES_FILE);
     }
 
+    File formatStampFile() {
+        return new File(dbPath + Globals.FILE_SEPARATOR + Globals.FORMAT_STAMP_FILE);
+    }
+
     File nodeIdFile() {
         return new File(dbPath + Globals.FILE_SEPARATOR + Globals.CLUSTER_FOLDER + Globals.FILE_SEPARATOR
                 + Globals.CLUSTER_NODE_ID_FILE);

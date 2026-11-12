@@ -24,6 +24,8 @@ There are no comments in the code. Not Javadoc, not line comments, not XML comme
 
 A file can have at most 500 lines, tests included, and a method at most 200. If you hit the limit, split the class instead of looking for an exclusion. The build also fails on duplicated blocks of code, so a copied helper will be flagged.
 
+If you change what any file under `filePath` looks like (pages, `pk.idx`, the field indexes and their logs, the write-ahead log, vacuum intents, tombstones, the schema, trigger, procedure and schedule files, admin records, or the files under `cluster/`), raise `Globals.STORAGE_FORMAT_VERSION` in the same pull request. A server refuses to start on a folder stamped with another format, which is what stops an old jar from misreading new files. [docs/compatibility.md](docs/compatibility.md) has the whole policy.
+
 There are no runtime dependencies and there won't be. JUnit and Mockito are the only libraries allowed, and only for tests. The JSON parser, the regex engine and the rest are written in the project on purpose.
 
 ## Pull requests

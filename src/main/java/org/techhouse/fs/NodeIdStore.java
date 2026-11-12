@@ -6,18 +6,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 
-final class NodeIdStore {
+public final class NodeIdStore {
     private final FilePaths paths;
 
     NodeIdStore(FilePaths paths) {
         this.paths = paths;
     }
 
-    Path file() {
+    public Path file() {
         return paths.nodeIdFile().toPath();
     }
 
-    String read() throws IOException {
+    public String read() throws IOException {
         final var path = file();
         if (!Files.exists(path)) {
             return null;
@@ -25,7 +25,7 @@ final class NodeIdStore {
         return Files.readString(path, StandardCharsets.UTF_8);
     }
 
-    void write(String nodeId) throws IOException {
+    public void write(String nodeId) throws IOException {
         final var path = file();
         final var parent = path.getParent();
         if (parent != null) {
