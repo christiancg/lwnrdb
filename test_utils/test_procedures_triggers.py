@@ -2416,8 +2416,10 @@ def test_dead_letter_cap_drops_oldest(conn: Conn, log_path: str):
                                       if run.get("runId") not in died], bool, 30.0, 0.2)
         check(f"write {index} is dead-lettered", len(fresh) == 1, f"new dead letters {fresh!r}")
         died.extend(fresh)
-    kept = sorted(run.get("runId") for run in dead_runs_of(conn, "capping", CAP_DB))
-    check(f"only the newest {DEAD_LETTER_CAP} dead letters are kept", kept == sorted(died[-DEAD_LETTER_CAP:]),
+    newest = sorted(died[-DEAD_LETTER_CAP:])
+    kept = await_latest(lambda: sorted(run.get("runId") for run in dead_runs_of(conn, "capping", CAP_DB)),
+                        lambda runs: runs == newest, 10.0, 0.2)
+    check(f"only the newest {DEAD_LETTER_CAP} dead letters are kept", kept == newest,
           f"kept={kept!r} died in order={died!r}")
     check("the cap is logged once for the episode", cap_log_lines(log_path) == 1,
           f"{cap_log_lines(log_path)} cap lines in the log")
