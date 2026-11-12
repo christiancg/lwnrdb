@@ -16,6 +16,9 @@ SAVES = 5
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 SAMPLE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(\{(.*)\})? (\S+)$')
 LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
+GUIDE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "operations.md")
+METRICS_HEADING = "### Metrics"
+DOCUMENTED_NAME = re.compile(r"`([a-z_]+)`")
 
 
 def _request(path: str = "/metrics", token=TOKEN, method: str = "GET"):
@@ -143,6 +146,31 @@ def test_the_document_total_matches_database_stats():
           f"stats={stats_entries()} metrics={value(scrape(), 'documents')}")
 
 
+def documented_metrics(guide_text: str) -> set:
+    names = set()
+    in_section = False
+    for line in guide_text.splitlines():
+        if line.startswith("#"):
+            in_section = line.strip() == METRICS_HEADING
+            continue
+        if in_section and line.startswith("| `"):
+            names.update(DOCUMENTED_NAME.findall(line.split("|")[1]))
+    return names
+
+
+def test_every_scraped_family_is_documented():
+    section("Every metric family a scrape returns has a row in docs/operations.md")
+    status, _, body = _request()
+    families = {line.split(" ")[2].removeprefix("lwnrdb_") for line in body.splitlines() if line.startswith("# TYPE ")}
+    with open(GUIDE, encoding="utf-8") as guide:
+        documented = documented_metrics(guide.read())
+    check("The scrape answers 200 and returns families", status == 200 and len(families) > 0, f"status={status}")
+    check("Every family is in the guide's Metrics table", families <= documented,
+          f"undocumented={sorted(families - documented)}")
+    check("The guide names no family the server does not return", documented <= families,
+          f"stale={sorted(documented - families)}")
+
+
 def test_refusals():
     section("A scrape without the token, on another path or with another method is refused")
     check("No token answers 401", _request(token=None)[0] == 401)
@@ -184,6 +212,7 @@ def run_all(write_config, port: int):
         test_the_connection_gauge_follows_open_connections()
         test_the_document_total_matches_database_stats()
         test_refusals()
+        test_every_scraped_family_is_documented()
     finally:
         bu.stop_server(proc, port=port, wait_for_port=True)
     test_a_metrics_port_equal_to_the_client_port_refuses_to_start(write_config, port)

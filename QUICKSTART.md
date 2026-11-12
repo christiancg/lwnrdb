@@ -11,7 +11,7 @@ Pick one of the three ways below. Every one of them listens on port `8989`.
 
 The server refuses to start without a password for its admin user, so each option sets one. Use at least 8
 characters, and avoid common passwords and the username: the server refuses those too (see
-[Bootstrap](README.md#bootstrap)). The admin user is called `admin`.
+[Bootstrap](docs/operations.md#bootstrap)). The admin user is called `admin`.
 
 ### With the published Docker image
 
@@ -138,10 +138,10 @@ Authenticate first with [`AUTHENTICATE`](docs/protocol.md#authenticate).
 
 ## 4. Next steps
 
-- [Configuration](README.md#configuration): memory, page size, timeouts and limits, all in `lwnrdb.cfg`.
+- [Configuration](docs/operations.md#configuration): memory, page size, timeouts and limits, all in `lwnrdb.cfg`.
 - [Indexes](docs/protocol.md#create_index): queries scan the collection until the fields they filter on are indexed.
 - [Users and permissions](docs/protocol.md#users--permissions): create a user for your application instead of using `admin`.
-- [TLS](README.md#tls--secure-connections): encrypt connections before exposing the server beyond your machine.
+- [TLS](docs/operations.md#tls--secure-connections): encrypt connections before exposing the server beyond your machine.
 - [Backups](README.md#client-shell-exec-dumprestore): `--dump` and `--restore`. A dump reads each database from one
   consistent snapshot, so you can take it while your application keeps writing.
 - [Consistency guarantees and known limitations](README.md#consistency-guarantees-and-known-limitations): what survives

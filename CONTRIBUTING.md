@@ -30,7 +30,7 @@ There are no runtime dependencies and there won't be. JUnit and Mockito are the 
 
 ## Pull requests
 
-Keep them focused on one thing. Add tests for what you changed, run `mvn verify` locally, and describe what the change does and why in the pull request. If it changes behavior that is documented in the README or under `docs/`, update that document in the same pull request. If a user of the server would notice the change, add a line for it under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), in the section that fits (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security`). Tests, CI and refactors get no entry.
+Keep them focused on one thing. Add tests for what you changed, run `mvn verify` locally, and describe what the change does and why in the pull request. If it changes behavior that is documented in the README or under `docs/`, update that document in the same pull request. A new configuration key needs its row in the configuration table of [docs/operations.md](docs/operations.md), which a test checks. If a user of the server would notice the change, add a line for it under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), in the section that fits (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security`). Tests, CI and refactors get no entry.
 
 ## Reporting bugs
 
