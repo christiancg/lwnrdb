@@ -36,6 +36,15 @@ public final class DeferredWrites implements DeferredApplyHook, DeferredApplyLis
         staleRows.add(Cache.getCollectionIdentifier(dbName, collName));
     }
 
+    public static void forgetCollection(String dbName, String collName) {
+        staleRows.remove(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public static void forgetDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        staleRows.removeIf(lockName -> lockName.startsWith(prefix));
+    }
+
     @Override
     public boolean pending(String lockName) {
         return DeferredApplies.pending(lockName) || !staleRows.isEmpty() && staleRows.contains(lockName);
@@ -87,6 +96,7 @@ public final class DeferredWrites implements DeferredApplyHook, DeferredApplyLis
             AdminReplayedRows.publish(dbName, collName, rows);
             return;
         }
+        reconcileRowsOnNextUse(dbName, collName);
         repairAfterRedo(dbName, collName, rows, generation);
     }
 
