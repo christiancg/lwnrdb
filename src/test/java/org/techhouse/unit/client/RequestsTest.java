@@ -64,10 +64,28 @@ public class RequestsTest {
     }
 
     @Test
-    public void test_aggregate_page() {
-        assertEquals("{\"type\":\"AGGREGATE\",\"databaseName\":\"shop\",\"collectionName\":\"orders\","
-                + "\"aggregationSteps\":[{\"type\":\"SKIP\",\"skip\":2000},{\"type\":\"LIMIT\",\"limit\":1000}]}",
-                json(Requests.aggregatePage("shop", "orders", 2000, 1000)));
+    public void test_start_snapshot() {
+        assertEquals(
+                "{\"type\":\"START_SNAPSHOT\",\"databaseName\":\"shop\",\"collectionNames\":[\"orders\",\"leads\"]}",
+                json(Requests.startSnapshot("shop", List.of("orders", "leads"))));
+    }
+
+    @Test
+    public void test_read_snapshot_from_the_start_and_after_an_id() {
+        assertEquals(
+                "{\"type\":\"READ_SNAPSHOT\",\"databaseName\":\"shop\",\"collectionName\":\"orders\","
+                        + "\"snapshotId\":\"s1\",\"limit\":1000}",
+                json(Requests.readSnapshot("shop", "orders", "s1", null, 1000)));
+        assertEquals(
+                "{\"type\":\"READ_SNAPSHOT\",\"databaseName\":\"shop\",\"collectionName\":\"orders\","
+                        + "\"snapshotId\":\"s1\",\"afterId\":\"o-9\",\"limit\":10}",
+                json(Requests.readSnapshot("shop", "orders", "s1", "o-9", 10)));
+    }
+
+    @Test
+    public void test_release_snapshot() {
+        assertEquals("{\"type\":\"RELEASE_SNAPSHOT\",\"databaseName\":\"shop\",\"snapshotId\":\"s1\"}",
+                json(Requests.releaseSnapshot("shop", "s1")));
     }
 
     @Test

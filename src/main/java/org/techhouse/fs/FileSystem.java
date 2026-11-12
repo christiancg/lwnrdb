@@ -36,6 +36,7 @@ public class FileSystem {
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
+    private final SnapshotFiles snapshotFiles = new SnapshotFiles(paths, pkIndexStore);
     private final WriteIntentJournal writeIntentJournal = new WriteIntentJournal(paths);
     private final PageVacuum pageVacuum = new PageVacuum(paths, pkIndexStore, writeIntentJournal);
     private final RecordReplacer recordReplacer = new RecordReplacer(paths, pkIndexStore, pageVacuum);
@@ -151,6 +152,10 @@ public class FileSystem {
 
     private static boolean isAbsent(File folder) {
         return !Files.exists(folder.toPath(), LinkOption.NOFOLLOW_LINKS);
+    }
+
+    public SnapshotFiles snapshotFiles() {
+        return snapshotFiles;
     }
 
     public MetadataFiles metadataFiles() {

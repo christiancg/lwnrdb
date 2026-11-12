@@ -25,6 +25,7 @@ import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.PrimaryKeyReindexResponse;
 import org.techhouse.ops.resp.ReindexResponse;
+import org.techhouse.ops.snapshot.SnapshotRegistry;
 
 // Index files are built and the field registered in admin metadata under one held collection write lock,
 // which stops a save landing mid-build from being skipped as "not a known index".
@@ -34,6 +35,7 @@ public final class IndexOperationHelper {
     private static FileSystem fs = IocContainer.get(FileSystem.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    private static final SnapshotRegistry snapshots = IocContainer.get(SnapshotRegistry.class);
 
     private IndexOperationHelper() {
     }
@@ -106,6 +108,7 @@ public final class IndexOperationHelper {
         }
         final var targets = fieldTargets(request, registeredIndexes, rebuild);
         recordFieldIndexWork(dbName, collName, rebuild, targets);
+        snapshots.abortCollection(dbName, collName, "the primary-key index of " + collName + " was rebuilt");
         fs.applyPkRebuild(dbName, collName, rebuild);
         faultInjector.at(FaultPoint.PK_INDEX_REPLACED, Cache.getCollectionIdentifier(dbName, collName));
         cache.userCache().evictPkIndex(dbName, collName);

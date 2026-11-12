@@ -10,6 +10,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.AdminUsageHelper;
+import org.techhouse.ops.snapshot.SnapshotRegistry;
 
 public final class DroppedCollections {
     private static final Logger logger = Logger.logFor(DroppedCollections.class);
@@ -18,6 +19,7 @@ public final class DroppedCollections {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final SnapshotRegistry snapshots = IocContainer.get(SnapshotRegistry.class);
 
     private interface UsageRowDelete {
         void run() throws IOException, InterruptedException;
@@ -34,6 +36,7 @@ public final class DroppedCollections {
         memoryManagement.forgetUsage(dbName, collName);
         SchemaValidationHelper.forgetCollection(dbName, collName);
         listenManager.forgetCollection(dbName, collName);
+        snapshots.abortCollection(dbName, collName, "its collection " + collName + " was dropped");
         deleteUsageRows(dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName,
                 () -> AdminUsageHelper.deleteUsageOfCollection(dbName, collName));
     }
@@ -47,6 +50,7 @@ public final class DroppedCollections {
         memoryManagement.forgetDatabaseUsage(dbName);
         SchemaValidationHelper.forgetDatabase(dbName);
         listenManager.forgetDatabase(dbName);
+        snapshots.abortDatabase(dbName, "its database was dropped");
         TriggerDeadLetterCap.forgetDatabase(dbName);
         deleteUsageRows(dbName, () -> AdminUsageHelper.deleteUsageOfDatabase(dbName));
     }

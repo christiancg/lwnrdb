@@ -142,8 +142,8 @@ Authenticate first with [`AUTHENTICATE`](README.md#authenticate).
 - [Indexes](README.md#create_index): queries scan the collection until the fields they filter on are indexed.
 - [Users and permissions](README.md#users--permissions): create a user for your application instead of using `admin`.
 - [TLS](README.md#tls--secure-connections): encrypt connections before exposing the server beyond your machine.
-- [Backups](README.md#client-shell-exec-dumprestore): `--dump` and `--restore`. A dump is not a point-in-time snapshot,
-  so stop writing while you take one.
+- [Backups](README.md#client-shell-exec-dumprestore): `--dump` and `--restore`. A dump reads each database from one
+  consistent snapshot, so you can take it while your application keeps writing.
 - [Consistency guarantees and known limitations](README.md#consistency-guarantees-and-known-limitations): what survives
   a crash or a power loss, and what does not.
 - [Scripting](docs/simplejs.md) and [clustering](docs/clustering.md), once the basics work for you.

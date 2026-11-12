@@ -9,17 +9,20 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.zip.GZIPOutputStream;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 
 public final class Dump {
     public static final int PAGE_SIZE = 1000;
-    public static final int MAX_PAGE_SIZE = 100_000;
+    public static final int MAX_PAGE_SIZE = Globals.SNAPSHOT_MAX_PAGE_DOCUMENTS;
     public static final int BATCH_BYTES = 4 * 1024 * 1024;
     public static final long PAGE_TARGET_BYTES = 4L * 1024 * 1024;
-    private static final String NO_RESULTS = "404-3";
+    private static final String DONE = "done";
+    private static final String LAST_ID = "lastId";
     private static final String NO_SCHEMA = "404-12";
     private static final String RESPONSE_BUDGET_EXHAUSTED = "503-17";
     private static final Set<String> SKIPPABLE_LISTINGS = Set.of("403-2", "403-6");
@@ -33,6 +36,9 @@ public final class Dump {
     private OutputStream sink;
     private JsonArray batch = new JsonArray();
     private long batchBytes;
+
+    private record SnapshotPage(List<JsonObject> documents, String lastId, boolean done) {
+    }
 
     public Dump(Connection connection, ClientOptions options, OutputStream stdout, PrintStream err) {
         this.connection = connection;
@@ -75,14 +81,11 @@ public final class Dump {
     private void dumpDatabase(DumpScope scope, DumpScope.DatabasePlan plan) throws IOException {
         final var database = plan.name();
         emit(Requests.createDatabase(database));
-        for (final var collection : plan.collections()) {
-            emit(Requests.createCollection(database, collection));
-            dumpDocuments(database, collection);
-        }
-        for (final var collection : plan.collections()) {
+        final var dumped = plan.collections().isEmpty() ? List.<String>of() : dumpCollections(database, plan);
+        for (final var collection : dumped) {
             dumpSchema(database, collection);
         }
-        for (final var collection : plan.collections()) {
+        for (final var collection : dumped) {
             final var fields = scope.indexesOf(database, collection);
             if (!fields.isEmpty()) {
                 emit(Requests.createIndexes(database, collection, fields));
@@ -91,58 +94,79 @@ public final class Dump {
         dumpDefinitions(plan);
     }
 
-    private void dumpDocuments(String database, String collection) throws IOException {
-        var skip = 0;
-        var limit = PAGE_SIZE;
-        while (true) {
-            final var documents = pageOf(database, collection, skip, limit);
-            if (documents.isEmpty()) {
-                break;
+    private List<String> dumpCollections(String database, DumpScope.DatabasePlan plan) throws IOException {
+        final var dumped = new ArrayList<String>();
+        try (var snapshot = DumpSnapshot.open(connection, database, plan.collections())) {
+            for (final var collection : plan.collections()) {
+                if (snapshot.collections().contains(collection)) {
+                    emit(Requests.createCollection(database, collection));
+                    dumpDocuments(snapshot, database, collection);
+                    dumped.add(collection);
+                } else {
+                    err.println("note: " + database + "." + collection
+                            + " was not dumped: it no longer exists or cannot be read");
+                }
             }
+        }
+        return dumped;
+    }
+
+    private void dumpDocuments(DumpSnapshot snapshot, String database, String collection) throws IOException {
+        String afterId = null;
+        var limit = PAGE_SIZE;
+        var count = 0;
+        while (true) {
+            final var page = pageOf(snapshot, database, collection, afterId, limit);
             var pageBytes = 0L;
-            for (final var document : documents) {
+            for (final var document : page.documents()) {
                 pageBytes += append(database, collection, document);
             }
-            skip += documents.size();
-            limit = nextPageSize(pageBytes, documents.size());
+            count += page.documents().size();
+            if (page.done()) {
+                break;
+            }
+            afterId = page.lastId();
+            if (!page.documents().isEmpty()) {
+                limit = nextPageSize(pageBytes, page.documents().size());
+            }
         }
         flushBatch(database, collection);
-        err.println(database + "." + collection + ": " + skip + " documents");
+        err.println(database + "." + collection + ": " + count + " documents");
     }
 
-    private List<JsonObject> pageOf(String database, String collection, int skip, int firstLimit) {
+    private SnapshotPage pageOf(DumpSnapshot snapshot, String database, String collection, String afterId,
+            int firstLimit) {
         var limit = firstLimit;
-        var reply = pageReply(database, collection, skip, limit);
+        var reply = pageReply(snapshot, database, collection, afterId, limit);
         while (reply == null || limit > 1 && RESPONSE_BUDGET_EXHAUSTED.equals(Connection.errorCodeOf(reply))) {
             limit = Math.max(1, limit / 2);
-            reply = pageReply(database, collection, skip, limit);
+            reply = pageReply(snapshot, database, collection, afterId, limit);
         }
-        return documentsOf(Requests.aggregatePage(database, collection, skip, limit), reply);
+        if (!Connection.isOk(reply)) {
+            throw snapshot.refused(collection, afterId, limit, reply);
+        }
+        final var done = JsonBoolean.TRUE.equals(reply.get(DONE));
+        final var lastId = Connection.stringOf(reply, LAST_ID);
+        if (!done && lastId == null) {
+            throw DumpScope.unexpectedReply(LAST_ID);
+        }
+        return new SnapshotPage(DumpScope.objectsOf(reply, "results"), lastId, done);
     }
 
-    private JsonObject pageReply(String database, String collection, int skip, int limit) {
+    private JsonObject pageReply(DumpSnapshot snapshot, String database, String collection, String afterId, int limit) {
         try {
-            return connection.send(Requests.aggregatePage(database, collection, skip, limit));
+            return snapshot.read(collection, afterId, limit);
         } catch (ClientException failure) {
             if (!Connection.isReplyTooLong(failure)) {
                 throw failure;
             }
             if (limit == 1) {
-                throw new ClientException("the document of " + database + "." + collection + " at position " + skip
+                throw new ClientException("the document of " + database + "." + collection + " after "
+                        + (afterId == null ? "the start" : "'" + afterId + "'")
                         + " is larger than the client's reply limit", ClientException.FAILED, failure);
             }
             return null;
         }
-    }
-
-    private static List<JsonObject> documentsOf(JsonObject request, JsonObject reply) {
-        if (NO_RESULTS.equals(Connection.errorCodeOf(reply))) {
-            return List.of();
-        }
-        if (!Connection.isOk(reply)) {
-            throw Connection.refused(request, reply);
-        }
-        return DumpScope.objectsOf(reply, "results");
     }
 
     public static int nextPageSize(long pageBytes, int documents) {

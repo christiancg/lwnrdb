@@ -22,6 +22,8 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.admin.PageRowWriteBack;
+import org.techhouse.ops.snapshot.SnapshotRegistry;
+import org.techhouse.ops.snapshot.SnapshotSweeper;
 
 /**
  * The step order is the contract: refuse new work before draining so the queues can reach empty, release open
@@ -38,6 +40,8 @@ public class ShutdownCoordinator {
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final FileSystem fileSystem = IocContainer.get(FileSystem.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final SnapshotRegistry snapshotRegistry = IocContainer.get(SnapshotRegistry.class);
+    private final SnapshotSweeper snapshotSweeper = IocContainer.get(SnapshotSweeper.class);
     private final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
@@ -70,6 +74,7 @@ public class ShutdownCoordinator {
             triggerExecutor.stopSweep();
             scheduleExecutor.stopTicking();
             writeStallWatchdog.stop();
+            snapshotSweeper.stop();
             if (clusterConfig.isEnabled()) {
                 antiEntropyService.stop(remaining(deadline));
                 adminAntiEntropyService.stop(remaining(deadline));
@@ -78,6 +83,7 @@ public class ShutdownCoordinator {
         });
         step("roll back open transactions", TransactionOperationHelper::rollbackOpenTransactionsAtShutdown);
         step("wait for in-flight requests", () -> awaitInFlightRequests(deadline));
+        step("release snapshots", snapshotRegistry::releaseAll);
         step("drain triggers", () -> triggerExecutor.drain(remaining(deadline)));
         // After the triggers and before the background queue: a scheduled run enqueues into both.
         step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));

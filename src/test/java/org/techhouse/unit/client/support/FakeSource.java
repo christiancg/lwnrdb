@@ -1,6 +1,7 @@
 package org.techhouse.unit.client.support;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +13,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 
 public final class FakeSource {
+    public static final String SNAPSHOT_ID = "6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10";
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     private final Map<String, List<String>> collections = new LinkedHashMap<>();
@@ -75,7 +77,9 @@ public final class FakeSource {
         });
         server.respond("GET_DATABASE_STATS",
                 ignored -> FakeLineServer.ok("GET_DATABASE_STATS", "\"stats\":" + stats()));
-        server.respond("AGGREGATE", this::page);
+        server.respond("START_SNAPSHOT", this::startSnapshot);
+        server.respond("READ_SNAPSHOT", this::page);
+        server.respond("RELEASE_SNAPSHOT", ignored -> FakeLineServer.ok("RELEASE_SNAPSHOT", "\"done\":true"));
         server.respond("GET_SCHEMA", request -> {
             final var schema = schemas.get(database(request) + "." + collection(request));
             return schema == null
@@ -90,19 +94,49 @@ public final class FakeSource {
                 "\"schedules\":[" + String.join(",", schedules.getOrDefault(database(request), List.of())) + "]"));
     }
 
-    public String page(JsonObject request) {
-        final var steps = request.get("aggregationSteps").asJsonArray();
-        final var skip = steps.get(0).asJsonObject().get("skip").asJsonNumber().getValue().intValue();
-        final var limit = steps.get(1).asJsonObject().get("limit").asJsonNumber().getValue().intValue();
-        final var all = documents.getOrDefault(database(request) + "." + collection(request), List.of());
-        if (skip >= all.size()) {
-            return FakeLineServer.error("AGGREGATE", "NOT_FOUND", "404-3");
+    public String startSnapshot(JsonObject request) {
+        final var database = database(request);
+        final var existing = collections.getOrDefault(database, List.of());
+        final var captured = new ArrayList<String>();
+        for (final var name : request.get("collectionNames").asJsonArray()) {
+            if (existing.contains(name.asJsonString().getValue())) {
+                captured.add(name.asJsonString().getValue());
+            }
         }
+        return FakeLineServer.ok("START_SNAPSHOT",
+                "\"snapshotId\":\"" + SNAPSHOT_ID + "\",\"collectionNames\":" + strings(captured));
+    }
+
+    public String page(JsonObject request) {
+        final var afterId = Connection.stringOf(request, "afterId");
+        final var limit = request.get("limit").asJsonNumber().getValue().intValue();
+        final var sorted = sortedDocuments(database(request) + "." + collection(request));
+        var start = 0;
+        while (afterId != null && start < sorted.size() && idOf(sorted.get(start)).compareTo(afterId) <= 0) {
+            start++;
+        }
+        final var end = Math.min(sorted.size(), start + limit);
         final var results = new JsonArray();
-        for (final var document : all.subList(skip, Math.min(all.size(), skip + limit))) {
+        for (final var document : sorted.subList(start, end)) {
             results.add(document);
         }
-        return FakeLineServer.ok("AGGREGATE", "\"results\":" + eJson.toJson(results));
+        final var lastId = end > start ? "\"" + idOf(sorted.get(end - 1)) + "\"" : "null";
+        return FakeLineServer.ok("READ_SNAPSHOT", "\"results\":" + eJson.toJson(results) + ",\"lastId\":" + lastId
+                + ",\"done\":" + (end == sorted.size()));
+    }
+
+    public List<String> sortedIds(String database, String collection) {
+        return sortedDocuments(database + "." + collection).stream().map(FakeSource::idOf).toList();
+    }
+
+    private List<JsonObject> sortedDocuments(String key) {
+        final var sorted = new ArrayList<>(documents.getOrDefault(key, List.of()));
+        sorted.sort(Comparator.comparing(FakeSource::idOf));
+        return sorted;
+    }
+
+    private static String idOf(JsonObject document) {
+        return Connection.stringOf(document, "_id");
     }
 
     private String stats() {

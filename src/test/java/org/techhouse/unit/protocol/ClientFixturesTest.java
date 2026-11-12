@@ -148,7 +148,7 @@ public class ClientFixturesTest {
     public void test_no_fixture_uses_a_test_only_operation() throws IOException {
         for (final var request : requests()) {
             final var type = OperationType.valueOf(typeOf(request));
-            assertFalse(ProtocolFiles.TEST_ONLY_OPERATIONS.contains(type), type.name());
+            assertFalse(ProtocolFiles.NON_CLIENT_OPERATIONS.contains(type), type.name());
         }
     }
 

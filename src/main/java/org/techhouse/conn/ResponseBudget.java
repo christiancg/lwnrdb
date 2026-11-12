@@ -15,7 +15,8 @@ public class ResponseBudget {
             OperationType.AGGREGATE, OperationType.LIST_DATABASES, OperationType.LIST_COLLECTIONS,
             OperationType.GET_SCHEMA, OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS,
             OperationType.LIST_TRANSACTIONS, OperationType.LIST_PROCEDURES, OperationType.LIST_TRIGGERS,
-            OperationType.LIST_SCHEDULES, OperationType.LIST_SCRIPTS, OperationType.LIST_TRIGGER_RUNS);
+            OperationType.LIST_SCHEDULES, OperationType.LIST_SCRIPTS, OperationType.LIST_TRIGGER_RUNS,
+            OperationType.READ_SNAPSHOT);
     private final AtomicLong unsent = new AtomicLong();
     private final LongSupplier configuredLimit;
 

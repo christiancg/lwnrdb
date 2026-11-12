@@ -257,6 +257,10 @@ unavailable) and the number is sequential.
 
 `404-12`: The collection has no schema.
 
+## SNAPSHOT_NOT_FOUND
+
+`404-13`: The snapshot does not exist: it was released or expired, or it belongs to another connection.
+
 ## SCRIPT_TIMEOUT
 
 `408-1`: Script exceeded its time budget.
@@ -344,6 +348,10 @@ unavailable) and the number is sequential.
 ## TRANSACTION_IDLE_TIMEOUT
 
 `409-16`: The transaction was rolled back after being idle too long.
+
+## SNAPSHOT_ABORTED
+
+`409-17`: The snapshot was aborted and holds nothing any more; open a new one.
 
 ## LISTEN_ENDED
 
@@ -501,6 +509,14 @@ unavailable) and the number is sequential.
 
 `500-35`: Error while gathering server info.
 
+## ERROR_STARTING_SNAPSHOT
+
+`500-36`: Error while opening the snapshot.
+
+## ERROR_READING_SNAPSHOT
+
+`500-37`: Error while reading the snapshot.
+
 ## MAX_CONNECTIONS_REACHED
 
 `503-1`: Max number of connections reached.
@@ -580,6 +596,10 @@ unavailable) and the number is sequential.
 ## TRANSACTION_BUDGET_EXHAUSTED
 
 `503-21`: The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly. Retryable.
+
+## SNAPSHOT_LIMIT_REACHED
+
+`503-22`: The server holds the maximum number of open snapshots; retry shortly. Retryable.
 
 ## code()
 

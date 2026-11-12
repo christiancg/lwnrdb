@@ -1199,6 +1199,36 @@ they describe the whole node and every tenant on it.
     "collections":[{"name":"orders","indexCount":1,"indexes":["customer"],"pageCount":2,"entryCount":2495,"sizeBytes":800000}]}]}}
 ```
 
+#### Snapshots (`START_SNAPSHOT`, `READ_SNAPSHOT`, `RELEASE_SNAPSHOT`)
+
+What [`--dump`](#client-shell-exec-dumprestore) reads a database through. They are wire operations any client may
+send, but they are not part of the [client libraries](#client-libraries). `START_SNAPSHOT` needs `READ` on the database
+and captures the collections the user may read (all of them, or those named in `collectionNames`). It holds the read
+locks of all of them at once for as long as registering takes, so the cut falls between two transactions; it waits at
+most `transactionLockTimeoutMs` for them and answers `409-5` past it, or `503-18` (retryable) at once when one of
+them is held by a committed transaction that has not finished applying. From then on, the first write that replaces or
+deletes a document the snapshot holds first copies its old version aside, so the snapshot keeps reading it.
+```json
+{"type":"START_SNAPSHOT","databaseName":"shop","collectionNames":["orders","customers"]}
+{"type":"START_SNAPSHOT","status":"OK","message":"Ok","errorCode":null,"snapshotId":"6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10","collectionNames":["customers","orders"]}
+```
+`READ_SNAPSHOT` pages one collection in `_id` order, `limit` (1 to 100000) ids at a time after `afterId` (absent for the
+first page). A page can hold fewer documents than `limit` while `done` is `false`, because the ids inserted after the
+cut are skipped; the next page starts after `lastId`.
+```json
+{"type":"READ_SNAPSHOT","databaseName":"shop","collectionName":"orders","snapshotId":"6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10","afterId":null,"limit":1000}
+{"type":"READ_SNAPSHOT","status":"OK","message":"Ok","errorCode":null,"results":[{"_id":"o-1","total":12}],"lastId":"o-1","done":false}
+{"type":"RELEASE_SNAPSHOT","databaseName":"shop","snapshotId":"6f1c0d2e-4b7a-4c1e-9f3a-2d5e8b7c6a10"}
+```
+A snapshot belongs to the connection that opened it: another connection's id answers `404-13`, and closing the
+connection releases it, as does leaving it unread for `snapshotIdleTimeoutMs` (default `300000`) or a shutdown. At most
+`snapshotMaxOpen` (default `4`) are open on a node at once; one more answers `503-22`. A snapshot whose old versions pass
+`snapshotMaxBytes` (default `1Gb`), or one of whose collections is dropped or has its primary-key index rebuilt, is
+aborted: its reads answer `409-17` with the reason until it is released, and the writes that passed it are never
+affected. Snapshots are not forced to disk and do not survive a restart; their old versions are kept under
+`{filePath}/.snapshots` and deleted on release and at startup. On a cluster a snapshot is local to the node the client
+is connected to; it keeps the versions that writes replicated to that node replace.
+
 #### `SERVER_INFO`
 
 Says which build a client is talking to and whether the node is ready. It is the one operation besides
@@ -1450,6 +1480,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-9` | `NOT_FOUND` | Trigger not found |
 | `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
 | `404-12` | `NOT_FOUND` | The collection has no schema — a [`GET_SCHEMA`](#get_schema) on a collection without one |
+| `404-13` | `NOT_FOUND` | The snapshot does not exist: it was released or expired, or it belongs to another connection |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
 | `408-3` | `ERROR` | The armed fault point was not reached in time (`AWAIT_FAULT`, testing only) |
@@ -1471,6 +1502,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-14` | `ERROR` | The transaction already committed on its owner; it can no longer be rolled back |
 | `409-15` | `ERROR` | The primary-key index cannot be rebuilt from the page files |
 | `409-16` | `ERROR` | The connection's transaction was rolled back after `transactionIdleTimeoutMs` without a request; answered once, to the next request, which is not executed |
+| `409-17` | `ERROR` | The snapshot was aborted and holds nothing any more; open a new one *(the message gives the reason: `snapshotMaxBytes`, a dropped collection or database, or a primary-key rebuild)* |
 | `410-1` | `NOT_FOUND` | The listen ended: a collection it reads was dropped, its database was dropped, or the listening user can no longer read it. Pushed once on the listen's connection; the `listenId` is unregistered afterwards |
 | `413-1` | `ERROR` | The connection left more than `clientOutboundQueueMaxBytes` of responses unread; its backlog is dropped, its listens end, and this `CLOSE_CONNECTION` frame is the last thing written before the connection is closed (a reader that never catches up does not see it) |
 | `500-1` | `ERROR` | Error during authentication |
@@ -1506,6 +1538,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-31` | `ERROR` | Error while saving the schedule |
 | `500-32` | `ERROR` | Error while deleting the schedule |
 | `500-35` | `ERROR` | Error while gathering server info |
+| `500-36` | `ERROR` | Error while opening the snapshot |
+| `500-37` | `ERROR` | Error while reading the snapshot |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
 | `421-3` | `ERROR` | This read joins collections the transaction wrote on different nodes |
 | `503-1` | `ERROR` | Max number of connections reached; sent as a `CLOSE_CONNECTION` frame and the connection is closed (with `tlsEnabled=true` it is closed before its handshake, with no frame) |
@@ -1525,6 +1559,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-17` | `ERROR` | The server holds the maximum bytes of unsent responses; retry shortly *(the response would have pushed the encoded responses waiting to be written, across every connection, past `maxUnsentResponseBytes`; a response under 64Kb and the response to a write are never refused, so only a read gets it, and repeating the read is safe)* |
 | `503-20` | `ERROR` | The server holds the maximum bytes of running aggregations; retry shortly *(every running pipeline together reached `aggregateTotalHeldBytes`; this one stopped and gave back what it held, so repeating it is safe)* |
 | `503-21` | `ERROR` | The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly *(every open transaction together reached `transactionTotalMaxBytes`; nothing was buffered and the transaction stays usable)* |
+| `503-22` | `ERROR` | The server holds the maximum number of open snapshots; retry shortly *(`snapshotMaxOpen`)* |
 | `503-19` | `ERROR` | The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly *(a write to it answered `500-34` and applying its log before the read still failed, typically because the disk is still full; nothing was read, and repeating the read is safe)* |
 
 ### Quickstart
@@ -1619,9 +1654,9 @@ a server silent for longer ends the run with `no reply from the server within 60
 client parses (`--shell`, the dump, the restore, authentication) is capped at 256 MB: a longer one ends the run with
 `the server's reply is longer than 268435456 bytes` (exit code `1`). `--exec` streams its replies and has no such cap.
 A dump page whose reply passes the cap, or that is still refused with `503-17` after the retries, is asked for again
-at half the size from the same position, down to one document; only a single document larger than the cap stops the
-dump, naming its position. The client retries `503-2`, `503-4`, `503-5`, `503-9`, `503-10` and `503-16` through
-`503-21` up to five times with a growing pause, because each means nothing was applied. It never resends after
+at half the size after the same `_id`, down to one document; only a single document larger than the cap stops the
+dump, naming the `_id` it came after. The client retries `503-2`, `503-4`, `503-5`, `503-9`, `503-10` and `503-16` through
+`503-22` up to five times with a growing pause, because each means nothing was applied. It never resends after
 `503-3`: that write committed on the node it reached, and resending a `SAVE` without an `_id` would store it twice.
 
 **The dump format is the restore script.** Every line is one ordinary request: `CREATE_DATABASE`,
@@ -1661,8 +1696,14 @@ carries no schedules, which belong to the database.
 | Trigger runs, in-doubt transactions | Node-local runtime state |
 | Definers, versions, timestamps, `disabledReason` | Restored definitions are stamped by the restoring user, who becomes their definer and whose permissions they then run with, and start at version 1; a disabled one comes back with `enabled:false` |
 
-**A dump is not a point-in-time snapshot.** Collections are read page by page while writes may continue; for an exact
-copy, stop the writers while dumping.
+**Each database is dumped from one snapshot, while writes go on.** Before it reads a database's documents the dump
+opens a [snapshot](#snapshots-start_snapshot-read_snapshot-release_snapshot) of it, a cut that falls between two
+transactions across all of its collections: a document written after the cut is dumped as it was at the cut, one deleted
+after it is still dumped, and one inserted after it is left out. Nothing waits for the dump beyond that moment, and
+writers keep the old versions it needs only while it runs. A snapshot is aborted when the old versions it keeps pass
+`snapshotMaxBytes`, when one of its collections or its database is dropped, or by a `REINDEX` with `"primaryKey": true`;
+the dump then fails (exit code 1) rather than mix two cuts, and can simply be run again. Schemas, indexes, procedures,
+triggers and schedules are read as they are when the dump reaches them, not from the snapshot.
 
 **Restore merges** into whatever the target already holds: an existing database or collection is reused (restore
 lists the databases first and skips the `CREATE_DATABASE` of one that exists, reporting `restored N requests, skipped
@@ -1752,6 +1793,9 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `listenRerunTimeoutMs` | Valid number ≥ 1 (default `10000`). Wall-clock budget of one background `LISTEN` re-run; past it the re-run is dropped with a warning and nothing is pushed |
 | `listenThreads` | Valid number ≥ 1 (default `2`). Workers that re-run `LISTEN` queries after a write. Identical registrations (same user, same query) share one re-run; distinct queries re-run on these workers in parallel, each holding its own result while it runs |
 | `transactionIdleTimeoutMs` | Valid number ≥ 1 (default `30000`). Milliseconds a connection with an open transaction may stay silent before the transaction is rolled back and its locks released; the next request answers `409-16` once |
+| `snapshotMaxBytes` | Valid size > 0 (default `1Gb`). Bytes one [snapshot](#snapshots-start_snapshot-read_snapshot-release_snapshot) may keep: the old versions of the documents written since it was opened, plus a modelled cost per id it remembers. Past it the snapshot is aborted (`409-17`); the writes are never affected |
+| `snapshotMaxOpen` | Valid number ≥ 1 (default `4`). Snapshots open on the node at once; one more answers `503-22` |
+| `snapshotIdleTimeoutMs` | Valid number ≥ 1000 (default `300000`). Milliseconds a snapshot may go unread before the server releases it |
 | `filePath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing; see [File permissions](#file-permissions) |
 | `logPath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing. Log cleanup deletes only expired files named `yyyy-MM-dd.log` here, so pointing it at a populated folder (even `.`) deletes nothing else |
 | `backgroundProcessingThreads` | Valid number ≥ 1 |
@@ -1906,6 +1950,11 @@ transactionIdleTimeoutMs=30000
 transactionMaxOps=100000
 transactionMaxBytes=256Mb
 transactionMaxAgeMs=600000
+# the snapshots --dump reads a database from: bytes of old versions one may keep (409-17 past it),
+# how many may be open (503-22 past it), and how long one may go unread before it is released
+snapshotMaxBytes=1Gb
+snapshotMaxOpen=4
+snapshotIdleTimeoutMs=300000
 # bytes every open transaction together may buffer (503-21); auto = a quarter of the heap
 transactionTotalMaxBytes=auto
 # LISTEN registrations per connection and per server (400-25), per user (400-38), request line (400-37),
@@ -2153,6 +2202,7 @@ What a single node promises, and what it deliberately does not. The multi-node m
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.
+- **A dump is one consistent cut of each database.** [`--dump`](#client-shell-exec-dumprestore) reads every database from a snapshot taken between two transactions, while writes go on: no document that existed throughout is missed, and no write after the cut appears. A snapshot that passes `snapshotMaxBytes` fails the dump instead of producing a mixed one.
 
 **Not guaranteed, by design**
 

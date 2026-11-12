@@ -46,6 +46,7 @@ import org.techhouse.ops.resp.ListenEndedResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.PrimaryKeyReindexResponse;
+import org.techhouse.ops.resp.ReadSnapshotResponse;
 import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.ResolveTriggerRunResponse;
 import org.techhouse.ops.resp.RunScriptResponse;
@@ -55,6 +56,7 @@ import org.techhouse.ops.resp.SaveScheduleResponse;
 import org.techhouse.ops.resp.SaveSchemaResponse;
 import org.techhouse.ops.resp.SaveTriggerResponse;
 import org.techhouse.ops.resp.ServerInfoResponse;
+import org.techhouse.ops.resp.StartSnapshotResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 import org.techhouse.ops.resp.StopListenResponse;
 import org.techhouse.ops.resp.TestTriggerResponse;
@@ -117,7 +119,9 @@ public class ResponseBytesTest {
                 new SaveProcedureResponse("ok", 3L), new SaveResponse("ok", "doc-1", true),
                 new SaveScheduleResponse("ok", 5L), new SaveSchemaResponse("ok", List.of("warning 界")),
                 new SaveTriggerResponse("ok", 4L, "alice"), new StartTransactionResponse("ok", "tx-1"),
-                new StopListenResponse(),
+                new StartSnapshotResponse("ok", "snap-1", List.of("c1", "界")),
+                new ReadSnapshotResponse("ok", rows, "doc-2", false),
+                new ReadSnapshotResponse("ok", List.of(), null, true), new StopListenResponse(),
                 new TestTriggerResponse("ok", "ALLOW", doc, "because", logs, false, List.of("at y")));
     }
 

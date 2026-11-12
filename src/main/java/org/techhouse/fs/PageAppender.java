@@ -89,7 +89,7 @@ final class PageAppender {
                 RecordReplacer.requireWithinPage(row, position,
                         PageLengths.lengthOf(paths.collectionPage(dbName, collName, row.getPage())));
                 plan.deleteRow(row.getValue());
-                plan.blank(row.getPage(), position, row.getLength());
+                plan.blank(row.getValue(), row.getPage(), position, row.getLength());
             }
             final var indexEntries = new ArrayList<IndexedDbEntry>(inserts.size());
             for (final var group : groups.entrySet()) {

@@ -64,6 +64,7 @@
     {"code":"404-9","name":"TRIGGER_NOT_FOUND","status":"NOT_FOUND","message":"Trigger not found","retryable":false},
     {"code":"404-11","name":"COLLECTION_NOT_FOUND","status":"NOT_FOUND","message":"Collection not found","retryable":false},
     {"code":"404-12","name":"SCHEMA_NOT_FOUND","status":"NOT_FOUND","message":"The collection has no schema","retryable":false},
+    {"code":"404-13","name":"SNAPSHOT_NOT_FOUND","status":"NOT_FOUND","message":"The snapshot does not exist: it was released or expired, or it belongs to another connection","retryable":false},
     {"code":"408-1","name":"SCRIPT_TIMEOUT","status":"ERROR","message":"Script exceeded its time budget","retryable":false},
     {"code":"408-2","name":"SCRIPT_CANCELLED","status":"ERROR","message":"Script was cancelled","retryable":false},
     {"code":"408-3","name":"FAULT_NOT_REACHED","status":"ERROR","message":"The armed fault point was not reached in time","retryable":false},
@@ -86,6 +87,7 @@
     {"code":"409-14","name":"TRANSACTION_ALREADY_COMMITTED","status":"ERROR","message":"The transaction already committed on its owner; it can no longer be rolled back","retryable":false},
     {"code":"409-15","name":"PRIMARY_KEY_REBUILD_REFUSED","status":"ERROR","message":"The primary-key index cannot be rebuilt from the page files","retryable":false},
     {"code":"409-16","name":"TRANSACTION_IDLE_TIMEOUT","status":"ERROR","message":"The transaction was rolled back after being idle too long","retryable":false},
+    {"code":"409-17","name":"SNAPSHOT_ABORTED","status":"ERROR","message":"The snapshot was aborted and holds nothing any more; open a new one","retryable":false},
     {"code":"410-1","name":"LISTEN_ENDED","status":"NOT_FOUND","message":"The listen ended","retryable":false},
     {"code":"413-1","name":"OUTBOUND_BACKLOG","status":"ERROR","message":"The connection's outbound buffer overflowed","retryable":false},
     {"code":"421-1","name":"NOT_COLLECTION_OWNER","status":"ERROR","message":"This node is not the owner of the target collection","retryable":false},
@@ -125,6 +127,8 @@
     {"code":"500-33","name":"TRANSACTION_HALF_APPLIED","status":"ERROR","message":"A committed transaction could not be fully applied; its collections are fenced until it is finished","retryable":false},
     {"code":"500-34","name":"WRITE_LOGGED_NOT_APPLIED","status":"ERROR","message":"The write was logged durably but could not be applied; it is applied before the collection is next used, or at the next startup, so it may already have taken effect","retryable":false},
     {"code":"500-35","name":"ERROR_GATHERING_SERVER_INFO","status":"ERROR","message":"Error while gathering server info","retryable":false},
+    {"code":"500-36","name":"ERROR_STARTING_SNAPSHOT","status":"ERROR","message":"Error while opening the snapshot","retryable":false},
+    {"code":"500-37","name":"ERROR_READING_SNAPSHOT","status":"ERROR","message":"Error while reading the snapshot","retryable":false},
     {"code":"503-1","name":"MAX_CONNECTIONS_REACHED","status":"ERROR","message":"Max number of connections reached","retryable":false},
     {"code":"503-2","name":"NO_QUORUM","status":"ERROR","message":"Cluster does not have a write quorum","retryable":true},
     {"code":"503-3","name":"REPLICATION_TIMEOUT","status":"ERROR","message":"Timed out waiting for the replication quorum","retryable":false},
@@ -144,6 +148,7 @@
     {"code":"503-18","name":"COLLECTION_FENCED","status":"ERROR","message":"The collection is held by a committed transaction that has not finished applying; retry shortly","retryable":true},
     {"code":"503-19","name":"WRITES_NOT_APPLIED","status":"ERROR","message":"The collection holds logged writes that could not be applied yet, so it cannot be read consistently; retry shortly","retryable":true},
     {"code":"503-20","name":"AGGREGATE_BUDGET_EXHAUSTED","status":"ERROR","message":"The server holds the maximum bytes of running aggregations; retry shortly","retryable":true},
-    {"code":"503-21","name":"TRANSACTION_BUDGET_EXHAUSTED","status":"ERROR","message":"The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly","retryable":true}
+    {"code":"503-21","name":"TRANSACTION_BUDGET_EXHAUSTED","status":"ERROR","message":"The server holds the maximum bytes of buffered transactions; the write was not buffered, retry shortly","retryable":true},
+    {"code":"503-22","name":"SNAPSHOT_LIMIT_REACHED","status":"ERROR","message":"The server holds the maximum number of open snapshots; retry shortly","retryable":true}
   ]
 }

@@ -74,6 +74,8 @@ public enum ErrorCode {
     TRIGGER_NOT_FOUND("404-9", "Trigger not found", OperationStatus.NOT_FOUND),
     COLLECTION_NOT_FOUND("404-11", "Collection not found", OperationStatus.NOT_FOUND),
     SCHEMA_NOT_FOUND("404-12", "The collection has no schema", OperationStatus.NOT_FOUND),
+    SNAPSHOT_NOT_FOUND("404-13", "The snapshot does not exist: it was released or expired, or it belongs to another"
+            + " connection", OperationStatus.NOT_FOUND),
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
     SCRIPT_CANCELLED("408-2", "Script was cancelled", OperationStatus.ERROR),
     FAULT_NOT_REACHED("408-3", "The armed fault point was not reached in time", OperationStatus.ERROR),
@@ -108,6 +110,8 @@ public enum ErrorCode {
     PRIMARY_KEY_REBUILD_REFUSED("409-15", "The primary-key index cannot be rebuilt from the page files",
             OperationStatus.ERROR),
     TRANSACTION_IDLE_TIMEOUT("409-16", "The transaction was rolled back after being idle too long",
+            OperationStatus.ERROR),
+    SNAPSHOT_ABORTED("409-17", "The snapshot was aborted and holds nothing any more; open a new one",
             OperationStatus.ERROR),
     LISTEN_ENDED("410-1", "The listen ended", OperationStatus.NOT_FOUND),
     OUTBOUND_BACKLOG("413-1", "The connection's outbound buffer overflowed", OperationStatus.ERROR),
@@ -154,6 +158,8 @@ public enum ErrorCode {
                     + " or at the next startup, so it may already have taken effect",
             OperationStatus.ERROR),
     ERROR_GATHERING_SERVER_INFO("500-35", "Error while gathering server info", OperationStatus.ERROR),
+    ERROR_STARTING_SNAPSHOT("500-36", "Error while opening the snapshot", OperationStatus.ERROR),
+    ERROR_READING_SNAPSHOT("500-37", "Error while reading the snapshot", OperationStatus.ERROR),
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR),
     NO_QUORUM("503-2", "Cluster does not have a write quorum", OperationStatus.ERROR),
     REPLICATION_TIMEOUT("503-3", "Timed out waiting for the replication quorum", OperationStatus.ERROR),
@@ -187,7 +193,9 @@ public enum ErrorCode {
     AGGREGATE_BUDGET_EXHAUSTED("503-20", "The server holds the maximum bytes of running aggregations; retry shortly",
             OperationStatus.ERROR),
     TRANSACTION_BUDGET_EXHAUSTED("503-21", "The server holds the maximum bytes of buffered transactions; the write was"
-            + " not buffered, retry shortly", OperationStatus.ERROR);
+            + " not buffered, retry shortly", OperationStatus.ERROR),
+    SNAPSHOT_LIMIT_REACHED("503-22", "The server holds the maximum number of open snapshots; retry shortly",
+            OperationStatus.ERROR);
     // @formatter:on
 
     private final String code;

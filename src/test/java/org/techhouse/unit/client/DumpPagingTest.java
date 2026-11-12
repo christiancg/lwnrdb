@@ -1,6 +1,7 @@
 package org.techhouse.unit.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -54,14 +55,13 @@ public class DumpPagingTest {
         }
     }
 
-    private static int intStep(JsonObject request, int index, String field) {
-        return request.get("aggregationSteps").asJsonArray().get(index).asJsonObject().get(field).asJsonNumber()
-                .getValue().intValue();
+    private static int limitOf(JsonObject request) {
+        return request.get("limit").asJsonNumber().getValue().intValue();
     }
 
-    private List<int[]> pageRequests() {
-        return server.requests().stream().filter(request -> "AGGREGATE".equals(Connection.stringOf(request, "type")))
-                .map(request -> new int[]{intStep(request, 0, "skip"), intStep(request, 1, "limit")}).toList();
+    private List<JsonObject> pageRequests() {
+        return server.requests().stream()
+                .filter(request -> "READ_SNAPSHOT".equals(Connection.stringOf(request, "type"))).toList();
     }
 
     private String err() {
@@ -69,26 +69,26 @@ public class DumpPagingTest {
     }
 
     @Test
-    public void aTooLongPageIsHalvedAndRetriedAtTheSameSkip() throws IOException {
+    public void aTooLongPageIsHalvedAndRetriedAfterTheSameId() throws IOException {
         assertEquals(ClientException.OK, dump(REPLY_CAP));
 
         final var pages = pageRequests();
-        assertEquals(Dump.PAGE_SIZE, pages.getFirst()[1]);
-        assertEquals(0, pages.get(1)[0], "the halved page asks for the same position again");
-        assertEquals(Dump.PAGE_SIZE / 2, pages.get(1)[1]);
+        assertEquals(Dump.PAGE_SIZE, limitOf(pages.getFirst()));
+        assertNull(Connection.stringOf(pages.get(1), "afterId"), "the halved page asks for the same position again");
+        assertEquals(Dump.PAGE_SIZE / 2, limitOf(pages.get(1)));
         assertTrue(err().contains("shop.orders: " + DOCUMENTS + " documents"), err());
     }
 
     @Test
     public void aPageRefusedWith503_17AfterItsRetriesIsHalved() throws IOException {
-        server.respond("AGGREGATE",
-                request -> intStep(request, 1, "limit") > 5
-                        ? FakeLineServer.error("AGGREGATE", "ERROR", "503-17")
+        server.respond("READ_SNAPSHOT",
+                request -> limitOf(request) > 5
+                        ? FakeLineServer.error("READ_SNAPSHOT", "ERROR", "503-17")
                         : source.page(request));
 
         assertEquals(ClientException.OK, dump(Connection.MAX_REPLY_BYTES));
 
-        assertTrue(pageRequests().stream().anyMatch(page -> page[1] <= 5), "the page shrank until it was answered");
+        assertTrue(pageRequests().stream().anyMatch(page -> limitOf(page) <= 5), "the page shrank until answered");
         assertTrue(err().contains("shop.orders: " + DOCUMENTS + " documents"), err());
     }
 
@@ -99,7 +99,7 @@ public class DumpPagingTest {
         final var failure = assertThrows(ClientException.class, () -> dump(REPLY_CAP));
 
         assertEquals(ClientException.FAILED, failure.exitCode());
-        assertTrue(failure.getMessage().contains("shop.orders at position 0"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("shop.orders after the start"), failure.getMessage());
     }
 
     @Test

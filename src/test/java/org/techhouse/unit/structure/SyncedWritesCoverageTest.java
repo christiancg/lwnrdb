@@ -15,7 +15,7 @@ public class SyncedWritesCoverageTest {
     private static final String FS_IO = "org.techhouse.fs.io";
     private static final String HELPER = "/SyncedWrites.java";
     private static final Set<String> EXEMPT_WRITERS = Set.of("/WalPlan.java", "/WalRedo.java", "/WalWriteGroup.java",
-            "/DurableShadow.java");
+            "/DurableShadow.java", "/SnapshotImageFile.java");
     private static final Pattern WRITE = Pattern.compile("new (java\\.io\\.)?FileOutputStream\\("
             + "|FileChannel\\.open\\([^;]*WRITE|Files\\.write|Files\\.newOutputStream|Files\\.move\\("
             + "|new (java\\.io\\.)?RandomAccessFile\\([^;]*RW_PERMISSIONS|OwnerOnlyFiles\\.create|\\.renameTo\\(");
