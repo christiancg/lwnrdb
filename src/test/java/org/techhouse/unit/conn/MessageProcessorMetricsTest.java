@@ -13,6 +13,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.conn.RequestMetrics;
 import org.techhouse.ejson.EJson;
@@ -119,7 +120,7 @@ public class MessageProcessorMetricsTest {
     @Test
     public void test_a_connection_over_max_connections_counts_a_refusal() throws Exception {
         TestUtils.setPrivateField(configuration, "maxConnections", 1);
-        processor("", new ByteArrayOutputStream());
+        IocContainer.get(ClientTracker.class).addClient(TestUtils.clientSocket());
 
         run(processor(SAVE, new ByteArrayOutputStream()));
 

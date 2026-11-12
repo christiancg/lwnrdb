@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -171,15 +170,27 @@ public class MetricsServerTest {
     }
 
     @Test
-    public void test_stop_closes_the_port_and_a_second_start_is_refused() throws IOException {
+    public void test_stop_ends_the_accept_thread_and_a_second_start_is_refused() throws Exception {
+        final var before = acceptThreads();
         started("");
-        final var port = server.boundPort();
+        final var accepting = acceptThreads();
+        accepting.removeAll(before);
+        assertEquals(1, accepting.size(), accepting::toString);
         assertThrows(IllegalStateException.class, () -> server.start(0, LOOPBACK, ""));
 
         server.stop();
 
         assertEquals(-1, server.boundPort());
-        assertThrows(ConnectException.class, () -> new Socket(LOOPBACK, port).close());
+        final var acceptThread = accepting.getFirst();
+        acceptThread.join(5000);
+        assertFalse(acceptThread.isAlive(), "the accept loop must end once its socket is closed");
+        server.start(0, LOOPBACK, "");
+        assertTrue(get("/metrics").startsWith("HTTP/1.1 200 OK\r\n"));
+    }
+
+    private static List<Thread> acceptThreads() {
+        return new ArrayList<>(Thread.getAllStackTraces().keySet().stream()
+                .filter(thread -> thread.getName().equals("lwnrdb-metrics-accept") && thread.isAlive()).toList());
     }
 
     @Test
