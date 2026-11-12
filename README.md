@@ -1247,13 +1247,14 @@ What comes back depends on who asks:
   {"type":"SERVER_INFO","status":"OK","message":"Ok","server":{"state":"READY"}}
   ```
 - **Any authenticated user** also gets `version` (the release, or `dev` for a server not run from a packaged jar),
-  `protocolVersion` (raised whenever a wire field changes; `1` today), `startedAtMs` (epoch milliseconds) and
-  `uptimeMs`.
+  `protocolVersion` (raised whenever a wire field changes; `1` today), `storageFormatVersion` (raised whenever a file
+  under `filePath` changes shape; `1` today, see [docs/compatibility.md](docs/compatibility.md)), `startedAtMs` (epoch
+  milliseconds) and `uptimeMs`.
 - **An admin** also gets `node`: `clusterEnabled`, `syncWrites` and `tlsEnabled`, plus `nodeId`, `aliveMembers` (this
   node included) and `expectedSize` when clustering is on.
   ```json
   {"type":"SERVER_INFO","status":"OK","message":"Ok","server":{"state":"READY","version":"0.1.0",
-    "protocolVersion":1,"startedAtMs":1762790400000,"uptimeMs":5231,
+    "protocolVersion":1,"storageFormatVersion":1,"startedAtMs":1762790400000,"uptimeMs":5231,
     "node":{"clusterEnabled":true,"nodeId":"n1","aliveMembers":3,"expectedSize":3,"syncWrites":true,"tlsEnabled":false}}}
   ```
 
@@ -1796,7 +1797,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `snapshotMaxBytes` | Valid size > 0 (default `1Gb`). Bytes one [snapshot](#snapshots-start_snapshot-read_snapshot-release_snapshot) may keep: the old versions of the documents written since it was opened, plus a modelled cost per id it remembers. Past it the snapshot is aborted (`409-17`); the writes are never affected |
 | `snapshotMaxOpen` | Valid number ≥ 1 (default `4`). Snapshots open on the node at once; one more answers `503-22` |
 | `snapshotIdleTimeoutMs` | Valid number ≥ 1000 (default `300000`). Milliseconds a snapshot may go unread before the server releases it |
-| `filePath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing; see [File permissions](#file-permissions) |
+| `filePath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing; see [File permissions](#file-permissions). The server stamps it with its storage format (`format.json`) and refuses to start on a folder written in another format; see [docs/compatibility.md](docs/compatibility.md) |
 | `logPath` | Path that exists or can be created, and is writable by the process. Created owner-only (`0700`) when missing. Log cleanup deletes only expired files named `yyyy-MM-dd.log` here, so pointing it at a populated folder (even `.`) deletes nothing else |
 | `backgroundProcessingThreads` | Valid number ≥ 1 |
 | `backgroundQueueMaxEvents` | Valid number ≥ 1 (default `200000`). Bound on the background index/admin queue, counted in events (a bulk write is one event). A `SAVE`, `BULK_SAVE`, `DELETE` or `COMMIT_TRANSACTION` arriving while it is reached waits for room, holding no lock, then answers `503-16` with nothing written. Acknowledged writes are never dropped and replicated writes are never held back |

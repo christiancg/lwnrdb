@@ -113,9 +113,12 @@ public class ServerInfoHelperTest {
     public void test_an_authenticated_user_sees_the_build_but_no_node() {
         final var server = serverAs(READER);
 
-        assertEquals(Set.of("state", "version", "protocolVersion", "startedAtMs", "uptimeMs"), keysOf(server));
+        assertEquals(Set.of("state", "version", "protocolVersion", "storageFormatVersion", "startedAtMs", "uptimeMs"),
+                keysOf(server));
         assertEquals(ServerVersion.UNPACKAGED, server.get("version").asJsonString().getValue());
         assertEquals(Globals.PROTOCOL_VERSION, server.get("protocolVersion").asJsonNumber().getValue().intValue());
+        assertEquals(Globals.STORAGE_FORMAT_VERSION,
+                server.get("storageFormatVersion").asJsonNumber().getValue().intValue());
         assertTrue(server.get("startedAtMs").asJsonNumber().getValue().longValue() > 0);
         assertTrue(server.get("uptimeMs").asJsonNumber().getValue().longValue() >= 0);
     }

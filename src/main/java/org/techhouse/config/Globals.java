@@ -79,6 +79,8 @@ public final class Globals {
     public static final String NEWLINE = System.lineSeparator();
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
     public static final int PROTOCOL_VERSION = 1;
+    public static final int STORAGE_FORMAT_VERSION = 1;
+    public static final int UNSTAMPED_STORAGE_FORMAT_VERSION = 1;
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
     public static final double EARTH_RADIUS_METERS = 6371000.0;
     public static final int GEO_HASH_MAX_PRECISION = 9;
@@ -106,6 +108,7 @@ public final class Globals {
     public static final String TLS_PROTOCOL = "TLS";
     public static final int TLS_CLOSE_LINGER_SECONDS = 1;
     public static final String STANDALONE_NODE_ID = "local";
+    public static final String FORMAT_STAMP_FILE = "format.json";
     public static final String CLUSTER_FOLDER = "cluster";
     public static final String CLUSTER_NODE_ID_FILE = "node.id";
     public static final String CLUSTER_ADMIN_TOMBSTONES_FILE = "admin-tombstones.idx";

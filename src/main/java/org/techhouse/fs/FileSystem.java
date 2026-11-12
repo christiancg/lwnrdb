@@ -44,6 +44,7 @@ public class FileSystem {
     private final WriteIntentRecovery writeIntentRecovery = new WriteIntentRecovery(paths, pkIndexStore,
             writeIntentJournal);
     private final NodeIdStore nodeIdStore = new NodeIdStore(paths);
+    private final FormatStampFile formatStamp = new FormatStampFile(paths);
     private final WriteAheadLog writeAheadLog = new WriteAheadLog(paths);
     private final TombstoneStore tombstones = new TombstoneStore(paths, writeAheadLog);
     private final WalCheckpoints walCheckpoints = new WalCheckpoints(paths, writeAheadLog);
@@ -174,16 +175,12 @@ public class FileSystem {
         return folderQuarantine;
     }
 
-    public Path nodeIdFile() {
-        return nodeIdStore.file();
+    public NodeIdStore nodeIds() {
+        return nodeIdStore;
     }
 
-    public String readNodeId() throws IOException {
-        return nodeIdStore.read();
-    }
-
-    public void writeNodeId(String nodeId) throws IOException {
-        nodeIdStore.write(nodeId);
+    public FormatStampFile formatStamp() {
+        return formatStamp;
     }
 
     public TombstoneStore tombstones() {

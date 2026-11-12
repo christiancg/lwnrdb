@@ -136,9 +136,11 @@ public class ServerMain {
         FetchPinningGuard.refuseUnpinnedFetch();
         ScriptHeapGuard.setCeilingPercent(config.intValue(ConfigKey.SCRIPT_HEAP_CEILING_PERCENT));
         fs.createBaseDbPath();
+        StorageFormatGuard.refuseIncompatibleFolder(fs);
         clearSnapshotsOfAPreviousProcess();
         DeviceSyncGuard.fallBackWhenUnsyncable(fs);
         installDurableShadowIfConfigured();
+        StorageFormatGuard.stampIfUnstamped(fs);
         fs.createAdminDatabase();
         StartupWarnings.retainAndReportUncleanStops();
         final var replayed = PageOccupancyReconciler.markReplayed(fs.redoWriteAheadLogs());

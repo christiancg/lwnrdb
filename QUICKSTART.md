@@ -146,6 +146,8 @@ Authenticate first with [`AUTHENTICATE`](README.md#authenticate).
   consistent snapshot, so you can take it while your application keeps writing.
 - [Consistency guarantees and known limitations](README.md#consistency-guarantees-and-known-limitations): what survives
   a crash or a power loss, and what does not.
+- [Upgrading](docs/compatibility.md): when a new release can take over your data folder as it is, and when it needs a
+  dump and restore.
 - [Scripting](docs/simplejs.md) and [clustering](docs/clustering.md), once the basics work for you.
 
 ## Stopping and cleaning up

@@ -2136,14 +2136,14 @@ Before authenticating, only the state
 As any authenticated user, the build too (`version` is `dev` when the server does not run from a packaged jar)
 
 ```json
-{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231}}
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "storageFormatVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231}}
 ```
 
 As an admin, the node as well (`nodeId`, `aliveMembers` and `expectedSize` only when clustering is on); an internal
 failure answers `500-35`
 
 ```json
-{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231, "node": {"clusterEnabled": false, "syncWrites": true, "tlsEnabled": false}}}
+{"type": "SERVER_INFO", "status": "OK", "message": "Ok", "server": {"state": "READY", "version": "1.0-SNAPSHOT", "protocolVersion": 1, "storageFormatVersion": 1, "startedAtMs": 1762790400000, "uptimeMs": 5231, "node": {"clusterEnabled": false, "syncWrites": true, "tlsEnabled": false}}}
 ```
 
 Snapshots, what `--dump` reads a database through. Open one, change the collection from a second connection, and the
