@@ -70,13 +70,15 @@ image, and start it on the same `filePath`.
 
 **Different storage format.**
 
-1. With the old release still running, dump everything (as an admin, so users and grants come along):
+1. With the old release still running, dump everything as an admin, so every database is included:
    ```bash
    java -jar lwnrdb.jar --dump --password ... > backup.jsonl
    ```
 2. Stop the old server and keep its folder until the new one is verified.
-3. Start the new release on an empty `filePath`.
-4. Restore into it:
+3. Start the new release on an empty `filePath`, with a `defaultAdminPassword` for its first admin.
+4. Recreate the other users, their grants and the database owners. A dump carries none of them, since password hashes
+   never leave the server ([operations.md](operations.md#what-a-dump-does-not-carry)).
+5. Restore into it:
    ```bash
    java -jar lwnrdb.jar --restore --password ... < backup.jsonl
    ```

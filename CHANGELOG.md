@@ -45,6 +45,9 @@ The first release. Protocol version 1, storage format version 1.
 - **Documentation.** A wire protocol reference for client authors, [docs/protocol.md](docs/protocol.md): framing,
   the request and response envelopes, how replies are matched to requests, retry rules, then every operation,
   permission and error code.
+- **Documentation.** An operations guide, [docs/operations.md](docs/operations.md): a deployment checklist, every
+  configuration key, sizing, security hardening, metrics and suggested alerts, the log lines that need action,
+  backups and restore drills, and a recovery runbook.
 - **Docker image.** For `linux/amd64` and `linux/arm64`, with a trimmed JRE and a health check, published to
   `ghcr.io/christiancg/lwnrdb`.
 

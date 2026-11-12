@@ -1067,7 +1067,7 @@ cluster listener has its own caps, described above.
 ## Configuration reference
 
 See the *Clustering* row of the configuration table in the main
-[README](../README.md#configuration). Key settings: `clusterEnabled`, `clusterPort`,
+[README](operations.md#configuration). Key settings: `clusterEnabled`, `clusterPort`,
 `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`, `nodeId`,
 `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`, `deadTimeoutMs`,
 `deadProbeIntervalMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`, `readFallbackToLocal`,
