@@ -144,8 +144,8 @@ def test_server_info_tiers():
     with Conn() as session:
         check_status("AUTHENTICATE as no_perms", session.authenticate("no_perms", "no_perms1234"), "OK")
         server = session.send({"type": "SERVER_INFO"}).get("server", {})
-    check("a user without grants sees the build", {"state", "version", "protocolVersion", "startedAtMs",
-                                                   "uptimeMs"} == set(server), str(server))
+    check("a user without grants sees the build", {"state", "version", "protocolVersion", "storageFormatVersion",
+                                                   "startedAtMs", "uptimeMs"} == set(server), str(server))
 
     with Conn() as session:
         check_status("AUTHENTICATE as admin", session.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
