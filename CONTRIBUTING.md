@@ -30,7 +30,7 @@ There are no runtime dependencies and there won't be. JUnit and Mockito are the 
 
 ## Pull requests
 
-Keep them focused on one thing. Add tests for what you changed, run `mvn verify` locally, and describe what the change does and why in the pull request. If it changes behavior that is documented in the README, update the README in the same pull request.
+Keep them focused on one thing. Add tests for what you changed, run `mvn verify` locally, and describe what the change does and why in the pull request. If it changes behavior that is documented in the README, update the README in the same pull request. If a user of the server would notice the change, add a line for it under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), in the section that fits (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security`). Tests, CI and refactors get no entry.
 
 ## Reporting bugs
 
@@ -40,14 +40,14 @@ Open an issue with the steps to reproduce it, what you expected to happen and wh
 
 Versions are not stored in the pom. The build takes the version from `-Drevision`, and when it is missing it falls back to `1.0-SNAPSHOT`, so a local build always produces `target/lwnrdb.jar`.
 
-To cut a release, tag the commit on `main` and push the tag:
+To cut a release, first rename `## [Unreleased]` in `CHANGELOG.md` to the version and the date, for example `## [0.1.0] - 2026-11-20`, check that it names the `protocolVersion` and the `storageFormatVersion`, and merge that into `main`. Then tag the merged commit and push the tag:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The release workflow takes it from there. It runs the full build with that version, attaches `lwnrdb-0.1.0.jar` to a GitHub release and publishes the Docker image to `ghcr.io/christiancg/lwnrdb` with the version and `latest` tags, for `linux/amd64` and `linux/arm64`.
+The release workflow takes it from there. It stops before building anything when `CHANGELOG.md` has no section for that version. Otherwise it runs the full build with that version, attaches `lwnrdb-0.1.0.jar` to a GitHub release whose notes are that section and publishes the Docker image to `ghcr.io/christiancg/lwnrdb` with the version and `latest` tags, for `linux/amd64` and `linux/arm64`.
 
 The jar is built once, on the runner's own platform, since it does not depend on the architecture. Only the trimmed JRE (`jlink`) and the runtime layer are built per platform, the arm64 ones under QEMU. To build both images locally:
 

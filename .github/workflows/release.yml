@@ -16,6 +16,17 @@ jobs:
       VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v version="${VERSION#v}" '
+            /^## \[/ { inside = index($0, "## [" version "]") == 1; next }
+            /^\[[^]]+\]: / { inside = 0 }
+            inside { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION#v}]' section"
+            exit 1
+          fi
       - uses: actions/setup-java@v6
         with:
           java-version: '27'
@@ -30,6 +41,12 @@ jobs:
           name: lwnrdb-jar
           path: target/lwnrdb.jar
           retention-days: 1
+      - name: Upload release notes
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+          retention-days: 1
 
   github-release:
     name: GitHub release
@@ -43,12 +60,15 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: lwnrdb-jar
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
       - name: Create release
         run: |
           mv lwnrdb.jar "lwnrdb-${VERSION#v}.jar"
           PRERELEASE=""
           case "${VERSION}" in *-*) PRERELEASE="--prerelease" ;; esac
-          gh release create "${VERSION}" "lwnrdb-${VERSION#v}.jar" --title "${VERSION}" --generate-notes ${PRERELEASE}
+          gh release create "${VERSION}" "lwnrdb-${VERSION#v}.jar" --title "${VERSION}" --notes-file release-notes.md ${PRERELEASE}
 
   docker:
     name: Docker image

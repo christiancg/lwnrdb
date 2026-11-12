@@ -24,7 +24,7 @@ Anything may change in a 0.x release, including the wire and the files. Two rule
 - a change to the wire raises `protocolVersion`;
 - a change to what any file under `filePath` looks like raises `storageFormatVersion`.
 
-The release notes name both numbers whenever either moves.
+Every release's entry in [CHANGELOG.md](../CHANGELOG.md), which is also its GitHub release notes, names both numbers and says when either one moved.
 
 ## The format stamp
 
@@ -63,7 +63,7 @@ a change.
 
 ## Upgrading
 
-Check the new release's `storageFormatVersion` in its release notes against `SERVER_INFO` on the running server.
+Check the new release's `storageFormatVersion` in [CHANGELOG.md](../CHANGELOG.md) against `SERVER_INFO` on the running server.
 
 **Same storage format.** Stop the server (it shuts down cleanly on `SIGTERM` or `Ctrl+C`), replace the jar or the
 image, and start it on the same `filePath`.
