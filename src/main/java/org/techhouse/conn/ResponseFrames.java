@@ -8,6 +8,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.LogRateLimiter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -16,7 +17,7 @@ final class ResponseFrames {
     private static final Logger logger = Logger.logFor(ResponseFrames.class);
     private static final LogRateLimiter REFUSAL_LOG = new LogRateLimiter(Globals.LOG_RATE_LIMIT_PER_SECOND);
 
-    record Reserved(EncodedJson frame, long bytes) {
+    record Reserved(EncodedJson frame, long bytes, OperationStatus status, String errorCode) {
     }
 
     private ResponseFrames() {
@@ -31,7 +32,7 @@ final class ResponseFrames {
         try {
             final var frame = OutboundQueue.frameOf(response, estimate);
             encoded = true;
-            return settled(estimate, frame);
+            return settled(estimate, frame, response.getStatus(), response.getErrorCode());
         } finally {
             if (!encoded) {
                 budget.release(estimate);
@@ -48,7 +49,7 @@ final class ResponseFrames {
         try {
             final var frame = EncodedJson.of(Utf8Encoder.encode(text));
             encoded = true;
-            return settled(estimate, frame);
+            return settled(estimate, frame, null, null);
         } finally {
             if (!encoded) {
                 budget.release(estimate);
@@ -59,7 +60,7 @@ final class ResponseFrames {
     static Reserved close(ErrorCode code) {
         final var frame = OutboundQueue.closeFrame(code);
         budget.reserve(frame.length());
-        return new Reserved(frame, frame.length());
+        return new Reserved(frame, frame.length(), code.getStatus(), code.getCode());
     }
 
     private static boolean cannotReserve(OperationType requestType, long estimate) {
@@ -70,9 +71,9 @@ final class ResponseFrames {
         return false;
     }
 
-    private static Reserved settled(long estimate, EncodedJson frame) {
+    private static Reserved settled(long estimate, EncodedJson frame, OperationStatus status, String errorCode) {
         budget.settle(estimate, frame.length());
-        return new Reserved(frame, frame.length());
+        return new Reserved(frame, frame.length(), status, errorCode);
     }
 
     private static Reserved refused(OperationType requestType, long estimate) {
@@ -86,6 +87,7 @@ final class ResponseFrames {
         final var frame = OutboundQueue
                 .frameOf(new OperationResponse(requestType, ErrorCode.RESPONSE_BUDGET_EXHAUSTED));
         budget.reserve(frame.length());
-        return new Reserved(frame, frame.length());
+        final var refusal = ErrorCode.RESPONSE_BUDGET_EXHAUSTED;
+        return new Reserved(frame, frame.length(), refusal.getStatus(), refusal.getCode());
     }
 }

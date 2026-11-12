@@ -30,6 +30,7 @@ public final class StartupWarnings {
             ConfigKey.MAX_LISTENS_PER_USER, ConfigKey.MAX_FILTER_OPERANDS, ConfigKey.AGGREGATE_TIMEOUT_MS,
             ConfigKey.MAX_CONCURRENT_SCRIPTS, ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_USER,
             ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_DATABASE);
+    private static final String LOCALHOST = "localhost";
     private static final List<ConfigKey> SIZE_LIMITS_OFF_AT_ZERO = List.of(ConfigKey.MAX_MEMORY);
 
     private StartupWarnings() {
@@ -126,6 +127,32 @@ public final class StartupWarnings {
                         + ", so every force also copies the forced file, or the forced folder's listing, into it."
                         + " It is for the power-loss harness only and slows every synced write.");
             }
+        }
+    }
+
+    public static void warnIfMetricsExposedWithoutToken() {
+        final var bindAddress = config.stringValue(ConfigKey.METRICS_BIND_ADDRESS).trim();
+        if (config.intValue(ConfigKey.METRICS_PORT) == 0 || !config.stringValue(ConfigKey.METRICS_TOKEN).isBlank()
+                || isLoopback(bindAddress)) {
+            return;
+        }
+        logger.warning("SECURITY WARNING: the metrics endpoint on port " + config.intValue(ConfigKey.METRICS_PORT)
+                + " listens on " + (bindAddress.isEmpty() ? "every interface" : bindAddress)
+                + " without a metricsToken, so anyone who reaches it can read the server's request rates, error "
+                + "codes and data totals. Set metricsToken, or bind metricsBindAddress to 127.0.0.1.");
+    }
+
+    private static boolean isLoopback(String address) {
+        if (LOCALHOST.equalsIgnoreCase(address)) {
+            return true;
+        }
+        final var bare = address.startsWith("[") && address.endsWith("]")
+                ? address.substring(1, address.length() - 1)
+                : address;
+        try {
+            return !bare.isEmpty() && InetAddress.ofLiteral(bare).isLoopbackAddress();
+        } catch (IllegalArgumentException notLiteral) {
+            return false;
         }
     }
 

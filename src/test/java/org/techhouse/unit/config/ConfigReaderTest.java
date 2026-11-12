@@ -78,6 +78,9 @@ public class ConfigReaderTest {
         expectedConfig.put("clusterPort", "9990");
         expectedConfig.put("clusterBindAddress", "0.0.0.0");
         expectedConfig.put("bindAddress", "");
+        expectedConfig.put("metricsPort", "0");
+        expectedConfig.put("metricsBindAddress", "127.0.0.1");
+        expectedConfig.put("metricsToken", "");
         expectedConfig.put("clusterAdvertisedAddress", "127.0.0.1");
         expectedConfig.put("clusterSeeds", "");
         expectedConfig.put("nodeId", "");

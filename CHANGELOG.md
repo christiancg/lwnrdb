@@ -32,6 +32,8 @@ The first release. Protocol version 1, storage format version 1.
 - **Operations.**
   - `SERVER_INFO` with the release, `protocolVersion` and `storageFormatVersion`.
   - `GET_DATABASE_STATS`, `REINDEX` and standardized error codes.
+  - An opt-in Prometheus `/metrics` endpoint (`metricsPort`): request counts and latencies per operation, error
+    codes, connections, fsyncs, cache, queues and data totals.
   - Memory-bounded caching sized from the heap.
   - TLS for clients.
   - Graceful shutdown.

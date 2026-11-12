@@ -29,6 +29,7 @@ import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.config.ServerVersion;
+import org.techhouse.conn.MetricsServer;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.conn.tls.TlsContextFactory;
@@ -71,6 +72,7 @@ public class ServerMain {
     private static final MetadataCachePruner metadataCachePruner = IocContainer.get(MetadataCachePruner.class);
     private static final ShutdownCoordinator shutdownCoordinator = IocContainer.get(ShutdownCoordinator.class);
     private static final WriteStallWatchdog writeStallWatchdog = IocContainer.get(WriteStallWatchdog.class);
+    private static final MetricsServer metricsServer = IocContainer.get(MetricsServer.class);
     private static final SnapshotRegistry snapshotRegistry = IocContainer.get(SnapshotRegistry.class);
     private static final SnapshotSweeper snapshotSweeper = IocContainer.get(SnapshotSweeper.class);
     private static ClusterServer clusterServer;
@@ -183,11 +185,19 @@ public class ServerMain {
         StartupWarnings.warnIfFaultInjectionEnabled();
         StartupWarnings.warnIfWritesAreNotSynced();
         StartupWarnings.warnIfClusterWithoutTls();
+        StartupWarnings.warnIfMetricsExposedWithoutToken();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
+        startMetricsIfEnabled();
         startClusterIfEnabled();
         TriggerRunRecovery.recoverLocal(startupTriggerRuns);
         return new SocketServer(port, config.getBindAddress(), createTlsFactory());
+    }
+
+    private static void startMetricsIfEnabled() throws IOException {
+        if (config.intValue(ConfigKey.METRICS_PORT) != 0) {
+            metricsServer.start();
+        }
     }
 
     private static void startTriggerRunSweepIfStandalone() {

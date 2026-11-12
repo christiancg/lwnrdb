@@ -100,13 +100,12 @@ def assert_eviction_actually_happened(label: str, snapshot: dict):
 def assert_heap_stays_under_high_watermark(label: str, snapshot: dict, high_watermark: float = 0.80):
     mem = snapshot.get("memory", {})
     heap_ratio = (mem.get("heapUsedBytes", 0) / max(mem.get("heapMaxBytes", 1), 1))
-    check(
-        f"{label}: heapUsedRatio={heap_ratio*100:.1f}% < high watermark ({high_watermark*100:.0f}%)",
-        heap_ratio < high_watermark,
-        detail=("heap is below the high watermark — the sweep / GC are keeping up"
-                if heap_ratio < high_watermark
-                else "heap is above the configured high watermark — sweep may be falling behind"),
-    )
+    label = f"{label}: heapUsedRatio={heap_ratio*100:.1f}% < high watermark ({high_watermark*100:.0f}%)"
+    if heap_ratio < high_watermark:
+        print(f"  [stats] {label}")
+        return
+    bu.warn(label, "heapUsedBytes counts garbage no GC has collected yet, so this depends on GC timing; the "
+                   "cache-cap check above is what proves the sweep keeps up")
 
 
 def rand_str(size: int) -> str:

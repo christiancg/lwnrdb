@@ -25,6 +25,7 @@ public class PackageBoundaryTest {
             .compile("\\borg\\.techhouse\\.(?!(client|ejson|ioc|utils|config\\.Globals|config\\.ConfigKey)\\b)[\\w.]+");
     private static final Pattern CLIENT_REFERENCE = Pattern.compile("\\borg\\.techhouse\\.client\\b[\\w.]*");
     private static final Pattern PROJECT_REFERENCE = Pattern.compile("\\borg\\.techhouse\\.[\\w.]+");
+    private static final String METRICS = "org.techhouse.metrics";
     private static final Set<String> ENTRY_POINT_REFERENCES = Set.of("org.techhouse.client.ClientMain",
             "org.techhouse.ServerMain");
 
@@ -77,6 +78,21 @@ public class PackageBoundaryTest {
                 final var matcher = CLIENT_REFERENCE.matcher(file.text().code());
                 while (matcher.find()) {
                     found.add(file.relativePath() + " -> " + matcher.group());
+                }
+            }
+        }
+        return found;
+    }
+
+    static Set<String> metricsProjectReferences(List<JavaSourceFile> files) {
+        final var found = new TreeSet<String>();
+        for (final var file : files) {
+            if (file.isInPackage(METRICS)) {
+                final var matcher = PROJECT_REFERENCE.matcher(file.text().code());
+                while (matcher.find()) {
+                    if (!matcher.group().startsWith(METRICS + ".") && !matcher.group().equals(METRICS)) {
+                        found.add(file.relativePath() + " -> " + matcher.group());
+                    }
                 }
             }
         }
@@ -152,6 +168,24 @@ public class PackageBoundaryTest {
                 """);
         assertEquals(Set.of(ENTRY_POINT + " -> org.techhouse.config.Configuration"),
                 entryPointReferencesBeyondTheDispatch(List.of(main)));
+    }
+
+    @Test
+    public void test_metrics_imports_nothing_from_the_project() {
+        final var found = metricsProjectReferences(JavaSources.under(JavaSources.MAIN));
+        assertTrue(found.isEmpty(),
+                "metrics holds primitives every layer records into, so it may use only java.*: " + found);
+    }
+
+    @Test
+    public void test_a_synthetic_metrics_class_reaching_the_server_is_caught() {
+        final var histogram = JavaSources.parse("Gauge.java", """
+                package org.techhouse.metrics;
+                import org.techhouse.metrics.Histogram;
+                import org.techhouse.ops.ErrorCode;
+                class Gauge {}
+                """);
+        assertEquals(Set.of("Gauge.java -> org.techhouse.ops.ErrorCode"), metricsProjectReferences(List.of(histogram)));
     }
 
     @Test

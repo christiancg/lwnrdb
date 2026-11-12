@@ -410,6 +410,10 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         };
     }
 
+    public long userCacheFootprintBytes() {
+        return userCache.footprintBytes();
+    }
+
     private long freeBudgetBytes() {
         final var maxBytes = userCache.maxMemoryBytes();
         return maxBytes == Globals.CACHE_UNLIMITED ? Long.MAX_VALUE : maxBytes - userCache.footprintBytes();

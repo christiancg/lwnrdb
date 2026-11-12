@@ -12,6 +12,7 @@ import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.InFlightRequests;
+import org.techhouse.conn.MetricsServer;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.fs.FileSystem;
@@ -48,6 +49,7 @@ public class ShutdownCoordinator {
     private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
     private final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
     private final WriteStallWatchdog writeStallWatchdog = IocContainer.get(WriteStallWatchdog.class);
+    private final MetricsServer metricsServer = IocContainer.get(MetricsServer.class);
 
     private volatile boolean alreadyRun;
 
@@ -64,6 +66,7 @@ public class ShutdownCoordinator {
             if (socketServer != null) {
                 socketServer.stopAccepting();
             }
+            metricsServer.stop();
             if (clusterServer != null) {
                 clusterServer.refuseWrites();
             }

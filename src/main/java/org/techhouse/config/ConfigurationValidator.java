@@ -33,6 +33,7 @@ public final class ConfigurationValidator {
         validateAdminPassword(configs, errors);
         validateCursorBatchSizes(configs, errors);
         validateTls(configs, errors);
+        validateMetricsPort(configs, errors);
         if (Boolean.parseBoolean(configs.getOrDefault("clusterEnabled", "false").trim())) {
             validateEnabledClusterConstraints(configs, errors);
         }
@@ -128,6 +129,24 @@ public final class ConfigurationValidator {
         if (Integer.parseInt(batchSize.trim()) > Integer.parseInt(maxBatchSize.trim())) {
             errors.add("scriptCursorBatchSize (" + batchSize + ") must not be greater than scriptCursorMaxBatchSize ("
                     + maxBatchSize + ")");
+        }
+    }
+
+    private static void validateMetricsPort(Map<String, String> configs, List<String> errors) {
+        final var metricsPort = parseIntOrNull(
+                configs.getOrDefault(ConfigKey.METRICS_PORT.key(), ConfigKey.METRICS_PORT.defaultValue()));
+        if (metricsPort == null || metricsPort == 0) {
+            return;
+        }
+        final var port = parseIntOrNull(configs.getOrDefault(ConfigKey.PORT.key(), ConfigKey.PORT.defaultValue()));
+        if (port != null && port.intValue() == metricsPort.intValue()) {
+            errors.add("metricsPort (" + metricsPort + ") must be different from port (" + port + ")");
+        }
+        final var clusterEnabled = Boolean.parseBoolean(configs.getOrDefault("clusterEnabled", "false").trim());
+        final var clusterPort = parseIntOrNull(
+                configs.getOrDefault(ConfigKey.CLUSTER_PORT.key(), ConfigKey.CLUSTER_PORT.defaultValue()));
+        if (clusterEnabled && clusterPort != null && clusterPort.intValue() == metricsPort.intValue()) {
+            errors.add("metricsPort (" + metricsPort + ") must be different from clusterPort (" + clusterPort + ")");
         }
     }
 
