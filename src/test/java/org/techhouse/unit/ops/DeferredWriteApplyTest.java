@@ -6,6 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,6 +16,7 @@ import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -47,6 +51,8 @@ public class DeferredWriteApplyTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private RecordingForcer recorder;
 
     @BeforeEach
@@ -213,5 +219,56 @@ public class DeferredWriteApplyTest {
                 cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
                         .mapToLong(AdminPageEntry::getPageSize).sum(),
                 "the replayed collection's page rows are rebuilt");
+    }
+
+    private Map<Long, List<Long>> rowsByPage() {
+        return cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(row -> row.getEntryCount() > 0 || row.getPageSize() > 0)
+                .collect(Collectors.toMap(AdminPageEntry::getPage,
+                        row -> List.of((long) row.getEntryCount(), row.getPageSize()), (a, _) -> a, TreeMap::new));
+    }
+
+    private Map<Long, List<Long>> liveByPage() throws Exception {
+        final var live = new TreeMap<Long, List<Long>>();
+        for (final var row : fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL)) {
+            live.merge(row.getPage(), List.of(1L, row.getLength()),
+                    (a, b) -> List.of(a.getFirst() + b.getFirst(), a.getLast() + b.getLast()));
+        }
+        return live;
+    }
+
+    private static JsonObject grownD1() {
+        final var object = document("d1", 100);
+        object.addProperty("body", "y".repeat(300));
+        return object;
+    }
+
+    @Test
+    public void aReplayThatBypassesTheLockHookStillReconcilesThePageRowsOnTheNextUse() throws Exception {
+        failTheTakeBack();
+        assertEquals("500-34", bulkSave(List.of(grownD1())).getErrorCode());
+        freeTheDisk();
+
+        assertTrue(fs.applyDeferredWrites(TestGlobals.DB, TestGlobals.COLL));
+        findD1();
+
+        assertEquals(liveByPage(), rowsByPage(), "the rows follow the replayed write once the collection is used");
+    }
+
+    @Test
+    public void aReplayInsideAnotherWritersLockHoldStillReconcilesThePageRows() throws Exception {
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            failTheTakeBack();
+            assertEquals("500-34", bulkSave(List.of(grownD1())).getErrorCode());
+            freeTheDisk();
+            bulkSave(List.of(document("d2", 200)));
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertEquals(100.0, findD1().get("n").asJsonNumber().getValue());
+
+        assertEquals(liveByPage(), rowsByPage(), "the rows follow a write replayed by the next writer's plan");
     }
 }

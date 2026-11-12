@@ -10,6 +10,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.AdminUsageHelper;
+import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.snapshot.SnapshotRegistry;
 
 public final class DroppedCollections {
@@ -36,6 +37,7 @@ public final class DroppedCollections {
         memoryManagement.forgetUsage(dbName, collName);
         SchemaValidationHelper.forgetCollection(dbName, collName);
         listenManager.forgetCollection(dbName, collName);
+        DeferredWrites.forgetCollection(dbName, collName);
         snapshots.abortCollection(dbName, collName, "its collection " + collName + " was dropped");
         deleteUsageRows(dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName,
                 () -> AdminUsageHelper.deleteUsageOfCollection(dbName, collName));
@@ -50,6 +52,7 @@ public final class DroppedCollections {
         memoryManagement.forgetDatabaseUsage(dbName);
         SchemaValidationHelper.forgetDatabase(dbName);
         listenManager.forgetDatabase(dbName);
+        DeferredWrites.forgetDatabase(dbName);
         snapshots.abortDatabase(dbName, "its database was dropped");
         TriggerDeadLetterCap.forgetDatabase(dbName);
         deleteUsageRows(dbName, () -> AdminUsageHelper.deleteUsageOfDatabase(dbName));

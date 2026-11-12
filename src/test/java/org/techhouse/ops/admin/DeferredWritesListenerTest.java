@@ -140,6 +140,44 @@ public class DeferredWritesListenerTest {
         assertEquals(1, entryCount());
     }
 
+    @Test
+    public void aReplayLeavesTheRowsDueForTheNextUseInUserDatabasesOnly() {
+        final var rows = List.of(new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "replayed", 0L, 10L, 1L, 1L));
+        final var id = TestGlobals.DB + Globals.COLL_IDENTIFIER_SEPARATOR + TestGlobals.COLL;
+        final var adminId = Globals.ADMIN_DB_NAME + Globals.COLL_IDENTIFIER_SEPARATOR
+                + Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME;
+
+        listener.replayed(TestGlobals.DB, TestGlobals.COLL, rows,
+                listener.replaying(TestGlobals.DB, TestGlobals.COLL, rows));
+        listener.replayed(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, List.of(), 0L);
+
+        assertTrue(listener.pending(id), "a replay outside the lock hook leaves the rows to the next use");
+        assertFalse(listener.pending(adminId));
+        listener.apply(id);
+        assertFalse(listener.pending(id));
+    }
+
+    @Test
+    public void aDropForgetsTheStaleRowsOfWhatItDropped() {
+        final var id = TestGlobals.DB + Globals.COLL_IDENTIFIER_SEPARATOR + TestGlobals.COLL;
+        final var sibling = TestGlobals.DB + Globals.COLL_IDENTIFIER_SEPARATOR + "sibling";
+        final var otherDb = "otherDb" + Globals.COLL_IDENTIFIER_SEPARATOR + TestGlobals.COLL;
+
+        DeferredWrites.reconcileRowsOnNextUse(TestGlobals.DB, TestGlobals.COLL);
+        DeferredWrites.forgetCollection(TestGlobals.DB, TestGlobals.COLL);
+        assertFalse(listener.pending(id));
+
+        DeferredWrites.reconcileRowsOnNextUse(TestGlobals.DB, TestGlobals.COLL);
+        DeferredWrites.reconcileRowsOnNextUse(TestGlobals.DB, "sibling");
+        DeferredWrites.reconcileRowsOnNextUse("otherDb", TestGlobals.COLL);
+        DeferredWrites.forgetDatabase(TestGlobals.DB);
+        assertFalse(listener.pending(id));
+        assertFalse(listener.pending(sibling));
+        assertTrue(listener.pending(otherDb), "only the dropped database's collections are forgotten");
+        DeferredWrites.forgetDatabase("otherDb");
+        assertFalse(listener.pending(otherDb));
+    }
+
     private void saveOne() {
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var object = new JsonObject();
