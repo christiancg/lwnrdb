@@ -50,7 +50,7 @@ JSON socket protocol — optionally [TLS](#tls--secure-connections). On top of t
 | Integrity | [per-collection JSON Schema](#schema-validation), [transactions](#transactions), [users and permissions](#users--permissions) |
 | Scripting | a built-in JS engine — [ad-hoc scripts](#run_script), [stored procedures](#save_procedure), [triggers](#save_trigger) (after and before the write), [scheduled procedures](#save_schedule), [pipeline operators](#script-operators-simplejs-in-the-pipeline), and shared code via `import … from "procedures/<name>"`. See [docs/simplejs.md](docs/simplejs.md) |
 | Clustering | fully-replicated nodes, no master, per-collection ownership, quorum writes, anti-entropy, cross-node transactions and script placement. See [docs/clustering.md](docs/clustering.md) |
-| Operations | [`SERVER_INFO`](#server_info) and a Docker health check, [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
+| Operations | [`SERVER_INFO`](#server_info) and a Docker health check, [`GET_DATABASE_STATS`](#get_database_stats), [`REINDEX`](#reindex), [standardized error codes](#error-codes), [Prometheus metrics](#metrics) (opt-in), memory-bounded caching, graceful shutdown |
 
 **Known non-goals.** No compound indexes (a pipeline uses as many single-field indexes as
 apply), no sharding (every node holds a complete copy), no compression, and no attempt to
@@ -1777,6 +1777,9 @@ Every value is **validated at startup**. If any value is invalid, the server log
 |---|---|
 | `port` | Valid number, 1–65535 |
 | `bindAddress` | Interface the client port binds to: an IP literal or a host name, checked at startup. Blank (the default) binds every interface; `127.0.0.1` accepts only local clients. If the port cannot be bound the server exits with status `1` |
+| `metricsPort` | Valid number, 0–65535 (default `0`, off). Port of the [Prometheus metrics endpoint](#metrics). Must differ from `port` and, with clustering on, from `clusterPort`; if it cannot be bound the server exits with status `1` |
+| `metricsBindAddress` | Interface the metrics port binds to, checked like `bindAddress` (default `127.0.0.1`). Blank binds every interface. Anything but a loopback address without a `metricsToken` is named in a `SECURITY WARNING` at startup |
+| `metricsToken` | Bearer token a scrape must send as `Authorization: Bearer <token>` (default blank: no token asked) |
 | `maxConnections` | Valid number ≥ 0. `0` means unlimited connections. Counts client sockets only. Like every protective limit where `0` turns the limit off (`maxUnauthenticatedConnectionsPerAddress`, `maxUnauthenticatedInvalidRequests`, `maxFailedAuthAttempts`, `authFailureDelayBaseMs`, `transactionMaxOps`, `transactionMaxAgeMs`, `maxListensPerConnection`, `maxListens`, `maxListensPerUser`, `maxFilterOperands`, `aggregateTimeoutMs`, `maxConcurrentScripts`, `maxConcurrentScriptsPerUser`, `maxConcurrentScriptsPerDatabase`), a `0` here is named in one `SECURITY WARNING` at startup |
 | `maxFailedAuthAttempts` | Valid number ≥ 0 (default `5`). Failed `AUTHENTICATE`s one connection may make; the last one answers `401-4` and closes the connection. Never reset by a success. `0` disables the cap (the delay still applies) |
 | `authFailureDelayBaseMs` | Valid number ≥ 0 (default `250`). Delay before the next `AUTHENTICATE` for a username from the same address after a failure, doubled per consecutive failure. `0` disables the delay |
@@ -2114,6 +2117,56 @@ of each new day) only ever deletes files named `yyyy-MM-dd.log` that fell out of
 other file in `logPath` is left alone), and
 `DROP_DATABASE` / `DROP_COLLECTION` never follow a symbolic link — a linked folder inside a database
 is unlinked, and its target's contents are left untouched.
+
+### Metrics
+
+With `metricsPort` set, the server answers `GET /metrics` (and `HEAD`) on that port in the Prometheus text format
+0.0.4. The endpoint is off by default and binds `127.0.0.1` unless `metricsBindAddress` says otherwise. It is plain
+HTTP, separate from the client port and its TLS: keep it on loopback, or set `metricsToken` and put a TLS-terminating
+proxy in front of it before exposing it. Any other path answers `404`, another method `405`, a missing or wrong token
+`401`, a request head over 8 KB `431`; at most four scrapes are served at once (`503` past that), and a scraper must
+send its request within 5 seconds.
+
+```yaml
+scrape_configs:
+  - job_name: lwnrdb
+    static_configs:
+      - targets: ["db-host:9100"]
+    authorization:
+      credentials: "<metricsToken>"
+```
+
+In Docker, set `metricsBindAddress=0.0.0.0` and a `metricsToken` in `lwnrdb.cfg`, and publish the port
+(`-p 9100:9100`).
+
+Every metric is prefixed `lwnrdb_`. A scrape reads only counters the server keeps in memory and takes no collection
+lock, so it answers while a collection is busy. Totals are reported across every user database, never per
+collection, so the number of series stays bounded.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `build_info` | gauge (always 1) | `version`, `protocol_version`, `storage_format_version` | What `SERVER_INFO` reports |
+| `uptime_seconds` | gauge | | Seconds since the JVM started |
+| `requests_total` | counter | `operation`, `status`, `code` | Requests answered. `code` is the error code, empty on success; `operation` is `UNKNOWN` for a line that could not be parsed, and `status` is `FORWARDED` for an answer relayed from a cluster peer |
+| `request_duration_seconds` | histogram | `operation` | Seconds from the parsed request to its queued response; writing the response to the socket is not included |
+| `connections` | gauge | | Open client connections |
+| `connections_refused_total` | counter | `reason` (`max_connections`, `unauthenticated_per_address`) | Connections refused when accepted (`503-1`, `503-14`) |
+| `in_flight_requests` | gauge | | Requests being served |
+| `unsent_response_bytes`, `unsent_response_limit_bytes` | gauge | | Encoded responses waiting to be written, and the `maxUnsentResponseBytes` budget |
+| `cache_bytes`, `cache_limit_bytes` | gauge | | Modelled heap bytes the user cache holds, and `maxMemory` (`+Inf` when unlimited, `0` with caching disabled) |
+| `heap_used_bytes`, `heap_max_bytes` | gauge | | JVM heap |
+| `gc_collections_total`, `gc_seconds_total` | counter | `gc` | Garbage collections and the time spent in them, per collector |
+| `background_queued` | gauge | `queue` (`index`, `maintenance`, `history`) | Background events waiting |
+| `triggers_total` | counter | `outcome` (`fired`, `failed`, `dropped`, `retried`, `dead_lettered`) | Trigger runs |
+| `trigger_queue`, `schedule_queue` | gauge | | Trigger and schedule runs waiting to be dispatched |
+| `schedules_total` | counter | `outcome` (`fired`, `failed`, `skipped`, `dropped`) | Scheduled procedure runs |
+| `scripts_running`, `scripts_rejected_total` | gauge, counter | | Scripts running on the node, and scripts refused for lack of a slot |
+| `in_doubt_transactions` | gauge | | Distributed transactions prepared on this node and not yet resolved |
+| `fsync_total`, `fsync_failures_total` | counter | | Files and folders forced to the device, and the forces that failed |
+| `fsync_duration_seconds` | histogram | | Seconds one force took |
+| `databases`, `collections`, `documents`, `live_bytes` | gauge | | Totals across every user database, from the page rows `GET_DATABASE_STATS` reads |
+
+The histograms share the bounds 0.5 ms, 1, 2.5, 5, 10, 25, 50, 100, 250 and 500 ms, 1, 2.5, 5 and 10 s.
 
 ### Clustering (multi-node)
 

@@ -49,6 +49,7 @@ public class MessageProcessor implements Runnable {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final PreAuthSlots preAuthSlots = IocContainer.get(PreAuthSlots.class);
     private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
+    private final RequestMetrics requestMetrics = IocContainer.get(RequestMetrics.class);
     private final BackgroundBacklogGate backlogGate = IocContainer.get(BackgroundBacklogGate.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final SnapshotRegistry snapshotRegistry = IocContainer.get(SnapshotRegistry.class);
@@ -105,10 +106,12 @@ public class MessageProcessor implements Runnable {
             if (clientId != null && !preAuthAdmitted) {
                 ConnectionLog.warn(logger, "Refused a connection from " + remoteAddress() + ": " + remoteHost
                         + " already holds the maximum number of unauthenticated connections");
+                requestMetrics.refused(RequestMetrics.RefusalReason.UNAUTHENTICATED_PER_ADDRESS);
                 OutboundQueue.sendDirectly(out, ErrorCode.TOO_MANY_UNAUTHENTICATED_CONNECTIONS);
             } else if (clientId != null) {
                 serveConnection(out);
             } else {
+                requestMetrics.refused(RequestMetrics.RefusalReason.MAX_CONNECTIONS);
                 OutboundQueue.sendDirectly(out, ErrorCode.MAX_CONNECTIONS_REACHED);
             }
         } catch (SSLException e) {
@@ -298,6 +301,7 @@ public class MessageProcessor implements Runnable {
     private boolean serveLine(RequestLine message, int maxTokens) {
         var close = false;
         var write = OutboundQueue.InlineWrite.NONE;
+        final var startedAt = System.nanoTime();
         serving = true;
         inFlightRequests.enter();
         try {
@@ -335,6 +339,7 @@ public class MessageProcessor implements Runnable {
             clientTracker.updateLastCommandTime(clientId);
             close = close || exhaustedUnauthenticatedInvalidRequests();
             write = enqueue(response);
+            requestMetrics.record(requestType, response, System.nanoTime() - startedAt);
             if (deliveredListen != null) {
                 listenManager.markDelivered(deliveredListen);
             }

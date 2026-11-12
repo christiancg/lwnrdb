@@ -210,17 +210,10 @@ public final class DatabaseStatsHelper {
     private static CollectionStats buildCollectionStats(String dbName, String collName) {
         final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
         final var indexes = collEntry == null ? Set.<String>of() : collEntry.getIndexes();
-        final var pageEntries = cache.getAdminPageEntries(dbName, collName);
-        long entryCount = 0L;
-        long sizeBytes = 0L;
-        long pageCount = 0L;
-        if (pageEntries != null) {
-            pageCount = pageEntries.size();
-            for (var p : pageEntries) {
-                entryCount += p.getEntryCount();
-                sizeBytes += p.getPageSize();
-            }
-        }
+        final var stored = StoredTotals.ofCollection(dbName, collName);
+        final var pageCount = stored.pages();
+        final var entryCount = stored.entries();
+        final var sizeBytes = stored.sizeBytes();
         final var collObj = new JsonObject();
         collObj.addProperty("name", collName);
         collObj.addProperty("indexCount", (long) indexes.size());

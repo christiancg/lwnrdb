@@ -36,14 +36,18 @@ final class SyncedWrites {
         if (faultInjector.isEnabled() && faultInjector.failsAt(FaultPoint.FILE_FORCED, subjectOf(path))) {
             forcer.forceFailed(path);
             ForceFailures.failed(path);
+            ForceMetrics.failed();
             throw new IOException("injected force failure of " + path);
         }
+        final var startedAt = System.nanoTime();
         try {
             forcer.force(channel, path);
         } catch (IOException | RuntimeException e) {
             ForceFailures.failed(path);
+            ForceMetrics.failed();
             throw e;
         }
+        ForceMetrics.observe(System.nanoTime() - startedAt);
     }
 
     private static String subjectOf(Path path) {

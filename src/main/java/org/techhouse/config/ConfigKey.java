@@ -7,6 +7,9 @@ public enum ConfigKey {
     // @formatter:off
     PORT("port", ValueType.INT, "8989", Rule.range(1, 65535)),
     BIND_ADDRESS("bindAddress", ValueType.STRING, "", Rule.bindAddress()),
+    METRICS_PORT("metricsPort", ValueType.INT, "0", Rule.range(0, 65535)),
+    METRICS_BIND_ADDRESS("metricsBindAddress", ValueType.STRING, "127.0.0.1", Rule.bindAddress()),
+    METRICS_TOKEN("metricsToken", ValueType.STRING, "", Rule.none()),
     MAX_CONNECTIONS("maxConnections", ValueType.INT, "100", Rule.atLeast(0)),
     MAX_UNAUTHENTICATED_CONNECTIONS_PER_ADDRESS("maxUnauthenticatedConnectionsPerAddress", ValueType.INT, "16", Rule.atLeast(0)),
     MAX_UNAUTHENTICATED_INVALID_REQUESTS("maxUnauthenticatedInvalidRequests", ValueType.INT, "5", Rule.atLeast(0)),

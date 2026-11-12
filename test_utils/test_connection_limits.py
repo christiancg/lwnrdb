@@ -9,6 +9,7 @@ import weakref
 
 import base_utils as bu
 import connection_budgets
+import metrics_cases
 from base_utils import Conn, check, check_code, check_status, section
 
 HOST = "127.0.0.1"
@@ -668,10 +669,13 @@ def main():
         test_an_idle_transaction_is_reaped_while_its_client_is_not_reading()
         test_outbound_cap_counts_utf8_bytes(log_path)
         test_max_connections_admits_exactly_the_limit_under_concurrency()
+        metrics_cases.test_the_endpoint_is_off_by_default()
     finally:
         bu.stop_server(proc, port=PORT, wait_for_port=True)
     budget_log_path = run_budget_phase()
-    bu.summary(on_failure=lambda: (bu.dump_log(log_path), bu.dump_log(budget_log_path)))
+    metrics_log_path = metrics_cases.run_all(bu.write_config, PORT)
+    bu.summary(on_failure=lambda: (bu.dump_log(log_path), bu.dump_log(budget_log_path),
+                                   bu.dump_log(metrics_log_path)))
 
 
 if __name__ == "__main__":

@@ -113,6 +113,17 @@ public class ServerMainStartupOrderTest {
     }
 
     @Test
+    public void test_the_metrics_endpoint_starts_after_its_warning_and_before_the_cluster() throws IOException {
+        final var body = mainBody();
+        final var metrics = positionOf(body, "startMetricsIfEnabled();");
+
+        assertTrue(positionOf(body, "StartupWarnings.warnIfMetricsExposedWithoutToken();") < metrics,
+                "the operator reads why an exposed endpoint is risky before it accepts a scrape");
+        assertTrue(metrics < positionOf(body, "startClusterIfEnabled();"),
+                "a metricsPort that cannot be bound stops the start before the node joins a cluster");
+    }
+
+    @Test
     public void test_trigger_runs_are_snapshotted_before_any_producer_starts() throws IOException {
         final var body = mainBody();
         final var snapshot = positionOf(body, "TriggerRunRecovery.startupRunIds();");

@@ -41,6 +41,10 @@ public class ClientTracker {
         return clientId;
     }
 
+    public int connectedClients() {
+        return socketClients.get();
+    }
+
     public void removeById(UUID clientId) {
         releaseBudgetOf(clients.remove(clientId));
         releaseSocketSlot(clientId);
