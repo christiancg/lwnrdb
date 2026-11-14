@@ -62,6 +62,16 @@ Returns the collection's field indexes.
 
 @returns the indexes facade
 
+## InsertAsync(T, CancellationToken)
+Inserts one document, never replacing one. A document whose `_id` is already stored is refused with `409-18` and
+nothing is written; without an `_id`, the server generates it.
+
+@param value the document
+@param ct cancels the wait; a request already sent closes its connection, since its outcome is unknown
+@returns the `_id`, and `Inserted` true
+@exception Lwnrdb.Client.Errors.ConflictException with code `409-18` when a document with that `_id` already exists
+@exception Lwnrdb.Client.Errors.MappingException when the value does not map to a document, for example a non-finite number or an integer beyond 2^53
+
 ## ListenAsync(ListenHandler<T>, CancellationToken)
 Subscribes to the whole collection: the handler gets its current content now, and the full result again whenever a write changes it. Listens use dedicated connections, never pooled ones.
 

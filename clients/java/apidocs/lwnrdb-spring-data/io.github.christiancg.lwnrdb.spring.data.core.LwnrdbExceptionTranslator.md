@@ -1,5 +1,5 @@
-Turns client exceptions into Spring's `DataAccessException` hierarchy: `400-3` is a
-`DuplicateKeyException`, schema and before-hook refusals are `DataIntegrityViolationException`s, lost connections are
+Turns client exceptions into Spring's `DataAccessException` hierarchy: `400-3` and `409-18` are
+`DuplicateKeyException`s, schema and before-hook refusals are `DataIntegrityViolationException`s, lost connections are
 `DataAccessResourceFailureException`s, `409-5` is a `PessimisticLockingFailureException`, and so on.
 
 ## translate(LwnrdbException)

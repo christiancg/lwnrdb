@@ -8,8 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.christiancg.lwnrdb.client.Collection;
 import io.github.christiancg.lwnrdb.client.Document;
 import io.github.christiancg.lwnrdb.client.ReadMode;
+import io.github.christiancg.lwnrdb.client.error.ConflictException;
 import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
 import io.github.christiancg.lwnrdb.client.error.NotFoundException;
+import io.github.christiancg.lwnrdb.client.protocol.ErrorCode;
 import io.github.christiancg.lwnrdb.client.query.Filters;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +61,21 @@ public class DataIT extends ServerIT {
         final var error = assertThrows(LwnrdbException.class,
                 () -> orders.saveAll(List.of(Document.of("_id", "d-1"), Document.of("_id", "d-1"))));
         assertEquals("400-3", error.rawCode().orElseThrow());
+    }
+
+    @Test
+    public void test_insert_stores_a_new_id_and_refuses_a_taken_one_leaving_it_unchanged() {
+        final var inserted = orders.insert(Document.of("_id", "ins-1", "status", "new"));
+        assertTrue(inserted.inserted());
+        assertEquals("ins-1", inserted.id());
+        final var error = assertThrows(ConflictException.class,
+                () -> orders.insert(Document.of("_id", "ins-1", "status", "replaced")));
+        assertTrue(error.hasCode(ErrorCode.DOCUMENT_ALREADY_EXISTS));
+        assertEquals("409-18", error.rawCode().orElseThrow());
+        assertEquals("new", orders.findById("ins-1").orElseThrow().getString("status").orElseThrow());
+        final var generated = orders.insert(Document.of("status", "fresh"));
+        assertTrue(generated.inserted());
+        assertEquals("fresh", orders.findById(generated.id()).orElseThrow().getString("status").orElseThrow());
     }
 
     @Test

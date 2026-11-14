@@ -153,6 +153,19 @@ public class OperationProcessorClusterWriteTest {
         assertEquals("421-1", response.getErrorCode());
     }
 
+    @Test
+    public void test_an_insert_on_a_node_that_lost_ownership_is_refused_as_not_owner() throws Exception {
+        final var self = node("self", 9990);
+        configureMembership(1, self);
+        assertEquals(OperationStatus.OK, processor.processMessage(save("held")).getStatus());
+        final var peer = peerOwningTheTestCollection(self);
+        assertNotNull(peer);
+        final var insert = save("held");
+        insert.setFailOnUpdate(true);
+
+        assertEquals("421-1", processor.processMessage(insert).getErrorCode());
+    }
+
     private String collectionOwnedByOther() {
         for (var i = 0; i < 500; i++) {
             if (!ownership.isOwner(TestGlobals.DB, "coll-" + i)) {

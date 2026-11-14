@@ -361,6 +361,10 @@ unavailable) and the number is sequential.
 
 `409-17`: The snapshot was aborted and holds nothing any more; open a new one.
 
+## DOCUMENT_ALREADY_EXISTS
+
+`409-18`: A document with this _id already exists.
+
 ## LISTEN_ENDED
 
 `410-1`: The listen ended.

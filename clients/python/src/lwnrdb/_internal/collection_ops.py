@@ -49,6 +49,10 @@ async def empty_on(code: str, empty: V, read: Callable[[], Awaitable[V]]) -> V:
         raise
 
 
+def _saved(reply: JsonObject) -> SaveResult:
+    return SaveResult(text_of(reply.get("_id")), boolean_of(reply.get("inserted"), fallback=False))
+
+
 class CollectionOps(Generic[T, R]):
     def __init__(self, context: ClientContext, database: str, collection: str, codec: DocumentCodec[T, R]) -> None:
         self.context = context
@@ -63,7 +67,13 @@ class CollectionOps(Generic[T, R]):
         reply = await self.context.channel.send(
             "SAVE", self.context.encoder.save(self.database, self.collection, self._encode(value))
         )
-        return SaveResult(text_of(reply.get("_id")), boolean_of(reply.get("inserted"), fallback=False))
+        return _saved(reply)
+
+    async def insert(self, value: T) -> SaveResult:
+        reply = await self.context.channel.send(
+            "SAVE", self.context.encoder.insert(self.database, self.collection, self._encode(value))
+        )
+        return _saved(reply)
 
     async def save_all(self, values: Sequence[T]) -> BulkSaveResult:
         encoded = [self._encode(value) for value in values]

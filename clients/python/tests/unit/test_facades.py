@@ -8,6 +8,7 @@ import pytest
 from lwnrdb import (
     AsyncAdmin,
     AsyncDatabase,
+    ConflictError,
     Document,
     NotFoundError,
     ProcedureDefinition,
@@ -77,6 +78,19 @@ async def test_update_where_sends_the_filter_and_patch_and_reads_the_updated_cou
     assert channel.requests[-1]["object"] == {"status": "expired"}
     silent = _shop(RecordingChannel()).collection("orders")
     assert await silent.update_where(field("status").eq("pending"), {"status": "expired"}) == 0
+
+
+async def test_insert_sends_fail_on_update_and_reads_the_save_reply() -> None:
+    channel = _replying("ok.save")
+    orders = _shop(channel).collection("orders")
+    inserted = await orders.insert({"_id": "o-1", "status": "new"})
+    assert (inserted.id, inserted.inserted) == ("o-1", True)
+    assert channel.requests[-1]["failOnUpdate"] is True
+    assert channel.requests[-1]["object"] == {"_id": "o-1", "status": "new"}
+    refused = _replying("errors.409_18")
+    with pytest.raises(ConflictError) as caught:
+        await _shop(refused).collection("orders").insert({"_id": "o-1"})
+    assert caught.value.raw_code == "409-18"
 
 
 async def test_a_missing_document_is_none_only_for_404_2() -> None:

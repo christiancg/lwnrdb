@@ -36,6 +36,9 @@ class RequestEncoder:
     def save(self, database: str, collection: str, document: JsonObject) -> JsonObject:
         return {**request("SAVE", database, collection), "object": document}
 
+    def insert(self, database: str, collection: str, document: JsonObject) -> JsonObject:
+        return {**request("SAVE", database, collection), "failOnUpdate": True, "object": document}
+
     def bulk_save(self, database: str, collection: str, documents: list[JsonObject]) -> JsonObject:
         objects: list[Json] = list(documents)
         return {**request("BULK_SAVE", database, collection), "objects": objects}

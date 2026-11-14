@@ -74,6 +74,22 @@ public class SaveConditionValidationTest {
     }
 
     @Test
+    public void test_fail_on_update_beside_a_condition_is_400_1() {
+        final var request = save(null, patch("status", "x"), statusIsPending());
+        request.setFailOnUpdate(true);
+
+        assertRefused(RequestValidator.validate(request), "SAVE with a condition cannot take failOnUpdate");
+    }
+
+    @Test
+    public void test_fail_on_update_without_a_condition_passes() {
+        final var request = save("o-1", patch("status", "x"), null);
+        request.setFailOnUpdate(true);
+
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
     public void test_an_empty_patch_beside_a_condition_is_400_1() {
         assertRefused(RequestValidator.validate(save(null, new JsonObject(), statusIsPending())),
                 "SAVE with a condition requires at least one field to set");

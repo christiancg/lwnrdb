@@ -46,6 +46,9 @@ public final class DataRequestValidator {
     }
 
     private static ValidationResult validateConditionalSave(SaveRequest request) {
+        if (request.isFailOnUpdate()) {
+            return ValidationResult.fail("SAVE with a condition cannot take failOnUpdate");
+        }
         if (request.get_id() != null || request.getObject().has(Globals.PK_FIELD)) {
             return ValidationResult.fail("SAVE takes either an _id or a condition, not both");
         }

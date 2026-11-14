@@ -110,6 +110,7 @@ public class EnforcingDatabaseAccessScopeTest {
     public void test_write_outside_the_scope_throws() {
         final var db = scoped();
         assertThrows(JsThrowException.class, () -> db.save("otherDb", TestGlobals.COLL, doc("nope")));
+        assertThrows(JsThrowException.class, () -> db.insert("otherDb", TestGlobals.COLL, doc("nope")));
         assertThrows(JsThrowException.class, () -> db.delete("otherDb", TestGlobals.COLL, "nope"));
         assertThrows(JsThrowException.class, () -> db.deleteWhere("otherDb", TestGlobals.COLL, everything()));
         assertThrows(JsThrowException.class,

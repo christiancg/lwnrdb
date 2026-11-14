@@ -63,6 +63,21 @@ describe("transactions", () => {
         expect(await accounts.findById("u2")).toEqual({ _id: "u2", tier: "gold", balance: 7 });
     });
 
+    test("insert inside a transaction refuses a committed _id and keeps the transaction's other writes", async () => {
+        await accounts.save({ _id: "i1", balance: 1 });
+        await accounts.save({ _id: "i2", balance: 2 });
+        await it.client.transaction(async (transaction) => {
+            const inside = transaction.collection("tx_it", "accounts");
+            await inside.save({ _id: "i3", balance: 3 });
+            await expect(inside.insert({ _id: "i1", balance: 10 })).rejects.toMatchObject({ rawCode: "409-18" });
+            await inside.delete("i2");
+            expect(await inside.insert({ _id: "i2", balance: 20 })).toEqual({ id: "i2", inserted: true });
+        });
+        expect(await accounts.findById("i1")).toEqual({ _id: "i1", balance: 1 });
+        expect(await accounts.findById("i2")).toEqual({ _id: "i2", balance: 20 });
+        expect(await accounts.findById("i3")).toEqual({ _id: "i3", balance: 3 });
+    });
+
     test("an idle transaction is rolled back by the server", async () => {
         const transaction = await it.client.beginTransaction();
         const inside = transaction.collection("tx_it", "accounts");

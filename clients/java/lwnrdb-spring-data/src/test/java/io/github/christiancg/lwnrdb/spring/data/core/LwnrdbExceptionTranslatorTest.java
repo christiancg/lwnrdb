@@ -72,6 +72,8 @@ public class LwnrdbExceptionTranslatorTest {
                 translator.translateExceptionIfPossible(new ConflictException("idle", "409-16", Status.ERROR)));
         assertInstanceOf(ConcurrencyFailureException.class,
                 translator.translateExceptionIfPossible(new ConflictException("open", "409-3", Status.ERROR)));
+        assertInstanceOf(DuplicateKeyException.class,
+                translator.translateExceptionIfPossible(new ConflictException("taken", "409-18", Status.ERROR)));
         assertInstanceOf(TransientDataAccessResourceException.class,
                 translator.translateExceptionIfPossible(new UnavailableException("busy", "503-2", Status.ERROR)));
         assertInstanceOf(UncategorizedLwnrdbException.class,

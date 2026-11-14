@@ -68,8 +68,9 @@ public class LwnrdbTransactionManagerTest {
             stack.template.deleteById("w1", Widget.class);
             stack.template.findAll(Widget.class);
             stack.template.updateWhere(Widget.class, null, Map.of("size", 3));
+            stack.template.insert(Widget.of("w2", "b", 2));
         });
-        assertEquals(List.of("START_TRANSACTION", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "SAVE",
+        assertEquals(List.of("START_TRANSACTION", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "SAVE", "SAVE",
                 "COMMIT_TRANSACTION"), typesUntil("COMMIT_TRANSACTION"));
         assertEquals(1, stack.server.acceptedConnections());
     }

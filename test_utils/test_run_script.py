@@ -1273,6 +1273,31 @@ def test_db_module_arity(conn: Conn):
                         "400-9", "at least one object")
 
 
+def test_db_insert(conn: Conn):
+    section("Host interface - db.insert never overwrites")
+    check_result("an insert of a new id returns the stored document", conn.run(
+        'import db from "db";\n'
+        f'return db.insert(db.name, "{COLL}", {{ _id: "insert-once", v: 1 }}).v;'), 1)
+    check_failed_script("a second insert of the same id throws",
+                        conn.run('import db from "db";\n'
+                                 f'db.insert(db.name, "{COLL}", {{ _id: "insert-once", v: 2 }});'),
+                        "400-9", "A document with this _id already exists")
+    check_result("the refusal is catchable and the script carries on", conn.run(
+        'import db from "db";\n'
+        'let refused = false;\n'
+        f'try {{ db.insert(db.name, "{COLL}", {{ _id: "insert-once", v: 3 }}); }} catch (e) {{ refused = true; }}\n'
+        f'db.insert(db.name, "{COLL}", {{ _id: "insert-after", v: 4 }});\n'
+        'return refused;'), True)
+    check_field("the stored document keeps its first body", conn.send(
+        {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "insert-once"}), "object.v", 1)
+    check_field("the write after the caught refusal landed", conn.send(
+        {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "insert-after"}), "object.v", 4)
+    check_failed_script("db.insert without a document is a TypeError",
+                        conn.run('import db from "db";\n'
+                                 f'db.insert(db.name, "{COLL}", 5);'),
+                        "400-9", "db.insert expects a document")
+
+
 def test_db_save_rejects_a_non_string_id(conn: Conn):
     section("Host interface - db.save with an _id that is not a string")
     for label, literal in (("a number", "123"), ("a boolean", "true"), ("an object", "{ a: 1 }"),
@@ -2106,6 +2131,7 @@ def main():
             test_value_guards(conn)
             test_db_module_arity(conn)
             test_db_save_rejects_a_non_string_id(conn)
+            test_db_insert(conn)
             test_db_delete_refuses_a_non_string_id(conn)
             test_db_aggregate_refuses_an_unparseable_pipeline(conn)
             test_capabilities(conn)

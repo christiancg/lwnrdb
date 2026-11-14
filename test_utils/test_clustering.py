@@ -614,6 +614,39 @@ def test_write_replication_and_read_routing():
     check_field("COUNT via node-2 reflects all cross-node writes", r, "results.0.count", NODE_COUNT)
 
 
+def insert(port, db, coll, obj):
+    return op(port, {"type": "SAVE", "databaseName": db, "collectionName": coll, "failOnUpdate": True, "object": obj})
+
+
+def test_fail_on_update_is_decided_by_the_owner():
+    section("SAVE with failOnUpdate is decided by the owner, whichever node receives it")
+
+    create_coll(nodes[0].client_port, DB, "insert_only")
+
+    r = op_with_retry(lambda: insert(nodes[0].client_port, DB, "insert_only", {"_id": "once", "v": 1}))
+    check_status("an insert via node-0 commits", r, "OK")
+    check("the inserted doc is visible on every node", all_nodes_see(DB, "insert_only", "once", 1))
+    for i in range(1, NODE_COUNT):
+        r = op_with_retry(lambda port=nodes[i].client_port: insert(port, DB, "insert_only", {"_id": "once", "v": 9}))
+        check_code(f"a second insert of the id via node-{i} -> 409-18", r, "ERROR", "409-18")
+    check("every node still holds the first body", all_nodes_see(DB, "insert_only", "once", 1))
+
+    conn = authed(nodes[1].client_port)
+    try:
+        check_status("START_TRANSACTION via node-1", conn.send({"type": "START_TRANSACTION"}), "OK")
+        check_code("a transactional insert of the committed id -> 409-18", conn.send(
+            {"type": "SAVE", "databaseName": DB, "collectionName": "insert_only", "failOnUpdate": True,
+             "object": {"_id": "once", "v": 5}}), "ERROR", "409-18")
+        check_status("a transactional insert of a new id", conn.send(
+            {"type": "SAVE", "databaseName": DB, "collectionName": "insert_only", "failOnUpdate": True,
+             "object": {"_id": "twice", "v": 2}}), "OK")
+        check_status("COMMIT_TRANSACTION", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    finally:
+        conn.close()
+    check("the transactional insert is visible on every node", all_nodes_see(DB, "insert_only", "twice", 2))
+    check("and the refused one changed nothing", all_nodes_see(DB, "insert_only", "once", 1))
+
+
 def test_bulk_delete_and_upsert():
     section("BULK_SAVE / DELETE / upsert replication")
 
@@ -4338,6 +4371,7 @@ GROUPS = {
         test_server_info_reports_each_node,
         test_ddl_replication,
         test_write_replication_and_read_routing,
+        test_fail_on_update_is_decided_by_the_owner,
         test_bulk_delete_and_upsert,
         test_concurrent_writers_on_one_owner_share_replication_and_replicas_converge,
         test_index_replication,

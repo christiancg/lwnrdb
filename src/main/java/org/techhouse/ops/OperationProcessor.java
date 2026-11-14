@@ -384,6 +384,10 @@ public class OperationProcessor {
                     if (ownershipError != null) {
                         return GroupCommit.answered(ownershipError);
                     }
+                    final var existsError = InsertOnlyGuard.check(saveRequest);
+                    if (existsError != null) {
+                        return GroupCommit.answered(existsError);
+                    }
                     final var schemaError = SchemaValidationHelper.check(saveRequest);
                     if (schemaError != null) {
                         return GroupCommit.answered(schemaError);

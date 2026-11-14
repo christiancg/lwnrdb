@@ -27,6 +27,8 @@ public sealed class TransactionCollection<T>
 
     public Task<SaveResult> SaveAsync(T value, CancellationToken ct = default) => Ops.SaveAsync(value, ct);
 
+    public Task<SaveResult> InsertAsync(T value, CancellationToken ct = default) => Ops.InsertAsync(value, ct);
+
     public Task<BulkSaveResult> SaveAllAsync(IEnumerable<T> values, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(values);

@@ -117,6 +117,7 @@ public enum ErrorCode {
             OperationStatus.ERROR),
     SNAPSHOT_ABORTED("409-17", "The snapshot was aborted and holds nothing any more; open a new one",
             OperationStatus.ERROR),
+    DOCUMENT_ALREADY_EXISTS("409-18", "A document with this _id already exists", OperationStatus.ERROR),
     LISTEN_ENDED("410-1", "The listen ended", OperationStatus.NOT_FOUND),
     OUTBOUND_BACKLOG("413-1", "The connection's outbound buffer overflowed", OperationStatus.ERROR),
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),

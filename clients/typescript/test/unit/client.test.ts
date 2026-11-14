@@ -167,11 +167,12 @@ describe("LwnrdbClient", () => {
         await orders.delete("o-1");
         await orders.deleteWhere(field("status").eq("closed"));
         await orders.updateWhere(field("status").eq("open"), { status: "closed" });
+        await orders.insert({ id: "o-2" });
         await transaction.commit();
         const session = server?.sessions.find((candidate) =>
             candidate.requests.some((request) => request.type === "START_TRANSACTION"),
         );
-        expect(session?.requests.map((request) => request.type).slice(-9)).toEqual([
+        expect(session?.requests.map((request) => request.type).slice(-10)).toEqual([
             "START_TRANSACTION",
             "SAVE",
             "BULK_SAVE",
@@ -180,8 +181,10 @@ describe("LwnrdbClient", () => {
             "DELETE",
             "DELETE",
             "SAVE",
+            "SAVE",
             "COMMIT_TRANSACTION",
         ]);
+        expect(session?.requests.at(-2)).toMatchObject({ type: "SAVE", failOnUpdate: true, object: { _id: "o-2" } });
     });
 
     test("a lost connection during a transaction discards it", async () => {
