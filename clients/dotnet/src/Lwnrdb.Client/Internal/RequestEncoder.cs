@@ -42,6 +42,9 @@ internal sealed class RequestEncoder(TimeZoneInfo? temporalZone)
     public static JsonObject Save(string database, string collection, JsonObject document) =>
         With(Request("SAVE", database, collection), "object", document);
 
+    public static JsonObject Insert(string database, string collection, JsonObject document) =>
+        With(With(Request("SAVE", database, collection), "failOnUpdate", true), "object", document);
+
     public JsonObject SaveWhere(string database, string collection, Filter condition, JsonObject patch) =>
         With(With(Request("SAVE", database, collection), "condition", Pipeline.Filter(condition)), "object", patch);
 

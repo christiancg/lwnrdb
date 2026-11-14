@@ -158,6 +158,25 @@ public class DbModuleTest {
     }
 
     @Test
+    public void test_insert() {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        final var document = new JsObject();
+        document.set("_id", new JsString("i1"));
+        final var result = call(db, "insert", new JsString("d"), new JsString("c"), document);
+        assertInstanceOf(JsObject.class, result);
+        assertEquals("insert:d/c", fake.calls.getFirst());
+    }
+
+    @Test
+    public void test_insert_rejects_a_non_object_document() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        final var thrown = assertThrows(TypeErrorException.class,
+                () -> call(db, "insert", new JsString("d"), new JsString("c"), new JsNumber(5)));
+        assertEquals("db.insert expects a document", thrown.getMessage());
+    }
+
+    @Test
     public void test_save_without_a_document_is_a_type_error() {
         final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
         assertThrows(TypeErrorException.class, () -> call(db, "save", new JsString("d"), new JsString("c")));

@@ -41,6 +41,13 @@ internal sealed class CollectionOps<T> : IQueryTarget<T>
         return new SaveResult(ResponseDecoder.TextOf(reply["_id"]), ResponseDecoder.BooleanOf(reply["inserted"], false));
     }
 
+    public async Task<SaveResult> InsertAsync(T value, CancellationToken ct)
+    {
+        var reply = await SendAsync(Operation.Save, RequestEncoder.Insert(Database, Collection, Encode(value)), ct)
+            .ConfigureAwait(false);
+        return new SaveResult(ResponseDecoder.TextOf(reply["_id"]), ResponseDecoder.BooleanOf(reply["inserted"], false));
+    }
+
     public async Task<BulkSaveResult> SaveAllAsync(IEnumerable<T> values, CancellationToken ct)
     {
         var encoded = values.Select(Encode).ToList();

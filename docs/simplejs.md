@@ -582,7 +582,7 @@ compiled program's static specifiers and refuses an unresolvable `procedures/` t
 
 ### The `db` module
 
-`db` exposes `findById`, `aggregate`, `cursor`, `save`, `bulkSave`, `updateWhere`, `delete`, `deleteWhere`,
+`db` exposes `findById`, `aggregate`, `cursor`, `save`, `insert`, `bulkSave`, `updateWhere`, `delete`, `deleteWhere`,
 `listCollections`, `listDatabases`, `transaction` and `name`. It is deliberately **read+write
 and single-database**: no DDL, no index management, no user operations, and no access to a
 database other than the run's scope. Opening DDL to scripts would put `CREATE_INDEX`/
@@ -601,11 +601,28 @@ schema violation, an entry-too-large, a cluster rejection, an internal error. On
 absence stays a value: `findById` answers `null`, `aggregate` answers `[]`, and `delete` of an
 absent id is a no-op, and `updateWhere` or `deleteWhere` matching nothing answers `0`. A collection that is not registered is not absence: reads of it throw
 (`404-11`) exactly as writes do, and so does a JOIN into one. A call that omits a required argument, or passes one of the wrong shape, is a
-catchable `TypeError` too — `db.save` needs a document, `db.deleteWhere` a condition object, `db.updateWhere` a
+catchable `TypeError` too — `db.save` and `db.insert` need a document, `db.deleteWhere` a condition object, `db.updateWhere` a
 condition object and an object of fields to set, and
 `db.aggregate`, `db.bulkSave` and `db.cursor` each need an array, and every database name, collection name and id must be a string:
 nothing is coerced, so `db.delete(db.name, "c")` or `db.findById(db.name, "c", 5)` throws rather
 than addressing the document whose `_id` is `"undefined"` or `"5"`.
+
+**`db.insert(database, collection, document)`** stores `document` like `db.save` and returns the stored
+document, but never overwrites: when a document with that `_id` already exists it throws a catchable `Error`
+(`A document with this _id already exists`) and writes nothing. It is the wire `SAVE` with `failOnUpdate`
+(see [protocol.md](protocol.md#save-insert-or-update)); without an `_id` it inserts under a generated one, and inside
+`db.transaction` the transaction's own writes count.
+
+```js
+import db from 'db';
+import args from 'args';
+try {
+  db.insert(db.name, 'accounts', { _id: args.accountId, plan: 'free' });
+} catch (e) {
+  return 'taken';
+}
+return 'created';
+```
 
 **`db.deleteWhere(database, collection, condition)`** deletes every document of the collection that
 matches `condition` and returns how many it deleted. The condition is a FILTER operator, exactly

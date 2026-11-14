@@ -16,6 +16,11 @@ The collection's name.
 
 Buffers an insert or replace of one document.
 
+## insert
+
+Buffers an insert of one document. An `_id` the transaction's view already holds, its own writes included, is refused
+with `409-18`; the transaction stays open and nothing is buffered.
+
 ## save_all
 
 Buffers an insert or replace of many documents.

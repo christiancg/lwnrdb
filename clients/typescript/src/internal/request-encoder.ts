@@ -35,6 +35,10 @@ export class RequestEncoder {
         return { ...request("SAVE", database, collection), object: document };
     }
 
+    insert(database: string, collection: string, document: JsonObject): JsonObject {
+        return { ...this.save(database, collection, document), failOnUpdate: true };
+    }
+
     bulkSave(database: string, collection: string, documents: JsonObject[]): JsonObject {
         return { ...request("BULK_SAVE", database, collection), objects: documents };
     }

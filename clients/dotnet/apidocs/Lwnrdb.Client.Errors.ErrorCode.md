@@ -272,6 +272,9 @@ Code `409-16` (`TRANSACTION_IDLE_TIMEOUT`). The transaction was rolled back afte
 ## SnapshotAborted
 Code `409-17` (`SNAPSHOT_ABORTED`). The snapshot was aborted and holds nothing any more; open a new one.
 
+## DocumentAlreadyExists
+Code `409-18` (`DOCUMENT_ALREADY_EXISTS`). A document with this _id already exists.
+
 ## ListenEnded
 Code `410-1` (`LISTEN_ENDED`). The listen ended.
 

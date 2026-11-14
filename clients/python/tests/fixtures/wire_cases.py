@@ -53,6 +53,7 @@ def _data(cases: dict[str, FixtureCall]) -> None:
     cases["data.save_nested"] = lambda r: r.orders.save(
         {"_id": "o-2", "customer": {"name": "Ana", "tags": ["vip", None, True, 1.5]}}
     )
+    cases["data.insert_with_id"] = lambda r: r.orders.insert({"_id": "o-3", "status": "new"})
     cases["data.bulk_save"] = lambda r: r.orders.save_all([{"_id": "o-1", "total": 1}, {"total": 2}])
     cases["data.find_by_id"] = lambda r: r.orders.find_by_id("o-1")
     cases["data.find_by_id_dirty"] = lambda r: r.orders.find_by_id("o-1", dirty_read=True)

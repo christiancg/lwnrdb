@@ -26,6 +26,10 @@ public final class TransactionCollection<T> {
         return ops.save(Objects.requireNonNull(value, "value"));
     }
 
+    public SaveResult insert(T value) {
+        return ops.insert(Objects.requireNonNull(value, "value"));
+    }
+
     public BulkSaveResult saveAll(List<T> values) {
         return ops.saveAll(values);
     }

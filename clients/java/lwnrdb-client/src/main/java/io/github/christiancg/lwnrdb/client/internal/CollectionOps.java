@@ -13,6 +13,7 @@ import io.github.christiancg.lwnrdb.client.query.Filter;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import tools.jackson.databind.node.ObjectNode;
 
 public final class CollectionOps<T> implements QueryTarget<T> {
     private final ClientContext context;
@@ -48,9 +49,22 @@ public final class CollectionOps<T> implements QueryTarget<T> {
     }
 
     public SaveResult save(T value) {
+        final var document = encoded(value);
+        return saved(channel.send(Operation.SAVE, context.encoder().save(database, collection, document)));
+    }
+
+    public SaveResult insert(T value) {
+        final var document = encoded(value);
+        return saved(channel.send(Operation.SAVE, context.encoder().insert(database, collection, document)));
+    }
+
+    private Document encoded(T value) {
         final var document = codec.encode(value);
         document.id().ifPresent(Names::id);
-        final var reply = channel.send(Operation.SAVE, context.encoder().save(database, collection, document));
+        return document;
+    }
+
+    private static SaveResult saved(ObjectNode reply) {
         return new SaveResult(ResponseDecoder.textOrNull(reply.get("_id")), reply.path("inserted").asBoolean(false));
     }
 

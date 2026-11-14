@@ -41,6 +41,10 @@ export class Collection<T, R> {
         return this.#ops.save(value);
     }
 
+    insert(value: T): Promise<SaveResult> {
+        return this.#ops.insert(value);
+    }
+
     saveAll(values: readonly T[]): Promise<BulkSaveResult> {
         return this.#ops.saveAll(values);
     }

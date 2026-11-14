@@ -10,6 +10,8 @@ import java.util.Optional;
 interface EntityStore<T> {
     void save(T value);
 
+    void insert(T value);
+
     void saveAll(List<T> values);
 
     Optional<T> findById(String id);
@@ -27,6 +29,11 @@ interface EntityStore<T> {
             @Override
             public void save(T value) {
                 collection.save(value);
+            }
+
+            @Override
+            public void insert(T value) {
+                collection.insert(value);
             }
 
             @Override
@@ -66,6 +73,11 @@ interface EntityStore<T> {
             @Override
             public void save(T value) {
                 collection.save(value);
+            }
+
+            @Override
+            public void insert(T value) {
+                collection.insert(value);
             }
 
             @Override

@@ -117,10 +117,12 @@ public sealed class TransactionTests : IAsyncLifetime
         await orders.DeleteWhereAsync(Lwnrdb.Client.Query.Filters.Field("status").Eq("void"));
         await orders.UpdateWhereAsync(o => o.Paid, new { Status = "settled" });
         await orders.UpdateWhereAsync(Lwnrdb.Client.Query.Filters.Field("status").Eq("void"), new { Paid = false });
+        await orders.InsertAsync(new Order { Id = "o-2" });
         var session = Assert.Single(_server.Sessions);
         Assert.Equal(
-            ["START_TRANSACTION", "AGGREGATE", "SAVE", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "DELETE", "DELETE", "SAVE", "SAVE"],
+            ["START_TRANSACTION", "AGGREGATE", "SAVE", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "DELETE", "DELETE", "SAVE", "SAVE", "SAVE"],
             session.Requests.Select(request => request["type"]!.GetValue<string>()));
+        Assert.True(session.Requests[^1]["failOnUpdate"]!.GetValue<bool>());
         Assert.Equal("orders", orders.Name);
     }
 

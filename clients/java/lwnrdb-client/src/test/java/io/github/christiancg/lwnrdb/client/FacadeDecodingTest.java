@@ -2,9 +2,12 @@ package io.github.christiancg.lwnrdb.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.christiancg.lwnrdb.client.admin.TriggerRunStatus;
+import io.github.christiancg.lwnrdb.client.error.ConflictException;
+import io.github.christiancg.lwnrdb.client.protocol.ErrorCode;
 import io.github.christiancg.lwnrdb.client.query.Filters;
 import io.github.christiancg.lwnrdb.client.scripting.ProcedureDefinition;
 import io.github.christiancg.lwnrdb.client.scripting.ScheduleDefinition;
@@ -58,6 +61,22 @@ public class FacadeDecodingTest {
                 .get("frame");
         recorder.channel.replyWith(request -> frame.deepCopy());
         assertEquals(3, recorder.orders.deleteWhere(Filters.field("status").eq("archived")));
+    }
+
+    @Test
+    public void test_an_insert_reply_decodes_like_a_save_and_a_taken_id_raises_a_conflict() {
+        final var inserted = recorder.orders.insert(Document.of("_id", "o-1", "status", "new"));
+        assertEquals("o-1", inserted.id());
+        assertTrue(inserted.inserted());
+        assertTrue(recorder.channel.last().get("failOnUpdate").asBoolean());
+        final var frame = (ObjectNode) ProtocolFixtures.responses().stream()
+                .filter(fixture -> fixture.name().equals("errors.409_18")).findFirst().orElseThrow().body()
+                .get("frame");
+        recorder.channel.replyWith(request -> frame.deepCopy());
+        final var error = assertThrows(ConflictException.class,
+                () -> recorder.orders.insert(Document.of("_id", "o-1", "status", "new")));
+        assertTrue(error.hasCode(ErrorCode.DOCUMENT_ALREADY_EXISTS));
+        assertFalse(ErrorCode.DOCUMENT_ALREADY_EXISTS.isRetryable());
     }
 
     @Test

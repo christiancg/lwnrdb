@@ -51,6 +51,14 @@ export class CollectionOps<T, R> implements QueryTarget<R> {
         return { id: textOf(reply._id), inserted: booleanOf(reply.inserted, false) };
     }
 
+    async insert(value: T): Promise<SaveResult> {
+        const reply = await this.context.channel.send(
+            "SAVE",
+            this.context.encoder.insert(this.database, this.collection, this.#encode(value)),
+        );
+        return { id: textOf(reply._id), inserted: booleanOf(reply.inserted, false) };
+    }
+
     async saveAll(values: readonly T[]): Promise<BulkSaveResult> {
         const encoded = values.map((value) => this.#encode(value));
         const reply = await this.context.channel.send(

@@ -14,6 +14,8 @@ import org.springframework.data.domain.Sort;
 public interface LwnrdbOperations {
     <T> T save(T entity);
 
+    <T> T insert(T entity);
+
     <T> List<T> saveAll(Iterable<T> entities);
 
     <T> Optional<T> findById(String id, Class<T> type);
