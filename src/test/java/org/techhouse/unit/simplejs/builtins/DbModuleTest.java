@@ -87,6 +87,20 @@ public class DbModuleTest {
     }
 
     @Test
+    public void test_delete_where_returns_the_count() {
+        final var fake = new FakeDatabaseAccess();
+        fake.nextDeletedCount = 7L;
+        final var db = DbModule.create(fake, null, null, null);
+        final var condition = new JsObject();
+        condition.set("fieldOperatorType", new JsString("EQUALS"));
+        condition.set("field", new JsString("status"));
+        condition.set("value", new JsString("archived"));
+        final var result = call(db, "deleteWhere", new JsString("d"), new JsString("c"), condition);
+        assertEquals(7.0, assertInstanceOf(JsNumber.class, result).getValue());
+        assertEquals("deleteWhere:d/c/status", fake.calls.getFirst());
+    }
+
+    @Test
     public void test_list_operations() {
         final var fake = new FakeDatabaseAccess();
         final var db = DbModule.create(fake, null, null, null);
@@ -279,6 +293,23 @@ public class DbModuleTest {
     public void test_delete_with_a_null_id_is_a_type_error() {
         assertRefused("db.delete expects a string id", "delete", new JsString("d"), new JsString("c"),
                 JsNull.getInstance());
+    }
+
+    @Test
+    public void test_delete_where_without_a_condition_is_a_type_error_and_reaches_no_database_call() {
+        assertRefused("db.deleteWhere expects a condition object", "deleteWhere", new JsString("d"), new JsString("c"));
+    }
+
+    @Test
+    public void test_delete_where_with_an_array_condition_is_a_type_error() {
+        assertRefused("db.deleteWhere expects a condition object", "deleteWhere", new JsString("d"), new JsString("c"),
+                new JsArray());
+    }
+
+    @Test
+    public void test_delete_where_with_a_number_collection_is_a_type_error() {
+        assertRefused("db.deleteWhere expects a string collection name", "deleteWhere", new JsString("d"),
+                new JsNumber(1), new JsObject());
     }
 
     @Test

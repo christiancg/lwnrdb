@@ -60,6 +60,14 @@ public class EnforcingDatabaseAccessScopeTest {
         return object;
     }
 
+    private static JsonObject everything() {
+        final var condition = new JsonObject();
+        condition.add("fieldOperatorType", new JsonString("NOT_EQUALS"));
+        condition.add("field", new JsonString("_id"));
+        condition.add("value", new JsonString("none"));
+        return condition;
+    }
+
     private static EnforcingDatabaseAccess scoped() {
         return new EnforcingDatabaseAccess(ADMIN, null, TestGlobals.DB);
     }
@@ -97,6 +105,7 @@ public class EnforcingDatabaseAccessScopeTest {
         final var db = scoped();
         assertThrows(JsThrowException.class, () -> db.save("otherDb", TestGlobals.COLL, doc("nope")));
         assertThrows(JsThrowException.class, () -> db.delete("otherDb", TestGlobals.COLL, "nope"));
+        assertThrows(JsThrowException.class, () -> db.deleteWhere("otherDb", TestGlobals.COLL, everything()));
         assertThrows(JsThrowException.class, () -> db.listCollections("otherDb"));
     }
 
@@ -130,6 +139,8 @@ public class EnforcingDatabaseAccessScopeTest {
                 "script_runs is the audit trail, so a script with READ_WRITE must not be able to forge a row");
         assertThrows(JsThrowException.class,
                 () -> db.delete(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, "forged"));
+        assertThrows(JsThrowException.class,
+                () -> db.deleteWhere(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, everything()));
     }
 
     @Test

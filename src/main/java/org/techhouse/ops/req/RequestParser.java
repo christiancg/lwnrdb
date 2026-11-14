@@ -48,6 +48,8 @@ public final class RequestParser {
 
     private static final EJson eJson = IocContainer.get(EJson.class);
     private static final Set<String> AGGREGATION_STEPS_KEY = Set.of("aggregationSteps");
+    private static final String CONDITION_FIELD = "condition";
+    private static final Set<String> CONDITION_KEY = Set.of(CONDITION_FIELD);
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         return parseRequest(message, Integer.MAX_VALUE);
@@ -81,7 +83,7 @@ public final class RequestParser {
                 }
                 case FIND_BY_ID -> eJson.fromJson(root, FindByIdRequest.class);
                 case AGGREGATE -> parseAggregationRequest(root);
-                case DELETE -> eJson.fromJson(root, DeleteRequest.class);
+                case DELETE -> parseDeleteRequest(root);
                 case CREATE_DATABASE -> eJson.fromJson(root, CreateDatabaseRequest.class);
                 case DROP_DATABASE -> eJson.fromJson(root, DropDatabaseRequest.class);
                 case LIST_DATABASES -> eJson.fromJson(root, ListDatabasesRequest.class);
@@ -143,6 +145,15 @@ public final class RequestParser {
         final var aggRequest = eJson.fromJson(parsed, AggregateRequest.class, AGGREGATION_STEPS_KEY);
         aggRequest.setAggregationSteps(parseAggregationSteps(parsed.get("aggregationSteps").asJsonArray()));
         return aggRequest;
+    }
+
+    private static OperationRequest parseDeleteRequest(final JsonObject parsed) {
+        final var deleteRequest = eJson.fromJson(parsed, DeleteRequest.class, CONDITION_KEY);
+        final var condition = parsed.get(CONDITION_FIELD);
+        if (condition != null && !condition.isJsonNull()) {
+            deleteRequest.setCondition(recursiveParse(condition.asJsonObject()));
+        }
+        return deleteRequest;
     }
 
     private static OperationRequest parseListenRequest(final JsonObject parsed) {

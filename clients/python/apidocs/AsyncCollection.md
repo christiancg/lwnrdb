@@ -55,6 +55,11 @@ Returns:
 
 Deletes one document by its `_id`.
 
+## delete_where
+
+Deletes every document that matches the filter, all or nothing, and returns how many it deleted (`0` when none
+matched). A filter matching more than the server's `deleteMaxMatches` is refused with `400-44` and deletes nothing.
+
 ## query
 
 Starts a query over the collection. See `QueryBuilder` for the steps.

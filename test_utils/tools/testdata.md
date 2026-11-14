@@ -536,6 +536,27 @@ Delete the one with id 1234
 {"type": "DELETE", "databaseName": "test", "collectionName": "testCollection", "_id": "1234"}
 ```
 
+Delete every document matching a condition (the same operator an AGGREGATE FILTER step takes); the reply carries
+`deletedCount`, and matching nothing is `OK` with `deletedCount` 0
+
+```json
+{"type": "DELETE", "databaseName": "test", "collectionName": "testCollection", "condition": {"conjunctionType": "AND", "operators": [{"fieldOperatorType": "EQUALS", "field": "status", "value": "archived"}, {"fieldOperatorType": "SMALLER_THAN", "field": "total", "value": 100}]}}
+```
+
+```json
+{"type": "DELETE", "status": "OK", "message": "Deleted 2 document(s)", "deletedCount": 2}
+```
+
+A DELETE with both an `_id` and a `condition` (or with neither) → `400-1`
+
+```json
+{"type": "DELETE", "databaseName": "test", "collectionName": "testCollection", "_id": "1234", "condition": {"fieldOperatorType": "EQUALS", "field": "status", "value": "archived"}}
+```
+
+```json
+{"type": "DELETE", "status": "ERROR", "message": "DELETE takes either an _id or a condition, not both", "errorCode": "400-1"}
+```
+
 Find by id
 
 ```json
@@ -1618,6 +1639,12 @@ Delete a document (deleting one that is not there is a no-op)
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ndb.delete(db.name, 'testCollection', 'scripted-1');\ndb.delete(db.name, 'testCollection', 'never-existed');\nreturn db.findById(db.name, 'testCollection', 'scripted-1') === null;"}
 ```
 
+Delete every document matching a condition and read how many went
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nreturn db.deleteWhere(db.name, 'testCollection', { fieldOperatorType: 'EQUALS', field: 'from', value: 'script' });"}
+```
+
 Transaction spanning two collections — both writes commit together
 
 ```json
@@ -2459,6 +2486,13 @@ Re-creating an index that already exists is always allowed:
 
 ```json
 {"type": "CREATE_INDEX", "status": "ERROR", "message": "The collection has the maximum number of indexes (64)", "errorCode": "400-42"}
+```
+
+A `DELETE` whose `condition` matches more than `deleteMaxMatches` (default 100 000) documents → `400-44`; nothing is
+deleted:
+
+```json
+{"type": "DELETE", "status": "ERROR", "message": "The delete condition matches more documents than allowed", "errorCode": "400-44"}
 ```
 
 A line that is not a valid command (not a JSON object, no known `type`, a field of the wrong shape) → `400-43`. When the

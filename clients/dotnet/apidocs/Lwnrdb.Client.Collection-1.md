@@ -21,6 +21,22 @@ Deletes one document.
 @param ct cancels the wait; a request already sent closes its connection, since its outcome is unknown
 @exception Lwnrdb.Client.Errors.NotFoundException when the document does not exist
 
+## DeleteWhereAsync(Filter, CancellationToken)
+Deletes every document that matches the filter, all or nothing. A filter matching more than the server's
+`deleteMaxMatches` is refused with `400-44` and deletes nothing.
+
+@param condition the documents to delete, built like a query filter
+@param ct cancels the wait; a request already sent closes its connection, since its outcome is unknown
+@returns how many documents were deleted; `0` when none matched
+
+## DeleteWhereAsync(Expression<Func<T, bool>>, CancellationToken)
+Deletes every document the predicate matches, translated to a server filter as `Where` is.
+
+@param predicate the documents to delete, over the stored members of `T`
+@param ct cancels the wait; a request already sent closes its connection, since its outcome is unknown
+@returns how many documents were deleted; `0` when none matched
+@exception System.NotSupportedException when the predicate cannot run on the server
+
 ## DropAsync(CancellationToken)
 Drops the collection with its indexes, schema and triggers.
 

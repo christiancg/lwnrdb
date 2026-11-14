@@ -7,6 +7,7 @@ import type { Lease } from "./internal/connection-pool.js";
 import { PinnedChannel } from "./internal/request-channel.js";
 import { textOf } from "./internal/response-decoder.js";
 import { Query } from "./query/query.js";
+import type { Filter } from "./query/types.js";
 import type { BulkSaveResult, SaveResult } from "./results.js";
 
 export class TransactionCollection<T, R> {
@@ -38,6 +39,10 @@ export class TransactionCollection<T, R> {
 
     delete(id: string): Promise<void> {
         return this.#ops.delete(id);
+    }
+
+    deleteWhere(condition: Filter): Promise<number> {
+        return this.#ops.deleteWhere(condition);
     }
 
     query(): Query<R> {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { connectWith, LwnrdbClient } from "../../src/client.js";
-import { AuthenticationError, ConnectionLostError, LwnrdbError, UnknownOutcomeError } from "../../src/index.js";
+import { AuthenticationError, ConnectionLostError, field, LwnrdbError, UnknownOutcomeError } from "../../src/index.js";
 import type { JsonObject } from "../../src/internal/values-codec.js";
 import { FakeServer, type Responder } from "../support/fake-server.js";
 import { error, ok } from "../support/recording-channel.js";
@@ -165,16 +165,18 @@ describe("LwnrdbClient", () => {
         expect(await orders.findById("o-1")).toEqual({ id: "o-1" });
         expect(await orders.query().toArray()).toEqual([{ id: "o-1" }]);
         await orders.delete("o-1");
+        await orders.deleteWhere(field("status").eq("closed"));
         await transaction.commit();
         const session = server?.sessions.find((candidate) =>
             candidate.requests.some((request) => request.type === "START_TRANSACTION"),
         );
-        expect(session?.requests.map((request) => request.type).slice(-7)).toEqual([
+        expect(session?.requests.map((request) => request.type).slice(-8)).toEqual([
             "START_TRANSACTION",
             "SAVE",
             "BULK_SAVE",
             "FIND_BY_ID",
             "AGGREGATE",
+            "DELETE",
             "DELETE",
             "COMMIT_TRANSACTION",
         ]);

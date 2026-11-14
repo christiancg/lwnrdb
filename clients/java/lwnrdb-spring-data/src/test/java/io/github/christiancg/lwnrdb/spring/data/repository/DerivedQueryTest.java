@@ -136,9 +136,11 @@ public class DerivedQueryTest {
         assertTrue(stack.steps("AGGREGATE").contains("\"COUNT\""));
         stack.results("[" + ROW + "]");
         assertTrue(widgets.existsByName("bolt"));
-        assertEquals(1, widgets.deleteByName("bolt"));
-        assertEquals("w1", stack.next("DELETE").get("_id").asString());
+        stack.replies.reply("DELETE", "{\"type\":\"DELETE\",\"status\":\"OK\",\"deletedCount\":2}");
+        assertEquals(2, widgets.deleteByName("bolt"));
+        assertEquals("bolt", stack.next("DELETE").get("condition").get("value").asString());
         assertEquals(1, widgets.removeByName("bolt").size());
+        assertEquals("w1", stack.next("DELETE").get("_id").asString());
         stack.results("[]");
         assertFalse(widgets.existsByName("none"));
     }

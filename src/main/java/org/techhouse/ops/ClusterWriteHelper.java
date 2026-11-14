@@ -10,8 +10,10 @@ import org.techhouse.cluster.WriteGuard;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
@@ -19,6 +21,10 @@ import org.techhouse.ops.resp.SaveResponse;
 public final class ClusterWriteHelper {
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+
+    public record ReservedDelete(List<String> removed, Long version) {
+    }
 
     private ClusterWriteHelper() {
     }
@@ -113,6 +119,58 @@ public final class ClusterWriteHelper {
             return response;
         }
         return afterDelete(dbName, collName, id, reservedVersion, response);
+    }
+
+    public static ReservedDelete deleteReserved(String dbName, String collName, List<String> ids) throws Exception {
+        final var reservation = coordinator.reserveDelete(dbName, collName, ids);
+        if (reservation.ownerLost()) {
+            return null;
+        }
+        try {
+            reservation.awaitTombstones();
+        } catch (java.io.IOException e) {
+            coordinator.retractDelete(dbName, collName, ids, reservation.version());
+            throw e;
+        }
+        return new ReservedDelete(bulkDeleteOrRetract(coordinator, dbName, collName, ids, reservation.version()),
+                reservation.version());
+    }
+
+    static ReservedDelete deleteReservedBesideForce(ClusterCoordinator through, String dbName, String collName,
+            List<String> ids) throws Exception {
+        final var reservation = through.reserveDelete(dbName, collName, ids);
+        if (reservation.ownerLost()) {
+            return null;
+        }
+        final var removed = bulkDeleteOrRetract(through, dbName, collName, ids, reservation.version());
+        reservation.awaitTombstones();
+        return new ReservedDelete(removed, reservation.version());
+    }
+
+    private static List<String> bulkDeleteOrRetract(ClusterCoordinator through, String dbName, String collName,
+            List<String> ids, Long reservedVersion) throws Exception {
+        try {
+            return DeleteOperationHelper.executeBulkDelete(dbName, collName, ids, listenManager, true);
+        } catch (Exception e) {
+            through.retractDelete(dbName, collName, ids, reservedVersion);
+            throw e;
+        }
+    }
+
+    static ReplicationOutcome replicateReserved(ClusterCoordinator through, String dbName, String collName,
+            ReservedDelete reserved) {
+        return reserved.removed().isEmpty()
+                ? ReplicationOutcome.NOT_CLUSTERED
+                : through.replicateDelete(dbName, collName, reserved.removed(), reserved.version());
+    }
+
+    public static OperationResponse afterDeleteMany(String dbName, String collName, ReservedDelete reserved,
+            OperationResponse response) {
+        if (response instanceof DeleteManyResponse && reserved != null) {
+            return withReplication(response, OperationType.DELETE,
+                    replicateReserved(coordinator, dbName, collName, reserved));
+        }
+        return response;
     }
 
     static OperationResponse afterGroupReplication(OperationResponse response, ReplicationOutcome outcome) {

@@ -40,6 +40,23 @@ public sealed class DataIT(DefaultServer fixture) : IClassFixture<DefaultServer>
     }
 
     [Fact]
+    public async Task DeleteWhereRemovesEveryMatchAndReportsTheCount()
+    {
+        var orders = await Orders("delete_where");
+        await orders.SaveAllAsync([
+            Document.Of("_id", "dw-1", "status", "archived", "total", 10),
+            Document.Of("_id", "dw-2", "status", "archived", "total", 500),
+            Document.Of("_id", "dw-3", "status", "active", "total", 10),
+        ]);
+        Assert.Equal(1, await orders.DeleteWhereAsync(
+            Query.Filters.And(Query.Filters.Field("status").Eq("archived"), Query.Filters.Field("total").Lt(100))));
+        Assert.Null(await orders.FindByIdAsync("dw-1"));
+        Assert.NotNull(await orders.FindByIdAsync("dw-2"));
+        Assert.NotNull(await orders.FindByIdAsync("dw-3"));
+        Assert.Equal(0, await orders.DeleteWhereAsync(Query.Filters.Field("status").Eq("never")));
+    }
+
+    [Fact]
     public async Task BulkSaveReportsInsertedAndUpdatedIds()
     {
         var orders = await Orders("bulk");

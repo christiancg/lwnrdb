@@ -57,6 +57,7 @@ public enum ConfigKey {
     LISTEN_RERUN_TIMEOUT_MS("listenRerunTimeoutMs", ValueType.LONG, "10000", Rule.atLeast(1)),
     LISTEN_THREADS("listenThreads", ValueType.INT, "2", Rule.atLeast(1)),
     MAX_FILTER_OPERANDS("maxFilterOperands", ValueType.INT, "10000", Rule.atLeast(0)),
+    DELETE_MAX_MATCHES("deleteMaxMatches", ValueType.INT, "100000", Rule.atLeast(1)),
     MAX_VECTOR_DIMENSIONS("maxVectorDimensions", ValueType.INT, "16384", Rule.atLeast(1)),
     AGGREGATE_TIMEOUT_MS("aggregateTimeoutMs", ValueType.LONG, "300000", Rule.atLeast(0)),
     AGGREGATE_MAX_RESULT_BYTES("aggregateMaxResultBytes", ValueType.SIZE, HeapShares.AUTO, Rule.orAuto(Rule.positiveSize())),

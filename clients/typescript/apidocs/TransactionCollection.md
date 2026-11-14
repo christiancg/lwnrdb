@@ -37,6 +37,13 @@ Buffers the delete of one document.
 
 @param id the `_id`
 
+## deleteWhere
+
+Buffers the delete of every document the filter matches in this transaction's view, its own writes included.
+
+@param condition the documents to delete, built like a query filter
+@returns how many documents matched and were buffered
+
 ## query
 
 @returns an empty pipeline that reads through the transaction

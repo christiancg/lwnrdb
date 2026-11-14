@@ -29,6 +29,7 @@ import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CallProcedureResponse;
 import org.techhouse.ops.resp.CancelScriptResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
@@ -103,7 +104,7 @@ public class ResponseBytesTest {
                 new CallProcedureResponse("ok", doc, logs, false, "run-1"),
                 new CallProcedureResponse("failed", ErrorCode.ERROR_RETRIEVING, logs, true, "run-2", List.of("at x")),
                 new CancelScriptResponse("ok", true), new CloseConnectionResponse(), new DeleteResponse("ok"),
-                new FindByIdResponse("ok", doc), new FindByIdResponse("ok", null),
+                new DeleteManyResponse(42L), new FindByIdResponse("ok", doc), new FindByIdResponse("ok", null),
                 new GetDatabaseStatsResponse("ok", doc), new GetSchemaResponse("ok", doc),
                 new ListCollectionsResponse("ok", List.of("c1", "c2")), new ListDatabasesResponse("ok", List.of("db1")),
                 new ListProceduresResponse("ok", rows), new ListSchedulesResponse("ok", rows),

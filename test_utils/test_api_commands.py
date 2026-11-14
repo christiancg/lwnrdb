@@ -129,6 +129,7 @@ COLL_BUDGET = "result_budget"
 COLL_DELETES = "many_deletes"
 COLL_SHAPES = "shapes"
 COLL_MIXED = "mixed_load"
+COLL_DELETE_WHERE = "delete_where"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -283,6 +284,66 @@ def test_crud(c):
                bulk_save(c, COLL_CRUD, [{"_id": 123, "v": 1}]), "ERROR", "400-1")
     check_code("BULK_SAVE invalid _id (illegal chars) -> 400-1",
                bulk_save(c, COLL_CRUD, [{"_id": "bad id!", "v": 1}]), "ERROR", "400-1")
+
+
+def delete_where(c, coll, condition, db=DB) -> dict:
+    return c.send({"type": "DELETE", "databaseName": db, "collectionName": coll, "condition": condition})
+
+
+def field_condition(field, operator, value) -> dict:
+    return {"fieldOperatorType": operator, "field": field, "value": value}
+
+
+def test_delete_by_condition(c):
+    section("DELETE with a condition")
+
+    check_status("create the collection", create_coll(c, COLL_DELETE_WHERE), "OK")
+    check_status("index the status field", create_index(c, COLL_DELETE_WHERE, "status"), "OK")
+    docs = [{"_id": f"w{i}", "status": "archived" if i % 3 == 0 else "active", "total": i * 10} for i in range(30)]
+    check_status("seed 30 documents", bulk_save(c, COLL_DELETE_WHERE, docs), "OK")
+
+    r = delete_where(c, COLL_DELETE_WHERE, field_condition("status", "EQUALS", "archived"))
+    check_status("DELETE where an indexed field matches", r, "OK")
+    check_field("it reports the 10 deleted documents", r, "deletedCount", 10)
+    remaining = ids_of(aggregate(c, COLL_DELETE_WHERE, []))
+    check("exactly the active documents remain",
+          remaining == sorted(d["_id"] for d in docs if d["status"] == "active"), f"remaining={remaining}")
+    check_code("an index read finds no archived document", aggregate(
+        c, COLL_DELETE_WHERE, [filter_step("status", "EQUALS", "archived")]), "NOT_FOUND", "404-3")
+
+    r = delete_where(c, COLL_DELETE_WHERE, {"conjunctionType": "AND", "operators": [
+        field_condition("status", "EQUALS", "active"), field_condition("total", "SMALLER_THAN", 50)]})
+    check_field("a conjunction on an indexed and an unindexed field deletes w1, w2 and w4", r, "deletedCount", 3)
+    check("w1, w2 and w4 are gone", all(find_by_id(c, COLL_DELETE_WHERE, i).get("status") == "NOT_FOUND"
+                                        for i in ("w1", "w2", "w4")))
+    check_status("w5 is still there", find_by_id(c, COLL_DELETE_WHERE, "w5"), "OK")
+
+    r = delete_where(c, COLL_DELETE_WHERE, field_condition("status", "EQUALS", "never"))
+    check_status("a condition matching nothing is OK", r, "OK")
+    check_field("and deletes 0 documents", r, "deletedCount", 0)
+
+    both = c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL_DELETE_WHERE, "_id": "w5",
+                   "condition": field_condition("status", "EQUALS", "active")})
+    check_code("_id and condition together -> 400-1", both, "ERROR", "400-1")
+    check_status("and w5 survives the refused request", find_by_id(c, COLL_DELETE_WHERE, "w5"), "OK")
+    check_code("neither _id nor condition -> 400-1",
+               c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL_DELETE_WHERE}), "ERROR", "400-1")
+    check_code("a condition without an operator shape -> 400-43",
+               delete_where(c, COLL_DELETE_WHERE, {"field": "status"}), "ERROR", "400-43")
+    check_code("an IN past maxFilterOperands -> 400-27",
+               delete_where(c, COLL_DELETE_WHERE, field_condition("total", "IN", list(range(10001)))),
+               "ERROR", "400-27")
+    check_code("a condition on a collection that does not exist -> 404-11",
+               delete_where(c, "never_created", field_condition("status", "EQUALS", "active")), "NOT_FOUND",
+               "404-11")
+
+    r = delete_where(c, COLL_DELETE_WHERE, {"script": "export default (d) => d.total >= 250;"})
+    check_field("a script condition deletes w25, w26, w28 and w29", r, "deletedCount", 4)
+    left = ids_of(aggregate(c, COLL_DELETE_WHERE, []))
+    check("the active documents below 250 that a previous delete kept remain",
+          left == sorted(f"w{i}" for i in range(5, 25) if i % 3 != 0), f"left={left}")
+
+    check_status("drop the collection", drop_coll(c, COLL_DELETE_WHERE), "OK")
 
 
 def test_top_level_id(c):
@@ -1747,6 +1808,7 @@ def main():
         test_names_that_do_not_exist_answer_as_before,
         test_reserved_script_runs_collection,
         test_crud,
+        test_delete_by_condition,
         test_top_level_id,
         test_value_types,
         test_rows_of_different_shapes_round_trip,

@@ -1,4 +1,4 @@
-import type { PipelineStep } from "../query/types.js";
+import type { Filter, PipelineStep } from "../query/types.js";
 import { PipelineEncoder } from "./pipeline-encoder.js";
 import { encodeDocument, type EncodeOptions, type JsonObject } from "./values-codec.js";
 
@@ -45,6 +45,10 @@ export class RequestEncoder {
 
     delete(database: string, collection: string, id: string): JsonObject {
         return { ...request("DELETE", database, collection), _id: id };
+    }
+
+    deleteWhere(database: string, collection: string, condition: Filter): JsonObject {
+        return { ...request("DELETE", database, collection), condition: this.pipeline.filter(condition) };
     }
 
     aggregate(

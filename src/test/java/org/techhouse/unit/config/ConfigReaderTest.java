@@ -299,6 +299,7 @@ public class ConfigReaderTest {
         expectedConfig.put("listenRerunTimeoutMs", "10000");
         expectedConfig.put("listenThreads", "2");
         expectedConfig.put("maxFilterOperands", "10000");
+        expectedConfig.put("deleteMaxMatches", "100000");
         expectedConfig.put("maxVectorDimensions", "16384");
         expectedConfig.put("aggregateTimeoutMs", "300000");
         expectedConfig.put("aggregateMaxResultBytes", "auto");

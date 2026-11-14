@@ -2,6 +2,7 @@ package io.github.christiancg.lwnrdb.spring.data.core;
 
 import io.github.christiancg.lwnrdb.client.Collection;
 import io.github.christiancg.lwnrdb.client.TransactionCollection;
+import io.github.christiancg.lwnrdb.client.query.Filter;
 import io.github.christiancg.lwnrdb.client.query.Query;
 import java.util.List;
 import java.util.Optional;
@@ -14,6 +15,8 @@ interface EntityStore<T> {
     Optional<T> findById(String id);
 
     void delete(String id);
+
+    long deleteWhere(Filter condition);
 
     Query<T> query();
 
@@ -37,6 +40,11 @@ interface EntityStore<T> {
             @Override
             public void delete(String id) {
                 collection.delete(id);
+            }
+
+            @Override
+            public long deleteWhere(Filter condition) {
+                return collection.deleteWhere(condition);
             }
 
             @Override
@@ -66,6 +74,11 @@ interface EntityStore<T> {
             @Override
             public void delete(String id) {
                 collection.delete(id);
+            }
+
+            @Override
+            public long deleteWhere(Filter condition) {
+                return collection.deleteWhere(condition);
             }
 
             @Override

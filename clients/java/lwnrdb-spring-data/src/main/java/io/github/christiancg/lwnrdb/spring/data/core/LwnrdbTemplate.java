@@ -5,6 +5,7 @@ import static io.github.christiancg.lwnrdb.client.query.Filters.field;
 import io.github.christiancg.lwnrdb.client.Collection;
 import io.github.christiancg.lwnrdb.client.Document;
 import io.github.christiancg.lwnrdb.client.LwnrdbClient;
+import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
 import io.github.christiancg.lwnrdb.client.error.NotFoundException;
 import io.github.christiancg.lwnrdb.client.protocol.ErrorCode;
 import io.github.christiancg.lwnrdb.client.query.Filter;
@@ -31,6 +32,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 public class LwnrdbTemplate implements LwnrdbOperations {
+    private static final Filter EVERY_DOCUMENT = field(Document.ID_FIELD).ne("");
     private final LwnrdbClient client;
     private final LwnrdbMappingContext mappingContext;
     private final LwnrdbExceptionTranslator translator = new LwnrdbExceptionTranslator();
@@ -150,7 +152,34 @@ public class LwnrdbTemplate implements LwnrdbOperations {
 
     @Override
     public <T> long deleteAll(Class<T> type) {
-        return delete(type, LwnrdbQuerySpec.all()).size();
+        return deleteMatching(type, LwnrdbQuerySpec.all());
+    }
+
+    @Override
+    public <T> long deleteWhere(Class<T> type, @Nullable Filter filter) {
+        return translate(() -> store(type).deleteWhere(filter == null ? EVERY_DOCUMENT : filter));
+    }
+
+    @Override
+    public <T> long deleteMatching(Class<T> type, LwnrdbQuerySpec spec) {
+        if (!isFilterOnly(spec)) {
+            return delete(type, spec).size();
+        }
+        final long deleted;
+        try {
+            deleted = store(type).deleteWhere(spec.filter().orElse(EVERY_DOCUMENT));
+        } catch (LwnrdbException e) {
+            if (e.hasCode(ErrorCode.DELETE_MATCHES_TOO_MANY)) {
+                return delete(type, spec).size();
+            }
+            final var translated = translator.translateExceptionIfPossible(e);
+            throw translated != null ? translated : e;
+        }
+        return deleted;
+    }
+
+    private static boolean isFilterOnly(LwnrdbQuerySpec spec) {
+        return spec.sort().isUnsorted() && spec.skip() == 0 && spec.limit().isEmpty();
     }
 
     @Override

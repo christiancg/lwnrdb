@@ -582,7 +582,7 @@ compiled program's static specifiers and refuses an unresolvable `procedures/` t
 
 ### The `db` module
 
-`db` exposes `findById`, `aggregate`, `cursor`, `save`, `bulkSave`, `delete`,
+`db` exposes `findById`, `aggregate`, `cursor`, `save`, `bulkSave`, `delete`, `deleteWhere`,
 `listCollections`, `listDatabases`, `transaction` and `name`. It is deliberately **read+write
 and single-database**: no DDL, no index management, no user operations, and no access to a
 database other than the run's scope. Opening DDL to scripts would put `CREATE_INDEX`/
@@ -599,12 +599,26 @@ the user owns or holds a database, collection or script grant on.
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
 schema violation, an entry-too-large, a cluster rejection, an internal error. Only genuine
 absence stays a value: `findById` answers `null`, `aggregate` answers `[]`, and `delete` of an
-absent id is a no-op. A collection that is not registered is not absence: reads of it throw
+absent id is a no-op, and `deleteWhere` matching nothing answers `0`. A collection that is not registered is not absence: reads of it throw
 (`404-11`) exactly as writes do, and so does a JOIN into one. A call that omits a required argument, or passes one of the wrong shape, is a
-catchable `TypeError` too — `db.save` needs a document and `db.aggregate`, `db.bulkSave` and
-`db.cursor` each need an array, and every database name, collection name and id must be a string:
+catchable `TypeError` too — `db.save` needs a document, `db.deleteWhere` a condition object, and
+`db.aggregate`, `db.bulkSave` and `db.cursor` each need an array, and every database name, collection name and id must be a string:
 nothing is coerced, so `db.delete(db.name, "c")` or `db.findById(db.name, "c", 5)` throws rather
 than addressing the document whose `_id` is `"undefined"` or `"5"`.
+
+**`db.deleteWhere(database, collection, condition)`** deletes every document of the collection that
+matches `condition` and returns how many it deleted. The condition is a FILTER operator, exactly
+what a `FILTER` step of `db.aggregate` takes as its `operator`, and the call is the wire `DELETE`
+with a `condition` (see [protocol.md](protocol.md#delete)): all or nothing, refused (a thrown
+`Error`) past `deleteMaxMatches` matches, before triggers run for every match first, and inside
+`db.transaction` it is buffered with the transaction's other writes.
+
+```js
+import db from 'db';
+const purged = db.deleteWhere(db.name, 'sessions',
+  { fieldOperatorType: 'SMALLER_THAN', field: 'expiresAt', value: Date.now() });
+return purged;
+```
 
 **`db.cursor(database, collection, pipeline, options)`** walks a pipeline one batch at a time so
 a script can read a collection larger than its memory budget. Each batch is an ordinary

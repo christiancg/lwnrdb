@@ -23,6 +23,7 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsString;
@@ -52,6 +53,7 @@ public final class DbModule {
                     requireString(args, 1, "delete", COLLECTION_NAME), requireString(args, 2, "delete", ID));
             return JsUndefined.getInstance();
         }));
+        db.set("deleteWhere", hostCall("deleteWhere", ops, args -> deleteWhere(database, ops, args)));
         db.set("listCollections", hostCall("listCollections", ops, args -> toStringArray(
                 database.listCollections(requireString(args, 0, "listCollections", DATABASE_NAME)))));
         db.set("listDatabases", hostCall("listDatabases", ops, _ -> toStringArray(database.listDatabases())));
@@ -110,6 +112,13 @@ public final class DbModule {
         final var result = database.bulkSave(dbName, collName, documents);
         InterpreterOps.chargeElements(ops, (long) result.inserted().size() + result.updated().size());
         return outcome(result);
+    }
+
+    private static JsValue deleteWhere(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "deleteWhere", DATABASE_NAME);
+        final var collName = requireString(args, 1, "deleteWhere", COLLECTION_NAME);
+        final var condition = requireCondition(payloadArg(args, ops));
+        return new JsNumber(database.deleteWhere(dbName, collName, condition));
     }
 
     private static JsValue cursor(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
@@ -299,6 +308,13 @@ public final class DbModule {
             return object;
         }
         throw new TypeErrorException("db.save expects a document");
+    }
+
+    private static JsonObject requireCondition(JsonBaseElement converted) {
+        if (converted instanceof JsonObject condition) {
+            return condition;
+        }
+        throw new TypeErrorException("db.deleteWhere expects a condition object");
     }
 
     private static JsonArray requireArray(JsonBaseElement converted, String message) {

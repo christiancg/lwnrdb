@@ -5,12 +5,12 @@ from typing import Generic, Protocol, TypeVar
 
 from lwnrdb._internal.client_context import ClientContext
 from lwnrdb._internal.names import collection_name, database_name, document_id
-from lwnrdb._internal.response_decoder import boolean_of, document, documents, strings, text_of
+from lwnrdb._internal.response_decoder import boolean_of, document, documents, number_of, strings, text_of
 from lwnrdb._internal.values_codec import JsonObject
 from lwnrdb.document import Document, DocumentCodec
 from lwnrdb.error_codes import ErrorCode
 from lwnrdb.errors import NotFoundError
-from lwnrdb.query.types import PipelineStep
+from lwnrdb.query.types import Filter, PipelineStep
 from lwnrdb.results import AnalyzeResult, BulkSaveResult, SaveResult
 
 T = TypeVar("T")
@@ -85,6 +85,13 @@ class CollectionOps(Generic[T, R]):
         await self.context.channel.send(
             "DELETE", self.context.encoder.delete(self.database, self.collection, document_id(value))
         )
+
+    async def delete_where(self, condition: Filter) -> int:
+        reply = await self.context.channel.send(
+            "DELETE", self.context.encoder.delete_where(self.database, self.collection, condition)
+        )
+        deleted = number_of(reply.get("deletedCount"))
+        return 0 if deleted is None else int(deleted)
 
     async def aggregate(self, steps: Sequence[PipelineStep], dirty_read: bool) -> list[Document]:
         request = self.context.encoder.aggregate(self.database, self.collection, steps, dirty_read, analyze=False)

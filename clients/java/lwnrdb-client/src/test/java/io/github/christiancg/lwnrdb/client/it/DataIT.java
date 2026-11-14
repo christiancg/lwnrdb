@@ -10,6 +10,7 @@ import io.github.christiancg.lwnrdb.client.Document;
 import io.github.christiancg.lwnrdb.client.ReadMode;
 import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
 import io.github.christiancg.lwnrdb.client.error.NotFoundException;
+import io.github.christiancg.lwnrdb.client.query.Filters;
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ public class DataIT extends ServerIT {
         assertFalse(second.inserted());
         final var read = orders.findById("o-1").orElseThrow();
         assertEquals("paid", read.getString("status").orElseThrow());
-        assertEquals(12.5, read.getDouble("total").getAsDouble());
+        assertEquals(12.5, read.getDouble("total").orElseThrow());
         assertEquals("paid", orders.findById("o-1", ReadMode.DIRTY).orElseThrow().getString("status").orElseThrow());
     }
 
@@ -65,6 +66,19 @@ public class DataIT extends ServerIT {
         orders.delete("gone");
         assertTrue(orders.findById("gone").isEmpty());
         assertThrows(NotFoundException.class, () -> orders.delete("gone"));
+    }
+
+    @Test
+    public void test_delete_where_removes_every_match_and_reports_the_count() {
+        orders.saveAll(List.of(Document.of("_id", "dw-1", "status", "archived", "total", 10),
+                Document.of("_id", "dw-2", "status", "archived", "total", 500),
+                Document.of("_id", "dw-3", "status", "active", "total", 10)));
+        assertEquals(1, orders
+                .deleteWhere(Filters.and(Filters.field("status").eq("archived"), Filters.field("total").lt(100))));
+        assertTrue(orders.findById("dw-1").isEmpty());
+        assertTrue(orders.findById("dw-2").isPresent());
+        assertTrue(orders.findById("dw-3").isPresent());
+        assertEquals(0, orders.deleteWhere(Filters.field("status").eq("never")));
     }
 
     @Test

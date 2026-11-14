@@ -15,6 +15,7 @@ from lwnrdb import (
     TriggerDefinition,
     TriggerEvent,
     collection_key,
+    field,
 )
 from lwnrdb._internal.values_codec import JsonObject
 from tests.support.protocol_fixtures import responses
@@ -57,6 +58,15 @@ async def test_data_replies_decode_to_results() -> None:
     found = await orders.find_by_id("o-1")
     assert found is not None
     assert found["_id"] == "o-1"
+
+
+async def test_delete_where_sends_the_filter_and_reads_the_deleted_count() -> None:
+    channel = _replying("ok.delete_where")
+    orders = _shop(channel).collection("orders")
+    assert await orders.delete_where(field("status").eq("archived")) == 3
+    assert channel.requests[-1]["condition"] == {"fieldOperatorType": "EQUALS", "field": "status", "value": "archived"}
+    silent = _shop(RecordingChannel()).collection("orders")
+    assert await silent.delete_where(field("status").eq("archived")) == 0
 
 
 async def test_a_missing_document_is_none_only_for_404_2() -> None:

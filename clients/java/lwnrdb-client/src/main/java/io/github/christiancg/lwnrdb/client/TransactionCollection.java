@@ -1,6 +1,7 @@
 package io.github.christiancg.lwnrdb.client;
 
 import io.github.christiancg.lwnrdb.client.internal.CollectionOps;
+import io.github.christiancg.lwnrdb.client.query.Filter;
 import io.github.christiancg.lwnrdb.client.query.Query;
 import java.util.List;
 import java.util.Objects;
@@ -35,6 +36,10 @@ public final class TransactionCollection<T> {
 
     public void delete(String id) {
         ops.delete(id);
+    }
+
+    public long deleteWhere(Filter condition) {
+        return ops.deleteWhere(condition);
     }
 
     public Query<T> query() {

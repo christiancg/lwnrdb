@@ -95,7 +95,8 @@ Deletes one entity; a missing id is ignored.
 
 ## deleteAll(Class)
 
-Reads every id, then deletes one at a time: the protocol has no bulk delete.
+Deletes every entity with one conditional `DELETE`, all or nothing. A collection holding more than the server's
+`deleteMaxMatches` documents is refused with `400-44`; it then reads every id and deletes one at a time.
 
 @param type the entity class
 @param <T> the entity type
@@ -103,10 +104,34 @@ Reads every id, then deletes one at a time: the protocol has no bulk delete.
 
 ## delete(Class, LwnrdbQuerySpec)
 
+Reads the matching entities, then deletes them one at a time, because the server does not return what a conditional
+`DELETE` removed.
+
 @param type the entity class
 @param spec what to delete
 @param <T> the entity type
 @return the deleted entities
+
+## deleteWhere(Class, Filter)
+
+Deletes every entity the filter matches with one conditional `DELETE`, all or nothing. Past the server's
+`deleteMaxMatches` it fails with the translated `400-44` and deletes nothing.
+
+@param type the entity class
+@param filter the filter, or null for every entity
+@param <T> the entity type
+@return how many were deleted
+
+## deleteMatching(Class, LwnrdbQuerySpec)
+
+Deletes what the spec matches and counts it. A spec with only a filter is one conditional `DELETE`, which falls back
+to reading and deleting one at a time when the server refuses it with `400-44`; a spec with a sort, a skip or a limit
+always reads first.
+
+@param type the entity class
+@param spec what to delete
+@param <T> the entity type
+@return how many were deleted
 
 ## query(Class)
 

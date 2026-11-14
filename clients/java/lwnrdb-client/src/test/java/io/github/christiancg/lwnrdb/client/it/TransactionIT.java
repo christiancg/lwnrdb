@@ -50,6 +50,19 @@ public class TransactionIT extends ServerIT {
     }
 
     @Test
+    public void test_a_delete_where_in_a_transaction_sees_its_own_writes_and_commits_with_it() {
+        accounts.save(Document.of("_id", "dw-a", "closed", true));
+        final long deleted = client.transaction(transaction -> {
+            final var inside = transaction.collection("tx_it", "accounts");
+            inside.save(Document.of("_id", "dw-b", "closed", true));
+            return inside.deleteWhere(field("closed").eq(true));
+        });
+        assertEquals(2, deleted);
+        assertTrue(accounts.findById("dw-a").isEmpty());
+        assertTrue(accounts.findById("dw-b").isEmpty());
+    }
+
+    @Test
     public void test_a_rollback_and_a_failing_body_leave_nothing() {
         try (var transaction = client.beginTransaction()) {
             transaction.collection("tx_it", "accounts").save(Document.of("_id", "r1"));

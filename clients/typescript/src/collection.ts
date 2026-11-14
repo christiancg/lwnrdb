@@ -1,6 +1,7 @@
 import type { CollectionOps } from "./internal/collection-ops.js";
 import { Indexes } from "./indexes.js";
 import { Query } from "./query/query.js";
+import type { Filter } from "./query/types.js";
 import type { BulkSaveResult, ReadOptions, SaveResult } from "./results.js";
 import { Schema } from "./schema.js";
 import { Triggers } from "./scripting/triggers.js";
@@ -50,6 +51,10 @@ export class Collection<T, R> {
 
     delete(id: string): Promise<void> {
         return this.#ops.delete(id);
+    }
+
+    deleteWhere(condition: Filter): Promise<number> {
+        return this.#ops.deleteWhere(condition);
     }
 
     query(): Query<R> {

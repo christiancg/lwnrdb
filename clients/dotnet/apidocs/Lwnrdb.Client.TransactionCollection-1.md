@@ -15,6 +15,22 @@ Deletes one document as part of the transaction.
 @param id the document's `_id`, case-sensitive
 @param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
 
+## DeleteWhereAsync(Filter, CancellationToken)
+Deletes every document the filter matches in the transaction's view, its own writes included, as part of the
+transaction.
+
+@param condition the documents to delete, built like a query filter
+@param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
+@returns how many documents matched and were buffered
+
+## DeleteWhereAsync(Expression<Func<T, bool>>, CancellationToken)
+Deletes every document the predicate matches as part of the transaction, translated to a server filter as `Where` is.
+
+@param predicate the documents to delete, over the stored members of `T`
+@param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
+@returns how many documents matched and were buffered
+@exception System.NotSupportedException when the predicate cannot run on the server
+
 ## FindByIdAsync(string, CancellationToken)
 Reads one document by its exact, case-sensitive `_id`, seeing the transaction's own writes.
 

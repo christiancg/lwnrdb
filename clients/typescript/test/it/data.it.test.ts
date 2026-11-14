@@ -1,5 +1,13 @@
 import { beforeAll, describe, expect, test } from "vitest";
-import { type Collection, type Document, LwnrdbError, NotFoundError, type Stored } from "../../src/index.js";
+import {
+    and,
+    type Collection,
+    type Document,
+    field,
+    LwnrdbError,
+    NotFoundError,
+    type Stored,
+} from "../../src/index.js";
 import { serverIt } from "./server-it.js";
 
 const it = serverIt();
@@ -50,6 +58,19 @@ describe("documents", () => {
         await orders.delete("gone");
         expect(await orders.findById("gone")).toBeUndefined();
         await expect(orders.delete("gone")).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    test("deleteWhere removes every match and reports the count", async () => {
+        await orders.saveAll([
+            { _id: "dw-1", status: "archived", total: 10 },
+            { _id: "dw-2", status: "archived", total: 500 },
+            { _id: "dw-3", status: "active", total: 10 },
+        ]);
+        expect(await orders.deleteWhere(and(field("status").eq("archived"), field("total").lt(100)))).toBe(1);
+        expect(await orders.findById("dw-1")).toBeUndefined();
+        expect(await orders.findById("dw-2")).toBeDefined();
+        expect(await orders.findById("dw-3")).toBeDefined();
+        expect(await orders.deleteWhere(field("status").eq("never"))).toBe(0);
     });
 
     test("nested values round-trip", async () => {

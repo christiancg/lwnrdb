@@ -34,6 +34,9 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -248,6 +251,43 @@ public class OperationProcessorBeforeHookTest {
         request.set_id("d2");
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
         assertNull(find("d2"));
+    }
+
+    private org.techhouse.ops.resp.OperationResponse deleteWhereQtyIsTwo() {
+        final var request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setCondition(new FieldOperator(FieldOperatorType.EQUALS, "qty", new JsonNumber(2)));
+        return processor.processMessage(request);
+    }
+
+    @Test
+    public void test_a_hook_rejecting_one_match_rejects_the_whole_conditional_delete() throws Exception {
+        for (final var id : List.of("w1", "w2", "w3")) {
+            assertEquals(OperationStatus.OK, save(id).getStatus());
+        }
+        installHook("lock", "lock", "export default (d) => { if (d._id === 'w2') { throw new Error('locked'); } };",
+                EventType.DELETED);
+
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(), deleteWhereQtyIsTwo().getErrorCode());
+
+        for (final var id : List.of("w1", "w2", "w3")) {
+            assertNotNull(find(id), id + " must survive a rejected conditional delete");
+        }
+    }
+
+    @Test
+    public void test_hooks_see_every_matched_document_of_a_conditional_delete() throws Exception {
+        for (final var id : List.of("v1", "v2")) {
+            assertEquals(OperationStatus.OK, save(id).getStatus());
+        }
+        installHook("check", "check", "export default (d) => { if (d.price !== 10) { throw new Error('bad'); } };",
+                EventType.DELETED);
+
+        final var response = deleteWhereQtyIsTwo();
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertTrue(((DeleteManyResponse) response).getDeletedCount() >= 2);
+        assertNull(find("v1"));
+        assertNull(find("v2"));
     }
 
     @Test

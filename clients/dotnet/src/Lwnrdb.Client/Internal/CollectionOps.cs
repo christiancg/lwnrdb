@@ -1,10 +1,13 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Lwnrdb.Client.Errors;
+using Lwnrdb.Client.Internal.Linq;
 using Lwnrdb.Client.Protocol;
 using Lwnrdb.Client.Query;
 
@@ -62,6 +65,20 @@ internal sealed class CollectionOps<T> : IQueryTarget<T>
     public async Task DeleteAsync(string id, CancellationToken ct) =>
         await SendAsync(Operation.Delete, RequestEncoder.Delete(Database, Collection, Names.DocumentId(id)), ct)
             .ConfigureAwait(false);
+
+    public async Task<long> DeleteWhereAsync(Filter condition, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        var reply = await SendAsync(Operation.Delete, Context.Encoder.DeleteWhere(Database, Collection, condition), ct)
+            .ConfigureAwait(false);
+        return ResponseDecoder.WholeOf(reply["deletedCount"]) ?? 0;
+    }
+
+    public Task<long> DeleteWhereAsync(Expression<Func<T, bool>> predicate, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        return DeleteWhereAsync(EntityPredicate.Translate(predicate, Context.Json), ct);
+    }
 
     public async Task<IReadOnlyList<Document>> AggregateAsync(ImmutableArray<PipelineStep> steps, bool dirtyRead, CancellationToken ct)
     {

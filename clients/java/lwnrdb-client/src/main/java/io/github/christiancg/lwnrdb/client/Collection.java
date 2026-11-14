@@ -2,6 +2,7 @@ package io.github.christiancg.lwnrdb.client;
 
 import io.github.christiancg.lwnrdb.client.internal.CollectionOps;
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
+import io.github.christiancg.lwnrdb.client.query.Filter;
 import io.github.christiancg.lwnrdb.client.query.Query;
 import io.github.christiancg.lwnrdb.client.scripting.Triggers;
 import java.util.List;
@@ -51,6 +52,10 @@ public final class Collection<T> {
         ops.delete(id);
     }
 
+    public long deleteWhere(Filter condition) {
+        return ops.deleteWhere(condition);
+    }
+
     public Query<T> query() {
         return new Query<>(ops);
     }
@@ -68,7 +73,9 @@ public final class Collection<T> {
     }
 
     public Subscription listen(Query<T> query, ListenHandler<T> handler) {
-        return ops.context().listens().listen(ops.database(), ops.collection(), query.steps(), ops.codec(),
+        @SuppressWarnings("resource")
+        final var listens = ops.context().listens();
+        return listens.listen(ops.database(), ops.collection(), query.steps(), ops.codec(),
                 Objects.requireNonNull(handler, "handler"));
     }
 

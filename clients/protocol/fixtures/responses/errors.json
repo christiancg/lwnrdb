@@ -17,6 +17,7 @@
     {"name":"errors.409_16","frame":{"type":"SAVE","status":"ERROR","message":"refused","errorCode":"409-16"},"expect":"error:409-16"},
     {"name":"errors.400_1","frame":{"type":"SAVE","status":"ERROR","message":"refused","errorCode":"400-1"},"expect":"error:400-1"},
     {"name":"errors.400_43","frame":{"type":"AGGREGATE","status":"ERROR","message":"refused","errorCode":"400-43"},"expect":"error:400-43"},
+    {"name":"errors.400_44","frame":{"type":"DELETE","status":"ERROR","message":"The delete condition matches more documents than allowed","errorCode":"400-44"},"expect":"error:400-44"},
     {"name":"errors.400_3","frame":{"type":"BULK_SAVE","status":"ERROR","message":"refused","errorCode":"400-3"},"expect":"error:400-3"},
     {"name":"errors.400_7","frame":{"type":"SAVE","status":"ERROR","message":"refused","errorCode":"400-7"},"expect":"error:400-7"},
     {"name":"errors.500_33","frame":{"type":"COMMIT_TRANSACTION","status":"ERROR","message":"refused","errorCode":"500-33"},"expect":"error:500-33"},

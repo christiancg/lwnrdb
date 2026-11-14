@@ -51,6 +51,9 @@ internal sealed class RequestEncoder(TimeZoneInfo? temporalZone)
     public static JsonObject Delete(string database, string collection, string id) =>
         With(Request("DELETE", database, collection), "_id", id);
 
+    public JsonObject DeleteWhere(string database, string collection, Filter condition) =>
+        With(Request("DELETE", database, collection), "condition", Pipeline.Filter(condition));
+
     public JsonObject Aggregate(string database, string collection, ImmutableArray<PipelineStep> steps, bool dirtyRead, bool analyze)
     {
         var frame = With(Request("AGGREGATE", database, collection), "aggregationSteps", Pipeline.Steps(steps));

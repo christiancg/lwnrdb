@@ -16,6 +16,7 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     public JsonObject nextFindResult;
     public String denyMessage;
     public boolean rejectNestedTransaction;
+    public long nextDeletedCount;
     private boolean inTransaction;
 
     @Override
@@ -50,6 +51,13 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     public void delete(String db, String coll, String id) {
         calls.add("delete:" + db + "/" + coll + "/" + id);
         maybeDeny();
+    }
+
+    @Override
+    public long deleteWhere(String db, String coll, JsonObject condition) {
+        calls.add("deleteWhere:" + db + "/" + coll + "/" + condition.get("field").asJsonString().getValue());
+        maybeDeny();
+        return nextDeletedCount;
     }
 
     @Override

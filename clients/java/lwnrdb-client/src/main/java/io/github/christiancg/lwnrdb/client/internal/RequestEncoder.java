@@ -2,8 +2,8 @@ package io.github.christiancg.lwnrdb.client.internal;
 
 import io.github.christiancg.lwnrdb.client.Document;
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
+import io.github.christiancg.lwnrdb.client.query.Filter;
 import java.util.List;
-import java.util.Optional;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -41,7 +41,7 @@ public final class RequestEncoder {
     }
 
     public ObjectNode save(String database, String collection, Document document) {
-        return (ObjectNode) of(Operation.SAVE, database, collection).set("object", Documents.node(document));
+        return of(Operation.SAVE, database, collection).set("object", Documents.node(document));
     }
 
     public ObjectNode bulkSave(String database, String collection, List<Document> documents) {
@@ -59,6 +59,10 @@ public final class RequestEncoder {
         return of(Operation.DELETE, database, collection).put(ID, id);
     }
 
+    public ObjectNode deleteWhere(String database, String collection, Filter condition) {
+        return of(Operation.DELETE, database, collection).set("condition", pipeline.filter(condition));
+    }
+
     public ObjectNode aggregate(String database, String collection, List<PipelineStep> steps, boolean dirtyRead,
             boolean analyze) {
         final var request = of(Operation.AGGREGATE, database, collection);
@@ -70,7 +74,7 @@ public final class RequestEncoder {
     }
 
     public ObjectNode listen(String database, String collection, List<PipelineStep> steps) {
-        return (ObjectNode) of(Operation.LISTEN, database, collection).set(STEPS, pipeline.steps(steps));
+        return of(Operation.LISTEN, database, collection).set(STEPS, pipeline.steps(steps));
     }
 
     public ObjectNode stopListen(String listenId) {
@@ -129,7 +133,7 @@ public final class RequestEncoder {
     }
 
     public ObjectNode saveSchema(String database, String collection, Document schema) {
-        return (ObjectNode) of(Operation.SAVE_SCHEMA, database, collection).set("schema", Documents.node(schema));
+        return of(Operation.SAVE_SCHEMA, database, collection).set("schema", Documents.node(schema));
     }
 
     public ObjectNode getSchema(String database, String collection) {
@@ -156,9 +160,12 @@ public final class RequestEncoder {
         return of(Operation.SERVER_INFO);
     }
 
-    public ObjectNode databaseStats(Optional<String> database) {
-        return database.map(name -> of(Operation.GET_DATABASE_STATS, name))
-                .orElseGet(() -> of(Operation.GET_DATABASE_STATS));
+    public ObjectNode databaseStats() {
+        return of(Operation.GET_DATABASE_STATS);
+    }
+
+    public ObjectNode databaseStats(String database) {
+        return of(Operation.GET_DATABASE_STATS, database);
     }
 
     public ObjectNode closeConnection() {
