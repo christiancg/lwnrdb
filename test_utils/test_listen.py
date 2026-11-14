@@ -4,7 +4,7 @@ import random
 import select
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import base_utils as bu
 from base_utils import Conn, check, check_code, check_field, check_status, section
@@ -241,6 +241,32 @@ def test_push_on_delete_by_condition(writer: Conn, listener: Conn):
         check("the pushed result is empty", not (pushed.get("results") or []), f"got {pushed.get('results')!r}")
     extra = listener.recv(timeout=1.0)
     check("one delete of three documents pushed once", extra is None, f"second push: {extra!r}")
+
+    stop_listen(listener, listen_id)
+
+
+def test_push_on_save_by_condition(writer: Conn, listener: Conn):
+    section("LISTEN: one push when a SAVE with a condition changes the result")
+
+    for doc_id in ("upd-1", "upd-2", "upd-3"):
+        save_doc(writer, {"_id": doc_id, "kind": "queued"})
+    time.sleep(0.3)
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "queued"}}]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the conditional save", r, "OK")
+    listen_id = r.get("listenId")
+
+    updated = writer.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                           "condition": steps[0]["operator"], "object": {"kind": "processed"}})
+    check_field("the conditional save moved all three out of the result", updated, "updatedCount", 3)
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the conditional save", pushed is not None, "no push message within 5 s")
+    if pushed is not None:
+        check("the pushed result is empty", not (pushed.get("results") or []), f"got {pushed.get('results')!r}")
+    extra = listener.recv(timeout=1.0)
+    check("one update of three documents pushed once", extra is None, f"second push: {extra!r}")
 
     stop_listen(listener, listen_id)
 
@@ -1131,6 +1157,7 @@ def main():
                 test_no_push_on_non_matching_insert(writer_conn, listener_conn)
                 test_push_on_delete(writer_conn, listener_conn)
                 test_push_on_delete_by_condition(writer_conn, listener_conn)
+                test_push_on_save_by_condition(writer_conn, listener_conn)
                 test_push_on_geo_distance_match(writer_conn, listener_conn)
                 test_no_push_on_geo_distance_non_match(writer_conn, listener_conn)
                 test_push_on_geo_within_match(writer_conn, listener_conn)

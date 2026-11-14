@@ -57,6 +57,27 @@ Inserts or replaces one document as part of the transaction.
 @param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
 @returns the `_id` and whether it was an insert
 
+## UpdateWhereAsync(Filter, object, CancellationToken)
+Updates every document the filter matches in the transaction's view, its own writes included, as part of the
+transaction, by merging the patch's top-level fields into it. The patch is mapped as in
+`Collection<T>.UpdateWhereAsync`.
+
+@param condition the documents to update, built like a query filter
+@param patch the fields to set on every matching document
+@param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
+@returns how many documents matched and were buffered
+@exception Lwnrdb.Client.Errors.MappingException when the patch does not map to a JSON object
+
+## UpdateWhereAsync(Expression<Func<T, bool>>, object, CancellationToken)
+Updates every document the predicate matches as part of the transaction, translated to a server filter as `Where` is.
+
+@param predicate the documents to update, over the stored members of `T`
+@param patch the fields to set on every matching document
+@param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
+@returns how many documents matched and were buffered
+@exception System.NotSupportedException when the predicate cannot run on the server
+@exception Lwnrdb.Client.Errors.MappingException when the patch does not map to a JSON object
+
 ## DatabaseName
 The database the collection belongs to.
 

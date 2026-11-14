@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -26,7 +27,9 @@ import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
+import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class UserOperationHelper {
@@ -144,6 +147,22 @@ public class UserOperationHelper {
                     GrantPruner.forDeletedUser(username, new GrantRewrite.Restamp(restamped));
                     return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
                 }));
+    }
+
+    public static OperationResponse processListUsers(ListUsersRequest request) {
+        final var lockSet = List
+                .of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME));
+        return OperationLocks.withReadLocks(request.isDirtyRead(), lockSet, OperationType.LIST_USERS,
+                ErrorCode.ERROR_LISTING_USERS, () -> {
+                    final var ownedByUser = ownedDatabasesByUser(cache.getAllAdminDbEntries());
+                    final var userStream = cache.getAllAdminUserEntries().stream()
+                            .map(user -> user.toResponseJson(ownedByUser.getOrDefault(user.get_id(), List.of())));
+                    final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
+                            userStream);
+                    return results.isEmpty()
+                            ? new OperationResponse(OperationType.LIST_USERS, ErrorCode.NO_USERS_FOUND)
+                            : new ListUsersResponse("Ok", results);
+                });
     }
 
     public static OperationResponse processSetPassword(SetPasswordRequest request, UUID clientId) {

@@ -13,11 +13,20 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from typing import Union
 
 import base_utils as bu
-from base_utils import (Conn, check, check_code, check_field, check_status, filter_step, holds_throughout, ids_of,
-                        section, wait_until)
+from base_utils import (
+    Conn,
+    check,
+    check_code,
+    check_field,
+    check_status,
+    filter_step,
+    holds_throughout,
+    ids_of,
+    section,
+    wait_until,
+)
 
 HOST = "127.0.0.1"
 BASE_CLIENT_PORT = int(os.environ.get("CLUSTER_TEST_CLIENT_PORT", "8991"))
@@ -135,7 +144,7 @@ def burst(port, script, count: int) -> list:
 
 class BackgroundOp:
 
-    def __init__(self, target: Union[Conn, int], payload: dict):
+    def __init__(self, target: Conn | int, payload: dict):
         self.response = None
         self._thread = threading.Thread(target=self._run, args=(target, payload), daemon=True)
         self._thread.start()
@@ -401,39 +410,39 @@ class Node:
         self._write_config()
 
     def _write_config(self, **overrides):
-        settings = dict(
-            maxMemory="96mb",
-            clusterEnabled=True,
-            clusterPort=self.cluster_port,
-            clusterBindAddress="127.0.0.1",
-            clusterAdvertisedAddress="127.0.0.1",
-            clusterSeeds="" if self.index == 0 else f"{HOST}:{BASE_CLUSTER_PORT}",
-            clusterExpectedSize=3,
-            clusterSecret=CLUSTER_SECRET,
-            gossipIntervalMs=int(GOSSIP_INTERVAL_S * 1000),
-            suspectTimeoutMs=2000,
-            deadTimeoutMs=4000,
-            deadProbeIntervalMs=1000,
-            replicationAckTimeoutMs=5000,
-            virtualNodesPerNode=128,
-            readFallbackToLocal=True,
-            antiEntropyIntervalMs=int(ANTI_ENTROPY_INTERVAL_S * 1000),
-            tombstoneRetentionMs=86400000,
-            scriptsEnabled=True,
-            scriptTimeoutMs=20000,
-            scriptRoutingEnabled=self.index != 2,
-            scriptLocalityWeight=100 if self.index == 0 else 0,
-            maxConcurrentScriptsPerUser=0,
-            maxConcurrentScriptsPerDatabase=0,
-            triggersEnabled=True,
-            beforeHookInstructionBudget=200000,
-            beforeHookTimeoutMs=2000,
-            schedulesEnabled=True,
-            scheduleTickMs=200,
-            scheduleRefreshMs=2000,
-            scheduleTimeoutMs=10000,
-            faultInjectionEnabled=True,
-        )
+        settings = {
+            "maxMemory": "96mb",
+            "clusterEnabled": True,
+            "clusterPort": self.cluster_port,
+            "clusterBindAddress": "127.0.0.1",
+            "clusterAdvertisedAddress": "127.0.0.1",
+            "clusterSeeds": "" if self.index == 0 else f"{HOST}:{BASE_CLUSTER_PORT}",
+            "clusterExpectedSize": 3,
+            "clusterSecret": CLUSTER_SECRET,
+            "gossipIntervalMs": int(GOSSIP_INTERVAL_S * 1000),
+            "suspectTimeoutMs": 2000,
+            "deadTimeoutMs": 4000,
+            "deadProbeIntervalMs": 1000,
+            "replicationAckTimeoutMs": 5000,
+            "virtualNodesPerNode": 128,
+            "readFallbackToLocal": True,
+            "antiEntropyIntervalMs": int(ANTI_ENTROPY_INTERVAL_S * 1000),
+            "tombstoneRetentionMs": 86400000,
+            "scriptsEnabled": True,
+            "scriptTimeoutMs": 20000,
+            "scriptRoutingEnabled": self.index != 2,
+            "scriptLocalityWeight": 100 if self.index == 0 else 0,
+            "maxConcurrentScriptsPerUser": 0,
+            "maxConcurrentScriptsPerDatabase": 0,
+            "triggersEnabled": True,
+            "beforeHookInstructionBudget": 200000,
+            "beforeHookTimeoutMs": 2000,
+            "schedulesEnabled": True,
+            "scheduleTickMs": 200,
+            "scheduleRefreshMs": 2000,
+            "scheduleTimeoutMs": 10000,
+            "faultInjectionEnabled": True,
+        }
         settings.update(overrides)
         bu.write_config(self.work_dir, self.client_port, **settings)
 
@@ -443,10 +452,10 @@ class Node:
         self.start()
 
     def start(self):
-        log = open(self.log_path, "ab")
-        self.proc = subprocess.Popen(
-            ["java", "-Xmx1g", "-jar", bu.JAR_PATH],
-            stdout=log, stderr=log, cwd=self.work_dir)
+        with open(self.log_path, "ab") as log:
+            self.proc = subprocess.Popen(
+                ["java", "-Xmx1g", "-jar", bu.JAR_PATH],
+                stdout=log, stderr=log, cwd=self.work_dir)
         deadline = time.time() + 60.0
         while time.time() < deadline:
             if bu.port_open(HOST, self.client_port):
@@ -681,6 +690,24 @@ def test_bulk_delete_and_upsert():
     check("every node holds a tombstone for each doomed id", wait_until(
         lambda: all(doomed_ids <= tombstone_ids(n, DB, "bulk") for n in nodes), timeout_s=15.0))
 
+    marked = [{"_id": f"cu{i:02d}", "batch": "cu", "phase": "new" if i % 2 == 0 else "old", "keep": i}
+              for i in range(10)]
+    check_status("BULK_SAVE a batch for a conditional save",
+                 op_with_retry(lambda: bulk_save(nodes[1].client_port, DB, "bulk", marked)), "OK")
+    check("the conditional save batch is on every node", all_nodes_see(DB, "bulk", "cu09", "old", field="phase"))
+    reply = op_with_retry(lambda: op(forwarder.client_port, {
+        "type": "SAVE", "databaseName": DB, "collectionName": "bulk",
+        "condition": {"fieldOperatorType": "EQUALS", "field": "phase", "value": "new"},
+        "object": {"phase": "promoted"}}))
+    check_status("a SAVE with a condition sent to a non-owner is forwarded and commits", reply, "OK")
+    check_field("it reports the five promoted documents", reply, "updatedCount", 5)
+    check("every node sees the merge on a promoted document", all_nodes_see(DB, "bulk", "cu08", "promoted",
+                                                                           field="phase"))
+    check("every node keeps the untouched field of a promoted document", all_nodes_see(DB, "bulk", "cu08", 8,
+                                                                                      field="keep"))
+    check("every node still sees an unmatched document unchanged", all_nodes_see(DB, "bulk", "cu07", "old",
+                                                                                field="phase"))
+
 
 def test_concurrent_writers_on_one_owner_share_replication_and_replicas_converge():
     section("Concurrent SAVEs and DELETEs on one owner are grouped, replicated once per group, and converge")
@@ -812,7 +839,7 @@ def _rows_read_their_own_record(node, coll) -> bool:
     for doc_id, position, length, page, _version in bu.read_pk_rows(_pk_path(node, coll)):
         with open(os.path.join(folder, f"{coll}-{page}.dat"), "rb") as fp:
             fp.seek(position)
-            if not fp.read(length).startswith(f'{{"_id":"{doc_id}"'.encode("utf-8")):
+            if not fp.read(length).startswith(f'{{"_id":"{doc_id}"'.encode()):
                 return False
     return True
 
@@ -1142,7 +1169,7 @@ class PeerSession:
     def closed_without_reply(self) -> bool:
         try:
             return self.sock.recv(1) == b""
-        except (ConnectionResetError, socket.timeout):
+        except (TimeoutError, ConnectionResetError):
             return True
 
     def close(self):
@@ -2895,7 +2922,7 @@ def exec_client(port: int, request: dict) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as cwd:
         return subprocess.run(["java", "-jar", bu.JAR_PATH, "--exec", json.dumps(request), "--host", HOST, "--port",
                                str(port), "--user", ADMIN_USERNAME], cwd=cwd, capture_output=True, timeout=300,
-                              env={**os.environ, "LWNRDB_PASSWORD": ADMIN_PASSWORD})
+                              env={**os.environ, "LWNRDB_PASSWORD": ADMIN_PASSWORD}, check=False)
 
 
 def test_the_client_does_not_resend_a_replication_timeout():
@@ -3008,7 +3035,7 @@ def test_cluster_port_reset_flood_is_rate_limited():
     elapsed = time.time() - start
     logged = bu.read_log(victim.log_path).count(marker) - before
     ceiling = CLUSTER_LOG_RATE_PER_SECOND * (int(elapsed) + 2)
-    check(f"the reset flood was rate-limited, not one line per reset",
+    check("the reset flood was rate-limited, not one line per reset",
           logged < ceiling and logged < CLUSTER_RESET_FLOOD,
           f"{logged} lines for {CLUSTER_RESET_FLOOD} resets in {elapsed:.1f}s (ceiling {ceiling})")
     with Conn(port=victim.client_port) as conn:
@@ -3114,7 +3141,7 @@ def test_an_escaped_trigger_depth_does_not_suppress_the_owners_trigger():
         finally:
             conn.close()
         check(f"the owner's trigger still ran for {doc_id}",
-              wait_until(lambda: runs_marked(host, marks, doc_id) >= 1, timeout_s=30.0))
+              wait_until(lambda doc_id=doc_id: runs_marked(host, marks, doc_id) >= 1, timeout_s=30.0))
 
 
 SCHEDULE_DB = DB

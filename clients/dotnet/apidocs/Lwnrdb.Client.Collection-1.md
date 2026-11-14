@@ -118,6 +118,32 @@ Returns the collection's triggers.
 
 @returns the triggers facade
 
+## UpdateWhereAsync(Filter, object, CancellationToken)
+Updates every document that matches the filter, all or nothing, by merging the patch's top-level fields into it: a
+field the patch names is added or replaced, every other field is kept. A filter matching more than the server's
+`updateMaxMatches` is refused with `400-45` and updates nothing.
+
+The patch is mapped like a saved document, with the collection's JSON options: an anonymous object or a mapped type
+by its members (camelCase by default), a dictionary by its keys as written, and a `Document` as it is. A patch naming
+`_id` (or an `Id` member) is refused with `400-1`, and so is an empty one.
+
+@param condition the documents to update, built like a query filter
+@param patch the fields to set on every matching document
+@param ct cancels the wait; a request already sent closes its connection, since its outcome is unknown
+@returns how many documents were updated; `0` when none matched
+@exception Lwnrdb.Client.Errors.MappingException when the patch does not map to a JSON object
+
+## UpdateWhereAsync(Expression<Func<T, bool>>, object, CancellationToken)
+Updates every document the predicate matches by merging the patch into it, translated to a server filter as `Where`
+is. The patch is mapped and merged as in the `Filter` overload.
+
+@param predicate the documents to update, over the stored members of `T`
+@param patch the fields to set on every matching document
+@param ct cancels the wait; a request already sent closes its connection, since its outcome is unknown
+@returns how many documents were updated; `0` when none matched
+@exception System.NotSupportedException when the predicate cannot run on the server
+@exception Lwnrdb.Client.Errors.MappingException when the patch does not map to a JSON object
+
 ## DatabaseName
 The database the collection belongs to.
 

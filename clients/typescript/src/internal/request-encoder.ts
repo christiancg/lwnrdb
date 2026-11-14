@@ -51,6 +51,10 @@ export class RequestEncoder {
         return { ...request("DELETE", database, collection), condition: this.pipeline.filter(condition) };
     }
 
+    updateWhere(database: string, collection: string, condition: Filter, patch: JsonObject): JsonObject {
+        return { ...request("SAVE", database, collection), condition: this.pipeline.filter(condition), object: patch };
+    }
+
     aggregate(
         database: string,
         collection: string,

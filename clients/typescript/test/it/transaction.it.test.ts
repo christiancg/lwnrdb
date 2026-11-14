@@ -49,6 +49,20 @@ describe("transactions", () => {
         expect(await accounts.findById("r3")).toBeUndefined();
     });
 
+    test("updateWhere inside a transaction sees its own writes and lands on commit", async () => {
+        await accounts.save({ _id: "u1", tier: "basic", balance: 5 });
+        const updated = await it.client.transaction(async (transaction) => {
+            const inside = transaction.collection("tx_it", "accounts");
+            await inside.save({ _id: "u2", tier: "basic", balance: 7 });
+            const count = await inside.updateWhere(field("tier").eq("basic"), { tier: "gold" });
+            expect((await accounts.findById("u1", { dirtyRead: true }))?.tier).toBe("basic");
+            return count;
+        });
+        expect(updated).toBe(2);
+        expect(await accounts.findById("u1")).toEqual({ _id: "u1", tier: "gold", balance: 5 });
+        expect(await accounts.findById("u2")).toEqual({ _id: "u2", tier: "gold", balance: 7 });
+    });
+
     test("an idle transaction is rolled back by the server", async () => {
         const transaction = await it.client.beginTransaction();
         const inside = transaction.collection("tx_it", "accounts");

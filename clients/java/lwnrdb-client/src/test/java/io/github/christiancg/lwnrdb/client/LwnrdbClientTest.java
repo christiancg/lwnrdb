@@ -105,6 +105,7 @@ public class LwnrdbClientTest {
                 orders.saveAll(List.of(Document.of("_id", "c")));
                 orders.query().filter(field("x").eq(1)).toList();
                 orders.deleteWhere(field("x").eq(2));
+                orders.updateWhere(field("x").eq(3), Document.of("y", 4));
                 assertEquals("shop", orders.databaseName());
                 assertEquals("orders", orders.name());
                 return transaction.id();
@@ -117,7 +118,7 @@ public class LwnrdbClientTest {
                 types.add(request.get("type").asString());
             } while (!"COMMIT_TRANSACTION".equals(request.get("type").asString()));
             assertEquals(List.of("AUTHENTICATE", "START_TRANSACTION", "SAVE", "DELETE", "FIND_BY_ID", "BULK_SAVE",
-                    "AGGREGATE", "DELETE", "COMMIT_TRANSACTION"), types);
+                    "AGGREGATE", "DELETE", "SAVE", "COMMIT_TRANSACTION"), types);
             assertEquals(1, server.acceptedConnections());
         }
     }

@@ -50,6 +50,8 @@ internal static class WireFixtureCases
         cases["data.find_by_id"] = r => r.Orders.FindByIdAsync("o-1");
         cases["data.find_by_id_dirty"] = r => r.Orders.FindByIdAsync("o-1", dirtyRead: true);
         cases["data.delete"] = r => r.Orders.DeleteAsync("o-1");
+        cases["data.save_where"] = r => r.Orders.UpdateWhereAsync(
+            And(Field("status").Eq("pending"), Field("total").Lt(100)), new { Status = "expired", ExpiredBy = "sweeper" });
         cases["data.delete_where"] = r => r.Orders.DeleteWhereAsync(And(Field("status").Eq("archived"), Field("total").Lt(100)));
     }
 
@@ -58,7 +60,7 @@ internal static class WireFixtureCases
         cases["aggregate.all"] = r => r.Orders.Query().ToListAsync();
         cases["aggregate.filter_sort_limit"] = r => r.Orders.Query().Filter(Active).Sort("createdAt", Order.Desc).Limit(10).ToListAsync();
         cases["aggregate.skip_limit"] = r => r.Orders.Query().Skip(20).Limit(10).ToListAsync();
-        cases["aggregate.sort_ascending"] = r => r.Orders.Query().Sort("name", Order.Asc).ToListAsync();
+        cases["aggregate.sort_ascending"] = r => r.Orders.Query().Sort("name").ToListAsync();
         cases["aggregate.count"] = r => r.Orders.Query().Filter(Active).CountAsync();
         cases["aggregate.group_by"] = r => r.Orders.Query().GroupBy("status").ToListAsync();
         cases["aggregate.distinct_field"] = r => r.Orders.Query().Distinct("status").ToListAsync();

@@ -25,6 +25,7 @@ FENCED_COLL = "tx_fenced"
 RETRY_COLL = "retry_shutdown"
 BATCH_DELETE_COLL = "batch_deletes"
 WHERE_DELETE_COLL = "where_deletes"
+WHERE_UPDATE_COLL = "where_updates"
 TWIN_FAILING_COLL = "twin_failing"
 TWIN_AUDITED_COLL = "twin_audited"
 CAP_COLL = "trigger_cap"
@@ -887,6 +888,38 @@ def test_deleted_trigger_fires_per_document_of_a_conditional_delete(conn: Conn):
                "name": "where_deletes_watch"})
 
 
+def test_updated_trigger_fires_per_document_of_a_conditional_save(conn: Conn):
+    section("A SAVE with a condition fires the UPDATED trigger once per updated document")
+    check_status("create a collection for it", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": WHERE_UPDATE_COLL}), "OK")
+    check_status("install a per-document update recorder", conn.save_procedure("where_update_recorder",
+                 "import db from 'db'; import args from 'args';"
+                 "db.save(db.name, '" + AUDIT + "', { _id: 'whereupd-' + args.id, kind: args.document.kind,"
+                 " size: args.document.size });"
+                 " return 'ok';"), "OK")
+    check_status("watch its updates",
+                 conn.save_trigger("where_updates_watch", ["UPDATED"], "where_update_recorder",
+                                   coll=WHERE_UPDATE_COLL), "OK")
+    for doc_id, kind in (("wu1", "old"), ("wu2", "old"), ("wu3", "new")):
+        check_status(f"write {doc_id}", conn.save_doc({"_id": doc_id, "kind": kind, "size": 3},
+                                                      coll=WHERE_UPDATE_COLL), "OK")
+
+    reply = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": WHERE_UPDATE_COLL,
+                       "condition": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "old"},
+                       "object": {"kind": "renewed"}})
+    check_field("the condition updated the two old documents", reply, "updatedCount", 2)
+
+    for doc_id in ("wu1", "wu2"):
+        row = await_doc(conn, "whereupd-" + doc_id)
+        body = row.get("object") or {}
+        check(f"the trigger received {doc_id} merged, its size kept",
+              row.get("status") == "OK" and body.get("kind") == "renewed" and body.get("size") == 3, f"got {row}")
+    check("no run fired for the document the condition kept",
+          await_absent(conn, "whereupd-wu3").get("status") != "OK")
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": WHERE_UPDATE_COLL,
+               "name": "where_updates_watch"})
+
+
 def test_cascade(conn: Conn):
     section("Cascade control")
     check_status("install a self-writing procedure", conn.save_procedure("cascader",
@@ -1127,6 +1160,32 @@ def test_before_hook_on_delete(conn: Conn):
                  conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "d2"}), "OK")
     check("it is gone", conn.find("d2").get("status") != "OK")
     drop_hook(conn, "guard_delete")
+
+
+def test_before_hook_on_conditional_save(conn: Conn):
+    section("Before hooks - SAVE with a condition")
+    check_status("seed two documents to update", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+         "objects": [{"_id": "cs1", "batch": "cs", "qty": 2, "price": 5},
+                     {"_id": "cs2", "batch": "cs", "qty": 3, "price": 5}]}), "OK")
+    check_status("install a recomputing, guarding update hook",
+                 install_hook(conn, "cs_guard", "csguard",
+                              "export default (doc) => { if (doc.price < 0) { throw new Error('negative'); }"
+                              " return { ...doc, total: doc.qty * doc.price }; };",
+                              ["UPDATED"]), "OK")
+    batch = {"fieldOperatorType": "EQUALS", "field": "batch", "value": "cs"}
+    reply = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "condition": batch,
+                       "object": {"price": 10}})
+    check_field("both documents are updated", reply, "updatedCount", 2)
+    for doc_id, total in (("cs1", 20), ("cs2", 30)):
+        body = conn.find(doc_id).get("object") or {}
+        check(f"the hook saw {doc_id} merged and recomputed its total", body.get("total") == total, f"got {body}")
+    refused = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "condition": batch,
+                         "object": {"price": -1}})
+    check_code("a merge the hook rejects is refused whole", refused, "ERROR", "400-21")
+    check("and no document took the refused price",
+          all((conn.find(i).get("object") or {}).get("price") == 10 for i in ("cs1", "cs2")))
+    drop_hook(conn, "cs_guard")
 
 
 def test_before_hook_bulk_save(conn: Conn):
@@ -1824,7 +1883,7 @@ def test_concurrent_hooked_and_triggered_saves_fire_once_each(conn: Conn):
         conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": GROUPED_COLL, "name": name})
 
 
-def trigger_runs(conn: Conn, status: str = None) -> list:
+def trigger_runs(conn: Conn, status: str | None = None) -> list:
     payload = {"type": "LIST_TRIGGER_RUNS"}
     if status:
         payload["status"] = status
@@ -2577,6 +2636,7 @@ def main():
             test_before_hook_schema_recheck(conn)
             test_before_hook_replacement_depth(conn)
             test_before_hook_on_delete(conn)
+            test_before_hook_on_conditional_save(conn)
             test_before_hook_bulk_save(conn)
             test_before_hook_bulk_save_in_a_transaction(conn)
             test_before_hook_chaining(conn)
@@ -2605,6 +2665,7 @@ def main():
             test_batch_mode(conn)
             test_batch_deleted_trigger_fires_once_per_transaction(conn)
             test_deleted_trigger_fires_per_document_of_a_conditional_delete(conn)
+            test_updated_trigger_fires_per_document_of_a_conditional_save(conn)
             test_cascade(conn)
             test_triggers_per_collection_are_capped(conn)
             test_a_first_run_delivers_the_document_as_it_is_when_it_runs(conn)

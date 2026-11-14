@@ -30,6 +30,16 @@ public final class SchemaOperationHelper {
     private SchemaOperationHelper() {
     }
 
+    public static OperationResponse processSaveSchema(SaveSchemaRequest request) {
+        return OperationLocks.withCollectionLock(request.getDatabaseName(), request.getCollectionName(),
+                OperationType.SAVE_SCHEMA, ErrorCode.ERROR_SAVING_SCHEMA, () -> executeSaveSchema(request));
+    }
+
+    public static OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
+        return OperationLocks.withCollectionLock(request.getDatabaseName(), request.getCollectionName(),
+                OperationType.DELETE_SCHEMA, ErrorCode.ERROR_DELETING_SCHEMA, () -> executeDeleteSchema(request));
+    }
+
     public static OperationResponse executeSaveSchema(SaveSchemaRequest request) throws IOException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();

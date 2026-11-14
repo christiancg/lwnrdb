@@ -67,6 +67,10 @@ try (LwnrdbClient client = LwnrdbClient.connect(settings)) {
 
 A collection must exist before its first write: a save into a missing one is refused with `404-11`.
 
+`orders.updateWhere(filter, Document.of("status", "expired"))` merges the patch's top-level fields into every
+document the filter matches, and `orders.deleteWhere(filter)` deletes every match; each is one request, all or
+nothing, and returns how many documents it changed.
+
 `LwnrdbClient` is thread-safe and holds a pool of connections (8 by default). Each request borrows one connection
 until its reply arrives, so the pool size bounds how many requests run at once; raise `poolSize` when more threads
 need to run in parallel.
@@ -307,6 +311,11 @@ all or nothing. When more than the server's `deleteMaxMatches` documents match (
 matching documents and deleting them one by one. A `delete…By` that returns the deleted entities, or one with a sort,
 `First`/`Top` or a limit, always reads first. `template.deleteWhere(Order.class, filter)` is the single request without
 the fallback.
+
+`template.updateWhere(Order.class, filter, Map.of("status", "expired"))` updates every match with one conditional
+`SAVE`, all or nothing: the patch's top-level fields are added or replaced and the rest are kept. Its keys are stored
+field names (`wirePath` translates a property), and past the server's `updateMaxMatches` it fails with the translated
+`400-45`.
 
 ### Health
 

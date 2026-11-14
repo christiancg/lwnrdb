@@ -134,6 +134,9 @@ Code `400-43` (`INVALID_COMMAND`). The command is not valid.
 ## DeleteMatchesTooMany
 Code `400-44` (`DELETE_MATCHES_TOO_MANY`). The delete condition matches more documents than allowed.
 
+## UpdateMatchesTooMany
+Code `400-45` (`UPDATE_MATCHES_TOO_MANY`). The update condition matches more documents than allowed.
+
 ## MustAuthenticateFirst
 Code `401-1` (`MUST_AUTHENTICATE_FIRST`). Must authenticate first.
 

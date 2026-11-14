@@ -1,9 +1,6 @@
 package org.techhouse.ops;
 
-import java.util.List;
 import java.util.UUID;
-import org.techhouse.cache.Cache;
-import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Transaction;
 import org.techhouse.ex.PartialBulkSaveException;
@@ -65,12 +62,11 @@ import org.techhouse.ops.req.StartSnapshotRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.resp.CloseConnectionResponse;
-import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
 import org.techhouse.ops.snapshot.SnapshotOperationHelper;
 
 public class OperationProcessor {
-    private final Cache cache = IocContainer.get(Cache.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
@@ -378,6 +374,9 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
+        if (saveRequest.getCondition() != null) {
+            return processSaveWhere(saveRequest, actingUser);
+        }
         return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING,
                 GroupCommit.forSave(saveRequest), effects -> {
                     final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.SAVE, dbName,
@@ -399,6 +398,22 @@ public class OperationProcessor {
                                     effects, () -> SaveOperationHelper.executeSave(saveRequest)),
                             effects);
                 });
+    }
+
+    private OperationResponse processSaveWhere(SaveRequest request, String actingUser) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
+            final var update = ConditionalSave.prepare(request, actingUser);
+            if (update.answered() != null) {
+                return update.answered();
+            }
+            final var merged = update.merged();
+            final var staged = TriggerHelper.stageBulkSave(merged, actingUser);
+            return SaveWhereResponse.answering(
+                    ClusterWriteHelper.afterBulkSave(dbName, collName, TriggerHelper.runStaged(staged, dbName, collName,
+                            actingUser, request.getTriggerDepth(), () -> SaveOperationHelper.executeBulkSave(merged))));
+        });
     }
 
     private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction,
@@ -462,33 +477,15 @@ public class OperationProcessor {
     }
 
     private OperationResponse processListUsers(ListUsersRequest request) {
-        final var lockSet = List
-                .of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME));
-        return OperationLocks.withReadLocks(request.isDirtyRead(), lockSet, OperationType.LIST_USERS,
-                ErrorCode.ERROR_LISTING_USERS, () -> {
-                    final var ownedByUser = UserOperationHelper.ownedDatabasesByUser(cache.getAllAdminDbEntries());
-                    final var userStream = cache.getAllAdminUserEntries().stream()
-                            .map(user -> user.toResponseJson(ownedByUser.getOrDefault(user.get_id(), List.of())));
-                    final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
-                            userStream);
-                    return results.isEmpty()
-                            ? new OperationResponse(OperationType.LIST_USERS, ErrorCode.NO_USERS_FOUND)
-                            : new ListUsersResponse("Ok", results);
-                });
+        return UserOperationHelper.processListUsers(request);
     }
 
     private OperationResponse processSaveSchema(SaveSchemaRequest request) {
-        final var dbName = request.getDatabaseName();
-        final var collName = request.getCollectionName();
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_SCHEMA,
-                ErrorCode.ERROR_SAVING_SCHEMA, () -> SchemaOperationHelper.executeSaveSchema(request));
+        return SchemaOperationHelper.processSaveSchema(request);
     }
 
     private OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
-        final var dbName = request.getDatabaseName();
-        final var collName = request.getCollectionName();
-        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
-                ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
+        return SchemaOperationHelper.processDeleteSchema(request);
     }
 
     private OperationResponse processGetSchema(GetSchemaRequest request) {

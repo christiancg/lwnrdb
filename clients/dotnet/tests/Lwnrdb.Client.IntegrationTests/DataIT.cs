@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading.Tasks;
 using Lwnrdb.Client.Errors;
@@ -6,6 +7,7 @@ using Xunit;
 
 namespace Lwnrdb.Client.IntegrationTests;
 
+[SuppressMessage("ReSharper", "InconsistentNaming")]
 public sealed class DataIT(DefaultServer fixture) : IClassFixture<DefaultServer>
 {
     private async Task<Collection<Document>> Orders(string name)
@@ -54,6 +56,43 @@ public sealed class DataIT(DefaultServer fixture) : IClassFixture<DefaultServer>
         Assert.NotNull(await orders.FindByIdAsync("dw-2"));
         Assert.NotNull(await orders.FindByIdAsync("dw-3"));
         Assert.Equal(0, await orders.DeleteWhereAsync(Query.Filters.Field("status").Eq("never")));
+    }
+
+    [Fact]
+    public async Task UpdateWhereMergesThePatchIntoEveryMatchAndReportsTheCount()
+    {
+        var orders = await Orders("update_where");
+        await orders.SaveAllAsync([
+            Document.Of("_id", "uw-1", "status", "pending", "total", 10, "note", "keep"),
+            Document.Of("_id", "uw-2", "status", "pending", "total", 500),
+            Document.Of("_id", "uw-3", "status", "active", "total", 10),
+        ]);
+        Assert.Equal(1, await orders.UpdateWhereAsync(
+            Query.Filters.And(Query.Filters.Field("status").Eq("pending"), Query.Filters.Field("total").Lt(100)),
+            new { Status = "expired", ExpiredBy = "sweeper" }));
+        var updated = await orders.FindByIdAsync("uw-1");
+        Assert.Equal(
+            ("expired", "sweeper", 10.0, "keep"),
+            (updated!.GetString("status"), updated.GetString("expiredBy"), updated.GetDouble("total"), updated.GetString("note")));
+        Assert.Equal("pending", (await orders.FindByIdAsync("uw-2"))!.GetString("status"));
+        Assert.False((await orders.FindByIdAsync("uw-3"))!.Has("expiredBy"));
+        Assert.Equal(0, await orders.UpdateWhereAsync(Query.Filters.Field("status").Eq("never"), new { Status = "lost" }));
+        var refused = await Assert.ThrowsAsync<LwnrdbException>(
+            () => orders.UpdateWhereAsync(Query.Filters.Field("status").Eq("active"), new { Id = "uw-9", Status = "lost" }));
+        Assert.Equal("400-1", refused.RawCode);
+        Assert.Equal("active", (await orders.FindByIdAsync("uw-3"))!.GetString("status"));
+    }
+
+    [Fact]
+    public async Task UpdateWhereTranslatesATypedPredicate()
+    {
+        await Orders("update_where_typed");
+        var items = fixture.Client.Database("data_it").Collection<Item>("update_where_typed");
+        await items.SaveAllAsync([new Item { Id = "t-1", Total = 3 }, new Item { Id = "t-2", Total = 30 }]);
+        Assert.Equal(1, await items.UpdateWhereAsync(item => item.Total < 10, new { Status = "cheap" }));
+        var cheap = await items.FindByIdAsync("t-1");
+        Assert.Equal(("cheap", 3.0), (cheap!.Status, cheap.Total));
+        Assert.Null((await items.FindByIdAsync("t-2"))!.Status);
     }
 
     [Fact]

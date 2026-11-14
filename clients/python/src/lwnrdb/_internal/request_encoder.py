@@ -46,6 +46,9 @@ class RequestEncoder:
     def delete(self, database: str, collection: str, document_id: str) -> JsonObject:
         return {**request("DELETE", database, collection), "_id": document_id}
 
+    def update_where(self, database: str, collection: str, condition: Filter, patch: JsonObject) -> JsonObject:
+        return {**request("SAVE", database, collection), "condition": self.pipeline.filter(condition), "object": patch}
+
     def delete_where(self, database: str, collection: str, condition: Filter) -> JsonObject:
         return {**request("DELETE", database, collection), "condition": self.pipeline.filter(condition)}
 

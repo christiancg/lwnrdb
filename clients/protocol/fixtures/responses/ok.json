@@ -7,6 +7,7 @@
     {"name":"ok.aggregate","frame":{"type":"AGGREGATE","status":"OK","message":"Ok","results":[{"_id":"o-1","openedAt":"#datetime(2024-01-01T10:00)","opensAt":"#time(09:30)","location":"#geo(40.71,-74.0)","embedding":"#vector(0.12,4.4E-4,-0.0,1.0E21)"},{"_id":"o-2"}]},"expect":"ok"},
     {"name":"ok.aggregate_count","frame":{"type":"AGGREGATE","status":"OK","message":"Ok","results":[{"count":2}]},"expect":"ok"},
     {"name":"ok.aggregate_analyze","frame":{"type":"AGGREGATE","status":"OK","message":"Ok","results":[],"analyzeResult":{"steps":[]}},"expect":"ok"},
+    {"name":"ok.save_where","frame":{"type":"SAVE","status":"OK","message":"Updated 3 document(s)","updatedCount":3},"expect":"ok"},
     {"name":"ok.delete","frame":{"type":"DELETE","status":"OK","message":"Deleted"},"expect":"ok"},
     {"name":"ok.delete_where","frame":{"type":"DELETE","status":"OK","message":"Deleted 3 document(s)","deletedCount":3},"expect":"ok"},
     {"name":"ok.list_databases","frame":{"type":"LIST_DATABASES","status":"OK","message":"Ok","databases":["shop"]},"expect":"ok"},

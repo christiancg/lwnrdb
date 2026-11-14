@@ -61,6 +61,36 @@ async def test_save_find_and_delete(client: AsyncLwnrdbClient) -> None:
     assert await orders.delete_where(field("status").eq("never")) == 0
 
 
+async def test_update_where_merges_the_patch_into_every_match(client: AsyncLwnrdbClient) -> None:
+    shop = client.database("data_update")
+    await shop.create()
+    orders = shop.collection("orders")
+    await orders.create()
+    await orders.save_all(
+        [
+            {"_id": "uw-1", "status": "pending", "total": 10, "note": "keep"},
+            {"_id": "uw-2", "status": "pending", "total": 500},
+            {"_id": "uw-3", "status": "active", "total": 10},
+        ]
+    )
+    pending_and_small = and_(field("status").eq("pending"), field("total").lt(100))
+    assert await orders.update_where(pending_and_small, {"status": "expired", "expiredBy": "sweeper"}) == 1
+    assert await orders.find_by_id("uw-1") == {
+        "_id": "uw-1",
+        "status": "expired",
+        "total": 10,
+        "note": "keep",
+        "expiredBy": "sweeper",
+    }
+    assert await orders.find_by_id("uw-2") == {"_id": "uw-2", "status": "pending", "total": 500}
+    assert await orders.find_by_id("uw-3") == {"_id": "uw-3", "status": "active", "total": 10}
+    assert await orders.update_where(field("status").eq("never"), {"status": "x"}) == 0
+    with pytest.raises(LwnrdbError) as refused:
+        await orders.update_where(field("status").eq("active"), {"_id": "uw-9", "status": "x"})
+    assert refused.value.raw_code == "400-1"
+    assert await orders.find_by_id("uw-9") is None
+
+
 async def test_save_all_reports_inserted_and_updated_ids(client: AsyncLwnrdbClient) -> None:
     shop = client.database("data_bulk")
     await shop.create()

@@ -1,5 +1,5 @@
-import os
 import json
+import os
 import sys
 import threading
 import time
@@ -130,6 +130,7 @@ COLL_DELETES = "many_deletes"
 COLL_SHAPES = "shapes"
 COLL_MIXED = "mixed_load"
 COLL_DELETE_WHERE = "delete_where"
+COLL_SAVE_WHERE = "save_where"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -346,6 +347,90 @@ def test_delete_by_condition(c):
     check_status("drop the collection", drop_coll(c, COLL_DELETE_WHERE), "OK")
 
 
+def save_where(c, coll, condition, patch, db=DB) -> dict:
+    return c.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "condition": condition,
+                   "object": patch})
+
+
+def test_save_by_condition(c):
+    section("SAVE with a condition")
+
+    check_status("create the collection", create_coll(c, COLL_SAVE_WHERE), "OK")
+    check_status("index the status field", create_index(c, COLL_SAVE_WHERE, "status"), "OK")
+    docs = [{"_id": f"u{i}", "status": "pending" if i % 3 == 0 else "active", "total": i * 10,
+             "meta": {"owner": f"o{i}"}} for i in range(30)]
+    check_status("seed 30 documents", bulk_save(c, COLL_SAVE_WHERE, docs), "OK")
+
+    r = save_where(c, COLL_SAVE_WHERE, field_condition("status", "EQUALS", "pending"),
+                   {"status": "expired", "expiredBy": "sweeper"})
+    check_status("SAVE where an indexed field matches", r, "OK")
+    check_field("it reports the 10 updated documents", r, "updatedCount", 10)
+    u3 = find_by_id(c, COLL_SAVE_WHERE, "u3").get("object", {})
+    check("u3 carries the patch and keeps every other field",
+          u3.get("status") == "expired" and u3.get("expiredBy") == "sweeper" and u3.get("total") == 30
+          and u3.get("meta") == {"owner": "o3"}, f"u3={u3}")
+    u4 = find_by_id(c, COLL_SAVE_WHERE, "u4").get("object", {})
+    check("u4 did not match and is untouched", u4.get("status") == "active" and "expiredBy" not in u4, f"u4={u4}")
+    expired = ids_of(aggregate(c, COLL_SAVE_WHERE, [filter_step("status", "EQUALS", "expired")]))
+    scanned = ids_of(aggregate(c, COLL_SAVE_WHERE, [{"type": "SKIP", "skip": 0},
+                                                   filter_step("status", "EQUALS", "expired")]))
+    check("the index and a scan agree on the updated documents",
+          expired == scanned == sorted(d["_id"] for d in docs if d["status"] == "pending"), f"index={expired}")
+    check_code("an index read finds no pending document", aggregate(
+        c, COLL_SAVE_WHERE, [filter_step("status", "EQUALS", "pending")]), "NOT_FOUND", "404-3")
+
+    r = save_where(c, COLL_SAVE_WHERE, {"conjunctionType": "AND", "operators": [
+        field_condition("status", "EQUALS", "active"), field_condition("total", "SMALLER_THAN", 50)]},
+        {"meta": {"replaced": True}})
+    check_field("a conjunction updates u1, u2 and u4", r, "updatedCount", 3)
+    check("a nested object replaces the stored one whole",
+          find_by_id(c, COLL_SAVE_WHERE, "u1").get("object", {}).get("meta") == {"replaced": True})
+
+    r = save_where(c, COLL_SAVE_WHERE, field_condition("status", "EQUALS", "never"), {"status": "x"})
+    check_status("a condition matching nothing is OK", r, "OK")
+    check_field("and updates 0 documents", r, "updatedCount", 0)
+
+    both = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_SAVE_WHERE, "_id": "u5",
+                   "condition": field_condition("status", "EQUALS", "active"), "object": {"status": "x"}})
+    check_code("_id and condition together -> 400-1", both, "ERROR", "400-1")
+    check_code("_id inside the object beside a condition -> 400-1",
+               save_where(c, COLL_SAVE_WHERE, field_condition("status", "EQUALS", "active"),
+                          {"_id": "renamed", "status": "x"}), "ERROR", "400-1")
+    check_code("an empty object beside a condition -> 400-1",
+               save_where(c, COLL_SAVE_WHERE, field_condition("status", "EQUALS", "active"), {}), "ERROR", "400-1")
+    check("and u5 is untouched by the refused requests",
+          find_by_id(c, COLL_SAVE_WHERE, "u5").get("object", {}).get("status") == "active")
+    check_code("a condition without an operator shape -> 400-43",
+               save_where(c, COLL_SAVE_WHERE, {"field": "status"}, {"a": 1}), "ERROR", "400-43")
+    check_code("a condition on a collection that does not exist -> 404-11",
+               save_where(c, "never_created", field_condition("status", "EQUALS", "active"), {"a": 1}),
+               "NOT_FOUND", "404-11")
+
+    check_status("attach a schema requiring a string status",
+                 c.send({"type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": COLL_SAVE_WHERE,
+                         "schema": {"type": "object", "properties": {"status": {"type": "string"}}}}), "OK")
+    check_code("a merge violating the schema -> 400-7",
+               save_where(c, COLL_SAVE_WHERE, field_condition("status", "EQUALS", "active"), {"status": 5}),
+               "ERROR", "400-7")
+    check("and no active document changed", ids_of(aggregate(
+        c, COLL_SAVE_WHERE, [filter_step("status", "EQUALS", "active")])) == sorted(
+        d["_id"] for d in docs if d["status"] == "active"))
+    check_status("require total and status in the schema",
+                 c.send({"type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": COLL_SAVE_WHERE,
+                         "schema": {"type": "object", "required": ["total", "status"],
+                                    "properties": {"status": {"type": "string"}}}}), "OK")
+    r = save_where(c, COLL_SAVE_WHERE, field_condition("_id", "EQUALS", "u5"), {"reviewed": True})
+    check_field("a patch without the required fields passes once merged", r, "updatedCount", 1)
+    check("u5 carries the patch beside its required fields",
+          find_by_id(c, COLL_SAVE_WHERE, "u5").get("object", {}).get("reviewed") is True)
+
+    r = save_where(c, COLL_SAVE_WHERE, {"script": "export default (d) => d.total >= 250;"}, {"late": True})
+    check_field("a script condition updates u25 to u29", r, "updatedCount", 5)
+    check("u27 carries the scripted patch", find_by_id(c, COLL_SAVE_WHERE, "u27").get("object", {}).get("late") is True)
+
+    check_status("drop the collection", drop_coll(c, COLL_SAVE_WHERE), "OK")
+
+
 def test_top_level_id(c):
     section("SAVE with a top-level _id")
 
@@ -470,7 +555,7 @@ LONG_ASCII_PREFIX_LENGTHS = (1, 255, 256, 1021, 4097, 70001)
 
 
 def json_unicode_escape(code: int) -> str:
-    return "\\" + "u%04x" % code
+    return f"\\u{code:04x}"
 
 
 LONG_ASCII_TAILS = (
@@ -1809,6 +1894,7 @@ def main():
         test_reserved_script_runs_collection,
         test_crud,
         test_delete_by_condition,
+        test_save_by_condition,
         test_top_level_id,
         test_value_types,
         test_rows_of_different_shapes_round_trip,

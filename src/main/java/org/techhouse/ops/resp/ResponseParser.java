@@ -31,7 +31,7 @@ public final class ResponseParser {
         return switch (type) {
             case FIND_BY_ID -> new FindByIdResponse(message, document(object));
             case AGGREGATE -> new AggregateResponse(message, results(object));
-            case SAVE -> new SaveResponse(message, text(object, "_id"));
+            case SAVE -> saveResponse(object, message);
             case BULK_SAVE -> new BulkSaveResponse(message, strings(object, "inserted"), strings(object, "updated"));
             case DELETE -> deleteResponse(object, message);
             case LIST_COLLECTIONS -> new ListCollectionsResponse(message, strings(object, "collections"));
@@ -39,6 +39,13 @@ public final class ResponseParser {
             case START_TRANSACTION -> new StartTransactionResponse(message, text(object, "transactionId"));
             default -> new OperationResponse(type, status, message);
         };
+    }
+
+    private static OperationResponse saveResponse(final JsonObject object, final String message) {
+        final var updatedCount = value(object, "updatedCount");
+        return updatedCount != null && updatedCount.isJsonNumber()
+                ? new SaveWhereResponse(updatedCount.asJsonNumber().getValue().longValue())
+                : new SaveResponse(message, text(object, "_id"));
     }
 
     private static DeleteResponse deleteResponse(final JsonObject object, final String message) {

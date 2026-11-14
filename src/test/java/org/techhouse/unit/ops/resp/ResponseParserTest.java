@@ -24,6 +24,7 @@ import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 
 public class ResponseParserTest {
@@ -75,6 +76,14 @@ public class ResponseParserTest {
     public void test_parses_delete_response() {
         final var response = assertInstanceOf(DeleteResponse.class, roundTrip(new DeleteResponse("deleted")));
         assertEquals(OperationType.DELETE, response.getType());
+    }
+
+    @Test
+    public void test_parses_a_conditional_save_response_with_its_count() {
+        final var response = assertInstanceOf(SaveWhereResponse.class, roundTrip(new SaveWhereResponse(12L)));
+        assertEquals(12L, response.getUpdatedCount());
+        assertEquals("Updated 12 document(s)", response.getMessage());
+        assertEquals(OperationType.SAVE, response.getType());
     }
 
     @Test

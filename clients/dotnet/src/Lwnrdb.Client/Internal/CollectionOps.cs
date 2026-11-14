@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -80,6 +81,21 @@ internal sealed class CollectionOps<T> : IQueryTarget<T>
         return DeleteWhereAsync(EntityPredicate.Translate(predicate, Context.Json), ct);
     }
 
+    public async Task<long> UpdateWhereAsync(Filter condition, object patch, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        ArgumentNullException.ThrowIfNull(patch);
+        var request = Context.Encoder.SaveWhere(Database, Collection, condition, EncodePatch(patch));
+        var reply = await SendAsync(Operation.Save, request, ct).ConfigureAwait(false);
+        return ResponseDecoder.WholeOf(reply["updatedCount"]) ?? 0;
+    }
+
+    public Task<long> UpdateWhereAsync(Expression<Func<T, bool>> predicate, object patch, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        return UpdateWhereAsync(EntityPredicate.Translate(predicate, Context.Json), patch, ct);
+    }
+
     public async Task<IReadOnlyList<Document>> AggregateAsync(ImmutableArray<PipelineStep> steps, bool dirtyRead, CancellationToken ct)
     {
         var request = Context.Encoder.Aggregate(Database, Collection, steps, dirtyRead, false);
@@ -112,6 +128,29 @@ internal sealed class CollectionOps<T> : IQueryTarget<T>
         {
             Names.DocumentId(ResponseDecoder.TextOf(id));
         }
+        return encoded;
+    }
+
+    private JsonObject EncodePatch(object patch)
+    {
+        if (patch is Document document)
+        {
+            return RequestEncoder.Document(document);
+        }
+        JsonNode? node;
+        try
+        {
+            node = JsonSerializer.SerializeToNode(patch, patch.GetType(), Context.Json);
+        }
+        catch (JsonException error)
+        {
+            throw new MappingException($"the patch does not map to a document: {error.Message}", error);
+        }
+        if (node is not JsonObject encoded)
+        {
+            throw new MappingException($"the patch, a {patch.GetType().Name}, does not map to a JSON object");
+        }
+        NumberGuard.CheckTree(encoded, string.Empty);
         return encoded;
     }
 }

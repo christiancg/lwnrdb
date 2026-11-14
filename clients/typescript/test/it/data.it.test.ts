@@ -73,6 +73,30 @@ describe("documents", () => {
         expect(await orders.deleteWhere(field("status").eq("never"))).toBe(0);
     });
 
+    test("updateWhere merges the patch into every match and keeps the other fields", async () => {
+        await orders.saveAll([
+            { _id: "uw-1", status: "pending", total: 10, note: "keep" },
+            { _id: "uw-2", status: "pending", total: 500 },
+            { _id: "uw-3", status: "active", total: 10 },
+        ]);
+        const pendingAndSmall = and(field("status").eq("pending"), field("total").lt(100));
+        expect(await orders.updateWhere(pendingAndSmall, { status: "expired", expiredBy: "sweeper" })).toBe(1);
+        expect(await orders.findById("uw-1")).toEqual({
+            _id: "uw-1",
+            status: "expired",
+            total: 10,
+            note: "keep",
+            expiredBy: "sweeper",
+        });
+        expect(await orders.findById("uw-2")).toEqual({ _id: "uw-2", status: "pending", total: 500 });
+        expect(await orders.findById("uw-3")).toEqual({ _id: "uw-3", status: "active", total: 10 });
+        expect(await orders.updateWhere(field("status").eq("never"), { status: "x" })).toBe(0);
+        await expect(orders.updateWhere(field("status").eq("active"), { _id: "uw-9" })).rejects.toMatchObject({
+            rawCode: "400-1",
+        });
+        expect(await orders.findById("uw-9")).toBeUndefined();
+    });
+
     test("nested values round-trip", async () => {
         const nested = {
             _id: "n-1",

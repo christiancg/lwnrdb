@@ -320,6 +320,39 @@ than stored. Earlier versions answered `OK` and wrote `null` in its place, so th
 the stored one disagreed until the next restart. `Infinity` and `NaN` were already refused as invalid
 JSON.
 
+With a `condition` instead of an `_id`, `SAVE` updates every document of the collection that matches it. The
+`condition` is a FILTER operator, exactly what `DELETE` with a `condition` takes (see [`DELETE`](#delete)), with the same
+indexes and limits (`400-27`, `408-6`, `503-20`). `object` is merged into each match: every top-level property of
+`object` is added to the document or replaces the one it has, and every other property of the document is kept. A
+nested object in `object` replaces the stored one whole, and a `null` value stores `null`; nothing is removed.
+```json
+{"type":"SAVE","databaseName":"my_db","collectionName":"my_coll",
+ "condition":{"conjunctionType":"AND","operators":[
+   {"fieldOperatorType":"EQUALS","field":"status","value":"pending"},
+   {"fieldOperatorType":"SMALLER_THAN","field":"createdAt","value":1700000000000}]},
+ "object":{"status":"expired","expiredBy":"sweeper"}}
+```
+It answers with the number of documents it updated; matching nothing is `OK` with `updatedCount` 0:
+```json
+{"type":"SAVE","status":"OK","message":"Updated 12 document(s)","updatedCount":12}
+```
+- **Never an insert, never an `_id`.** A request with both a `condition` and an `_id` (beside `object` or inside it),
+  or with an empty `object`, is refused with `400-1`.
+- **All or nothing.** The matches are found, merged and written under one hold of the collection's write lock as one
+  write-ahead-log record, so readers never see part of it and a crash never leaves part of it. Every merged document is
+  checked against the collection's schema (`400-7`) and `maxEntrySize` before anything is written, and one refusal
+  refuses the whole request. A condition matching more than `updateMaxMatches` documents (default `100000`) is refused
+  with `400-45` before anything is written. Every match is written, even one the merge leaves unchanged.
+- **Hooks and triggers run per document.** Every `UPDATED` before trigger runs against every merged document before
+  anything is written and may rewrite it; one rejection refuses the whole request with `400-21`. `UPDATED` after
+  triggers fire once per updated document (`document` mode) or once for the whole request (`batch` mode).
+- **Scripts.** A `script` operator in the condition runs once per document while the collection's write lock is held.
+- **Inside a transaction** the condition is evaluated against the transaction's own view, and every merged document is
+  buffered as one save, counted against `transactionMaxOps` and `transactionMaxBytes` (`400-26`); a refusal buffers
+  none of them.
+- **In a cluster** the request is routed to the collection's owner like any write, and the updates replicate as one
+  batch.
+
 ### `BULK_SAVE`
 At least one object required.
 ```json
@@ -746,7 +779,7 @@ If the connection closes with a transaction still open, it is automatically roll
 
 **Maximum age.** A transaction older than `transactionMaxAgeMs` (default `600000`, `0` = no limit) is rolled back the same way however busy the connection is, so a client cannot hold its write locks forever by sending a request every few seconds. Its next request is answered `408-5` once and not executed, exactly like the idle case.
 
-**Size.** One transaction may buffer at most `transactionMaxOps` operations (default `100000`; a `BULK_SAVE` counts one per document) and `transactionMaxBytes` of documents (default `256Mb`). A `DELETE` with a `condition` counts one operation per document it matches. A buffered `DELETE` counts the bytes of what it buffers: its id, plus the whole deleted document when a `DELETED` trigger will receive it. The write that would pass either is refused with `400-26`; nothing of it is buffered and the transaction stays usable, so the client can still commit what it buffered or roll back. Every open transaction together may buffer at most `transactionTotalMaxBytes` (default `auto`, a quarter of the heap); a write that would pass it answers `503-21`, buffers nothing and leaves its transaction usable, and retrying it is safe once another transaction has ended.
+**Size.** One transaction may buffer at most `transactionMaxOps` operations (default `100000`; a `BULK_SAVE` counts one per document) and `transactionMaxBytes` of documents (default `256Mb`). A `DELETE` with a `condition` counts one operation per document it matches, and so does a `SAVE` with a `condition`. A buffered `DELETE` counts the bytes of what it buffers: its id, plus the whole deleted document when a `DELETED` trigger will receive it. The write that would pass either is refused with `400-26`; nothing of it is buffered and the transaction stays usable, so the client can still commit what it buffered or roll back. Every open transaction together may buffer at most `transactionTotalMaxBytes` (default `auto`, a quarter of the heap); a write that would pass it answers `503-21`, buffers nothing and leaves its transaction usable, and retrying it is safe once another transaction has ended.
 
 **Grants are checked again at commit.** Every operation is authorized when it is buffered, and `COMMIT_TRANSACTION` authorizes every collection the transaction writes once more against the user's current grants. If a grant was revoked in between, the commit is refused with `403-1`, the whole transaction is rolled back and nothing is applied.
 
@@ -1637,6 +1670,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-42` | `ERROR` |  | The collection has the maximum number of indexes (`maxIndexesPerCollection`); re-creating an existing index is never refused |
 | `400-43` | `ERROR` |  | The command is not valid: the line is not a JSON object, names no known `type`, is denser than the token budget, nests deeper than 128 levels, holds a custom value past its limits (such as a `#vector` over `maxVectorDimensions`), or has a field of the wrong shape. `type` is the request's own when it could be read, `null` otherwise; the connection stays open |
 | `400-44` | `ERROR` |  | The delete condition matches more documents than allowed (`deleteMaxMatches`); nothing was deleted |
+| `400-45` | `ERROR` |  | The update condition matches more documents than allowed (`updateMaxMatches`); nothing was written |
 | `401-1` | `UNAUTHENTICATED` |  | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` |  | User no longer exists |
 | `401-3` | `ERROR` |  | The user doesn't exist or the wrong credentials have been provided |

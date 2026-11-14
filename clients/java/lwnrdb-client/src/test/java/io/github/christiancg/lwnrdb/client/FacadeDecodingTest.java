@@ -61,6 +61,22 @@ public class FacadeDecodingTest {
     }
 
     @Test
+    public void test_a_conditional_update_reply_decodes_its_count_and_maps_its_patch() {
+        final var frame = (ObjectNode) ProtocolFixtures.responses().stream()
+                .filter(fixture -> fixture.name().equals("ok.save_where")).findFirst().orElseThrow().body()
+                .get("frame");
+        recorder.channel.replyWith(request -> frame.deepCopy());
+        final var pending = Filters.field("status").eq("pending");
+        assertEquals(3, recorder.orders.updateWhere(pending, Map.of("status", "expired")));
+        assertEquals("expired", recorder.channel.last().get("object").get("status").asString());
+        assertEquals(3, recorder.orders.updateWhere(pending, new Expiry("o-1", "expired")));
+        final var mapped = recorder.channel.last().get("object");
+        assertEquals("o-1", mapped.get("_id").asString());
+        assertFalse(mapped.has("id"));
+        assertEquals("pending", recorder.channel.last().get("condition").get("value").asString());
+    }
+
+    @Test
     public void test_ddl_index_and_schema_replies_decode() {
         assertEquals(List.of("orders"), recorder.shop.listCollections());
         assertEquals("shop", recorder.shop.name());
@@ -112,5 +128,8 @@ public class FacadeDecodingTest {
         assertTrue(users.get(0).admin());
         final var transactions = recorder.admin.transactions().list();
         assertEquals(42000, transactions.get(0).ageMs());
+    }
+
+    private record Expiry(String id, String status) {
     }
 }

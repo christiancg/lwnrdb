@@ -83,6 +83,19 @@ export class CollectionOps<T, R> implements QueryTarget<R> {
         return numberOf(reply.deletedCount) ?? 0;
     }
 
+    async updateWhere(condition: Filter, patch: Record<string, unknown>): Promise<number> {
+        const reply = await this.context.channel.send(
+            "SAVE",
+            this.context.encoder.updateWhere(
+                this.database,
+                this.collection,
+                condition,
+                this.context.encoder.document(patch),
+            ),
+        );
+        return numberOf(reply.updatedCount) ?? 0;
+    }
+
     async aggregate(steps: readonly PipelineStep[], dirtyRead: boolean): Promise<Document[]> {
         const request = this.context.encoder.aggregate(this.database, this.collection, steps, dirtyRead, false);
         return emptyOn(ErrorCode.NO_RESULTS, [], async () =>

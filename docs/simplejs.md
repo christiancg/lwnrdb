@@ -582,7 +582,7 @@ compiled program's static specifiers and refuses an unresolvable `procedures/` t
 
 ### The `db` module
 
-`db` exposes `findById`, `aggregate`, `cursor`, `save`, `bulkSave`, `delete`, `deleteWhere`,
+`db` exposes `findById`, `aggregate`, `cursor`, `save`, `bulkSave`, `updateWhere`, `delete`, `deleteWhere`,
 `listCollections`, `listDatabases`, `transaction` and `name`. It is deliberately **read+write
 and single-database**: no DDL, no index management, no user operations, and no access to a
 database other than the run's scope. Opening DDL to scripts would put `CREATE_INDEX`/
@@ -599,9 +599,10 @@ the user owns or holds a database, collection or script grant on.
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
 schema violation, an entry-too-large, a cluster rejection, an internal error. Only genuine
 absence stays a value: `findById` answers `null`, `aggregate` answers `[]`, and `delete` of an
-absent id is a no-op, and `deleteWhere` matching nothing answers `0`. A collection that is not registered is not absence: reads of it throw
+absent id is a no-op, and `updateWhere` or `deleteWhere` matching nothing answers `0`. A collection that is not registered is not absence: reads of it throw
 (`404-11`) exactly as writes do, and so does a JOIN into one. A call that omits a required argument, or passes one of the wrong shape, is a
-catchable `TypeError` too — `db.save` needs a document, `db.deleteWhere` a condition object, and
+catchable `TypeError` too — `db.save` needs a document, `db.deleteWhere` a condition object, `db.updateWhere` a
+condition object and an object of fields to set, and
 `db.aggregate`, `db.bulkSave` and `db.cursor` each need an array, and every database name, collection name and id must be a string:
 nothing is coerced, so `db.delete(db.name, "c")` or `db.findById(db.name, "c", 5)` throws rather
 than addressing the document whose `_id` is `"undefined"` or `"5"`.
@@ -618,6 +619,21 @@ import db from 'db';
 const purged = db.deleteWhere(db.name, 'sessions',
   { fieldOperatorType: 'SMALLER_THAN', field: 'expiresAt', value: Date.now() });
 return purged;
+```
+
+**`db.updateWhere(database, collection, condition, fields)`** merges `fields` into every document of the
+collection that matches `condition` and returns how many it updated: each top-level property of `fields` is
+added or replaced, and every other property of the document is kept. It is the wire `SAVE` with a
+`condition` (see [protocol.md](protocol.md#save-insert-or-update)): all or nothing, refused (a thrown `Error`)
+past `updateMaxMatches` matches or when `fields` names `_id` or is empty, `UPDATED` before triggers run for
+every merged document first, and inside `db.transaction` it is buffered with the transaction's other writes.
+
+```js
+import db from 'db';
+const expired = db.updateWhere(db.name, 'sessions',
+  { fieldOperatorType: 'SMALLER_THAN', field: 'expiresAt', value: Date.now() },
+  { state: 'expired' });
+return expired;
 ```
 
 **`db.cursor(database, collection, pipeline, options)`** walks a pipeline one batch at a time so

@@ -81,6 +81,16 @@ class CollectionOps(Generic[T, R]):
 
         return await empty_on(ErrorCode.ENTRY_NOT_FOUND, None, read)
 
+    async def update_where(self, condition: Filter, patch: Document) -> int:
+        reply = await self.context.channel.send(
+            "SAVE",
+            self.context.encoder.update_where(
+                self.database, self.collection, condition, self.context.encoder.document(patch)
+            ),
+        )
+        updated = number_of(reply.get("updatedCount"))
+        return 0 if updated is None else int(updated)
+
     async def delete(self, value: str) -> None:
         await self.context.channel.send(
             "DELETE", self.context.encoder.delete(self.database, self.collection, document_id(value))

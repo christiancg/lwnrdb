@@ -60,6 +60,12 @@ public class EnforcingDatabaseAccessScopeTest {
         return object;
     }
 
+    private static JsonObject statusPatch() {
+        final var patch = new JsonObject();
+        patch.add("status", new JsonString("touched"));
+        return patch;
+    }
+
     private static JsonObject everything() {
         final var condition = new JsonObject();
         condition.add("fieldOperatorType", new JsonString("NOT_EQUALS"));
@@ -106,6 +112,8 @@ public class EnforcingDatabaseAccessScopeTest {
         assertThrows(JsThrowException.class, () -> db.save("otherDb", TestGlobals.COLL, doc("nope")));
         assertThrows(JsThrowException.class, () -> db.delete("otherDb", TestGlobals.COLL, "nope"));
         assertThrows(JsThrowException.class, () -> db.deleteWhere("otherDb", TestGlobals.COLL, everything()));
+        assertThrows(JsThrowException.class,
+                () -> db.updateWhere("otherDb", TestGlobals.COLL, everything(), statusPatch()));
         assertThrows(JsThrowException.class, () -> db.listCollections("otherDb"));
     }
 
@@ -141,6 +149,8 @@ public class EnforcingDatabaseAccessScopeTest {
                 () -> db.delete(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, "forged"));
         assertThrows(JsThrowException.class,
                 () -> db.deleteWhere(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, everything()));
+        assertThrows(JsThrowException.class,
+                () -> db.updateWhere(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, everything(), statusPatch()));
     }
 
     @Test

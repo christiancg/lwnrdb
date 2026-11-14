@@ -54,6 +54,12 @@ function data(cases: Map<string, FixtureCall>): void {
     cases.set("data.find_by_id", (r) => r.orders.findById("o-1"));
     cases.set("data.find_by_id_dirty", (r) => r.orders.findById("o-1", { dirtyRead: true }));
     cases.set("data.delete", (r) => r.orders.delete("o-1"));
+    cases.set("data.save_where", (r) =>
+        r.orders.updateWhere(and(field("status").eq("pending"), field("total").lt(100)), {
+            status: "expired",
+            expiredBy: "sweeper",
+        }),
+    );
     cases.set("data.delete_where", (r) =>
         r.orders.deleteWhere(and(field("status").eq("archived"), field("total").lt(100))),
     );

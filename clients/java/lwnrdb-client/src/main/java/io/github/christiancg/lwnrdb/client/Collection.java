@@ -56,6 +56,10 @@ public final class Collection<T> {
         return ops.deleteWhere(condition);
     }
 
+    public long updateWhere(Filter condition, Object patch) {
+        return ops.updateWhere(condition, patch);
+    }
+
     public Query<T> query() {
         return new Query<>(ops);
     }

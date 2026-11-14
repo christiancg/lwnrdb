@@ -63,6 +63,31 @@ public class TransactionIT extends ServerIT {
     }
 
     @Test
+    public void test_an_update_where_in_a_transaction_is_invisible_until_commit_and_undone_by_rollback() {
+        accounts.saveAll(List.of(Document.of("_id", "uw-a", "tier", "basic", "balance", 5),
+                Document.of("_id", "uw-b", "tier", "basic")));
+        try (var transaction = client.beginTransaction()) {
+            final var inside = transaction.collection("tx_it", "accounts");
+            assertEquals(2, inside.updateWhere(field("tier").eq("basic"), Document.of("tier", "gold")));
+            assertEquals("gold", inside.findById("uw-a").orElseThrow().getString("tier").orElseThrow());
+            assertEquals("basic", tierOf("uw-a", ReadMode.DIRTY));
+            transaction.rollback();
+        }
+        assertEquals("basic", tierOf("uw-a", ReadMode.COMMITTED));
+        final long updated = client.transaction(transaction -> {
+            final var count = transaction.collection("tx_it", "accounts").updateWhere(field("tier").eq("basic"),
+                    Document.of("tier", "gold"));
+            assertEquals("basic", tierOf("uw-b", ReadMode.DIRTY));
+            return count;
+        });
+        assertEquals(2, updated);
+        assertEquals("gold", tierOf("uw-b", ReadMode.COMMITTED));
+        final var merged = accounts.findById("uw-a").orElseThrow();
+        assertEquals("gold", merged.getString("tier").orElseThrow());
+        assertEquals(5, merged.getLong("balance").orElseThrow());
+    }
+
+    @Test
     public void test_a_rollback_and_a_failing_body_leave_nothing() {
         try (var transaction = client.beginTransaction()) {
             transaction.collection("tx_it", "accounts").save(Document.of("_id", "r1"));
@@ -112,5 +137,9 @@ public class TransactionIT extends ServerIT {
             first.commit();
         }
         assertTrue(accounts.findById("s1").isPresent());
+    }
+
+    private String tierOf(String id, ReadMode mode) {
+        return accounts.findById(id, mode).orElseThrow().getString("tier").orElseThrow();
     }
 }

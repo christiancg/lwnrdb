@@ -74,13 +74,7 @@ public final class RequestParser {
             parsedType = type;
             return switch (type) {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);
-                case SAVE -> {
-                    final var parsed = eJson.fromJson(root, SaveRequest.class);
-                    if (parsed.getObject().get(Globals.PK_FIELD) instanceof JsonString objectId) {
-                        parsed.set_id(objectId.getValue());
-                    }
-                    yield parsed;
-                }
+                case SAVE -> parseSaveRequest(root);
                 case FIND_BY_ID -> eJson.fromJson(root, FindByIdRequest.class);
                 case AGGREGATE -> parseAggregationRequest(root);
                 case DELETE -> parseDeleteRequest(root);
@@ -145,6 +139,18 @@ public final class RequestParser {
         final var aggRequest = eJson.fromJson(parsed, AggregateRequest.class, AGGREGATION_STEPS_KEY);
         aggRequest.setAggregationSteps(parseAggregationSteps(parsed.get("aggregationSteps").asJsonArray()));
         return aggRequest;
+    }
+
+    private static OperationRequest parseSaveRequest(final JsonObject parsed) {
+        final var saveRequest = eJson.fromJson(parsed, SaveRequest.class, CONDITION_KEY);
+        if (saveRequest.getObject().get(Globals.PK_FIELD) instanceof JsonString objectId) {
+            saveRequest.set_id(objectId.getValue());
+        }
+        final var condition = parsed.get(CONDITION_FIELD);
+        if (condition != null && !condition.isJsonNull()) {
+            saveRequest.setCondition(recursiveParse(condition.asJsonObject()));
+        }
+        return saveRequest;
     }
 
     private static OperationRequest parseDeleteRequest(final JsonObject parsed) {

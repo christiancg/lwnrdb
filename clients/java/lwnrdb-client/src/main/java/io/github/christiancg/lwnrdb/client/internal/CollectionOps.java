@@ -6,6 +6,7 @@ import io.github.christiancg.lwnrdb.client.Document;
 import io.github.christiancg.lwnrdb.client.DocumentCodec;
 import io.github.christiancg.lwnrdb.client.SaveResult;
 import io.github.christiancg.lwnrdb.client.error.NotFoundException;
+import io.github.christiancg.lwnrdb.client.mapping.JacksonCodec;
 import io.github.christiancg.lwnrdb.client.protocol.ErrorCode;
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
 import io.github.christiancg.lwnrdb.client.query.Filter;
@@ -83,6 +84,20 @@ public final class CollectionOps<T> implements QueryTarget<T> {
         final var reply = channel.send(Operation.DELETE,
                 context.encoder().deleteWhere(database, collection, Objects.requireNonNull(condition, "condition")));
         return reply.path("deletedCount").asLong(0);
+    }
+
+    public long updateWhere(Filter condition, Object patch) {
+        final var request = context.encoder().updateWhere(database, collection,
+                Objects.requireNonNull(condition, "condition"), patchOf(Objects.requireNonNull(patch, "patch")));
+        return channel.send(Operation.SAVE, request).path("updatedCount").asLong(0);
+    }
+
+    private Document patchOf(Object patch) {
+        return patch instanceof Document document ? document : encode(patch.getClass(), patch);
+    }
+
+    private <P> Document encode(Class<P> type, Object patch) {
+        return new JacksonCodec<>(type, context.json()).encode(type.cast(patch));
     }
 
     @Override

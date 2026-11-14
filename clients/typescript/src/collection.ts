@@ -57,6 +57,10 @@ export class Collection<T, R> {
         return this.#ops.deleteWhere(condition);
     }
 
+    updateWhere(condition: Filter, patch: Record<string, unknown>): Promise<number> {
+        return this.#ops.updateWhere(condition, patch);
+    }
+
     query(): Query<R> {
         return new Query(this.#ops);
     }

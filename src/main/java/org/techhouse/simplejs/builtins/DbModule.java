@@ -32,6 +32,7 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class DbModule {
     private static final int PAYLOAD_INDEX = 2;
+    private static final int PATCH_INDEX = 3;
     private static final String PK_FIELD = "_id";
     private static final String DATABASE_NAME = "database name";
     private static final String COLLECTION_NAME = "collection name";
@@ -54,6 +55,7 @@ public final class DbModule {
             return JsUndefined.getInstance();
         }));
         db.set("deleteWhere", hostCall("deleteWhere", ops, args -> deleteWhere(database, ops, args)));
+        db.set("updateWhere", hostCall("updateWhere", ops, args -> updateWhere(database, ops, args)));
         db.set("listCollections", hostCall("listCollections", ops, args -> toStringArray(
                 database.listCollections(requireString(args, 0, "listCollections", DATABASE_NAME)))));
         db.set("listDatabases", hostCall("listDatabases", ops, _ -> toStringArray(database.listDatabases())));
@@ -117,8 +119,18 @@ public final class DbModule {
     private static JsValue deleteWhere(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
         final var dbName = requireString(args, 0, "deleteWhere", DATABASE_NAME);
         final var collName = requireString(args, 1, "deleteWhere", COLLECTION_NAME);
-        final var condition = requireCondition(payloadArg(args, ops));
+        final var condition = requireObject(payloadArg(args, ops), "db.deleteWhere expects a condition object");
         return new JsNumber(database.deleteWhere(dbName, collName, condition));
+    }
+
+    private static JsValue updateWhere(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "updateWhere", DATABASE_NAME);
+        final var collName = requireString(args, 1, "updateWhere", COLLECTION_NAME);
+        final var condition = requireObject(payloadArg(args, ops), "db.updateWhere expects a condition object");
+        final var patch = requireObject(
+                args.size() > PATCH_INDEX ? EJsonInterop.toHostPayload(args.get(PATCH_INDEX), ops) : null,
+                "db.updateWhere expects an object of fields to set");
+        return new JsNumber(database.updateWhere(dbName, collName, condition, patch));
     }
 
     private static JsValue cursor(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
@@ -310,11 +322,11 @@ public final class DbModule {
         throw new TypeErrorException("db.save expects a document");
     }
 
-    private static JsonObject requireCondition(JsonBaseElement converted) {
-        if (converted instanceof JsonObject condition) {
-            return condition;
+    private static JsonObject requireObject(JsonBaseElement converted, String message) {
+        if (converted instanceof JsonObject object) {
+            return object;
         }
-        throw new TypeErrorException("db.deleteWhere expects a condition object");
+        throw new TypeErrorException(message);
     }
 
     private static JsonArray requireArray(JsonBaseElement converted, String message) {

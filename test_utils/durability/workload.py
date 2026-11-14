@@ -1,8 +1,8 @@
 import random
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 import base_utils as bu
 from fuzz import values
@@ -20,12 +20,13 @@ CLOSED_MESSAGE = "Server closed connection unexpectedly"
 SAVE = "SAVE"
 DELETE = "DELETE"
 DELETE_WHERE = "DELETE_WHERE"
+SAVE_WHERE = "SAVE_WHERE"
 BULK_SAVE = "BULK_SAVE"
 TRANSACTION = "TRANSACTION"
 CREATE_INDEX = "CREATE_INDEX"
 DROP_INDEX = "DROP_INDEX"
 REINDEX = "REINDEX"
-ID_OPS = (SAVE, DELETE, BULK_SAVE, TRANSACTION, DELETE_WHERE)
+ID_OPS = (SAVE, DELETE, BULK_SAVE, TRANSACTION, DELETE_WHERE, SAVE_WHERE)
 
 INDEXED_FIELDS = ["v", "n"]
 CHURNED_INDEX = "tag"
@@ -34,6 +35,8 @@ MAX_PAD = 1200
 MAX_BULK = 40
 DELETE_WHERE_SHARE = 0.3
 MAX_DELETE_WHERE_EXTRA = 4
+SAVE_WHERE_SHARE = 0.15
+MAX_SAVE_WHERE_EXTRA = 4
 SETUP_BULK = 50
 
 
@@ -102,7 +105,7 @@ class Workload:
         self.collections = collections
         self.docs = docs
         self.rng = random.Random(seed)
-        self.schema: Optional[WorkloadSchema] = None
+        self.schema: WorkloadSchema | None = None
         self._entries = []
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -158,6 +161,8 @@ class Workload:
                 self._delete(conn, schema, coll, op["ids"][0], -1)
             elif kind == DELETE_WHERE:
                 self._delete_where(conn, schema, coll, op["ids"], -1)
+            elif kind == SAVE_WHERE:
+                self._save_where(conn, schema, rng, coll, op["ids"], -1)
             elif kind == BULK_SAVE:
                 self._bulk(conn, schema, rng, coll, op["ids"], -1)
             elif kind == TRANSACTION:
@@ -166,7 +171,7 @@ class Workload:
                 self._admin(conn, schema, coll, kind, op.get("field", CHURNED_INDEX), -1, op.get("primaryKey", False))
         return self.history()
 
-    def fixed_sequence(self, coll: Optional[str] = None) -> list:
+    def fixed_sequence(self, coll: str | None = None) -> list:
         schema = self._require_schema()
         coll = coll or schema.collections[0]
         ids = schema.ids[coll]
@@ -206,7 +211,14 @@ class Workload:
     def _one_op(self, conn, schema, rng, coll, owned, client) -> bool:
         roll = rng.random()
         if roll < 0.5:
-            entry = self._save(conn, schema, rng, coll, rng.choice(owned), client)
+            doc_id = rng.choice(owned)
+            side = random.Random(hash(rng.getstate()[1]))
+            if side.random() < SAVE_WHERE_SHARE and len(owned) > 1:
+                others = [other for other in owned if other != doc_id]
+                extra = side.sample(others, side.randint(1, min(MAX_SAVE_WHERE_EXTRA, len(others))))
+                entry = self._save_where(conn, schema, rng, coll, [doc_id] + extra, client)
+            else:
+                entry = self._save(conn, schema, rng, coll, doc_id, client)
         elif roll < 0.62:
             doc_id = rng.choice(owned)
             side = random.Random(hash(rng.getstate()[1]))
@@ -274,6 +286,19 @@ class Workload:
                                               "condition": {"fieldOperatorType": "IN", "field": "_id",
                                                             "value": list(ids)}}))
 
+    def _save_where(self, conn, schema, rng, coll, ids, client) -> HistoryEntry:
+        found = conn.send({"type": "AGGREGATE", "databaseName": schema.db, "collectionName": coll,
+                           "aggregationSteps": [{"type": "FILTER", "operator": _ids_in(ids)}]})
+        present = sorted(row["_id"] for row in found.get("results") or [])
+        if not present:
+            return self._save(conn, schema, rng, coll, ids[0], client)
+        token = self._token(client)
+        drawn = self._document(rng, ids[0], token)
+        entry = self._record(SAVE_WHERE, coll, present, [token] * len(present), client)
+        return self._answer(entry, conn.send({"type": "SAVE", "databaseName": schema.db, "collectionName": coll,
+                                              "condition": _ids_in(present),
+                                              "object": {"w": token, "n": drawn["n"]}}))
+
     def _last_written(self, coll, ids) -> list:
         last = {}
         with self._lock:
@@ -323,3 +348,7 @@ class Workload:
         else:
             request["fieldName"] = index_field
         return self._answer(entry, conn.send(request))
+
+
+def _ids_in(ids) -> dict:
+    return {"fieldOperatorType": "IN", "field": "_id", "value": list(ids)}

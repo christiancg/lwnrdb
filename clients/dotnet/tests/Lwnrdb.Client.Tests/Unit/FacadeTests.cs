@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
@@ -33,6 +34,39 @@ public sealed class FacadeTests
         await Assert.ThrowsAsync<ArgumentNullException>(() => _recorder.Orders.DeleteWhereAsync((Filter)null!));
         await Assert.ThrowsAsync<NotSupportedException>(
             () => _recorder.TypedOrders.DeleteWhereAsync(order => order.Total < order.Discount));
+    }
+
+    [Fact]
+    public async Task UpdateWhereSendsTheConditionAndThePatchAndReadsTheCount()
+    {
+        Reply("updatedCount", JsonValue.Create(2));
+        Assert.Equal(2, await _recorder.Orders.UpdateWhereAsync(Filters.Field("status").Eq("pending"), new { Status = "expired", Id = "x" }));
+        Assert.Equal("SAVE", _recorder.Channel.Last["type"]!.GetValue<string>());
+        Assert.Equal("EQUALS", _recorder.Channel.Last["condition"]!["fieldOperatorType"]!.GetValue<string>());
+        Assert.Equal("""{"status":"expired","_id":"x"}""", _recorder.Channel.Last["object"]!.ToJsonString());
+        Assert.Equal(2, await _recorder.TypedOrders.UpdateWhereAsync(order => order.Total < 100, Document.Of("paid", true)));
+        Assert.Equal("SMALLER_THAN", _recorder.Channel.Last["condition"]!["fieldOperatorType"]!.GetValue<string>());
+        Assert.Equal("""{"paid":true}""", _recorder.Channel.Last["object"]!.ToJsonString());
+        await _recorder.Orders.UpdateWhereAsync(Filters.Field("paid").Eq(true), new Dictionary<string, object?> { ["Status"] = "done" });
+        Assert.Equal("""{"Status":"done"}""", _recorder.Channel.Last["object"]!.ToJsonString());
+        _recorder.Channel.Replies = request => RecordingChannel.Ok(request);
+        Assert.Equal(0, await _recorder.Orders.UpdateWhereAsync(Filters.Field("status").Eq("pending"), new { Paid = true }));
+    }
+
+    [Fact]
+    public async Task UpdateWhereRefusesWhatCannotBeSent()
+    {
+        var pending = Filters.Field("status").Eq("pending");
+        await Assert.ThrowsAsync<ArgumentNullException>(() => _recorder.Orders.UpdateWhereAsync((Filter)null!, new { Paid = true }));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => _recorder.Orders.UpdateWhereAsync(pending, null!));
+        await Assert.ThrowsAsync<MappingException>(() => _recorder.Orders.UpdateWhereAsync(pending, "expired"));
+        var cycle = new Dictionary<string, object?>();
+        cycle["self"] = cycle;
+        await Assert.ThrowsAsync<MappingException>(() => _recorder.Orders.UpdateWhereAsync(pending, cycle));
+        await Assert.ThrowsAsync<MappingException>(() => _recorder.Orders.UpdateWhereAsync(pending, new { Big = 9007199254740993L }));
+        await Assert.ThrowsAsync<NotSupportedException>(
+            () => _recorder.TypedOrders.UpdateWhereAsync(order => order.Total < order.Discount, new { Paid = true }));
+        Assert.Empty(_recorder.Channel.Requests);
     }
 
     [Fact]
@@ -172,7 +206,7 @@ public sealed class FacadeTests
         Assert.Equal(["a"], (await _recorder.Orders.SaveAllAsync([Document.Empty])).Updated);
         Assert.Equal(1, (await _recorder.TypedOrders.FindByIdAsync("o-1"))!.Total);
         Assert.Equal(9, (await _recorder.Orders.Indexes().ReindexPrimaryKeyAsync()).PrimaryKeyEntries);
-        Assert.Equal(["email"], (await _recorder.Orders.Indexes().ReindexAsync(["email"])).RebuiltFields);
+        Assert.Equal(["email"], (await _recorder.Orders.Indexes().ReindexAsync("email")).RebuiltFields);
         Assert.Equal(["w"], await _recorder.Orders.Schema().SaveAsync(Document.Of("type", "object")));
         Assert.Equal("object", (await _recorder.Orders.Schema().GetAsync())!.GetString("type"));
         Assert.Equal(["orders"], await _recorder.Shop.ListCollectionsAsync());
@@ -223,16 +257,16 @@ public sealed class FacadeTests
     [Fact]
     public async Task UnknownStatusesAndCodesStillRaise()
     {
-        _recorder.Channel.Replies = request => new JsonObject { ["type"] = "SAVE", ["status"] = "WEIRD" };
+        _recorder.Channel.Replies = _ => new JsonObject { ["type"] = "SAVE", ["status"] = "WEIRD" };
         var error = await Assert.ThrowsAsync<LwnrdbException>(() => _recorder.Orders.SaveAsync(Document.Empty));
         Assert.Equal("request failed", error.Message);
-        _recorder.Channel.Replies = request => new JsonObject { ["type"] = "SAVE", ["status"] = "FORBIDDEN" };
+        _recorder.Channel.Replies = _ => new JsonObject { ["type"] = "SAVE", ["status"] = "FORBIDDEN" };
         await Assert.ThrowsAsync<ForbiddenException>(() => _recorder.Orders.SaveAsync(Document.Empty));
-        _recorder.Channel.Replies = request => new JsonObject { ["type"] = "SAVE", ["status"] = "UNAUTHENTICATED", ["errorCode"] = "999-1" };
+        _recorder.Channel.Replies = _ => new JsonObject { ["type"] = "SAVE", ["status"] = "UNAUTHENTICATED", ["errorCode"] = "999-1" };
         await Assert.ThrowsAsync<AuthenticationException>(() => _recorder.Orders.SaveAsync(Document.Empty));
-        _recorder.Channel.Replies = request => new JsonObject { ["type"] = "SAVE", ["status"] = "NOT_FOUND", ["message"] = new JsonObject() };
+        _recorder.Channel.Replies = _ => new JsonObject { ["type"] = "SAVE", ["status"] = "NOT_FOUND", ["message"] = new JsonObject() };
         await Assert.ThrowsAsync<NotFoundException>(() => _recorder.Orders.SaveAsync(Document.Empty));
-        _recorder.Channel.Replies = request => new JsonObject { ["type"] = "SAVE", ["status"] = "ERROR", ["errorCode"] = "400-2" };
+        _recorder.Channel.Replies = _ => new JsonObject { ["type"] = "SAVE", ["status"] = "ERROR", ["errorCode"] = "400-2" };
         Assert.Contains("Entry size", (await Assert.ThrowsAsync<LwnrdbException>(() => _recorder.Orders.SaveAsync(Document.Empty))).Message, StringComparison.Ordinal);
     }
 }

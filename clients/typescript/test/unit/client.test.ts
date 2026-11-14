@@ -166,11 +166,12 @@ describe("LwnrdbClient", () => {
         expect(await orders.query().toArray()).toEqual([{ id: "o-1" }]);
         await orders.delete("o-1");
         await orders.deleteWhere(field("status").eq("closed"));
+        await orders.updateWhere(field("status").eq("open"), { status: "closed" });
         await transaction.commit();
         const session = server?.sessions.find((candidate) =>
             candidate.requests.some((request) => request.type === "START_TRANSACTION"),
         );
-        expect(session?.requests.map((request) => request.type).slice(-8)).toEqual([
+        expect(session?.requests.map((request) => request.type).slice(-9)).toEqual([
             "START_TRANSACTION",
             "SAVE",
             "BULK_SAVE",
@@ -178,6 +179,7 @@ describe("LwnrdbClient", () => {
             "AGGREGATE",
             "DELETE",
             "DELETE",
+            "SAVE",
             "COMMIT_TRANSACTION",
         ]);
     });
