@@ -6,7 +6,7 @@ from enum import Enum
 
 import pytest
 
-from lwnrdb import AsyncLwnrdbClient, ConflictError, LwnrdbClient, LwnrdbError, field
+from lwnrdb import AsyncLwnrdbClient, ConflictError, LwnrdbClient, LwnrdbError, and_, field
 
 pytestmark = pytest.mark.it
 
@@ -47,6 +47,18 @@ async def test_save_find_and_delete(client: AsyncLwnrdbClient) -> None:
     assert await orders.find_by_id("missing") is None
     await orders.delete("o-1")
     assert await orders.find_by_id("o-1") is None
+    await orders.save_all(
+        [
+            {"_id": "dw-1", "status": "archived", "total": 10},
+            {"_id": "dw-2", "status": "archived", "total": 500},
+            {"_id": "dw-3", "status": "active", "total": 10},
+        ]
+    )
+    assert await orders.delete_where(and_(field("status").eq("archived"), field("total").lt(100))) == 1
+    assert await orders.find_by_id("dw-1") is None
+    assert await orders.find_by_id("dw-2") is not None
+    assert await orders.find_by_id("dw-3") is not None
+    assert await orders.delete_where(field("status").eq("never")) == 0
 
 
 async def test_save_all_reports_inserted_and_updated_ids(client: AsyncLwnrdbClient) -> None:

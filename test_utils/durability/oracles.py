@@ -5,8 +5,8 @@ import time
 import base_utils as bu
 from fuzz.oracles import count_of, rows_of
 
-from .workload import (ACCEPTED, BULK_SAVE, CHURNED_INDEX, CLOSED_MESSAGE, ID_OPS, OUTCOME_ERROR, OUTCOME_OK,
-                       SEVERITY_FAIL, SEVERITY_OBSERVE, TRANSACTION, Divergence, History, WorkloadSchema)
+from .workload import (ACCEPTED, BULK_SAVE, CHURNED_INDEX, CLOSED_MESSAGE, DELETE_WHERE, ID_OPS, OUTCOME_ERROR,
+                       OUTCOME_OK, SEVERITY_FAIL, SEVERITY_OBSERVE, TRANSACTION, Divergence, History, WorkloadSchema)
 
 FULL_SCAN = [{"type": "SKIP", "skip": 0}]
 MAX_VALUES_PER_FIELD = 20
@@ -147,6 +147,9 @@ def atomicity(state: dict, history: History, schema: WorkloadSchema) -> list:
     found = []
     entries = sorted(history.entries, key=lambda e: e.sent_at)
     for position, entry in enumerate(entries):
+        if entry.op == DELETE_WHERE:
+            found.extend(_delete_where_atomicity(state, entries[position + 1:], entry, history.seed))
+            continue
         if entry.op not in (TRANSACTION, BULK_SAVE) or entry.outcome == OUTCOME_OK or state.get(entry.coll) is None:
             continue
         written = [(doc_id, token) for doc_id, token in zip(entry.ids, entry.values) if token is not None]
@@ -160,6 +163,19 @@ def atomicity(state: dict, history: History, schema: WorkloadSchema) -> list:
             found.append(Divergence("O2", history.seed, f"{entry.coll}: {_describe(entry)} landed {len(landed)} of"
                                                          f" {len(written)} writes: {landed}", severity))
     return found
+
+
+def _delete_where_atomicity(state: dict, later_entries: list, entry, seed: int) -> list:
+    if entry.outcome == OUTCOME_OK or state.get(entry.coll) is None or not entry.present:
+        return []
+    touched = set(entry.ids)
+    if any(later.coll == entry.coll and touched & set(later.ids) for later in later_entries):
+        return []
+    deleted = sorted(doc_id for doc_id in entry.present if _token_of(state, entry.coll, doc_id) is None)
+    if 0 < len(deleted) < len(entry.present):
+        return [Divergence("O2", seed, f"{entry.coll}: {_describe(entry)} deleted {len(deleted)} of the"
+                                       f" {len(entry.present)} documents it matched: {deleted}")]
+    return []
 
 
 def _scalar_values(docs: list, field_name: str) -> list:

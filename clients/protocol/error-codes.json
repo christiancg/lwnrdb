@@ -43,6 +43,7 @@
     {"code":"400-41","name":"TOO_MANY_DATABASES","status":"ERROR","message":"The server has the maximum number of databases","retryable":false},
     {"code":"400-42","name":"TOO_MANY_INDEXES_FOR_COLLECTION","status":"ERROR","message":"The collection has the maximum number of indexes","retryable":false},
     {"code":"400-43","name":"INVALID_COMMAND","status":"ERROR","message":"The command is not valid","retryable":false},
+    {"code":"400-44","name":"DELETE_MATCHES_TOO_MANY","status":"ERROR","message":"The delete condition matches more documents than allowed","retryable":false},
     {"code":"401-1","name":"MUST_AUTHENTICATE_FIRST","status":"UNAUTHENTICATED","message":"Must authenticate first","retryable":false},
     {"code":"401-2","name":"USER_NO_LONGER_EXISTS","status":"UNAUTHENTICATED","message":"User no longer exists","retryable":false},
     {"code":"401-3","name":"WRONG_CREDENTIALS","status":"ERROR","message":"The user doesn't exist or the wrong credentials have been provided","retryable":false},

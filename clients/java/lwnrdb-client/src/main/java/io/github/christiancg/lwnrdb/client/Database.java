@@ -13,6 +13,7 @@ import io.github.christiancg.lwnrdb.client.scripting.Schedules;
 import io.github.christiancg.lwnrdb.client.scripting.TriggerInfo;
 import java.util.List;
 import java.util.Optional;
+import tools.jackson.databind.node.ObjectNode;
 
 public final class Database {
     private final ClientContext context;
@@ -53,8 +54,7 @@ public final class Database {
     }
 
     public Document stats() {
-        final var reply = context.channel().send(Operation.GET_DATABASE_STATS,
-                context.encoder().databaseStats(Optional.of(name)));
+        final var reply = context.channel().send(Operation.GET_DATABASE_STATS, context.encoder().databaseStats(name));
         return ResponseDecoder.document(reply, "stats").orElseGet(Document::empty);
     }
 
@@ -63,11 +63,11 @@ public final class Database {
     }
 
     public ScriptResult runScript(String script) {
-        return runScript(script, Optional.empty());
+        return run(context.scripts().runScript(name, script, Optional.empty()));
     }
 
     public ScriptResult runScript(String script, Document args) {
-        return runScript(script, Optional.of(args));
+        return run(context.scripts().runScript(name, script, Optional.of(args)));
     }
 
     public Procedures procedures() {
@@ -84,8 +84,7 @@ public final class Database {
         return ResponseDecoder.documents(reply, "triggers").stream().map(Descriptors::trigger).toList();
     }
 
-    private ScriptResult runScript(String script, Optional<Document> args) {
-        return ScriptResults.of(context.json(),
-                context.channel().send(Operation.RUN_SCRIPT, context.scripts().runScript(name, script, args)));
+    private ScriptResult run(ObjectNode request) {
+        return ScriptResults.of(context.json(), context.channel().send(Operation.RUN_SCRIPT, request));
     }
 }

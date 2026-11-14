@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from lwnrdb._internal.pipeline_encoder import PipelineEncoder
 from lwnrdb._internal.values_codec import NO_ZONE, EncodeOptions, Json, JsonObject, encode_document
-from lwnrdb.query.types import PipelineStep
+from lwnrdb.query.types import Filter, PipelineStep
 
 
 def request(kind: str, database: str | None = None, collection: str | None = None) -> JsonObject:
@@ -45,6 +45,9 @@ class RequestEncoder:
 
     def delete(self, database: str, collection: str, document_id: str) -> JsonObject:
         return {**request("DELETE", database, collection), "_id": document_id}
+
+    def delete_where(self, database: str, collection: str, condition: Filter) -> JsonObject:
+        return {**request("DELETE", database, collection), "condition": self.pipeline.filter(condition)}
 
     def aggregate(
         self,

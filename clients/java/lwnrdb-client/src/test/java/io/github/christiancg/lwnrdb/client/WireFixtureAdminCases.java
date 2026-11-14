@@ -53,7 +53,7 @@ final class WireFixtureAdminCases {
         cases.put("schema.get", r -> r.orders.schema().get());
         cases.put("schema.delete", r -> r.orders.schema().delete());
         cases.put("info.server_info", r -> r.channel.send(null, r.encoder.serverInfo()));
-        cases.put("info.database_stats_all", r -> r.channel.send(null, r.encoder.databaseStats(Optional.empty())));
+        cases.put("info.database_stats_all", r -> r.channel.send(null, r.encoder.databaseStats()));
         cases.put("info.database_stats_one", r -> r.shop.stats());
         cases.put("info.close_connection", r -> r.channel.send(null, r.encoder.closeConnection()));
     }

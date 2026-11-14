@@ -12,7 +12,7 @@ from lwnrdb._internal.collection_ops import CollectionOps
 from lwnrdb._internal.handler_adapter import Callbacks, async_callbacks
 from lwnrdb.errors import LwnrdbError
 from lwnrdb.listen import Handler
-from lwnrdb.query.types import PipelineStep
+from lwnrdb.query.types import Filter, PipelineStep
 from lwnrdb.results import BulkSaveResult, SaveResult
 
 T = TypeVar("T")
@@ -54,6 +54,9 @@ class AsyncCollection(Generic[T, R]):
 
     async def delete(self, id: str) -> None:  # noqa: A002
         await self._ops.delete(id)
+
+    async def delete_where(self, condition: Filter) -> int:
+        return await self._ops.delete_where(condition)
 
     def query(self) -> AsyncQuery[R]:
         return AsyncQuery(self._ops)

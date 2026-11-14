@@ -958,6 +958,25 @@ def test_host_writes(conn: Conn):
     check_result("deleting an absent document is a no-op",
                  conn.run('import db from "db";\n'
                           f'db.delete(db.name, "{COLL}", "never-existed");\nreturn "no-op";'), "no-op")
+    check_result("deleteWhere deletes every match and returns the count",
+                 conn.run('import db from "db";\n'
+                          f'db.bulkSave(db.name, "{COLL}", [{{ _id: "dw1", purge: true }}, {{ _id: "dw2", purge: true }},'
+                          ' { _id: "dw3", purge: false }]);\n'
+                          f'const n = db.deleteWhere(db.name, "{COLL}",'
+                          ' { fieldOperatorType: "EQUALS", field: "purge", value: true });\n'
+                          f'return [n, db.findById(db.name, "{COLL}", "dw1") === null,'
+                          f' db.findById(db.name, "{COLL}", "dw3") !== null];'), [2, True, True])
+    check_result("deleteWhere matching nothing returns 0",
+                 conn.run('import db from "db";\n'
+                          f'return db.deleteWhere(db.name, "{COLL}",'
+                          ' { fieldOperatorType: "EQUALS", field: "purge", value: "never" });'), 0)
+    check_result("deleteWhere inside a transaction commits with it",
+                 conn.run('import db from "db";\n'
+                          f'db.save(db.name, "{COLL}", {{ _id: "dwt", purge: "tx" }});\n'
+                          'let n = 0;\n'
+                          f'db.transaction(() => {{ n = db.deleteWhere(db.name, "{COLL}",'
+                          ' { fieldOperatorType: "EQUALS", field: "purge", value: "tx" }); });\n'
+                          f'return [n, db.findById(db.name, "{COLL}", "dwt") === null];'), [1, True])
     check_result("a document written by a script is visible to the wire protocol",
                  conn.run('import db from "db";\n'
                           f'db.save(db.name, "{COLL}", {{ _id: "visible", via: "script" }});\nreturn "saved";'),
@@ -1212,6 +1231,7 @@ def test_db_module_arity(conn: Conn):
                         ("db.bulkSave", f'db.bulkSave("{COLL}", [{{ _id: "arity" }}])'),
                         ("db.cursor", f'db.cursor(db.name, "{COLL}")'),
                         ("db.delete", f'db.delete(db.name, "{COLL}")'),
+                        ("db.deleteWhere", f'db.deleteWhere(db.name, "{COLL}")'),
                         ("db.findById", f'db.findById(db.name, "{COLL}")')):
         check_failed_script(f"{label} with too few arguments is a TypeError",
                             conn.run(f'import db from "db";\n{call};'), "400-9", "TypeError")

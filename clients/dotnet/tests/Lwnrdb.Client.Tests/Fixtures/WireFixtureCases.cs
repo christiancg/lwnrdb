@@ -50,6 +50,7 @@ internal static class WireFixtureCases
         cases["data.find_by_id"] = r => r.Orders.FindByIdAsync("o-1");
         cases["data.find_by_id_dirty"] = r => r.Orders.FindByIdAsync("o-1", dirtyRead: true);
         cases["data.delete"] = r => r.Orders.DeleteAsync("o-1");
+        cases["data.delete_where"] = r => r.Orders.DeleteWhereAsync(And(Field("status").Eq("archived"), Field("total").Lt(100)));
     }
 
     private static void Aggregate(Dictionary<string, FixtureCall> cases)

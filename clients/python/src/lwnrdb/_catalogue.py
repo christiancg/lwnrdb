@@ -98,6 +98,7 @@ class ErrorCode(StrEnum):
     TOO_MANY_DATABASES = '400-41'
     TOO_MANY_INDEXES_FOR_COLLECTION = '400-42'
     INVALID_COMMAND = '400-43'
+    DELETE_MATCHES_TOO_MANY = '400-44'
     MUST_AUTHENTICATE_FIRST = '401-1'
     USER_NO_LONGER_EXISTS = '401-2'
     WRONG_CREDENTIALS = '401-3'
@@ -315,6 +316,7 @@ ERROR_CODES = (
     ('TOO_MANY_DATABASES', '400-41', 'ERROR', False, 'The server has the maximum number of databases'),
     ('TOO_MANY_INDEXES_FOR_COLLECTION', '400-42', 'ERROR', False, 'The collection has the maximum number of indexes'),
     ('INVALID_COMMAND', '400-43', 'ERROR', False, 'The command is not valid'),
+    ('DELETE_MATCHES_TOO_MANY', '400-44', 'ERROR', False, 'The delete condition matches more documents than allowed'),
     ('MUST_AUTHENTICATE_FIRST', '401-1', 'UNAUTHENTICATED', False, 'Must authenticate first'),
     ('USER_NO_LONGER_EXISTS', '401-2', 'UNAUTHENTICATED', False, 'User no longer exists'),
     ('WRONG_CREDENTIALS', '401-3', 'ERROR', False, "The user doesn't exist or the wrong credentials have been provided"),

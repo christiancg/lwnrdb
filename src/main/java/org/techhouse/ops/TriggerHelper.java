@@ -178,6 +178,22 @@ public final class TriggerHelper {
                 (_, _, descriptor) -> TriggerRunLog.recordStaged(descriptor, versions, effects.stagingSink()));
     }
 
+    public static StagedTriggerRuns stageDeleteMany(DeleteRequest request, List<DbEntry> captured, String actingUser)
+            throws IOException {
+        if (captured.isEmpty()) {
+            return StagedTriggerRuns.none();
+        }
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        final var versions = priorVersionsOf(dbName, collName, captured.stream().map(DbEntry::get_id).toList());
+        final var effects = WriteEffects.batched();
+        final var staged = stageRuns(dbName, collName, EventType.DELETED, captured, actingUser,
+                request.getTriggerDepth(),
+                (_, _, descriptor) -> TriggerRunLog.recordStaged(descriptor, versions, effects.stagingSink()));
+        effects.flushStaging(Cache.getCollectionIdentifier(dbName, collName));
+        return staged;
+    }
+
     private static boolean firesOnNoSave(String dbName, String collName, int depth) {
         return hasNotTriggerFor(dbName, collName, EventType.CREATED, depth)
                 && hasNotTriggerFor(dbName, collName, EventType.UPDATED, depth);

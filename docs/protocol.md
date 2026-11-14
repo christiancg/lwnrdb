@@ -336,9 +336,28 @@ Read operations accept an optional `"dirtyRead": true` (default `false`); see [C
 ```
 
 ### `DELETE`
+Takes either an `_id` or a `condition`, never both: a request with both, or with neither, is refused with `400-1`.
 ```json
 {"type":"DELETE","databaseName":"my_db","collectionName":"my_coll","_id":"user-1"}
 ```
+With `_id` it deletes that document and answers `404-2` when there is none.
+
+With `condition` it deletes every document of the collection that matches it. A `condition` is a FILTER operator, exactly what an [`AGGREGATE`](#aggregate) `FILTER` step takes as its `operator` (field, conjunction, custom and `script` operators alike), so it uses the same indexes and is held to the same `maxFilterOperands` limits (`400-27`), `aggregateTimeoutMs` deadline (`408-6`) and `aggregateTotalHeldBytes` pool (`503-20`).
+```json
+{"type":"DELETE","databaseName":"my_db","collectionName":"my_coll",
+ "condition":{"conjunctionType":"AND","operators":[
+   {"fieldOperatorType":"EQUALS","field":"status","value":"archived"},
+   {"fieldOperatorType":"SMALLER_THAN","field":"updatedAt","value":1700000000000}]}}
+```
+It answers with the number of documents it deleted; matching nothing is `OK` with `deletedCount` 0:
+```json
+{"type":"DELETE","status":"OK","message":"Deleted 42 document(s)","deletedCount":42}
+```
+- **All or nothing.** The matches are found and deleted under one hold of the collection's write lock and written as one write-ahead-log record, so readers never see part of it and a crash never leaves part of it. A condition matching more than `deleteMaxMatches` documents (default `100000`) is refused with `400-44` before anything is deleted; narrow it, or delete in several requests.
+- **Hooks and triggers run per document.** Every `DELETED` before trigger runs against every match before anything is deleted, and one rejection refuses the whole request with `400-21`. `DELETED` after triggers fire once per deleted document (`document` mode) or once for the whole request (`batch` mode).
+- **Scripts.** A `script` operator in the condition runs once per document while the collection's write lock is held, so writers to that collection wait for it.
+- **Inside a transaction** the condition is evaluated against the transaction's own view (its buffered saves and deletes included), and every match is buffered as one delete, counted against `transactionMaxOps` and `transactionMaxBytes` (`400-26`); a hook rejection or a size refusal buffers none of them.
+- **In a cluster** the request is routed to the collection's owner like any write, and the deletes replicate as one batch.
 
 ### `AGGREGATE`
 Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](../README.md#concurrency--locking).
@@ -727,7 +746,7 @@ If the connection closes with a transaction still open, it is automatically roll
 
 **Maximum age.** A transaction older than `transactionMaxAgeMs` (default `600000`, `0` = no limit) is rolled back the same way however busy the connection is, so a client cannot hold its write locks forever by sending a request every few seconds. Its next request is answered `408-5` once and not executed, exactly like the idle case.
 
-**Size.** One transaction may buffer at most `transactionMaxOps` operations (default `100000`; a `BULK_SAVE` counts one per document) and `transactionMaxBytes` of documents (default `256Mb`). A buffered `DELETE` counts the bytes of what it buffers: its id, plus the whole deleted document when a `DELETED` trigger will receive it. The write that would pass either is refused with `400-26`; nothing of it is buffered and the transaction stays usable, so the client can still commit what it buffered or roll back. Every open transaction together may buffer at most `transactionTotalMaxBytes` (default `auto`, a quarter of the heap); a write that would pass it answers `503-21`, buffers nothing and leaves its transaction usable, and retrying it is safe once another transaction has ended.
+**Size.** One transaction may buffer at most `transactionMaxOps` operations (default `100000`; a `BULK_SAVE` counts one per document) and `transactionMaxBytes` of documents (default `256Mb`). A `DELETE` with a `condition` counts one operation per document it matches. A buffered `DELETE` counts the bytes of what it buffers: its id, plus the whole deleted document when a `DELETED` trigger will receive it. The write that would pass either is refused with `400-26`; nothing of it is buffered and the transaction stays usable, so the client can still commit what it buffered or roll back. Every open transaction together may buffer at most `transactionTotalMaxBytes` (default `auto`, a quarter of the heap); a write that would pass it answers `503-21`, buffers nothing and leaves its transaction usable, and retrying it is safe once another transaction has ended.
 
 **Grants are checked again at commit.** Every operation is authorized when it is buffered, and `COMMIT_TRANSACTION` authorizes every collection the transaction writes once more against the user's current grants. If a grant was revoked in between, the commit is refused with `403-1`, the whole transaction is rolled back and nothing is applied.
 
@@ -1617,6 +1636,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-41` | `ERROR` |  | The server has the maximum number of databases (`maxDatabases`) |
 | `400-42` | `ERROR` |  | The collection has the maximum number of indexes (`maxIndexesPerCollection`); re-creating an existing index is never refused |
 | `400-43` | `ERROR` |  | The command is not valid: the line is not a JSON object, names no known `type`, is denser than the token budget, nests deeper than 128 levels, holds a custom value past its limits (such as a `#vector` over `maxVectorDimensions`), or has a field of the wrong shape. `type` is the request's own when it could be read, `null` otherwise; the connection stays open |
+| `400-44` | `ERROR` |  | The delete condition matches more documents than allowed (`deleteMaxMatches`); nothing was deleted |
 | `401-1` | `UNAUTHENTICATED` |  | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` |  | User no longer exists |
 | `401-3` | `ERROR` |  | The user doesn't exist or the wrong credentials have been provided |

@@ -28,6 +28,11 @@ Reads one document by its `_id`, seeing the transaction's own writes.
 
 Buffers the delete of one document.
 
+## delete_where
+
+Buffers the delete of every document the filter matches in the transaction's view, its own writes included, and
+returns how many matched.
+
 ## query
 
 Starts a query that sees the transaction's own writes.

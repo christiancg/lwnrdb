@@ -13,6 +13,7 @@ from lwnrdb import (
     LwnrdbError,
     ServerAddress,
     UnknownOutcomeError,
+    field,
 )
 from lwnrdb._internal.connection_factory import open_streams
 from lwnrdb._internal.values_codec import JsonObject
@@ -80,9 +81,10 @@ async def test_a_transaction_body_commits_on_a_clean_exit(client: AsyncLwnrdbCli
     async with client.transaction() as transaction:
         assert transaction.id == "tx-1"
         await transaction.collection("shop", "orders").save({"_id": "o-1"})
+        await transaction.collection("shop", "orders").delete_where(field("status").eq("void"))
     assert not transaction.is_open
     kinds = [request["type"] for request in fake.requests if request["type"] != "AUTHENTICATE"]
-    assert kinds == ["START_TRANSACTION", "SAVE", "COMMIT_TRANSACTION"]
+    assert kinds == ["START_TRANSACTION", "SAVE", "DELETE", "COMMIT_TRANSACTION"]
     sessions = {id(session) for session in fake.sessions if any(r["type"] == "SAVE" for r in session.requests)}
     assert len(sessions) == 1
 

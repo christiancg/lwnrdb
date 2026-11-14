@@ -8,6 +8,7 @@
     {"name":"ok.aggregate_count","frame":{"type":"AGGREGATE","status":"OK","message":"Ok","results":[{"count":2}]},"expect":"ok"},
     {"name":"ok.aggregate_analyze","frame":{"type":"AGGREGATE","status":"OK","message":"Ok","results":[],"analyzeResult":{"steps":[]}},"expect":"ok"},
     {"name":"ok.delete","frame":{"type":"DELETE","status":"OK","message":"Deleted"},"expect":"ok"},
+    {"name":"ok.delete_where","frame":{"type":"DELETE","status":"OK","message":"Deleted 3 document(s)","deletedCount":3},"expect":"ok"},
     {"name":"ok.list_databases","frame":{"type":"LIST_DATABASES","status":"OK","message":"Ok","databases":["shop"]},"expect":"ok"},
     {"name":"ok.list_collections","frame":{"type":"LIST_COLLECTIONS","status":"OK","message":"Ok","collections":["orders"]},"expect":"ok"},
     {"name":"ok.reindex","frame":{"type":"REINDEX","status":"OK","message":"Rebuilt 1 index(es)","rebuiltFields":["email"]},"expect":"ok"},

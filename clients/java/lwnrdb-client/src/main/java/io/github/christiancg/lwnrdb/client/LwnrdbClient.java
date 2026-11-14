@@ -72,8 +72,7 @@ public final class LwnrdbClient implements AutoCloseable {
     }
 
     public Document databaseStats() {
-        final var reply = context.channel().send(Operation.GET_DATABASE_STATS,
-                context.encoder().databaseStats(Optional.empty()));
+        final var reply = context.channel().send(Operation.GET_DATABASE_STATS, context.encoder().databaseStats());
         return ResponseDecoder.document(reply, "stats").orElseGet(Document::empty);
     }
 

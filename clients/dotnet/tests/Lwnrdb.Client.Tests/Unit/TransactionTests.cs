@@ -112,9 +112,11 @@ public sealed class TransactionTests : IAsyncLifetime
         await orders.FindByIdAsync("o-1");
         await orders.DeleteAsync("o-1");
         await orders.Query().CountAsync();
+        await orders.DeleteWhereAsync(o => o.Paid);
+        await orders.DeleteWhereAsync(Lwnrdb.Client.Query.Filters.Field("status").Eq("void"));
         var session = Assert.Single(_server.Sessions);
         Assert.Equal(
-            ["START_TRANSACTION", "AGGREGATE", "SAVE", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE"],
+            ["START_TRANSACTION", "AGGREGATE", "SAVE", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "DELETE", "DELETE"],
             session.Requests.Select(request => request["type"]!.GetValue<string>()));
         Assert.Equal("orders", orders.Name);
     }

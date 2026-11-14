@@ -18,6 +18,7 @@ ADMIN_PASSWORD = bu.PASSWORD
 DB = "txn_test_db"
 COLL = "orders"
 JOIN_COLL = "order_configs"
+PURGE_COLL = "purges"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -227,6 +228,56 @@ def test_buffered_delete_reads_as_not_found(c):
 
     with authed_conn() as oc:
         check_status("rolled-back delete leaves the document in place", find_by_id(oc, "del1"), "OK")
+
+
+def delete_where(c, condition, coll=PURGE_COLL, db=DB) -> dict:
+    return c.send({"type": "DELETE", "databaseName": db, "collectionName": coll, "condition": condition})
+
+
+def kind_is(kind: str) -> dict:
+    return {"fieldOperatorType": "EQUALS", "field": "kind", "value": kind}
+
+
+def test_delete_by_condition_inside_a_transaction(c):
+    section("DELETE with a condition inside a transaction")
+
+    check_status("CREATE_COLLECTION purges", c.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                                                     "collectionName": PURGE_COLL}), "OK")
+    check_status("seed four stale and one fresh document", bulk_save(
+        c, [{"_id": f"p{i}", "kind": "stale" if i < 4 else "fresh"} for i in range(5)], coll=PURGE_COLL), "OK")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("buffer a fifth stale document", save(c, {"_id": "p-buffered", "kind": "stale"}, coll=PURGE_COLL),
+                 "OK")
+    check_status("buffer a delete of p0", delete(c, "p0", coll=PURGE_COLL), "OK")
+    r = delete_where(c, kind_is("stale"))
+    check_field("the condition sees the buffered save and not the buffered delete", r, "deletedCount", 4)
+    check_status("the matches read as gone inside the transaction", find_by_id(c, "p-buffered", coll=PURGE_COLL),
+                 "NOT_FOUND")
+    with authed_conn() as oc:
+        check_status("another client's dirty read still sees p1 before the commit", oc.send(
+            {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": PURGE_COLL, "_id": "p1", "dirtyRead": True}),
+                     "OK")
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as oc:
+        remaining = result_ids(aggregate(oc, coll=PURGE_COLL))
+        check("only the fresh document survives the commit", remaining == ["p4"], f"remaining={remaining}")
+
+
+def test_a_rolled_back_delete_by_condition_keeps_everything(c):
+    section("A rolled-back DELETE with a condition deletes nothing")
+
+    check_status("seed two documents", bulk_save(
+        c, [{"_id": "r1", "kind": "doomed"}, {"_id": "r2", "kind": "doomed"}], coll=PURGE_COLL), "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_field("the condition matches both", delete_where(c, kind_is("doomed")), "deletedCount", 2)
+    check_field("a condition matching nothing answers 0", delete_where(c, kind_is("none")), "deletedCount", 0)
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    with authed_conn() as oc:
+        check_status("r1 survives the rollback", find_by_id(oc, "r1", coll=PURGE_COLL), "OK")
+        check_status("r2 survives the rollback", find_by_id(oc, "r2", coll=PURGE_COLL), "OK")
 
 
 def test_bulk_save_in_transaction(c):
@@ -834,6 +885,9 @@ def main():
         test_reduce_after_a_filter_inside_a_transaction_folds_in_id_order(c)
     with authed_conn() as (c):
         test_buffered_delete_reads_as_not_found(c)
+    with authed_conn() as (c):
+        test_delete_by_condition_inside_a_transaction(c)
+        test_a_rolled_back_delete_by_condition_keeps_everything(c)
     with authed_conn() as (c):
         test_custom_typed_writes_are_readable_inside_the_transaction(c)
     with authed_conn() as (c):

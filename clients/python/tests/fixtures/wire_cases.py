@@ -57,6 +57,9 @@ def _data(cases: dict[str, FixtureCall]) -> None:
     cases["data.find_by_id"] = lambda r: r.orders.find_by_id("o-1")
     cases["data.find_by_id_dirty"] = lambda r: r.orders.find_by_id("o-1", dirty_read=True)
     cases["data.delete"] = lambda r: r.orders.delete("o-1")
+    cases["data.delete_where"] = lambda r: r.orders.delete_where(
+        and_(field("status").eq("archived"), field("total").lt(100))
+    )
 
 
 def _aggregate(cases: dict[str, FixtureCall]) -> None:

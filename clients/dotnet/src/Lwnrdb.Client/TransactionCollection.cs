@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Lwnrdb.Client.Internal;
@@ -35,6 +36,11 @@ public sealed class TransactionCollection<T>
     public Task<T?> FindByIdAsync(string id, CancellationToken ct = default) => Ops.FindByIdAsync(id, false, ct);
 
     public Task DeleteAsync(string id, CancellationToken ct = default) => Ops.DeleteAsync(id, ct);
+
+    public Task<long> DeleteWhereAsync(Filter condition, CancellationToken ct = default) => Ops.DeleteWhereAsync(condition, ct);
+
+    public Task<long> DeleteWhereAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
+        Ops.DeleteWhereAsync(predicate, ct);
 
     public Query<T> Query() => new(Ops, [], false);
 

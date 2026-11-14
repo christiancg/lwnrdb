@@ -49,8 +49,7 @@ public class PartTreeLwnrdbQuery implements RepositoryQuery {
             spec = spec.limited(accessor.getLimit().max());
         }
         if (tree.isDelete()) {
-            final var deleted = operations.delete(type, spec);
-            return returnsNumber() ? (Object) (long) deleted.size() : deleted;
+            return returnsNumber() ? (Object) operations.deleteMatching(type, spec) : operations.delete(type, spec);
         }
         if (tree.isCountProjection()) {
             return operations.count(type, spec.filter().orElse(null));

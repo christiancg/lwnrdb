@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Admin, Database, LocalTime, NotFoundError, TriggerEvent, TriggerRunDecision } from "../../src/index.js";
+import { Admin, Database, field, LocalTime, NotFoundError, TriggerEvent, TriggerRunDecision } from "../../src/index.js";
 import type { JsonObject } from "../../src/internal/values-codec.js";
 import { RecordingChannel, recordingContext } from "../support/recording-channel.js";
 
@@ -19,6 +19,17 @@ describe("collection replies", () => {
         expect(await orders.save({ total: 1 })).toEqual({ id: "o-9", inserted: true });
         expect(await orders.saveAll([{ _id: "a" }, { _id: "b" }])).toEqual({ inserted: ["a"], updated: ["b"] });
         expect([orders.databaseName, orders.name]).toEqual(["shop", "orders"]);
+    });
+
+    test("deleteWhere sends the filter as the condition and answers the deleted count", async () => {
+        const { orders, channel } = setup(() => ({ deletedCount: 3 }));
+        expect(await orders.deleteWhere(field("status").eq("archived"))).toBe(3);
+        expect(channel.requests[0]).toMatchObject({
+            type: "DELETE",
+            condition: { fieldOperatorType: "EQUALS", field: "status", value: "archived" },
+        });
+        const { orders: silent } = setup(() => ({}));
+        expect(await silent.deleteWhere(field("status").eq("archived"))).toBe(0);
     });
 
     test("an invalid _id is refused before it is sent", async () => {

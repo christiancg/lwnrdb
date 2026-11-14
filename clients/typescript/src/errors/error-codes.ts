@@ -64,6 +64,7 @@ const CATALOGUE = [
     ["TOO_MANY_DATABASES", "400-41", "ERROR", false, "The server has the maximum number of databases"],
     ["TOO_MANY_INDEXES_FOR_COLLECTION", "400-42", "ERROR", false, "The collection has the maximum number of indexes"],
     ["INVALID_COMMAND", "400-43", "ERROR", false, "The command is not valid"],
+    ["DELETE_MATCHES_TOO_MANY", "400-44", "ERROR", false, "The delete condition matches more documents than allowed"],
     ["MUST_AUTHENTICATE_FIRST", "401-1", "UNAUTHENTICATED", false, "Must authenticate first"],
     ["USER_NO_LONGER_EXISTS", "401-2", "UNAUTHENTICATED", false, "User no longer exists"],
     [

@@ -16,6 +16,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.utils.JsonUtils;
 
 public final class DataRequestValidator {
@@ -101,8 +102,14 @@ public final class DataRequestValidator {
         if (!base.isValid()) {
             return base;
         }
+        if (request.get_id() != null && request.getCondition() != null) {
+            return ValidationResult.fail("DELETE takes either an _id or a condition, not both");
+        }
+        if (request.getCondition() != null) {
+            return AggregationStepValidator.validate(new FilterAggregationStep(request.getCondition()));
+        }
         if (request.get_id() == null) {
-            return ValidationResult.fail("DELETE request requires an _id");
+            return ValidationResult.fail("DELETE request requires an _id or a condition");
         }
         if (!NameValidations.isId(request.get_id())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
