@@ -26,6 +26,7 @@ RETRY_COLL = "retry_shutdown"
 BATCH_DELETE_COLL = "batch_deletes"
 WHERE_DELETE_COLL = "where_deletes"
 WHERE_UPDATE_COLL = "where_updates"
+INSERT_COLL = "insert_only"
 TWIN_FAILING_COLL = "twin_failing"
 TWIN_AUDITED_COLL = "twin_audited"
 CAP_COLL = "trigger_cap"
@@ -918,6 +919,39 @@ def test_updated_trigger_fires_per_document_of_a_conditional_save(conn: Conn):
           await_absent(conn, "whereupd-wu3").get("status") != "OK")
     conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": WHERE_UPDATE_COLL,
                "name": "where_updates_watch"})
+
+
+def test_a_refused_insert_fires_nothing(conn: Conn):
+    section("A SAVE with failOnUpdate refused for an existing _id runs no hook and fires no trigger")
+    check_status("create a collection for it", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": INSERT_COLL}), "OK")
+    check_status("write the document the insert collides with",
+                 conn.save_doc({"_id": "taken", "kind": "original"}, coll=INSERT_COLL), "OK")
+    check_status("install an update recorder", conn.save_procedure("insert_update_recorder",
+                 "import db from 'db'; import args from 'args';"
+                 "db.save(db.name, '" + AUDIT + "', { _id: 'insert-after-' + args.id });"
+                 " return 'ok';"), "OK")
+    check_status("watch its writes", conn.save_trigger("insert_watch", ["CREATED", "UPDATED"],
+                                                       "insert_update_recorder", coll=INSERT_COLL), "OK")
+    check_status("hook its writes with a veto of every overwrite", install_hook(
+        conn, "insert_hook", "insert_overwrite_veto",
+        "export default (d) => { if (d.kind === 'overwrite') { throw new Error('vetoed'); } return d; };",
+        ["CREATED", "UPDATED"], coll=INSERT_COLL), "OK")
+
+    reply = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": INSERT_COLL, "failOnUpdate": True,
+                       "object": {"_id": "taken", "kind": "overwrite"}})
+    check_code("the insert of an existing id -> 409-18, not the hook's 400-21", reply, "ERROR", "409-18")
+    check("no after trigger fired for it", await_absent(conn, "insert-after-taken").get("status") != "OK")
+    check_field("the document is unchanged", conn.send(
+        {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": INSERT_COLL, "_id": "taken"}),
+        "object.kind", "original")
+
+    check_status("an insert of a new id is accepted", conn.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": INSERT_COLL, "failOnUpdate": True,
+         "object": {"_id": "fresh", "kind": "new"}}), "OK")
+    check("its after trigger fired", await_doc(conn, "insert-after-fresh").get("status") == "OK")
+    for name in ("insert_watch", "insert_hook"):
+        conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": INSERT_COLL, "name": name})
 
 
 def test_cascade(conn: Conn):
@@ -2666,6 +2700,7 @@ def main():
             test_batch_deleted_trigger_fires_once_per_transaction(conn)
             test_deleted_trigger_fires_per_document_of_a_conditional_delete(conn)
             test_updated_trigger_fires_per_document_of_a_conditional_save(conn)
+            test_a_refused_insert_fires_nothing(conn)
             test_cascade(conn)
             test_triggers_per_collection_are_capped(conn)
             test_a_first_run_delivers_the_document_as_it_is_when_it_runs(conn)

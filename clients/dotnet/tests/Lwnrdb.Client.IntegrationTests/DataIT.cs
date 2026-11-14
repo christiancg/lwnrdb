@@ -96,6 +96,39 @@ public sealed class DataIT(DefaultServer fixture) : IClassFixture<DefaultServer>
     }
 
     [Fact]
+    public async Task InsertRefusesAnExistingIdAndWritesNothing()
+    {
+        var orders = await Orders("insert");
+        Assert.Equal(new SaveResult("in-1", true), await orders.InsertAsync(Document.Of("_id", "in-1", "status", "new")));
+        var refused = await Assert.ThrowsAsync<ConflictException>(
+            () => orders.InsertAsync(Document.Of("_id", "in-1", "status", "replaced")));
+        Assert.Equal("409-18", refused.RawCode);
+        Assert.True(refused.HasCode(ErrorCode.DocumentAlreadyExists));
+        Assert.Equal("new", (await orders.FindByIdAsync("in-1"))!.GetString("status"));
+        var generated = await orders.InsertAsync(Document.Of("status", "draft"));
+        Assert.True(generated.Inserted);
+        Assert.Equal("draft", (await orders.FindByIdAsync(generated.Id!))!.GetString("status"));
+    }
+
+    [Fact]
+    public async Task InsertInsideATransactionRefusesACommittedIdAndTheRestCommits()
+    {
+        var orders = await Orders("insert_tx");
+        await orders.SaveAsync(Document.Of("_id", "it-1", "status", "committed"));
+        await using (var transaction = await fixture.Client.BeginTransactionAsync())
+        {
+            var inside = transaction.Collection("data_it", "insert_tx");
+            Assert.True((await inside.InsertAsync(Document.Of("_id", "it-2", "status", "new"))).Inserted);
+            var refused = await Assert.ThrowsAsync<ConflictException>(
+                () => inside.InsertAsync(Document.Of("_id", "it-1", "status", "replaced")));
+            Assert.Equal("409-18", refused.RawCode);
+            await transaction.CommitAsync();
+        }
+        Assert.Equal("committed", (await orders.FindByIdAsync("it-1"))!.GetString("status"));
+        Assert.Equal("new", (await orders.FindByIdAsync("it-2"))!.GetString("status"));
+    }
+
+    [Fact]
     public async Task BulkSaveReportsInsertedAndUpdatedIds()
     {
         var orders = await Orders("bulk");

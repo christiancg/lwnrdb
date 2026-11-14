@@ -21,6 +21,20 @@ describe("collection replies", () => {
         expect([orders.databaseName, orders.name]).toEqual(["shop", "orders"]);
     });
 
+    test("insert sends the save frame with failOnUpdate and decodes the reply like save", async () => {
+        const { orders, channel } = setup(() => ({ _id: "o-3", inserted: true }));
+        expect(await orders.insert({ _id: "o-3", status: "new" })).toEqual({ id: "o-3", inserted: true });
+        expect(channel.requests[0]).toEqual({
+            type: "SAVE",
+            databaseName: "shop",
+            collectionName: "orders",
+            failOnUpdate: true,
+            object: { _id: "o-3", status: "new" },
+        });
+        const { orders: silent } = setup(() => ({}));
+        expect(await silent.insert({ status: "new" })).toEqual({ id: undefined, inserted: false });
+    });
+
     test("deleteWhere sends the filter as the condition and answers the deleted count", async () => {
         const { orders, channel } = setup(() => ({ deletedCount: 3 }));
         expect(await orders.deleteWhere(field("status").eq("archived"))).toBe(3);

@@ -145,6 +145,7 @@ class ErrorCode(StrEnum):
     PRIMARY_KEY_REBUILD_REFUSED = '409-15'
     TRANSACTION_IDLE_TIMEOUT = '409-16'
     SNAPSHOT_ABORTED = '409-17'
+    DOCUMENT_ALREADY_EXISTS = '409-18'
     LISTEN_ENDED = '410-1'
     OUTBOUND_BACKLOG = '413-1'
     NOT_COLLECTION_OWNER = '421-1'
@@ -364,6 +365,7 @@ ERROR_CODES = (
     ('PRIMARY_KEY_REBUILD_REFUSED', '409-15', 'ERROR', False, 'The primary-key index cannot be rebuilt from the page files'),
     ('TRANSACTION_IDLE_TIMEOUT', '409-16', 'ERROR', False, 'The transaction was rolled back after being idle too long'),
     ('SNAPSHOT_ABORTED', '409-17', 'ERROR', False, 'The snapshot was aborted and holds nothing any more; open a new one'),
+    ('DOCUMENT_ALREADY_EXISTS', '409-18', 'ERROR', False, 'A document with this _id already exists'),
     ('LISTEN_ENDED', '410-1', 'NOT_FOUND', False, 'The listen ended'),
     ('OUTBOUND_BACKLOG', '413-1', 'ERROR', False, "The connection's outbound buffer overflowed"),
     ('NOT_COLLECTION_OWNER', '421-1', 'ERROR', False, 'This node is not the owner of the target collection'),

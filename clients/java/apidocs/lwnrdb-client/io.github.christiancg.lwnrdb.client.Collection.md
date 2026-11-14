@@ -28,6 +28,14 @@ server generates it.
 @param value the document
 @return the `_id` and whether it was an insert
 
+## insert(T)
+
+Inserts one document and never replaces one: a document whose `_id` is already stored is refused with `409-18`
+(a `ConflictException`) and nothing is written. Without an `_id`, the server generates it, as for `save`.
+
+@param value the document
+@return the `_id`; the reply is always an insert
+
 ## saveAll(List)
 
 Inserts or replaces many documents in one request.

@@ -54,7 +54,7 @@ public class GroupCommitThrowableTest {
 
     private static GroupCommit.GroupedWrite write(String id, GroupCommit.GroupedAttempt attempt) {
         return new GroupCommit.GroupedWrite(OperationType.SAVE, ErrorCode.ERROR_SAVING,
-                new GroupCommit.Eligibility(() -> true, id, () -> false), attempt);
+                new GroupCommit.Eligibility(() -> true, id, () -> false, false), attempt);
     }
 
     private static CompletableFuture<OperationResponse> queued(GroupCommit.GroupedWrite write) {

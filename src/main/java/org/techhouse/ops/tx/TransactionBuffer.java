@@ -68,6 +68,9 @@ public final class TransactionBuffer {
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var insert = !TransactionWrites.isVisible(transaction, collId,
                     cache.getPkIndexAndLoadIfNecessary(dbName, collName), id);
+            if (!insert && request.isFailOnUpdate()) {
+                return new OperationResponse(OperationType.SAVE, ErrorCode.DOCUMENT_ALREADY_EXISTS);
+            }
             final var hooked = TransactionWrites.runBeforeHooks(dbName, collName,
                     insert ? EventType.CREATED : EventType.UPDATED,
                     clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id, OperationType.SAVE,

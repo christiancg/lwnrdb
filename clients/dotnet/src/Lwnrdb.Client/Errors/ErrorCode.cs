@@ -98,6 +98,7 @@ public sealed class ErrorCode
     public static readonly ErrorCode PrimaryKeyRebuildRefused = new("409-15", "PRIMARY_KEY_REBUILD_REFUSED", Status.Error, false, "The primary-key index cannot be rebuilt from the page files");
     public static readonly ErrorCode TransactionIdleTimeout = new("409-16", "TRANSACTION_IDLE_TIMEOUT", Status.Error, false, "The transaction was rolled back after being idle too long");
     public static readonly ErrorCode SnapshotAborted = new("409-17", "SNAPSHOT_ABORTED", Status.Error, false, "The snapshot was aborted and holds nothing any more; open a new one");
+    public static readonly ErrorCode DocumentAlreadyExists = new("409-18", "DOCUMENT_ALREADY_EXISTS", Status.Error, false, "A document with this _id already exists");
     public static readonly ErrorCode ListenEnded = new("410-1", "LISTEN_ENDED", Status.NotFound, false, "The listen ended");
     public static readonly ErrorCode OutboundBacklog = new("413-1", "OUTBOUND_BACKLOG", Status.Error, false, "The connection's outbound buffer overflowed");
     public static readonly ErrorCode NotCollectionOwner = new("421-1", "NOT_COLLECTION_OWNER", Status.Error, false, "This node is not the owner of the target collection");

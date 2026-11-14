@@ -44,6 +44,11 @@ public final class RequestEncoder {
         return of(Operation.SAVE, database, collection).set("object", Documents.node(document));
     }
 
+    public ObjectNode insert(String database, String collection, Document document) {
+        return of(Operation.SAVE, database, collection).put("failOnUpdate", true).set("object",
+                Documents.node(document));
+    }
+
     public ObjectNode updateWhere(String database, String collection, Filter condition, Document patch) {
         return of(Operation.SAVE, database, collection).set("condition", pipeline.filter(condition)).set("object",
                 Documents.node(patch));

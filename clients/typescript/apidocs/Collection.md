@@ -29,6 +29,14 @@ generates it.
 @param value the document
 @returns the `_id` and whether it was an insert
 
+## insert
+
+Inserts one document, never replacing one. A document whose `_id` is already stored is refused with `409-18` and
+nothing is written; without an `_id`, the server generates it.
+
+@param value the document
+@returns the `_id`, and `inserted` always `true`
+
 ## saveAll
 
 Inserts or replaces many documents in one request.

@@ -91,6 +91,30 @@ async def test_update_where_merges_the_patch_into_every_match(client: AsyncLwnrd
     assert await orders.find_by_id("uw-9") is None
 
 
+async def test_insert_refuses_an_id_that_is_already_stored(client: AsyncLwnrdbClient) -> None:
+    shop = client.database("data_insert")
+    await shop.create()
+    orders = shop.collection("orders")
+    await orders.create()
+    inserted = await orders.insert({"_id": "in-1", "status": "new"})
+    assert (inserted.id, inserted.inserted) == ("in-1", True)
+    with pytest.raises(ConflictError) as refused:
+        await orders.insert({"_id": "in-1", "status": "replaced"})
+    assert refused.value.raw_code == "409-18"
+    assert await orders.find_by_id("in-1") == {"_id": "in-1", "status": "new"}
+    generated = await orders.insert({"status": "generated"})
+    assert generated.inserted
+    assert generated.id
+    async with client.transaction() as tx:
+        inside = tx.collection("data_insert", "orders")
+        with pytest.raises(ConflictError) as refused_inside:
+            await inside.insert({"_id": "in-1", "status": "replaced"})
+        assert refused_inside.value.raw_code == "409-18"
+        await inside.insert({"_id": "in-2", "status": "new"})
+    assert await orders.find_by_id("in-1") == {"_id": "in-1", "status": "new"}
+    assert await orders.find_by_id("in-2") == {"_id": "in-2", "status": "new"}
+
+
 async def test_save_all_reports_inserted_and_updated_ids(client: AsyncLwnrdbClient) -> None:
     shop = client.database("data_bulk")
     await shop.create()

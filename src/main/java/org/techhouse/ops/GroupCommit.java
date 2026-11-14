@@ -32,7 +32,7 @@ final class GroupCommit {
         HELD, HELD_AFTER_INTERRUPT, WITHDRAWN
     }
 
-    record Eligibility(BooleanSupplier groupable, String id, BooleanSupplier sideEffects) {
+    record Eligibility(BooleanSupplier groupable, String id, BooleanSupplier sideEffects, boolean checksExistence) {
     }
 
     @FunctionalInterface
@@ -54,6 +54,7 @@ final class GroupCommit {
         private final ErrorCode errorCode;
         private final String id;
         private final BooleanSupplier sideEffects;
+        private final boolean checksExistence;
         private final GroupedAttempt attempt;
         private OperationResponse response;
         private volatile boolean served;
@@ -64,6 +65,7 @@ final class GroupCommit {
             this.errorCode = errorCode;
             this.id = eligibility.id();
             this.sideEffects = eligibility.sideEffects();
+            this.checksExistence = eligibility.checksExistence();
             this.attempt = attempt;
         }
 
@@ -104,6 +106,10 @@ final class GroupCommit {
                 sideEffecting = GroupCommit.sideEffecting(sideEffects);
             }
             return sideEffecting;
+        }
+
+        private boolean sequencedById() {
+            return checksExistence || sideEffecting();
         }
     }
 
@@ -150,7 +156,8 @@ final class GroupCommit {
                 request.get_id() != null ? request.get_id() : objectId,
                 () -> TriggerHelper.firesOnSave(dbName, collName, depth)
                         || BeforeHookContext.hasHooksFor(dbName, collName, EventType.CREATED)
-                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.UPDATED));
+                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.UPDATED),
+                request.isFailOnUpdate());
     }
 
     static Eligibility forDelete(DeleteRequest request) {
@@ -159,7 +166,8 @@ final class GroupCommit {
         final var depth = request.getTriggerDepth();
         return new Eligibility(() -> depth == 0, request.get_id(),
                 () -> TriggerHelper.firesOnDelete(dbName, collName, depth)
-                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.DELETED));
+                        || BeforeHookContext.hasHooksFor(dbName, collName, EventType.DELETED),
+                false);
     }
 
     static OperationResponse run(String dbName, String collName, GroupedWrite write) {
@@ -295,7 +303,7 @@ final class GroupCommit {
                 break;
             }
             final var earlier = next.id == null ? null : byId.get(next.id);
-            if (earlier != null && (earlier.sideEffecting() || next.sideEffecting())) {
+            if (earlier != null && (earlier.sequencedById() || next.sequencedById())) {
                 break;
             }
             if (!queue.writes.remove(next)) {

@@ -50,6 +50,7 @@ function data(cases: Map<string, FixtureCall>): void {
     cases.set("data.save_nested", (r) =>
         r.orders.save({ _id: "o-2", customer: { name: "Ana", tags: ["vip", null, true, 1.5] } }),
     );
+    cases.set("data.insert_with_id", (r) => r.orders.insert({ _id: "o-3", status: "new" }));
     cases.set("data.bulk_save", (r) => r.orders.saveAll([{ _id: "o-1", total: 1 }, { total: 2 }]));
     cases.set("data.find_by_id", (r) => r.orders.findById("o-1"));
     cases.set("data.find_by_id_dirty", (r) => r.orders.findById("o-1", { dirtyRead: true }));

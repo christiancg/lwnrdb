@@ -98,6 +98,7 @@ public enum ErrorCode {
     PRIMARY_KEY_REBUILD_REFUSED("409-15", Status.ERROR, false, "The primary-key index cannot be rebuilt from the page files"),
     TRANSACTION_IDLE_TIMEOUT("409-16", Status.ERROR, false, "The transaction was rolled back after being idle too long"),
     SNAPSHOT_ABORTED("409-17", Status.ERROR, false, "The snapshot was aborted and holds nothing any more; open a new one"),
+    DOCUMENT_ALREADY_EXISTS("409-18", Status.ERROR, false, "A document with this _id already exists"),
     LISTEN_ENDED("410-1", Status.NOT_FOUND, false, "The listen ended"),
     OUTBOUND_BACKLOG("413-1", Status.ERROR, false, "The connection's outbound buffer overflowed"),
     NOT_COLLECTION_OWNER("421-1", Status.ERROR, false, "This node is not the owner of the target collection"),

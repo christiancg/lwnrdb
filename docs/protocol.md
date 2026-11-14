@@ -183,6 +183,7 @@ Never retry automatically:
 
 - `503-3`: the write committed, only its replication fell short of a quorum. Sending it again writes it again, which is
   harmless for a `SAVE` with an `_id` or a `DELETE` and wrong for a `SAVE` without one or a read-modify-write script.
+  A resent `SAVE` with `failOnUpdate` answers `409-18`, because its first attempt stored the document.
 - `503-7` and `503-8`: the outcome is unknown, so only an idempotent request may be sent again, and that is the
   caller's decision.
 - `500-33`, `500-34` and `409-10`: the write or transaction was durably logged or decided, and the server finishes it.
@@ -190,7 +191,8 @@ Never retry automatically:
 
 After a lost connection, resend only requests that change nothing: `FIND_BY_ID`, `AGGREGATE`, the `LIST_*` and `GET_*`
 operations and `SERVER_INFO`. Any write may have been applied before the connection dropped, and a resent `SAVE`
-without an `_id` stores a second document.
+without an `_id` stores a second document. A resent `SAVE` with `failOnUpdate` whose first attempt landed answers
+`409-18`, so after a dropped connection that code can mean the caller's own write.
 
 ## Transactions on the wire
 
@@ -314,6 +316,28 @@ The id may also be sent beside the object instead of inside it; the two forms ad
 ```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","_id":"user-1","object":{"name":"Alice"}}
 ```
+With `"failOnUpdate":true` a `SAVE` never overwrites: when a document with that `_id` already exists it is refused with
+`409-18` and nothing is written, so a client that chooses its own ids cannot replace a document by accident. Without
+an existing document it is an ordinary insert, answered with `"inserted":true`; without an `_id` the generated one
+never collides. `failOnUpdate` defaults to `false`, today's upsert.
+```json
+{"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","failOnUpdate":true,"object":{"_id":"user-1","name":"Alice"}}
+```
+```json
+{"type":"SAVE","status":"ERROR","message":"A document with this _id already exists","errorCode":"409-18"}
+```
+- **Nothing runs for a refusal.** Existence is checked under the collection's write lock before the before hooks and
+  the triggers, so a refused request runs no hook, fires no trigger and notifies no LISTEN. A body that fails the
+  collection's schema is still refused with `400-7` first, before the existence check.
+- **Inside a transaction** the transaction's own view decides: an id it buffered is refused, an id it deleted may be
+  inserted again. A refusal buffers nothing and the transaction stays usable. The transaction holds the collection
+  until it ends, so nothing else can insert that id meanwhile.
+- **In a cluster** the request is routed to the collection's owner like any write, and the owner decides.
+- **Not with a `condition`.** A conditional `SAVE` only ever updates, so `failOnUpdate` beside a `condition` is refused
+  with `400-1`. `BULK_SAVE` does not take it.
+- The clients expose it as `insert` (`InsertAsync` in .NET) on a collection and inside a transaction, and scripts as
+  `db.insert`.
+
 Every number is stored as an IEEE-754 double, and a request carrying one outside that range —
 `1e400`, `-1e400`, or a digit string that overflows — is refused as an unparseable command rather
 than stored. Earlier versions answered `OK` and wrote `null` in its place, so the cached document and
@@ -1716,6 +1740,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-15` | `ERROR` |  | The primary-key index cannot be rebuilt from the page files |
 | `409-16` | `ERROR` |  | The connection's transaction was rolled back after `transactionIdleTimeoutMs` without a request; answered once, to the next request, which is not executed |
 | `409-17` | `ERROR` |  | The snapshot was aborted and holds nothing any more; open a new one *(the message gives the reason: `snapshotMaxBytes`, a dropped collection or database, or a primary-key rebuild)* |
+| `409-18` | `ERROR` |  | A document with this _id already exists *(a `SAVE` with `failOnUpdate`)* |
 | `410-1` | `NOT_FOUND` |  | The listen ended: a collection it reads was dropped, its database was dropped, or the listening user can no longer read it. Pushed once on the listen's connection; the `listenId` is unregistered afterwards |
 | `413-1` | `ERROR` |  | The connection left more than `clientOutboundQueueMaxBytes` of responses unread; its backlog is dropped, its listens end, and this `CLOSE_CONNECTION` frame is the last thing written before the connection is closed (a reader that never catches up does not see it) |
 | `421-1` | `ERROR` |  | This node is not the owner of the target collection |

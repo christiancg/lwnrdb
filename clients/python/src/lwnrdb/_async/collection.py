@@ -47,6 +47,9 @@ class AsyncCollection(Generic[T, R]):
     async def save(self, value: T) -> SaveResult:
         return await self._ops.save(value)
 
+    async def insert(self, value: T) -> SaveResult:
+        return await self._ops.insert(value)
+
     async def save_all(self, values: Sequence[T]) -> BulkSaveResult:
         return await self._ops.save_all(values)
 

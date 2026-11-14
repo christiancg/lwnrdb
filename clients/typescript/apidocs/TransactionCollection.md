@@ -17,6 +17,14 @@ Buffers an insert or replace of one document.
 @param value the document
 @returns the `_id` and whether it was an insert
 
+## insert
+
+Buffers an insert of one document, refused with `409-18` when its `_id` is in the transaction's view, its own writes
+included. A refused insert buffers nothing and leaves the transaction open.
+
+@param value the document
+@returns the `_id`, and `inserted` always `true`
+
 ## saveAll
 
 Buffers inserts or replaces of many documents.

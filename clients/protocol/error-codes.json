@@ -90,6 +90,7 @@
     {"code":"409-15","name":"PRIMARY_KEY_REBUILD_REFUSED","status":"ERROR","message":"The primary-key index cannot be rebuilt from the page files","retryable":false},
     {"code":"409-16","name":"TRANSACTION_IDLE_TIMEOUT","status":"ERROR","message":"The transaction was rolled back after being idle too long","retryable":false},
     {"code":"409-17","name":"SNAPSHOT_ABORTED","status":"ERROR","message":"The snapshot was aborted and holds nothing any more; open a new one","retryable":false},
+    {"code":"409-18","name":"DOCUMENT_ALREADY_EXISTS","status":"ERROR","message":"A document with this _id already exists","retryable":false},
     {"code":"410-1","name":"LISTEN_ENDED","status":"NOT_FOUND","message":"The listen ended","retryable":false},
     {"code":"413-1","name":"OUTBOUND_BACKLOG","status":"ERROR","message":"The connection's outbound buffer overflowed","retryable":false},
     {"code":"421-1","name":"NOT_COLLECTION_OWNER","status":"ERROR","message":"This node is not the owner of the target collection","retryable":false},

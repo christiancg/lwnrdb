@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataRetrievalFailureException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -56,6 +57,16 @@ public class LwnrdbTemplateTest {
         assertTrue(template.saveAll(List.of()).isEmpty());
         assertThrows(InvalidDataAccessApiUsageException.class,
                 () -> template.saveAll(List.of(Widget.of("a", "x", 1), new Plain())));
+    }
+
+    @Test
+    public void test_insert_generates_ids_sends_fail_on_update_and_translates_a_taken_id() throws Exception {
+        final var inserted = template.insert(Widget.of(null, "bolt", 2));
+        final var request = stack.next("SAVE");
+        assertEquals(inserted.code(), request.get("object").get("_id").asString());
+        assertTrue(request.get("failOnUpdate").asBoolean());
+        stack.replies.reply("SAVE", "{\"type\":\"SAVE\",\"status\":\"ERROR\",\"errorCode\":\"409-18\"}");
+        assertThrows(DuplicateKeyException.class, () -> template.insert(Widget.of("w1", "bolt", 2)));
     }
 
     @Test

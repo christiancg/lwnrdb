@@ -42,6 +42,13 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     }
 
     @Override
+    public JsonObject insert(String db, String coll, JsonObject document) {
+        calls.add("insert:" + db + "/" + coll);
+        maybeDeny();
+        return document;
+    }
+
+    @Override
     public BulkSaveOutcome bulkSave(String db, String coll, List<JsonObject> documents) {
         calls.add("bulkSave:" + db + "/" + coll + "/" + documents.size());
         maybeDeny();

@@ -475,6 +475,23 @@ Update an object
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": { "name": "test with id updated 1", "_id": "1234" }}
 ```
 
+Refuse to overwrite: `failOnUpdate` on the id saved above → `409-18`, and `1234` keeps its body (the same request with
+a new `_id` is an ordinary insert)
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "failOnUpdate": true, "object": { "name": "never written", "_id": "1234" }}
+```
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "A document with this _id already exists", "errorCode": "409-18"}
+```
+
+`failOnUpdate` beside a `condition` → `400-1`
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "failOnUpdate": true, "condition": {"fieldOperatorType": "EQUALS", "field": "name", "value": "test"}, "object": { "name": "x" }}
+```
+
 Insert after update
 
 ```json

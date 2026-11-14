@@ -201,6 +201,7 @@ const CATALOGUE = [
         false,
         "The snapshot was aborted and holds nothing any more; open a new one",
     ],
+    ["DOCUMENT_ALREADY_EXISTS", "409-18", "ERROR", false, "A document with this _id already exists"],
     ["LISTEN_ENDED", "410-1", "NOT_FOUND", false, "The listen ended"],
     ["OUTBOUND_BACKLOG", "413-1", "ERROR", false, "The connection's outbound buffer overflowed"],
     ["NOT_COLLECTION_OWNER", "421-1", "ERROR", false, "This node is not the owner of the target collection"],

@@ -31,6 +31,8 @@ public interface DatabaseAccess {
 
     JsonObject save(String db, String coll, JsonObject document);
 
+    JsonObject insert(String db, String coll, JsonObject document);
+
     BulkSaveOutcome bulkSave(String db, String coll, List<JsonObject> documents);
 
     void delete(String db, String coll, String id);

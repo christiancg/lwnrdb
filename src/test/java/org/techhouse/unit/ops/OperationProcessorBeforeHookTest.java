@@ -175,6 +175,19 @@ public class OperationProcessorBeforeHookTest {
     }
 
     @Test
+    public void test_an_insert_refused_for_an_existing_id_runs_no_hook() throws Exception {
+        assertEquals(OperationStatus.OK, save("taken").getStatus());
+        installHook("veto", "veto", "export default (d) => { throw new Error('hooked'); };", EventType.CREATED,
+                EventType.UPDATED);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document("taken"));
+        request.set_id("taken");
+        request.setFailOnUpdate(true);
+
+        assertEquals(ErrorCode.DOCUMENT_ALREADY_EXISTS.getCode(), processor.processMessage(request).getErrorCode());
+    }
+
+    @Test
     public void test_a_compliant_write_still_succeeds_after_a_rejection() throws Exception {
         installHook("veto", "veto", "export default (d) => { if (d.qty > 1) { throw new Error('too many'); } };",
                 EventType.CREATED, EventType.UPDATED);

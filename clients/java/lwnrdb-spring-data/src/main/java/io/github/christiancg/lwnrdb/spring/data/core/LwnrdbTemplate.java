@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -44,13 +45,22 @@ public class LwnrdbTemplate implements LwnrdbOperations {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public <T> T save(T entity) {
+        return written(entity, EntityStore::save);
+    }
+
+    @Override
+    public <T> T insert(T entity) {
+        return written(entity, EntityStore::insert);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T written(T entity, BiConsumer<EntityStore<T>, T> write) {
         Objects.requireNonNull(entity, "entity");
         final var type = (Class<T>) entity.getClass();
         return translate(() -> {
             final var stored = codec(type).withGeneratedId(entity);
-            store(type).save(stored);
+            write.accept(store(type), stored);
             return stored;
         });
     }

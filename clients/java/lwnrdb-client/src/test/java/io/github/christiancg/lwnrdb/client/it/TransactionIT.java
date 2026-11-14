@@ -9,6 +9,7 @@ import io.github.christiancg.lwnrdb.client.Collection;
 import io.github.christiancg.lwnrdb.client.Document;
 import io.github.christiancg.lwnrdb.client.LwnrdbClient;
 import io.github.christiancg.lwnrdb.client.ReadMode;
+import io.github.christiancg.lwnrdb.client.error.ConflictException;
 import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +61,35 @@ public class TransactionIT extends ServerIT {
         assertEquals(2, deleted);
         assertTrue(accounts.findById("dw-a").isEmpty());
         assertTrue(accounts.findById("dw-b").isEmpty());
+    }
+
+    @Test
+    public void test_an_insert_in_a_transaction_refuses_a_committed_id_and_the_transaction_still_commits() {
+        accounts.save(Document.of("_id", "in-a", "balance", 1));
+        final var refused = client.transaction(transaction -> {
+            final var inside = transaction.collection("tx_it", "accounts");
+            inside.save(Document.of("_id", "in-b", "balance", 2));
+            final var error = assertThrows(ConflictException.class,
+                    () -> inside.insert(Document.of("_id", "in-a", "balance", 99)));
+            assertTrue(inside.insert(Document.of("_id", "in-c", "balance", 3)).inserted());
+            return error.rawCode().orElseThrow();
+        });
+        assertEquals("409-18", refused);
+        assertEquals(1, accounts.findById("in-a").orElseThrow().getLong("balance").orElseThrow());
+        assertEquals(2, accounts.findById("in-b").orElseThrow().getLong("balance").orElseThrow());
+        assertEquals(3, accounts.findById("in-c").orElseThrow().getLong("balance").orElseThrow());
+    }
+
+    @Test
+    public void test_an_insert_after_a_delete_of_the_same_id_in_a_transaction_is_accepted() {
+        accounts.save(Document.of("_id", "in-d", "balance", 4));
+        final boolean inserted = client.transaction(transaction -> {
+            final var inside = transaction.collection("tx_it", "accounts");
+            inside.delete("in-d");
+            return inside.insert(Document.of("_id", "in-d", "balance", 40)).inserted();
+        });
+        assertTrue(inserted);
+        assertEquals(40, accounts.findById("in-d").orElseThrow().getLong("balance").orElseThrow());
     }
 
     @Test

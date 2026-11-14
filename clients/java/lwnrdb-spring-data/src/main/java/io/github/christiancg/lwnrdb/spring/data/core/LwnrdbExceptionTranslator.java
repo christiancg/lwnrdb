@@ -72,6 +72,9 @@ public class LwnrdbExceptionTranslator implements PersistenceExceptionTranslator
     }
 
     private static DataAccessException conflict(LwnrdbException exception) {
+        if (exception.hasCode(ErrorCode.DOCUMENT_ALREADY_EXISTS)) {
+            return new DuplicateKeyException(exception.getMessage(), exception);
+        }
         if (exception.hasCode(ErrorCode.TRANSACTION_LOCK_TIMEOUT)) {
             return new PessimisticLockingFailureException(exception.getMessage(), exception);
         }

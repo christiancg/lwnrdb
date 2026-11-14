@@ -7,6 +7,15 @@ transaction, on its connection. Failures are Spring's `DataAccessException`s.
 @param <T> the entity type
 @return the stored entity, with its id
 
+## insert(T)
+
+Inserts the entity and never replaces one: an id that is already stored fails with a `DuplicateKeyException`
+(`409-18`) and writes nothing.
+
+@param entity the entity; a `null` id is replaced by a UUID
+@param <T> the entity type
+@return the stored entity, with its id
+
 ## saveAll(Iterable)
 
 @param entities entities of one class, saved in one request

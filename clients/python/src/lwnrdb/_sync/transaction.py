@@ -32,6 +32,9 @@ class TransactionCollection(Generic[T, R]):
     def save(self, value: T) -> SaveResult:
         return self._runtime.run(self._inner.save(value))
 
+    def insert(self, value: T) -> SaveResult:
+        return self._runtime.run(self._inner.insert(value))
+
     def save_all(self, values: Sequence[T]) -> BulkSaveResult:
         return self._runtime.run(self._inner.save_all(values))
 

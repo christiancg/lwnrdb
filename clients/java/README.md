@@ -67,6 +67,9 @@ try (LwnrdbClient client = LwnrdbClient.connect(settings)) {
 
 A collection must exist before its first write: a save into a missing one is refused with `404-11`.
 
+`orders.insert(Document.of("_id", "o-2", "status", "new"))` stores a document only when its `_id` is not taken: a
+stored one is refused with `409-18` (a `ConflictException`) and left unchanged.
+
 `orders.updateWhere(filter, Document.of("status", "expired"))` merges the patch's top-level fields into every
 document the filter matches, and `orders.deleteWhere(filter)` deletes every match; each is one request, all or
 nothing, and returns how many documents it changed.
@@ -292,9 +295,9 @@ public void replace(Order cancelled, Order placed) {
   `TransientDataAccessResourceException`.
 - `REQUIRES_NEW` suspends the outer transaction and opens a second connection. `NESTED` is refused, because the server
   has no savepoints.
-- Server errors are translated to Spring's `DataAccessException`s: `400-3` is a `DuplicateKeyException`, a lock timeout
-  a `PessimisticLockingFailureException`, schema and before-hook refusals `DataIntegrityViolationException`s, lost
-  connections `DataAccessResourceFailureException`s.
+- Server errors are translated to Spring's `DataAccessException`s: `400-3` and `409-18` are `DuplicateKeyException`s, a
+  lock timeout a `PessimisticLockingFailureException`, schema and before-hook refusals
+  `DataIntegrityViolationException`s, lost connections `DataAccessResourceFailureException`s.
 
 ### The template
 
@@ -311,6 +314,9 @@ all or nothing. When more than the server's `deleteMaxMatches` documents match (
 matching documents and deleting them one by one. A `delete…By` that returns the deleted entities, or one with a sort,
 `First`/`Top` or a limit, always reads first. `template.deleteWhere(Order.class, filter)` is the single request without
 the fallback.
+
+`template.insert(order)` stores a new entity like `save`, but an id that is already stored fails with a
+`DuplicateKeyException` (`409-18`) instead of overwriting it.
 
 `template.updateWhere(Order.class, filter, Map.of("status", "expired"))` updates every match with one conditional
 `SAVE`, all or nothing: the patch's top-level fields are added or replaced and the rest are kept. Its keys are stored

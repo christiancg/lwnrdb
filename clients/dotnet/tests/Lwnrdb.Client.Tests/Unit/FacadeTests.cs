@@ -70,6 +70,29 @@ public sealed class FacadeTests
     }
 
     [Fact]
+    public async Task InsertSendsFailOnUpdateAndReadsTheSaveReply()
+    {
+        _recorder.Channel.Replies = request => RecordingChannel.Ok(request, new JsonObject { ["_id"] = "o-3", ["inserted"] = true });
+        var inserted = await _recorder.Orders.InsertAsync(Document.Of("_id", "o-3", "status", "new"));
+        Assert.Equal(("o-3", true), (inserted.Id, inserted.Inserted));
+        Assert.Equal("SAVE", _recorder.Channel.Last["type"]!.GetValue<string>());
+        Assert.True(_recorder.Channel.Last["failOnUpdate"]!.GetValue<bool>());
+        Assert.Equal("""{"_id":"o-3","status":"new"}""", _recorder.Channel.Last["object"]!.ToJsonString());
+        await _recorder.Orders.SaveAsync(Document.Of("_id", "o-3"));
+        Assert.Null(_recorder.Channel.Last["failOnUpdate"]);
+        _recorder.Channel.Replies = _ => new JsonObject
+        {
+            ["type"] = "SAVE",
+            ["status"] = "ERROR",
+            ["message"] = "A document with this _id already exists",
+            ["errorCode"] = "409-18",
+        };
+        var refused = await Assert.ThrowsAsync<ConflictException>(() => _recorder.Orders.InsertAsync(Document.Of("_id", "o-3")));
+        Assert.True(refused.HasCode(ErrorCode.DocumentAlreadyExists));
+        Assert.False(ErrorCode.DocumentAlreadyExists.IsRetryable);
+    }
+
+    [Fact]
     public async Task AdminListsDecodeTheirRows()
     {
         Reply("users", new JsonArray(new JsonObject

@@ -44,6 +44,7 @@ internal static class WireFixtureCases
     {
         cases["data.save_with_id"] = r => r.Orders.SaveAsync(Document.Of("_id", "o-1", "status", "active", "total", 120));
         cases["data.save_without_id"] = r => r.Orders.SaveAsync(Document.Of("status", "new"));
+        cases["data.insert_with_id"] = r => r.Orders.InsertAsync(Document.Of("_id", "o-3", "status", "new"));
         cases["data.save_nested"] = r => r.Orders.SaveAsync(Document.Of(
             "_id", "o-2", "customer", Document.Of("name", "Ana", "tags", new object?[] { "vip", null, true, 1.5 })));
         cases["data.bulk_save"] = r => r.Orders.SaveAllAsync([Document.Of("_id", "o-1", "total", 1), Document.Of("total", 2)]);

@@ -17,6 +17,14 @@ Buffers an insert or replace until commit.
 @param value the document
 @return the `_id` and whether it is an insert
 
+## insert(T)
+
+Buffers an insert until commit. A document whose `_id` this transaction's view already holds, its own writes included,
+is refused with `409-18` and nothing is buffered; the transaction stays open and its other writes still commit.
+
+@param value the document
+@return the `_id`; the reply is always an insert
+
 ## saveAll(List)
 
 Buffers many writes until commit.

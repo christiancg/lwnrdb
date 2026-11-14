@@ -37,6 +37,17 @@ describe("documents", () => {
         expect(await orders.findById("Case")).toBeDefined();
     });
 
+    test("insert adds a new document and refuses an _id that is already stored", async () => {
+        expect(await orders.insert({ _id: "i-1", status: "new" })).toEqual({ id: "i-1", inserted: true });
+        const refused = orders.insert({ _id: "i-1", status: "replaced" });
+        await expect(refused).rejects.toMatchObject({ rawCode: "409-18" });
+        await expect(refused).rejects.toBeInstanceOf(LwnrdbError);
+        expect(await orders.findById("i-1")).toEqual({ _id: "i-1", status: "new" });
+        const generated = await orders.insert({ status: "fresh" });
+        expect(generated.inserted).toBe(true);
+        expect(await orders.findById(generated.id ?? "")).toEqual({ _id: generated.id, status: "fresh" });
+    });
+
     test("saveAll reports inserts and updates and refuses duplicates", async () => {
         await orders.save({ _id: "b-1", v: 1 });
         expect(

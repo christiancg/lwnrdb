@@ -132,6 +132,40 @@ def test_save_reports_whether_it_inserted(c):
     check_status("COMMIT_TRANSACTION again", commit_txn(c), "OK")
 
 
+def insert(c, obj, coll=COLL, db=DB) -> dict:
+    return c.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "failOnUpdate": True, "object": obj})
+
+
+def test_insert_inside_a_transaction(c):
+    section("SAVE with failOnUpdate inside a transaction")
+    coll = "insert_only"
+    check_status("create the collection",
+                 c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("seed a committed document", save(c, {"_id": "kept", "total": 1}, coll=coll), "OK")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_code("an insert of a committed id -> 409-18", insert(c, {"_id": "kept", "total": 2}, coll=coll),
+               "ERROR", "409-18")
+    check_status("an insert of a new id is buffered", insert(c, {"_id": "fresh", "total": 1}, coll=coll), "OK")
+    check_code("a second insert of the id the transaction buffered -> 409-18",
+               insert(c, {"_id": "fresh", "total": 2}, coll=coll), "ERROR", "409-18")
+    check_status("the transaction is still usable and commits", commit_txn(c), "OK")
+    check_field("the committed document keeps its body", find_by_id(c, "kept", coll=coll), "object.total", 1)
+    check_field("the buffered insert committed its first body", find_by_id(c, "fresh", coll=coll), "object.total", 1)
+
+    check_status("START_TRANSACTION again", start_txn(c), "OK")
+    check_status("buffered DELETE of a committed id", delete(c, "kept", coll=coll), "OK")
+    check_status("an insert after the transaction deleted the id is accepted",
+                 insert(c, {"_id": "kept", "total": 9}, coll=coll), "OK")
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+    check_field("the re-inserted document is stored", find_by_id(c, "kept", coll=coll), "object.total", 9)
+
+    check_status("START_TRANSACTION for a rollback", start_txn(c), "OK")
+    check_status("an insert of a new id", insert(c, {"_id": "rolled", "total": 1}, coll=coll), "OK")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+    check_code("the rolled back insert left nothing", find_by_id(c, "rolled", coll=coll), "NOT_FOUND", "404-2")
+
+
 def test_rollback_discards(c):
     section("Rollback discards buffered writes")
 
@@ -929,6 +963,8 @@ def main():
         test_commit_and_read_your_writes(c)
     with authed_conn() as (c):
         test_save_reports_whether_it_inserted(c)
+    with authed_conn() as (c):
+        test_insert_inside_a_transaction(c)
     with authed_conn() as (c):
         test_rollback_discards(c)
     with authed_conn() as (c):

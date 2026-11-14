@@ -131,6 +131,7 @@ COLL_SHAPES = "shapes"
 COLL_MIXED = "mixed_load"
 COLL_DELETE_WHERE = "delete_where"
 COLL_SAVE_WHERE = "save_where"
+COLL_INSERT = "insert_only"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -429,6 +430,55 @@ def test_save_by_condition(c):
     check("u27 carries the scripted patch", find_by_id(c, COLL_SAVE_WHERE, "u27").get("object", {}).get("late") is True)
 
     check_status("drop the collection", drop_coll(c, COLL_SAVE_WHERE), "OK")
+
+
+def insert(c, coll, obj, db=DB) -> dict:
+    return c.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "failOnUpdate": True, "object": obj})
+
+
+def test_save_fail_on_update(c):
+    section("SAVE with failOnUpdate")
+
+    check_status("create the collection", create_coll(c, COLL_INSERT), "OK")
+    check_status("index the status field", create_index(c, COLL_INSERT, "status"), "OK")
+
+    r = insert(c, COLL_INSERT, {"_id": "n1", "status": "first"})
+    check_status("an insert of a new id", r, "OK")
+    check_field("it reports an insert", r, "inserted", True)
+
+    r = insert(c, COLL_INSERT, {"_id": "n1", "status": "second"})
+    check_code("an insert of an existing id -> 409-18", r, "ERROR", "409-18")
+    check("the reply names the reason", r.get("message") == "A document with this _id already exists", f"r={r}")
+    check_field("the stored document keeps its first body", find_by_id(c, COLL_INSERT, "n1"), "object.status", "first")
+
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_INSERT, "failOnUpdate": True,
+                "_id": "n1", "object": {"status": "beside"}})
+    check_code("the _id beside the object is checked too -> 409-18", r, "ERROR", "409-18")
+
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_INSERT, "failOnUpdate": False,
+                "object": {"_id": "n1", "status": "updated"}})
+    check_status("failOnUpdate false still updates", r, "OK")
+    check_field("and reports an update", r, "inserted", False)
+
+    r = insert(c, COLL_INSERT, {"status": "anonymous"})
+    check_status("an insert without an _id", r, "OK")
+    check("gets a generated _id", bool(r.get("_id")), f"r={r}")
+
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_INSERT, "failOnUpdate": True,
+                "condition": field_condition("status", "EQUALS", "updated"), "object": {"status": "x"}})
+    check_code("failOnUpdate beside a condition -> 400-1", r, "ERROR", "400-1")
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_INSERT, "failOnUpdate": "yes",
+                "object": {"_id": "n9", "status": "x"}})
+    check_code("a failOnUpdate that is not a boolean -> 400-43", r, "ERROR", "400-43")
+
+    for value in ("second", "beside", "x"):
+        indexed = ids_of(aggregate(c, COLL_INSERT, [filter_step("status", "EQUALS", value)]))
+        scanned = ids_of(aggregate(c, COLL_INSERT, [{"type": "SKIP", "skip": 0},
+                                                   filter_step("status", "EQUALS", value)]))
+        check(f"no refused value is indexed or stored ({value})", indexed == scanned == [],
+              f"index={indexed} scan={scanned}")
+
+    check_status("drop the collection", drop_coll(c, COLL_INSERT), "OK")
 
 
 def test_top_level_id(c):
@@ -1895,6 +1945,7 @@ def main():
         test_crud,
         test_delete_by_condition,
         test_save_by_condition,
+        test_save_fail_on_update,
         test_top_level_id,
         test_value_types,
         test_rows_of_different_shapes_round_trip,

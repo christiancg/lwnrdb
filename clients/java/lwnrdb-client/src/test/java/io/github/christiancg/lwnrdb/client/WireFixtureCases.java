@@ -49,6 +49,7 @@ final class WireFixtureCases {
     private static void data(Map<String, Consumer<Recorder>> cases) {
         cases.put("data.save_with_id", r -> r.orders.save(Document.of("_id", "o-1", "status", "active", "total", 120)));
         cases.put("data.save_without_id", r -> r.orders.save(Document.of("status", "new")));
+        cases.put("data.insert_with_id", r -> r.orders.insert(Document.of("_id", "o-3", "status", "new")));
         cases.put("data.save_nested", r -> r.orders.save(Document.of("_id", "o-2", "customer",
                 Document.of("name", "Ana", "tags", Arrays.asList("vip", null, true, 1.5)))));
         cases.put("data.bulk_save",

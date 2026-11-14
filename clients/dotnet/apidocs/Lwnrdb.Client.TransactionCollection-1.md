@@ -38,6 +38,15 @@ Reads one document by its exact, case-sensitive `_id`, seeing the transaction's 
 @param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
 @returns the document, or the default value of `T` when there is none
 
+## InsertAsync(T, CancellationToken)
+Inserts one document as part of the transaction, never replacing one. A document whose `_id` the transaction's view
+already holds, its own writes included, is refused with `409-18` and nothing is buffered; the transaction stays open.
+
+@param value the document
+@param ct cancels the wait; a request already sent closes the transaction's connection, since its outcome is unknown
+@returns the `_id`, and `Inserted` true
+@exception Lwnrdb.Client.Errors.ConflictException with code `409-18` when a document with that `_id` already exists
+
 ## Query()
 Starts a fluent query over the collection, sent on the transaction's connection.
 

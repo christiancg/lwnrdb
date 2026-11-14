@@ -41,12 +41,18 @@ public final class DbModule {
     private DbModule() {
     }
 
+    @FunctionalInterface
+    private interface DocumentWrite {
+        JsonObject apply(String db, String coll, JsonObject document);
+    }
+
     public static JsObject create(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
             ResourceLimits limits) {
         final var db = new JsObject();
         db.set("findById", hostCall("findById", ops, args -> findById(database, ops, args)));
         db.set("aggregate", hostCall("aggregate", ops, args -> aggregate(database, ops, args)));
-        db.set("save", hostCall("save", ops, args -> save(database, ops, args)));
+        db.set("save", hostCall("save", ops, args -> write("save", database::save, ops, args)));
+        db.set("insert", hostCall("insert", ops, args -> write("insert", database::insert, ops, args)));
         db.set("bulkSave", hostCall("bulkSave", ops, args -> bulkSave(database, ops, args)));
         db.set("cursor", hostCall("cursor", ops, args -> cursor(database, ops, intrinsics, limits, args)));
         db.set("delete", hostCall("delete", ops, args -> {
@@ -91,11 +97,11 @@ public final class DbModule {
         return array;
     }
 
-    private static JsValue save(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var dbName = requireString(args, 0, "save", DATABASE_NAME);
-        final var collName = requireString(args, 1, "save", COLLECTION_NAME);
-        final var document = requireDocument(payloadArg(args, ops));
-        final var saved = database.save(dbName, collName, document);
+    private static JsValue write(String method, DocumentWrite access, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, method, DATABASE_NAME);
+        final var collName = requireString(args, 1, method, COLLECTION_NAME);
+        final var document = requireObject(payloadArg(args, ops), "db." + method + " expects a document");
+        final var saved = access.apply(dbName, collName, document);
         InterpreterOps.charge(ops, EJsonInterop.estimatedBytes(saved));
         return EJsonInterop.fromEjson(saved);
     }
@@ -313,13 +319,6 @@ public final class DbModule {
 
     private static JsonBaseElement payloadArg(List<JsValue> args, InterpreterOps ops) {
         return args.size() > PAYLOAD_INDEX ? EJsonInterop.toHostPayload(args.get(PAYLOAD_INDEX), ops) : null;
-    }
-
-    private static JsonObject requireDocument(JsonBaseElement converted) {
-        if (converted instanceof JsonObject object) {
-            return object;
-        }
-        throw new TypeErrorException("db.save expects a document");
     }
 
     private static JsonObject requireObject(JsonBaseElement converted, String message) {

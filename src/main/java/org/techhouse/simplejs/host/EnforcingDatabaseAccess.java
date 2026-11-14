@@ -171,8 +171,18 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     @Override
     public JsonObject save(String db, String coll, JsonObject document) {
+        return saveDocument(db, coll, document, false);
+    }
+
+    @Override
+    public JsonObject insert(String db, String coll, JsonObject document) {
+        return saveDocument(db, coll, document, true);
+    }
+
+    private JsonObject saveDocument(String db, String coll, JsonObject document, boolean failOnUpdate) {
         final var request = new SaveRequest(db, coll);
         request.setObject(document);
+        request.setFailOnUpdate(failOnUpdate);
         if (document.get(Globals.PK_FIELD) instanceof JsonString objectId) {
             request.set_id(objectId.getValue());
         }
