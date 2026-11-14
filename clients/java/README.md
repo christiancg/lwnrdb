@@ -302,8 +302,11 @@ public void replace(Order cancelled, Order placed) {
   the `LwnrdbClient`, outside any transaction.
 - `wirePath(Order.class, "address.city")` translates a property path to the stored field names for those queries.
 
-`deleteAll()` and `delete…By` read the matching documents first and delete them one by one, because the server has no
-bulk delete by filter; on a large collection, drop and re-create the collection instead.
+`deleteAll()` and a `delete…By` method that returns a count send one conditional `DELETE`, which deletes every match
+all or nothing. When more than the server's `deleteMaxMatches` documents match (`400-44`), they fall back to reading the
+matching documents and deleting them one by one. A `delete…By` that returns the deleted entities, or one with a sort,
+`First`/`Top` or a limit, always reads first. `template.deleteWhere(Order.class, filter)` is the single request without
+the fallback.
 
 ### Health
 

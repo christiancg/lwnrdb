@@ -35,6 +35,8 @@ public interface DatabaseAccess {
 
     void delete(String db, String coll, String id);
 
+    long deleteWhere(String db, String coll, JsonObject condition);
+
     List<String> listCollections(String db);
 
     List<String> listDatabases();

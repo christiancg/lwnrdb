@@ -2,11 +2,13 @@ package org.techhouse.ops;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -104,6 +106,19 @@ public final class BeforeHookHelper {
         try (var hooks = BeforeHookContext.open(dbName, collName, EventType.DELETED, actingUser)) {
             final var outcome = hooks.apply(document, request.get_id(), OperationType.DELETE);
             return outcome.isRejected() ? outcome.rejection() : null;
+        }
+    }
+
+    public static OperationResponse beforeDeleteAll(String dbName, String collName, List<DbEntry> documents,
+            String actingUser) {
+        try (var hooks = BeforeHookContext.open(dbName, collName, EventType.DELETED, actingUser)) {
+            for (final var document : documents) {
+                final var outcome = hooks.apply(document.getData(), document.get_id(), OperationType.DELETE);
+                if (outcome.isRejected()) {
+                    return outcome.rejection();
+                }
+            }
+            return null;
         }
     }
 

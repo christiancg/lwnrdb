@@ -10,7 +10,7 @@ import weakref
 import base_utils as bu
 import connection_budgets
 import metrics_cases
-from base_utils import Conn, check, check_code, check_status, section
+from base_utils import Conn, check, check_code, check_field, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("CONNLIMIT_TEST_PORT", "9444"))
@@ -18,6 +18,8 @@ AUTH_TIMEOUT_S = 1.5
 IDLE_TIMEOUT_S = 1.5
 MAX_CONNECTIONS = 6
 TRANSACTION_MAX_OPS = 20
+DELETE_MAX_MATCHES = 5
+PURGE_COLL = "purge_items"
 TRANSACTION_MAX_AGE_S = 6.0
 DB = "connlimits_db"
 COLL = "items"
@@ -48,7 +50,7 @@ def write_config(work_dir: str):
                     authTimeoutMs=int(AUTH_TIMEOUT_S * 1000), transactionIdleTimeoutMs=int(IDLE_TIMEOUT_S * 1000),
                     maxConnections=MAX_CONNECTIONS, transactionMaxOps=TRANSACTION_MAX_OPS,
                     transactionMaxAgeMs=int(TRANSACTION_MAX_AGE_S * 1000),
-                    listenMaxRetainedBytes=f"{LISTEN_RETAINED_BYTES}")
+                    listenMaxRetainedBytes=f"{LISTEN_RETAINED_BYTES}", deleteMaxMatches=DELETE_MAX_MATCHES)
 
 
 def raw_socket(timeout: float = 10.0) -> socket.socket:
@@ -400,6 +402,31 @@ def test_a_transaction_past_its_operation_limit_is_refused():
         check_status("The refused one was never written", holder.send(find("many-overflow")), "NOT_FOUND")
 
 
+def test_a_delete_condition_past_delete_max_matches_is_refused_whole():
+    section("A DELETE condition matching more than deleteMaxMatches deletes nothing")
+    with Conn.authenticated() as conn:
+        check_status("CREATE_COLLECTION for the purge cases",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": PURGE_COLL}), "OK")
+        objects = [{"_id": f"purge-{i}", "kind": "stale" if i <= DELETE_MAX_MATCHES else "fresh"}
+                   for i in range(DELETE_MAX_MATCHES + 3)]
+        check_status("BULK_SAVE six stale and two fresh documents",
+                     conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": PURGE_COLL,
+                                "objects": objects}), "OK")
+        stale = {"fieldOperatorType": "EQUALS", "field": "kind", "value": "stale"}
+        check_code(f"A condition matching {DELETE_MAX_MATCHES + 1} documents -> 400-44",
+                   conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PURGE_COLL,
+                              "condition": stale}), "ERROR", "400-44")
+        remaining = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": PURGE_COLL,
+                               "aggregationSteps": [{"type": "COUNT"}]})
+        check_field("Every document survives the refusal", remaining, "results.0.count", DELETE_MAX_MATCHES + 3)
+        check_status("Deleting one stale document by id fits",
+                     conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PURGE_COLL,
+                                "_id": "purge-0"}), "OK")
+        reply = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": PURGE_COLL, "condition": stale})
+        check_field(f"A condition matching exactly {DELETE_MAX_MATCHES} documents deletes them all", reply,
+                    "deletedCount", DELETE_MAX_MATCHES)
+
+
 def test_a_busy_transaction_is_still_reaped_at_its_maximum_age():
     section("A transaction that keeps sending requests is rolled back at transactionMaxAgeMs")
     holder = open_transaction_with_one_write("aged-1")
@@ -662,6 +689,7 @@ def main():
         test_close_connection_is_always_accepted_after_a_reap()
         test_server_info_after_a_reap_leaves_the_notice_for_the_next_request()
         test_a_transaction_past_its_operation_limit_is_refused()
+        test_a_delete_condition_past_delete_max_matches_is_refused_whole()
         test_a_busy_transaction_is_still_reaped_at_its_maximum_age()
         test_unparseable_lines_before_authentication_close_the_connection()
         test_an_unauthenticated_request_is_answered_401_1_without_validation()

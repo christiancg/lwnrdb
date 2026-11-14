@@ -10,6 +10,7 @@ from lwnrdb._sync.indexes import Indexes, Schema, Triggers
 from lwnrdb._sync.query import Query, SyncTarget
 from lwnrdb._sync.subscription import Subscription
 from lwnrdb.listen import Handler
+from lwnrdb.query.types import Filter
 from lwnrdb.results import BulkSaveResult, SaveResult
 
 T = TypeVar("T")
@@ -46,6 +47,9 @@ class Collection(Generic[T, R]):
 
     def delete(self, id: str) -> None:  # noqa: A002
         self._runtime.run(self._inner.delete(id))
+
+    def delete_where(self, condition: Filter) -> int:
+        return self._runtime.run(self._inner.delete_where(condition))
 
     def query(self) -> Query[R]:
         return Query(SyncTarget(self._runtime, self._inner._ops))

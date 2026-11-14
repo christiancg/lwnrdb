@@ -7,6 +7,7 @@
     {"name":"data.bulk_save","request":{"type":"BULK_SAVE","databaseName":"shop","collectionName":"orders","objects":[{"_id":"o-1","total":1},{"total":2}]}},
     {"name":"data.find_by_id","request":{"type":"FIND_BY_ID","databaseName":"shop","collectionName":"orders","_id":"o-1"}},
     {"name":"data.find_by_id_dirty","request":{"type":"FIND_BY_ID","databaseName":"shop","collectionName":"orders","_id":"o-1","dirtyRead":true}},
-    {"name":"data.delete","request":{"type":"DELETE","databaseName":"shop","collectionName":"orders","_id":"o-1"}}
+    {"name":"data.delete","request":{"type":"DELETE","databaseName":"shop","collectionName":"orders","_id":"o-1"}},
+    {"name":"data.delete_where","request":{"type":"DELETE","databaseName":"shop","collectionName":"orders","condition":{"conjunctionType":"AND","operators":[{"fieldOperatorType":"EQUALS","field":"status","value":"archived"},{"fieldOperatorType":"SMALLER_THAN","field":"total","value":100}]}}}
   ]
 }

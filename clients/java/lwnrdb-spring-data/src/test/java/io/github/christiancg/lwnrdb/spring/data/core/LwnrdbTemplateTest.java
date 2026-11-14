@@ -15,6 +15,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataRetrievalFailureException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.data.domain.PageRequest;
@@ -23,6 +24,8 @@ import org.springframework.data.domain.Sort;
 
 public class LwnrdbTemplateTest {
     private static final String ROW = "{\"_id\":\"w1\",\"name\":\"bolt\",\"size\":2}";
+    private static final String DELETED_FOUR = "{\"type\":\"DELETE\",\"status\":\"OK\",\"deletedCount\":4}";
+    private static final String TOO_MANY = "{\"type\":\"DELETE\",\"status\":\"ERROR\",\"errorCode\":\"400-44\"}";
 
     private Stack stack;
     private LwnrdbTemplate template;
@@ -88,7 +91,51 @@ public class LwnrdbTemplateTest {
         template.delete(Widget.of("w9", "x", 1));
         assertThrows(InvalidDataAccessApiUsageException.class, () -> template.delete(Widget.of(null, "x", 1)));
         template.deleteAllById(List.of("a", "b"), Widget.class);
-        assertEquals(1, template.deleteAll(Widget.class));
+        stack.replies.reply("DELETE", DELETED_FOUR);
+        assertEquals(4, template.deleteAll(Widget.class));
+    }
+
+    @Test
+    public void test_delete_all_is_one_conditional_delete_of_every_id() throws Exception {
+        stack.replies.reply("DELETE", DELETED_FOUR);
+
+        assertEquals(4, template.deleteAll(Widget.class));
+
+        final var condition = stack.next("DELETE").get("condition");
+        assertEquals("NOT_EQUALS", condition.get("fieldOperatorType").asString());
+        assertEquals("_id", condition.get("field").asString());
+        assertEquals("", condition.get("value").asString());
+    }
+
+    @Test
+    public void test_delete_where_sends_the_filter_and_translates_a_refusal() throws Exception {
+        stack.replies.reply("DELETE", DELETED_FOUR);
+        assertEquals(4, template.deleteWhere(Widget.class, Filters.field("name").eq("bolt")));
+        assertEquals("name", stack.next("DELETE").get("condition").get("field").asString());
+        assertEquals(4, template.deleteWhere(Widget.class, null));
+        assertEquals("_id", stack.next("DELETE").get("condition").get("field").asString());
+        stack.replies.reply("DELETE", TOO_MANY);
+        assertThrows(DataAccessException.class,
+                () -> template.deleteWhere(Widget.class, Filters.field("name").eq("bolt")));
+    }
+
+    @Test
+    public void test_a_capped_conditional_delete_falls_back_to_reading_and_deleting_one_at_a_time() throws Exception {
+        stack.replies.replyOnce("DELETE", TOO_MANY);
+
+        assertEquals(1, template.deleteMatching(Widget.class, LwnrdbQuerySpec.of(Filters.field("name").eq("bolt"))));
+
+        assertEquals("name", stack.next("DELETE").get("condition").get("field").asString());
+        assertEquals("w1", stack.next("DELETE").get("_id").asString());
+    }
+
+    @Test
+    public void test_delete_matching_with_a_sort_reads_first_and_other_refusals_are_translated() throws Exception {
+        assertEquals(1, template.deleteMatching(Widget.class,
+                LwnrdbQuerySpec.of(Filters.field("name").eq("bolt")).sorted(Sort.by("size"))));
+        assertEquals("w1", stack.next("DELETE").get("_id").asString());
+        stack.replies.reply("DELETE", "{\"type\":\"DELETE\",\"status\":\"NOT_FOUND\",\"errorCode\":\"404-11\"}");
+        assertThrows(DataRetrievalFailureException.class, () -> template.deleteAll(Widget.class));
     }
 
     @Test

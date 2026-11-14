@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Lwnrdb.Client.Admin;
 using Lwnrdb.Client.Errors;
+using Lwnrdb.Client.Query;
 using Lwnrdb.Client.Tests.Support;
 using Lwnrdb.Client.Values;
 using Xunit;
@@ -16,6 +17,23 @@ public sealed class FacadeTests
 
     private void Reply(string field, JsonNode value) =>
         _recorder.Channel.Replies = request => RecordingChannel.Ok(request, new JsonObject { [field] = value.DeepClone() });
+
+    [Fact]
+    public async Task DeleteWhereSendsTheConditionAndReadsTheCount()
+    {
+        Reply("deletedCount", JsonValue.Create(3));
+        Assert.Equal(3, await _recorder.Orders.DeleteWhereAsync(Filters.Field("status").Eq("archived")));
+        var condition = _recorder.Channel.Last["condition"]!;
+        Assert.Equal("EQUALS", condition["fieldOperatorType"]!.GetValue<string>());
+        Assert.Equal("status", condition["field"]!.GetValue<string>());
+        Assert.Equal(3, await _recorder.TypedOrders.DeleteWhereAsync(order => order.Total < 100));
+        Assert.Equal("SMALLER_THAN", _recorder.Channel.Last["condition"]!["fieldOperatorType"]!.GetValue<string>());
+        _recorder.Channel.Replies = request => RecordingChannel.Ok(request);
+        Assert.Equal(0, await _recorder.Orders.DeleteWhereAsync(Filters.Field("status").Eq("archived")));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => _recorder.Orders.DeleteWhereAsync((Filter)null!));
+        await Assert.ThrowsAsync<NotSupportedException>(
+            () => _recorder.TypedOrders.DeleteWhereAsync(order => order.Total < order.Discount));
+    }
 
     [Fact]
     public async Task AdminListsDecodeTheirRows()

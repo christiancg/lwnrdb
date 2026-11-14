@@ -36,6 +36,7 @@ import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
+import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
@@ -118,7 +119,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     @Override
     public List<JsonObject> aggregate(String db, String coll, JsonArray pipeline) {
         final var rawJson = aggregateMessage(db, coll, pipeline);
-        final var response = dispatch(parsedAggregate(rawJson), rawJson);
+        final var response = dispatch(parsedRequest(rawJson), rawJson);
         if (response instanceof AggregateResponse aggregateResponse) {
             return aggregateResponse.getResults();
         }
@@ -128,7 +129,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         throw jsError(response.getMessage());
     }
 
-    private OperationRequest parsedAggregate(String rawJson) {
+    private OperationRequest parsedRequest(String rawJson) {
         try {
             return RequestParser.parseRequest(rawJson);
         } catch (InvalidCommandException unparseable) {
@@ -200,6 +201,21 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response.getStatus() != OperationStatus.OK && !isNotFound(response)) {
             throw jsError(response.getMessage());
         }
+    }
+
+    @Override
+    public long deleteWhere(String db, String coll, JsonObject condition) {
+        final var message = new JsonObject();
+        message.add("type", new JsonString("DELETE"));
+        message.add("databaseName", new JsonString(db));
+        message.add("collectionName", new JsonString(coll));
+        message.add("condition", condition);
+        final var rawJson = eJson.toJson(message);
+        final var response = dispatch(parsedRequest(rawJson), rawJson);
+        if (response instanceof DeleteManyResponse deleteManyResponse) {
+            return deleteManyResponse.getDeletedCount();
+        }
+        throw jsError(response.getMessage());
     }
 
     @Override

@@ -5,7 +5,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import check, check_code, check_result, check_status, section
+from base_utils import check, check_code, check_field, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PROC_TEST_PORT", "8996"))
@@ -24,6 +24,7 @@ RECOVERED_COLL = "tx_recovered"
 FENCED_COLL = "tx_fenced"
 RETRY_COLL = "retry_shutdown"
 BATCH_DELETE_COLL = "batch_deletes"
+WHERE_DELETE_COLL = "where_deletes"
 TWIN_FAILING_COLL = "twin_failing"
 TWIN_AUDITED_COLL = "twin_audited"
 CAP_COLL = "trigger_cap"
@@ -858,6 +859,34 @@ def test_batch_deleted_trigger_fires_once_per_transaction(conn: Conn):
                "name": "batch_deletes_watch"})
 
 
+def test_deleted_trigger_fires_per_document_of_a_conditional_delete(conn: Conn):
+    section("A DELETE with a condition fires the DELETED trigger once per deleted document")
+    check_status("create a collection for it", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": WHERE_DELETE_COLL}), "OK")
+    check_status("install a per-document delete recorder", conn.save_procedure("where_delete_recorder",
+                 "import db from 'db'; import args from 'args';"
+                 "db.save(db.name, '" + AUDIT + "', { _id: 'wheredel-' + args.id, kind: args.document.kind });"
+                 " return 'ok';"), "OK")
+    check_status("watch its deletes",
+                 conn.save_trigger("where_deletes_watch", ["DELETED"], "where_delete_recorder",
+                                   coll=WHERE_DELETE_COLL), "OK")
+    for doc_id, kind in (("wd1", "old"), ("wd2", "old"), ("wd3", "new")):
+        check_status(f"write {doc_id}", conn.save_doc({"_id": doc_id, "kind": kind}, coll=WHERE_DELETE_COLL), "OK")
+
+    reply = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": WHERE_DELETE_COLL,
+                       "condition": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "old"}})
+    check_field("the condition deleted the two old documents", reply, "deletedCount", 2)
+
+    for doc_id in ("wd1", "wd2"):
+        row = await_doc(conn, "wheredel-" + doc_id)
+        check(f"the trigger received {doc_id} as it was before the delete",
+              row.get("status") == "OK" and (row.get("object") or {}).get("kind") == "old", f"got {row}")
+    check("no run fired for the document the condition kept",
+          await_absent(conn, "wheredel-wd3").get("status") != "OK")
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": WHERE_DELETE_COLL,
+               "name": "where_deletes_watch"})
+
+
 def test_cascade(conn: Conn):
     section("Cascade control")
     check_status("install a self-writing procedure", conn.save_procedure("cascader",
@@ -1090,6 +1119,10 @@ def test_before_hook_on_delete(conn: Conn):
     refused = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "d1"})
     check_code("deleting a locked document is refused", refused, "ERROR", "400-21")
     check("the locked document survives", conn.find("d1").get("status") == "OK")
+    guarded = {"fieldOperatorType": "EQUALS", "field": "qty", "value": 1}
+    refused = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "condition": guarded})
+    check_code("a condition matching the locked document is refused whole", refused, "ERROR", "400-21")
+    check("the unlocked match survives the refused conditional delete", conn.find("d2").get("status") == "OK")
     check_status("deleting an unlocked one succeeds",
                  conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "d2"}), "OK")
     check("it is gone", conn.find("d2").get("status") != "OK")
@@ -2571,6 +2604,7 @@ def main():
             test_trigger_run_operations(conn)
             test_batch_mode(conn)
             test_batch_deleted_trigger_fires_once_per_transaction(conn)
+            test_deleted_trigger_fires_per_document_of_a_conditional_delete(conn)
             test_cascade(conn)
             test_triggers_per_collection_are_capped(conn)
             test_a_first_run_delivers_the_document_as_it_is_when_it_runs(conn)

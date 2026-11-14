@@ -56,6 +56,14 @@ Deletes one document.
 
 @param id the `_id`
 
+## deleteWhere(Filter)
+
+Deletes every document that matches the filter, all or nothing. A filter matching more than the server's
+`deleteMaxMatches` is refused with `400-44` and deletes nothing.
+
+@param condition the documents to delete, built like a query filter
+@return how many documents were deleted; `0` when none matched
+
 ## query()
 
 Starts a query over the whole collection. Add steps, then run it with `toList()`, `count()` or `first()`.

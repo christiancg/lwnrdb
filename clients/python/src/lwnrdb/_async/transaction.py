@@ -14,6 +14,7 @@ from lwnrdb._internal.request_channel import PinnedChannel
 from lwnrdb._internal.response_decoder import text_of
 from lwnrdb.document import Document, DocumentCodec
 from lwnrdb.errors import ConnectionLostError, LwnrdbError, UnknownOutcomeError
+from lwnrdb.query.types import Filter
 from lwnrdb.results import BulkSaveResult, SaveResult
 
 T = TypeVar("T")
@@ -44,6 +45,9 @@ class AsyncTransactionCollection(Generic[T, R]):
 
     async def delete(self, id: str) -> None:  # noqa: A002
         await self._ops.delete(id)
+
+    async def delete_where(self, condition: Filter) -> int:
+        return await self._ops.delete_where(condition)
 
     def query(self) -> AsyncQuery[R]:
         return AsyncQuery(self._ops)

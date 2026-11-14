@@ -8,7 +8,9 @@ import io.github.christiancg.lwnrdb.client.SaveResult;
 import io.github.christiancg.lwnrdb.client.error.NotFoundException;
 import io.github.christiancg.lwnrdb.client.protocol.ErrorCode;
 import io.github.christiancg.lwnrdb.client.protocol.Operation;
+import io.github.christiancg.lwnrdb.client.query.Filter;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 public final class CollectionOps<T> implements QueryTarget<T> {
@@ -75,6 +77,12 @@ public final class CollectionOps<T> implements QueryTarget<T> {
 
     public void delete(String id) {
         channel.send(Operation.DELETE, context.encoder().delete(database, collection, Names.id(id)));
+    }
+
+    public long deleteWhere(Filter condition) {
+        final var reply = channel.send(Operation.DELETE,
+                context.encoder().deleteWhere(database, collection, Objects.requireNonNull(condition, "condition")));
+        return reply.path("deletedCount").asLong(0);
     }
 
     @Override

@@ -37,6 +37,14 @@ Buffers a delete until commit.
 
 @param id the `_id`
 
+## deleteWhere(Filter)
+
+Buffers a delete of every document the filter matches in this transaction's view, its own writes included, until
+commit.
+
+@param condition the documents to delete, built like a query filter
+@return how many documents matched and were buffered
+
 ## query()
 
 @return a query that sees this transaction's own writes

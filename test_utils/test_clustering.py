@@ -659,6 +659,28 @@ def test_bulk_delete_and_upsert():
     check("anti-entropy sweeps do not append a tombstone a node already holds", reappended,
           f"tombstone lines: {[tombstone_line_count(n, DB, 'bulk') for n in nodes]}")
 
+    owner = owner_of(nodes[0].client_port, DB, "bulk")
+    check("the bulk collection's owner is known", owner is not None)
+    if owner is None:
+        return
+    forwarder = next(n for n in nodes if n.alive and n is not owner)
+    doomed = [{"_id": f"cd{i:02d}", "fate": "doomed" if i % 2 == 0 else "kept"} for i in range(20)]
+    check_status("BULK_SAVE a batch for a conditional delete",
+                 op_with_retry(lambda: bulk_save(nodes[1].client_port, DB, "bulk", doomed)), "OK")
+    check("the conditional batch is on every node", all_nodes_see(DB, "bulk", "cd19", "kept", field="fate"))
+    reply = op_with_retry(lambda: op(forwarder.client_port, {
+        "type": "DELETE", "databaseName": DB, "collectionName": "bulk",
+        "condition": {"fieldOperatorType": "EQUALS", "field": "fate", "value": "doomed"}}))
+    check_status("a DELETE with a condition sent to a non-owner is forwarded and commits", reply, "OK")
+    check_field("it reports the ten doomed documents", reply, "deletedCount", 10)
+    doomed_ids = {d["_id"] for d in doomed if d["fate"] == "doomed"}
+    kept_ids = {d["_id"] for d in doomed if d["fate"] == "kept"}
+    check("no node holds a doomed document and every node holds the kept ones", wait_until(
+        lambda: all(not doomed_ids & set(stored_documents(n, DB, "bulk"))
+                    and kept_ids <= set(stored_documents(n, DB, "bulk")) for n in nodes), timeout_s=15.0))
+    check("every node holds a tombstone for each doomed id", wait_until(
+        lambda: all(doomed_ids <= tombstone_ids(n, DB, "bulk") for n in nodes), timeout_s=15.0))
+
 
 def test_concurrent_writers_on_one_owner_share_replication_and_replicas_converge():
     section("Concurrent SAVEs and DELETEs on one owner are grouped, replicated once per group, and converge")

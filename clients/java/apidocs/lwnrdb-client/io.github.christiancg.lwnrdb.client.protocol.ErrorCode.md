@@ -173,6 +173,10 @@ unavailable) and the number is sequential.
 
 `400-43`: The command is not valid.
 
+## DELETE_MATCHES_TOO_MANY
+
+`400-44`: The delete condition matches more documents than allowed.
+
 ## MUST_AUTHENTICATE_FIRST
 
 `401-1`: Must authenticate first.

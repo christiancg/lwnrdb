@@ -19,18 +19,21 @@ CLOSED_MESSAGE = "Server closed connection unexpectedly"
 
 SAVE = "SAVE"
 DELETE = "DELETE"
+DELETE_WHERE = "DELETE_WHERE"
 BULK_SAVE = "BULK_SAVE"
 TRANSACTION = "TRANSACTION"
 CREATE_INDEX = "CREATE_INDEX"
 DROP_INDEX = "DROP_INDEX"
 REINDEX = "REINDEX"
-ID_OPS = (SAVE, DELETE, BULK_SAVE, TRANSACTION)
+ID_OPS = (SAVE, DELETE, BULK_SAVE, TRANSACTION, DELETE_WHERE)
 
 INDEXED_FIELDS = ["v", "n"]
 CHURNED_INDEX = "tag"
 TAGS = ["red", "green", "blue", "Red", ""]
 MAX_PAD = 1200
 MAX_BULK = 40
+DELETE_WHERE_SHARE = 0.3
+MAX_DELETE_WHERE_EXTRA = 4
 SETUP_BULK = 50
 
 
@@ -45,6 +48,7 @@ class HistoryEntry:
     error_code: str = ""
     answered_at: float = 0.0
     client: int = -1
+    present: list = field(default_factory=list)
 
 
 @dataclass
@@ -152,6 +156,8 @@ class Workload:
                 self._save(conn, schema, rng, coll, op["ids"][0], -1)
             elif kind == DELETE:
                 self._delete(conn, schema, coll, op["ids"][0], -1)
+            elif kind == DELETE_WHERE:
+                self._delete_where(conn, schema, coll, op["ids"], -1)
             elif kind == BULK_SAVE:
                 self._bulk(conn, schema, rng, coll, op["ids"], -1)
             elif kind == TRANSACTION:
@@ -202,7 +208,14 @@ class Workload:
         if roll < 0.5:
             entry = self._save(conn, schema, rng, coll, rng.choice(owned), client)
         elif roll < 0.62:
-            entry = self._delete(conn, schema, coll, rng.choice(owned), client)
+            doc_id = rng.choice(owned)
+            side = random.Random(hash(rng.getstate()[1]))
+            if side.random() < DELETE_WHERE_SHARE and len(owned) > 1:
+                others = [other for other in owned if other != doc_id]
+                extra = side.sample(others, side.randint(1, min(MAX_DELETE_WHERE_EXTRA, len(others))))
+                entry = self._delete_where(conn, schema, coll, [doc_id] + extra, client)
+            else:
+                entry = self._delete(conn, schema, coll, doc_id, client)
         elif roll < 0.76:
             entry = self._bulk(conn, schema, rng, coll, rng.sample(owned, rng.randint(2, min(MAX_BULK, len(owned)))),
                                client)
@@ -252,6 +265,24 @@ class Workload:
         entry = self._record(DELETE, coll, [doc_id], [None], client)
         return self._answer(entry, conn.send({"type": "DELETE", "databaseName": schema.db, "collectionName": coll,
                                               "_id": doc_id}))
+
+    def _delete_where(self, conn, schema, coll, ids, client) -> HistoryEntry:
+        present = self._last_written(coll, ids)
+        entry = self._record(DELETE_WHERE, coll, ids, [None] * len(ids), client)
+        entry.present = present
+        return self._answer(entry, conn.send({"type": "DELETE", "databaseName": schema.db, "collectionName": coll,
+                                              "condition": {"fieldOperatorType": "IN", "field": "_id",
+                                                            "value": list(ids)}}))
+
+    def _last_written(self, coll, ids) -> list:
+        last = {}
+        with self._lock:
+            for entry in sorted(self._entries, key=lambda e: e.sent_at):
+                for doc_id, token in zip(entry.ids, entry.values, strict=True):
+                    if entry.coll == coll and doc_id in ids:
+                        last[doc_id] = (entry.outcome, token)
+        return [doc_id for doc_id in ids
+                if doc_id in last and last[doc_id][0] == OUTCOME_OK and last[doc_id][1] is not None]
 
     def _bulk(self, conn, schema, rng, coll, ids, client) -> HistoryEntry:
         tokens = [self._token(client) for _ in ids]

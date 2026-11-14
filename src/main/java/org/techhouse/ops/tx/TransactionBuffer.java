@@ -184,24 +184,34 @@ public final class TransactionBuffer {
             if (deleteHook != null) {
                 return deleteHook;
             }
-            final var payload = new JsonObject();
-            payload.addProperty(Globals.PK_FIELD, id);
-            final var deletedDocument = TransactionWrites.documentForDeletedTrigger(transaction, collId, dbName,
-                    collName, id);
-            if (deletedDocument != null) {
-                payload.add(DELETED_DOCUMENT_FIELD, deletedDocument);
-            }
+            final var payload = deletePayload(transaction, collId, dbName, collName, id);
             final var bytes = byteSizeOf(dbName, collName, payload);
             final var sizeRefusal = sizeRefusal(transaction, OperationType.DELETE, 1, bytes);
             if (sizeRefusal != null) {
                 return sizeRefusal;
             }
-            final var version = hybridClock.next();
-            bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload, List.of(),
-                    List.of(version), bytes);
-            transaction.recordDelete(collId, id, version);
+            bufferPreparedDelete(transaction, dbName, collName, collId, id, payload, bytes);
             return new DeleteResponse("Entry with id " + id + " deleted successfully");
         });
+    }
+
+    static JsonObject deletePayload(Transaction transaction, String collId, String dbName, String collName, String id) {
+        final var payload = new JsonObject();
+        payload.addProperty(Globals.PK_FIELD, id);
+        final var deletedDocument = TransactionWrites.documentForDeletedTrigger(transaction, collId, dbName, collName,
+                id);
+        if (deletedDocument != null) {
+            payload.add(DELETED_DOCUMENT_FIELD, deletedDocument);
+        }
+        return payload;
+    }
+
+    static void bufferPreparedDelete(Transaction transaction, String dbName, String collName, String collId, String id,
+            JsonObject payload, long bytes) {
+        final var version = hybridClock.next();
+        bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload, List.of(),
+                List.of(version), bytes);
+        transaction.recordDelete(collId, id, version);
     }
 
     private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
@@ -217,11 +227,11 @@ public final class TransactionBuffer {
         return seq;
     }
 
-    private static long byteSizeOf(String dbName, String collName, JsonObject document) {
+    static long byteSizeOf(String dbName, String collName, JsonObject document) {
         return DbEntry.fromJsonObject(dbName, collName, document).byteSize();
     }
 
-    private static OperationResponse sizeRefusal(Transaction transaction, OperationType type, int ops, long bytes) {
+    static OperationResponse sizeRefusal(Transaction transaction, OperationType type, int ops, long bytes) {
         if (exceedsLimits(transaction, ops, bytes)) {
             return new OperationResponse(type, ErrorCode.TRANSACTION_TOO_LARGE);
         }
@@ -253,8 +263,8 @@ public final class TransactionBuffer {
         return null;
     }
 
-    private static OperationResponse lockedRefusal(Transaction transaction, OperationType type, String dbName,
-            String collName, int ops, Runnable onTimeout) throws InterruptedException {
+    static OperationResponse lockedRefusal(Transaction transaction, OperationType type, String dbName, String collName,
+            int ops, Runnable onTimeout) throws InterruptedException {
         if (exceedsLimits(transaction, ops, 0L)) {
             return new OperationResponse(type, ErrorCode.TRANSACTION_TOO_LARGE);
         }

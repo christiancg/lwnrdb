@@ -1,11 +1,11 @@
 import type { Document } from "../document.js";
 import { NotFoundError } from "../errors/errors.js";
 import { ErrorCode } from "../errors/error-codes.js";
-import type { PipelineStep } from "../query/types.js";
+import type { Filter, PipelineStep } from "../query/types.js";
 import type { AnalyzeResult, BulkSaveResult, SaveResult } from "../results.js";
 import type { ClientContext } from "./client-context.js";
 import { collectionName, databaseName, documentId } from "./names.js";
-import { booleanOf, document, documents, strings, textOf } from "./response-decoder.js";
+import { booleanOf, document, documents, numberOf, strings, textOf } from "./response-decoder.js";
 import type { JsonObject } from "./values-codec.js";
 
 export interface RowCodec<T, R> {
@@ -73,6 +73,14 @@ export class CollectionOps<T, R> implements QueryTarget<R> {
             "DELETE",
             this.context.encoder.delete(this.database, this.collection, documentId(id)),
         );
+    }
+
+    async deleteWhere(condition: Filter): Promise<number> {
+        const reply = await this.context.channel.send(
+            "DELETE",
+            this.context.encoder.deleteWhere(this.database, this.collection, condition),
+        );
+        return numberOf(reply.deletedCount) ?? 0;
     }
 
     async aggregate(steps: readonly PipelineStep[], dirtyRead: boolean): Promise<Document[]> {

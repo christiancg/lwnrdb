@@ -412,6 +412,9 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
+        if (deleteRequest.getCondition() != null) {
+            return processDeleteWhere(deleteRequest, actingUser);
+        }
         return OperationLocks.withGroupedCollectionLock(dbName, collName, OperationType.DELETE,
                 ErrorCode.ERROR_DELETING, GroupCommit.forDelete(deleteRequest), effects -> {
                     final var ownershipError = ClusterWriteHelper.refusalUnderLock(OperationType.DELETE, dbName,
@@ -440,6 +443,21 @@ public class OperationProcessor {
                         return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
                                 reservation.version(), local, effects);
                     };
+                });
+    }
+
+    private OperationResponse processDeleteWhere(DeleteRequest request, String actingUser) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
+                () -> {
+                    final var deletion = ConditionalDelete.prepare(request, actingUser);
+                    if (deletion.refusal() != null) {
+                        return deletion.refusal();
+                    }
+                    final var staged = TriggerHelper.stageDeleteMany(request, deletion.captured(), actingUser);
+                    return deletion.replicated(TriggerHelper.runStaged(staged, dbName, collName, actingUser,
+                            request.getTriggerDepth(), deletion::execute));
                 });
     }
 

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.christiancg.lwnrdb.client.admin.TriggerRunStatus;
+import io.github.christiancg.lwnrdb.client.query.Filters;
 import io.github.christiancg.lwnrdb.client.scripting.ProcedureDefinition;
 import io.github.christiancg.lwnrdb.client.scripting.ScheduleDefinition;
 import io.github.christiancg.lwnrdb.client.scripting.TriggerDefinition;
@@ -48,6 +49,15 @@ public class FacadeDecodingTest {
         assertEquals(2, analysis.results().size());
         assertEquals("shop", recorder.orders.databaseName());
         assertEquals("orders", recorder.orders.name());
+    }
+
+    @Test
+    public void test_a_conditional_delete_reply_decodes_its_count() {
+        final var frame = (ObjectNode) ProtocolFixtures.responses().stream()
+                .filter(fixture -> fixture.name().equals("ok.delete_where")).findFirst().orElseThrow().body()
+                .get("frame");
+        recorder.channel.replyWith(request -> frame.deepCopy());
+        assertEquals(3, recorder.orders.deleteWhere(Filters.field("status").eq("archived")));
     }
 
     @Test

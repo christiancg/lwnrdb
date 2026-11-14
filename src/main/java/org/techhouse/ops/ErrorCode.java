@@ -50,6 +50,8 @@ public enum ErrorCode {
     TOO_MANY_INDEXES_FOR_COLLECTION("400-42", "The collection has the maximum number of indexes",
             OperationStatus.ERROR),
     INVALID_COMMAND("400-43", "The command is not valid", OperationStatus.ERROR),
+    DELETE_MATCHES_TOO_MANY("400-44", "The delete condition matches more documents than allowed",
+            OperationStatus.ERROR),
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED),
     USER_NO_LONGER_EXISTS("401-2", "User no longer exists", OperationStatus.UNAUTHENTICATED),
     WRONG_CREDENTIALS("401-3", "The user doesn't exist or the wrong credentials have been provided", OperationStatus.ERROR),

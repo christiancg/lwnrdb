@@ -7,7 +7,6 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -23,7 +22,6 @@ public final class ScriptRunPrune {
     private static final Cache cache = IocContainer.get(Cache.class);
     @SuppressWarnings("FieldMayBeFinal")
     private static ClusterCoordinator clusterCoordinator = IocContainer.get(ClusterCoordinator.class);
-    private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
 
     private record Row(String id, long page, long startedAt) {
     }
@@ -85,22 +83,12 @@ public final class ScriptRunPrune {
         if (refusal != null) {
             return refusal;
         }
-        final var reservation = clusterCoordinator.reserveDelete(dbName, collName, ids);
-        if (reservation.ownerLost()) {
+        final var reserved = ClusterWriteHelper.deleteReservedBesideForce(clusterCoordinator, dbName, collName, ids);
+        if (reserved == null) {
             return new OperationResponse(OperationType.DELETE, ErrorCode.NOT_COLLECTION_OWNER);
         }
-        final List<String> removed;
-        try {
-            removed = DeleteOperationHelper.executeBulkDelete(dbName, collName, ids, listenManager, true);
-        } catch (Exception e) {
-            clusterCoordinator.retractDelete(dbName, collName, ids, reservation.version());
-            throw e;
-        }
-        deleted[0] = removed.size();
-        reservation.awaitTombstones();
-        if (!removed.isEmpty()) {
-            clusterCoordinator.replicateDelete(dbName, collName, removed, reservation.version());
-        }
-        return new DeleteResponse("Pruned " + removed.size() + " row(s)");
+        deleted[0] = reserved.removed().size();
+        ClusterWriteHelper.replicateReserved(clusterCoordinator, dbName, collName, reserved);
+        return new DeleteResponse("Pruned " + deleted[0] + " row(s)");
     }
 }
