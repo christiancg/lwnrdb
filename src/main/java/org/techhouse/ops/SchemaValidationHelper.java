@@ -60,6 +60,9 @@ public final class SchemaValidationHelper {
     }
 
     private static OperationResponse checkSave(SaveRequest request) {
+        if (request.getCondition() != null) {
+            return null;
+        }
         final var schema = governingSchema(request.getDatabaseName(), request.getCollectionName());
         final var document = request.getObject();
         if (schema == null || alreadyChecked(request, document, schema)) {

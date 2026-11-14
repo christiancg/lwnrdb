@@ -45,6 +45,15 @@ commit.
 @param condition the documents to delete, built like a query filter
 @return how many documents matched and were buffered
 
+## updateWhere(Filter, Object)
+
+Buffers an update of every document the filter matches in this transaction's view, its own writes included, until
+commit. Each match gets the patch's top-level fields merged in; every other field is kept.
+
+@param condition the documents to update, built like a query filter
+@param patch the fields to set: a `Document`, a `Map` or an object mapped like a saved document
+@return how many documents matched and were buffered
+
 ## query()
 
 @return a query that sees this transaction's own writes

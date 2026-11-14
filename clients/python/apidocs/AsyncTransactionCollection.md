@@ -24,6 +24,11 @@ Buffers an insert or replace of many documents.
 
 Reads one document by its `_id`, seeing the transaction's own writes.
 
+## update_where
+
+Buffers the merge of `patch` into every document the filter matches in the transaction's view, its own writes
+included, and returns how many matched.
+
 ## delete
 
 Buffers the delete of one document.

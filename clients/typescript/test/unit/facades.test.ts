@@ -32,6 +32,20 @@ describe("collection replies", () => {
         expect(await silent.deleteWhere(field("status").eq("archived"))).toBe(0);
     });
 
+    test("updateWhere sends the filter as the condition and the patch as the object", async () => {
+        const { orders, channel } = setup(() => ({ updatedCount: 2 }));
+        expect(await orders.updateWhere(field("status").eq("pending"), { status: "expired" })).toBe(2);
+        expect(channel.requests[0]).toEqual({
+            type: "SAVE",
+            databaseName: "shop",
+            collectionName: "orders",
+            condition: { fieldOperatorType: "EQUALS", field: "status", value: "pending" },
+            object: { status: "expired" },
+        });
+        const { orders: silent } = setup(() => ({}));
+        expect(await silent.updateWhere(field("status").eq("pending"), { status: "expired" })).toBe(0);
+    });
+
     test("an invalid _id is refused before it is sent", async () => {
         const { orders, channel } = setup(() => ({}));
         await expect(orders.save({ _id: "a b" })).rejects.toThrow(/invalid _id/);

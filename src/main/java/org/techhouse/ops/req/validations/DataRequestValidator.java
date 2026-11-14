@@ -36,10 +36,27 @@ public final class DataRequestValidator {
         if (request.getObject() == null) {
             return ValidationResult.fail("SAVE request requires an object");
         }
+        if (request.getCondition() != null) {
+            return validateConditionalSave(request);
+        }
         if (request.get_id() != null && !NameValidations.isId(request.get_id())) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return validateDocument(request.getObject());
+    }
+
+    private static ValidationResult validateConditionalSave(SaveRequest request) {
+        if (request.get_id() != null || request.getObject().has(Globals.PK_FIELD)) {
+            return ValidationResult.fail("SAVE takes either an _id or a condition, not both");
+        }
+        if (request.getObject().isEmpty()) {
+            return ValidationResult.fail("SAVE with a condition requires at least one field to set");
+        }
+        final var document = validateDocument(request.getObject());
+        if (!document.isValid()) {
+            return document;
+        }
+        return AggregationStepValidator.validate(new FilterAggregationStep(request.getCondition()));
     }
 
     private static ValidationResult validateDocument(JsonObject object) {

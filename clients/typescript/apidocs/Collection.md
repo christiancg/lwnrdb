@@ -58,6 +58,17 @@ Deletes every document that matches the filter, all or nothing. A filter matchin
 @param condition the documents to delete, built like a query filter
 @returns how many documents were deleted; `0` when none matched
 
+## updateWhere
+
+Updates every document that matches the filter, all or nothing, by merging the patch into it: each top-level key of
+the patch is added or replaced, and every other field is kept. The patch may not hold an `_id`, and an empty patch is
+refused with `400-1`. A filter matching more than the server's `updateMaxMatches` is refused with `400-45` and updates
+nothing.
+
+@param condition the documents to update, built like a query filter
+@param patch the top-level fields to set on every match
+@returns how many documents were updated; `0` when none matched
+
 ## query
 
 Starts a query over the whole collection. Add steps, then run it with `toArray()`, `count()` or `first()`.

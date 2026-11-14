@@ -12,6 +12,7 @@ import io.github.christiancg.lwnrdb.spring.data.model.Plain;
 import io.github.christiancg.lwnrdb.spring.data.model.Widget;
 import io.github.christiancg.lwnrdb.spring.data.model.WidgetRepository;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,7 @@ public class LwnrdbTemplateTest {
     private static final String ROW = "{\"_id\":\"w1\",\"name\":\"bolt\",\"size\":2}";
     private static final String DELETED_FOUR = "{\"type\":\"DELETE\",\"status\":\"OK\",\"deletedCount\":4}";
     private static final String TOO_MANY = "{\"type\":\"DELETE\",\"status\":\"ERROR\",\"errorCode\":\"400-44\"}";
+    private static final String UPDATED_TWO = "{\"type\":\"SAVE\",\"status\":\"OK\",\"updatedCount\":2}";
 
     private Stack stack;
     private LwnrdbTemplate template;
@@ -117,6 +119,20 @@ public class LwnrdbTemplateTest {
         stack.replies.reply("DELETE", TOO_MANY);
         assertThrows(DataAccessException.class,
                 () -> template.deleteWhere(Widget.class, Filters.field("name").eq("bolt")));
+    }
+
+    @Test
+    public void test_update_where_sends_the_filter_and_the_patch_and_translates_a_refusal() throws Exception {
+        stack.replies.reply("SAVE", UPDATED_TWO);
+        assertEquals(2, template.updateWhere(Widget.class, Filters.field("name").eq("bolt"), Map.of("size", 3)));
+        final var request = stack.next("SAVE");
+        assertEquals("name", request.get("condition").get("field").asString());
+        assertEquals(3, request.get("object").get("size").asInt());
+        assertEquals(2, template.updateWhere(Widget.class, null, Map.of("size", 4)));
+        assertEquals("_id", stack.next("SAVE").get("condition").get("field").asString());
+        stack.replies.reply("SAVE", "{\"type\":\"SAVE\",\"status\":\"ERROR\",\"errorCode\":\"400-45\"}");
+        assertThrows(DataAccessException.class,
+                () -> template.updateWhere(Widget.class, Filters.field("name").eq("bolt"), Map.of("size", 5)));
     }
 
     @Test

@@ -44,6 +44,15 @@ Buffers the delete of every document the filter matches in this transaction's vi
 @param condition the documents to delete, built like a query filter
 @returns how many documents matched and were buffered
 
+## updateWhere
+
+Buffers the update of every document the filter matches in this transaction's view, its own writes included, each
+merged with the patch's top-level fields.
+
+@param condition the documents to update, built like a query filter
+@param patch the top-level fields to set on every match
+@returns how many documents matched and were buffered
+
 ## query
 
 @returns an empty pipeline that reads through the transaction

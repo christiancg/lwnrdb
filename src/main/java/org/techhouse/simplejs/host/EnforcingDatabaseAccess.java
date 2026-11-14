@@ -43,6 +43,7 @@ import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
+import org.techhouse.ops.resp.SaveWhereResponse;
 import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.Intrinsics;
@@ -214,6 +215,22 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         final var response = dispatch(parsedRequest(rawJson), rawJson);
         if (response instanceof DeleteManyResponse deleteManyResponse) {
             return deleteManyResponse.getDeletedCount();
+        }
+        throw jsError(response.getMessage());
+    }
+
+    @Override
+    public long updateWhere(String db, String coll, JsonObject condition, JsonObject patch) {
+        final var message = new JsonObject();
+        message.add("type", new JsonString("SAVE"));
+        message.add("databaseName", new JsonString(db));
+        message.add("collectionName", new JsonString(coll));
+        message.add("condition", condition);
+        message.add("object", patch);
+        final var rawJson = eJson.toJson(message);
+        final var response = dispatch(parsedRequest(rawJson), rawJson);
+        if (response instanceof SaveWhereResponse saveWhereResponse) {
+            return saveWhereResponse.getUpdatedCount();
         }
         throw jsError(response.getMessage());
     }

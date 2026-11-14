@@ -1,6 +1,6 @@
+import json
 import os
 import socket
-import json
 import sys
 import tempfile
 import time
@@ -278,6 +278,59 @@ def test_a_rolled_back_delete_by_condition_keeps_everything(c):
     with authed_conn() as oc:
         check_status("r1 survives the rollback", find_by_id(oc, "r1", coll=PURGE_COLL), "OK")
         check_status("r2 survives the rollback", find_by_id(oc, "r2", coll=PURGE_COLL), "OK")
+
+
+def save_where(c, condition, patch, coll=PURGE_COLL, db=DB) -> dict:
+    return c.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "condition": condition,
+                   "object": patch})
+
+
+def test_update_by_condition_inside_a_transaction(c):
+    section("SAVE with a condition inside a transaction")
+
+    check_status("seed three pending and one done document", bulk_save(
+        c, [{"_id": f"t{i}", "kind": "pending" if i < 3 else "done", "n": i} for i in range(4)], coll=PURGE_COLL),
+        "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("buffer a fourth pending document", save(c, {"_id": "t-buffered", "kind": "pending", "n": 9},
+                                                         coll=PURGE_COLL), "OK")
+    check_status("buffer a delete of t0", delete(c, "t0", coll=PURGE_COLL), "OK")
+    r = save_where(c, kind_is("pending"), {"kind": "claimed"})
+    check_field("the condition sees the buffered save and not the buffered delete", r, "updatedCount", 3)
+    inside = find_by_id(c, "t-buffered", coll=PURGE_COLL).get("object") or {}
+    check("the buffered document reads as claimed inside the transaction", inside.get("kind") == "claimed",
+          f"got {inside}")
+    with authed_conn() as oc:
+        outside = oc.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": PURGE_COLL, "_id": "t1",
+                           "dirtyRead": True}).get("object") or {}
+        check("another client's dirty read still sees t1 pending before the commit",
+              outside.get("kind") == "pending", f"got {outside}")
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as oc:
+        for doc_id, n in (("t1", 1), ("t2", 2), ("t-buffered", 9)):
+            row = find_by_id(oc, doc_id, coll=PURGE_COLL).get("object") or {}
+            check(f"{doc_id} is claimed after the commit and keeps n", row.get("kind") == "claimed"
+                  and row.get("n") == n, f"got {row}")
+        done = find_by_id(oc, "t3", coll=PURGE_COLL).get("object") or {}
+        check("t3 did not match and is untouched", done.get("kind") == "done", f"got {done}")
+
+
+def test_a_rolled_back_update_by_condition_changes_nothing(c):
+    section("A rolled-back SAVE with a condition changes nothing")
+
+    check_status("seed two documents", bulk_save(
+        c, [{"_id": "s1", "kind": "frozen"}, {"_id": "s2", "kind": "frozen"}], coll=PURGE_COLL), "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_field("the condition matches both", save_where(c, kind_is("frozen"), {"kind": "thawed"}), "updatedCount", 2)
+    check_field("a condition matching nothing answers 0", save_where(c, kind_is("none"), {"kind": "x"}),
+                "updatedCount", 0)
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    with authed_conn() as oc:
+        for doc_id in ("s1", "s2"):
+            row = find_by_id(oc, doc_id, coll=PURGE_COLL).get("object") or {}
+            check(f"{doc_id} is still frozen after the rollback", row.get("kind") == "frozen", f"got {row}")
 
 
 def test_bulk_save_in_transaction(c):
@@ -888,6 +941,8 @@ def main():
     with authed_conn() as (c):
         test_delete_by_condition_inside_a_transaction(c)
         test_a_rolled_back_delete_by_condition_keeps_everything(c)
+        test_update_by_condition_inside_a_transaction(c)
+        test_a_rolled_back_update_by_condition_changes_nothing(c)
     with authed_conn() as (c):
         test_custom_typed_writes_are_readable_inside_the_transaction(c)
     with authed_conn() as (c):

@@ -530,6 +530,29 @@ set `maxEntrySize=1Kb` in `lwnrdb.cfg` and send a document whose `blob` alone is
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "too-big", "blob": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
 ```
 
+Update every document matching a condition (the same operator an AGGREGATE FILTER step takes): `object` is merged into
+each match, its top-level fields added or replaced and every other field kept; the reply carries `updatedCount`, and
+matching nothing is `OK` with `updatedCount` 0
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "condition": {"conjunctionType": "AND", "operators": [{"fieldOperatorType": "EQUALS", "field": "status", "value": "pending"}, {"fieldOperatorType": "SMALLER_THAN", "field": "total", "value": 100}]}, "object": {"status": "expired", "expiredBy": "sweeper"}}
+```
+
+```json
+{"type": "SAVE", "status": "OK", "message": "Updated 2 document(s)", "updatedCount": 2}
+```
+
+A SAVE with both a `condition` and an `_id` (beside `object` or inside it), or with a `condition` and an empty
+`object` → `400-1`
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "condition": {"fieldOperatorType": "EQUALS", "field": "status", "value": "pending"}, "object": {"_id": "1234", "status": "expired"}}
+```
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "SAVE takes either an _id or a condition, not both", "errorCode": "400-1"}
+```
+
 Delete the one with id 1234
 
 ```json
@@ -1639,6 +1662,12 @@ Delete a document (deleting one that is not there is a no-op)
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ndb.delete(db.name, 'testCollection', 'scripted-1');\ndb.delete(db.name, 'testCollection', 'never-existed');\nreturn db.findById(db.name, 'testCollection', 'scripted-1') === null;"}
 ```
 
+Update every document matching a condition and read how many changed
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nreturn db.updateWhere(db.name, 'testCollection', { fieldOperatorType: 'EQUALS', field: 'from', value: 'script' }, { touched: true });"}
+```
+
 Delete every document matching a condition and read how many went
 
 ```json
@@ -2493,6 +2522,13 @@ deleted:
 
 ```json
 {"type": "DELETE", "status": "ERROR", "message": "The delete condition matches more documents than allowed", "errorCode": "400-44"}
+```
+
+A `SAVE` whose `condition` matches more than `updateMaxMatches` (default 100 000) documents → `400-45`; nothing is
+written:
+
+```json
+{"type": "SAVE", "status": "ERROR", "message": "The update condition matches more documents than allowed", "errorCode": "400-45"}
 ```
 
 A line that is not a valid command (not a JSON object, no known `type`, a field of the wrong shape) → `400-43`. When the

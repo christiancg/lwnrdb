@@ -43,6 +43,9 @@ class AsyncTransactionCollection(Generic[T, R]):
     async def find_by_id(self, id: str) -> R | None:  # noqa: A002
         return await self._ops.find_by_id(id, dirty_read=False)
 
+    async def update_where(self, condition: Filter, patch: Document) -> int:
+        return await self._ops.update_where(condition, patch)
+
     async def delete(self, id: str) -> None:  # noqa: A002
         await self._ops.delete(id)
 

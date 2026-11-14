@@ -9,6 +9,7 @@ from lwnrdb._internal.portal import SyncRuntime
 from lwnrdb._sync.indexes import Indexes, Schema, Triggers
 from lwnrdb._sync.query import Query, SyncTarget
 from lwnrdb._sync.subscription import Subscription
+from lwnrdb.document import Document
 from lwnrdb.listen import Handler
 from lwnrdb.query.types import Filter
 from lwnrdb.results import BulkSaveResult, SaveResult
@@ -44,6 +45,9 @@ class Collection(Generic[T, R]):
 
     def find_by_id(self, id: str, *, dirty_read: bool = False) -> R | None:  # noqa: A002
         return self._runtime.run(self._inner.find_by_id(id, dirty_read=dirty_read))
+
+    def update_where(self, condition: Filter, patch: Document) -> int:
+        return self._runtime.run(self._inner.update_where(condition, patch))
 
     def delete(self, id: str) -> None:  # noqa: A002
         self._runtime.run(self._inner.delete(id))

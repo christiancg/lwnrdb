@@ -37,6 +37,8 @@ public interface DatabaseAccess {
 
     long deleteWhere(String db, String coll, JsonObject condition);
 
+    long updateWhere(String db, String coll, JsonObject condition, JsonObject patch);
+
     List<String> listCollections(String db);
 
     List<String> listDatabases();

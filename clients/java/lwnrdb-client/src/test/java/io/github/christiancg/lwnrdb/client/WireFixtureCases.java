@@ -56,6 +56,9 @@ final class WireFixtureCases {
         cases.put("data.find_by_id", r -> r.orders.findById("o-1"));
         cases.put("data.find_by_id_dirty", r -> r.orders.findById("o-1", ReadMode.DIRTY));
         cases.put("data.delete", r -> r.orders.delete("o-1"));
+        cases.put("data.save_where",
+                r -> r.orders.updateWhere(and(field("status").eq("pending"), field("total").lt(100)),
+                        Document.of("status", "expired", "expiredBy", "sweeper")));
         cases.put("data.delete_where",
                 r -> r.orders.deleteWhere(and(field("status").eq("archived"), field("total").lt(100))));
     }

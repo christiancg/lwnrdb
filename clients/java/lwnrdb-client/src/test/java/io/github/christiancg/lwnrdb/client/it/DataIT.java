@@ -12,6 +12,7 @@ import io.github.christiancg.lwnrdb.client.error.LwnrdbException;
 import io.github.christiancg.lwnrdb.client.error.NotFoundException;
 import io.github.christiancg.lwnrdb.client.query.Filters;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -79,6 +80,36 @@ public class DataIT extends ServerIT {
         assertTrue(orders.findById("dw-2").isPresent());
         assertTrue(orders.findById("dw-3").isPresent());
         assertEquals(0, orders.deleteWhere(Filters.field("status").eq("never")));
+    }
+
+    @Test
+    public void test_update_where_merges_the_patch_into_every_match_and_keeps_other_fields() {
+        orders.saveAll(List.of(Document.of("_id", "uw-1", "status", "pending", "total", 10, "note", "keep"),
+                Document.of("_id", "uw-2", "status", "pending", "total", 500),
+                Document.of("_id", "uw-3", "status", "active", "total", 10)));
+        assertEquals(1,
+                orders.updateWhere(Filters.and(Filters.field("status").eq("pending"), Filters.field("total").lt(100)),
+                        Document.of("status", "expired", "expiredBy", "sweeper")));
+        final var updated = orders.findById("uw-1").orElseThrow();
+        assertEquals("expired", updated.getString("status").orElseThrow());
+        assertEquals("sweeper", updated.getString("expiredBy").orElseThrow());
+        assertEquals("keep", updated.getString("note").orElseThrow());
+        assertEquals(10, updated.getLong("total").orElseThrow());
+        final var untouched = orders.findById("uw-2").orElseThrow();
+        assertEquals("pending", untouched.getString("status").orElseThrow());
+        assertFalse(untouched.has("expiredBy"));
+        assertEquals("active", orders.findById("uw-3").orElseThrow().getString("status").orElseThrow());
+        assertEquals(0, orders.updateWhere(Filters.field("status").eq("never"), Map.of("status", "seen")));
+    }
+
+    @Test
+    public void test_update_where_refuses_an_id_in_the_patch_and_updates_nothing() {
+        orders.save(Document.of("_id", "uw-4", "status", "pending"));
+        final var error = assertThrows(LwnrdbException.class, () -> orders.updateWhere(Filters.field("_id").eq("uw-4"),
+                Document.of("_id", "uw-5", "status", "moved")));
+        assertEquals("400-1", error.rawCode().orElseThrow());
+        assertEquals("pending", orders.findById("uw-4").orElseThrow().getString("status").orElseThrow());
+        assertTrue(orders.findById("uw-5").isEmpty());
     }
 
     @Test

@@ -44,6 +44,11 @@ public final class RequestEncoder {
         return of(Operation.SAVE, database, collection).set("object", Documents.node(document));
     }
 
+    public ObjectNode updateWhere(String database, String collection, Filter condition, Document patch) {
+        return of(Operation.SAVE, database, collection).set("condition", pipeline.filter(condition)).set("object",
+                Documents.node(patch));
+    }
+
     public ObjectNode bulkSave(String database, String collection, List<Document> documents) {
         final var request = of(Operation.BULK_SAVE, database, collection);
         final var objects = request.putArray("objects");

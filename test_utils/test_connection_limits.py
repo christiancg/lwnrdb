@@ -19,6 +19,7 @@ IDLE_TIMEOUT_S = 1.5
 MAX_CONNECTIONS = 6
 TRANSACTION_MAX_OPS = 20
 DELETE_MAX_MATCHES = 5
+UPDATE_MAX_MATCHES = 4
 PURGE_COLL = "purge_items"
 TRANSACTION_MAX_AGE_S = 6.0
 DB = "connlimits_db"
@@ -50,7 +51,8 @@ def write_config(work_dir: str):
                     authTimeoutMs=int(AUTH_TIMEOUT_S * 1000), transactionIdleTimeoutMs=int(IDLE_TIMEOUT_S * 1000),
                     maxConnections=MAX_CONNECTIONS, transactionMaxOps=TRANSACTION_MAX_OPS,
                     transactionMaxAgeMs=int(TRANSACTION_MAX_AGE_S * 1000),
-                    listenMaxRetainedBytes=f"{LISTEN_RETAINED_BYTES}", deleteMaxMatches=DELETE_MAX_MATCHES)
+                    listenMaxRetainedBytes=f"{LISTEN_RETAINED_BYTES}", deleteMaxMatches=DELETE_MAX_MATCHES,
+                    updateMaxMatches=UPDATE_MAX_MATCHES)
 
 
 def raw_socket(timeout: float = 10.0) -> socket.socket:
@@ -402,6 +404,33 @@ def test_a_transaction_past_its_operation_limit_is_refused():
         check_status("The refused one was never written", holder.send(find("many-overflow")), "NOT_FOUND")
 
 
+def test_an_update_condition_past_update_max_matches_is_refused_whole():
+    section("A SAVE condition matching more than updateMaxMatches writes nothing")
+    with Conn.authenticated() as conn:
+        coll = "bump_items"
+        check_status("CREATE_COLLECTION for the bump cases",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+        objects = [{"_id": f"bump-{i}", "kind": "old" if i <= UPDATE_MAX_MATCHES else "new"}
+                   for i in range(UPDATE_MAX_MATCHES + 3)]
+        check_status("BULK_SAVE five old and two new documents",
+                     conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                                "objects": objects}), "OK")
+        old = {"fieldOperatorType": "EQUALS", "field": "kind", "value": "old"}
+        check_code(f"A condition matching {UPDATE_MAX_MATCHES + 1} documents -> 400-45",
+                   conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "condition": old,
+                              "object": {"bumped": True}}), "ERROR", "400-45")
+        bumped = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "aggregationSteps": [
+            {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "bumped", "value": True}}]})
+        check_code("No document carries the patch after the refusal", bumped, "NOT_FOUND", "404-3")
+        check_status("Retiring one old document by id",
+                     conn.send({"type": "DELETE", "databaseName": DB, "collectionName": coll, "_id": "bump-0"}),
+                     "OK")
+        reply = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "condition": old,
+                           "object": {"bumped": True}})
+        check_field(f"A condition matching exactly {UPDATE_MAX_MATCHES} documents updates them all", reply,
+                    "updatedCount", UPDATE_MAX_MATCHES)
+
+
 def test_a_delete_condition_past_delete_max_matches_is_refused_whole():
     section("A DELETE condition matching more than deleteMaxMatches deletes nothing")
     with Conn.authenticated() as conn:
@@ -690,6 +719,7 @@ def main():
         test_server_info_after_a_reap_leaves_the_notice_for_the_next_request()
         test_a_transaction_past_its_operation_limit_is_refused()
         test_a_delete_condition_past_delete_max_matches_is_refused_whole()
+        test_an_update_condition_past_update_max_matches_is_refused_whole()
         test_a_busy_transaction_is_still_reaped_at_its_maximum_age()
         test_unparseable_lines_before_authentication_close_the_connection()
         test_an_unauthenticated_request_is_answered_401_1_without_validation()

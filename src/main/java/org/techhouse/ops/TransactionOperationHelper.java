@@ -28,6 +28,7 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 import org.techhouse.ops.tx.CommitAuthorization;
 import org.techhouse.ops.tx.ConditionalDeleteBuffer;
+import org.techhouse.ops.tx.ConditionalSaveBuffer;
 import org.techhouse.ops.tx.SliceCommit;
 import org.techhouse.ops.tx.SliceStateMachine;
 import org.techhouse.ops.tx.TransactionBuffer;
@@ -421,6 +422,9 @@ public final class TransactionOperationHelper {
     public static OperationResponse bufferSave(SaveRequest request, Transaction transaction) {
         if (isFenced(transaction)) {
             return new OperationResponse(OperationType.SAVE, ErrorCode.TRANSACTION_HALF_APPLIED);
+        }
+        if (request.getCondition() != null) {
+            return ConditionalSaveBuffer.buffer(request, transaction, () -> abortInPlace(transaction.getClientId()));
         }
         return TransactionBuffer.bufferSave(request, transaction, () -> abortInPlace(transaction.getClientId()));
     }

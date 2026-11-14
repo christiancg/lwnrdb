@@ -48,6 +48,8 @@ public interface LwnrdbOperations {
 
     <T> long deleteMatching(Class<T> type, LwnrdbQuerySpec spec);
 
+    <T> long updateWhere(Class<T> type, @Nullable Filter filter, Object patch);
+
     <T> Query<T> query(Class<T> type);
 
     <T> Collection<T> collection(Class<T> type);

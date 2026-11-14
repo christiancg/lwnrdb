@@ -69,6 +69,16 @@ async def test_delete_where_sends_the_filter_and_reads_the_deleted_count() -> No
     assert await silent.delete_where(field("status").eq("archived")) == 0
 
 
+async def test_update_where_sends_the_filter_and_patch_and_reads_the_updated_count() -> None:
+    channel = _replying("ok.save_where")
+    orders = _shop(channel).collection("orders")
+    assert await orders.update_where(field("status").eq("pending"), {"status": "expired"}) == 3
+    assert channel.requests[-1]["condition"] == {"fieldOperatorType": "EQUALS", "field": "status", "value": "pending"}
+    assert channel.requests[-1]["object"] == {"status": "expired"}
+    silent = _shop(RecordingChannel()).collection("orders")
+    assert await silent.update_where(field("status").eq("pending"), {"status": "expired"}) == 0
+
+
 async def test_a_missing_document_is_none_only_for_404_2() -> None:
     channel = RecordingChannel()
     channel.replies = lambda request: error(request, "NOT_FOUND", "404-2")

@@ -18,6 +18,8 @@ interface EntityStore<T> {
 
     long deleteWhere(Filter condition);
 
+    long updateWhere(Filter condition, Object patch);
+
     Query<T> query();
 
     static <T> EntityStore<T> of(Collection<T> collection) {
@@ -45,6 +47,11 @@ interface EntityStore<T> {
             @Override
             public long deleteWhere(Filter condition) {
                 return collection.deleteWhere(condition);
+            }
+
+            @Override
+            public long updateWhere(Filter condition, Object patch) {
+                return collection.updateWhere(condition, patch);
             }
 
             @Override
@@ -79,6 +86,11 @@ interface EntityStore<T> {
             @Override
             public long deleteWhere(Filter condition) {
                 return collection.deleteWhere(condition);
+            }
+
+            @Override
+            public long updateWhere(Filter condition, Object patch) {
+                return collection.updateWhere(condition, patch);
             }
 
             @Override

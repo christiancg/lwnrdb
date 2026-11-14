@@ -62,6 +62,10 @@ public class OperationResponse {
         }
     }
 
+    public OperationResponse as(OperationType otherType) {
+        return new OperationResponse(otherType, status, message, errorCode);
+    }
+
     public int estimatedJsonChars() {
         return BASE_JSON_CHARS;
     }

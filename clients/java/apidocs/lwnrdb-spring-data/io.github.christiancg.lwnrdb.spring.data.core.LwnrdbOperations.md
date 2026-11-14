@@ -133,6 +133,19 @@ always reads first.
 @param <T> the entity type
 @return how many were deleted
 
+## updateWhere(Class, Filter, Object)
+
+Updates every entity the filter matches with one conditional `SAVE`, all or nothing, merging the patch's top-level
+fields into each match and keeping the others. The patch's fields are stored names, not property names: translate a
+property with `wirePath`. Past the server's `updateMaxMatches` it fails with the translated `400-45` and updates
+nothing.
+
+@param type the entity class
+@param filter the filter, or null for every entity
+@param patch the fields to set: a `Document`, a `Map` or an object the client maps like a saved document
+@param <T> the entity type
+@return how many were updated
+
 ## query(Class)
 
 The client's fluent query, for what derived queries cannot express: vector `nearest`, geo `distance`, scripts, `map`.

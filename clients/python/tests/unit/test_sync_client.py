@@ -68,6 +68,7 @@ def test_sync_calls_return_plain_values(client: LwnrdbClient) -> None:
     assert found is not None
     assert found["_id"] == "o-1"
     assert orders.query().filter(field("a").eq(1)).to_list() == []
+    assert orders.update_where(field("a").eq(1), {"b": 2}) == 0
     assert orders.delete_where(field("a").eq(1)) == 0
     assert client.settings.pool_size == 8
 
@@ -79,6 +80,7 @@ def test_a_with_block_transaction_commits_and_a_failing_one_rolls_back(
     with client.transaction() as transaction:
         assert transaction.id == "tx-1"
         transaction.collection("shop", "orders").save({"_id": "o-1"})
+        assert transaction.collection("shop", "orders").update_where(field("status").eq("new"), {"status": "void"}) == 0
         assert transaction.collection("shop", "orders").delete_where(field("status").eq("void")) == 0
     assert fake.requests_of_type("COMMIT_TRANSACTION")
     with pytest.raises(RuntimeError), client.transaction():

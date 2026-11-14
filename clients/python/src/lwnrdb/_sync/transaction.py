@@ -38,6 +38,9 @@ class TransactionCollection(Generic[T, R]):
     def find_by_id(self, id: str) -> R | None:  # noqa: A002
         return self._runtime.run(self._inner.find_by_id(id))
 
+    def update_where(self, condition: Filter, patch: Document) -> int:
+        return self._runtime.run(self._inner.update_where(condition, patch))
+
     def delete(self, id: str) -> None:  # noqa: A002
         self._runtime.run(self._inner.delete(id))
 

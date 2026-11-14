@@ -177,6 +177,10 @@ unavailable) and the number is sequential.
 
 `400-44`: The delete condition matches more documents than allowed.
 
+## UPDATE_MATCHES_TOO_MANY
+
+`400-45`: The update condition matches more documents than allowed.
+
 ## MUST_AUTHENTICATE_FIRST
 
 `401-1`: Must authenticate first.

@@ -52,6 +52,7 @@ public sealed class ErrorCode
     public static readonly ErrorCode TooManyIndexesForCollection = new("400-42", "TOO_MANY_INDEXES_FOR_COLLECTION", Status.Error, false, "The collection has the maximum number of indexes");
     public static readonly ErrorCode InvalidCommand = new("400-43", "INVALID_COMMAND", Status.Error, false, "The command is not valid");
     public static readonly ErrorCode DeleteMatchesTooMany = new("400-44", "DELETE_MATCHES_TOO_MANY", Status.Error, false, "The delete condition matches more documents than allowed");
+    public static readonly ErrorCode UpdateMatchesTooMany = new("400-45", "UPDATE_MATCHES_TOO_MANY", Status.Error, false, "The update condition matches more documents than allowed");
     public static readonly ErrorCode MustAuthenticateFirst = new("401-1", "MUST_AUTHENTICATE_FIRST", Status.Unauthenticated, false, "Must authenticate first");
     public static readonly ErrorCode UserNoLongerExists = new("401-2", "USER_NO_LONGER_EXISTS", Status.Unauthenticated, false, "User no longer exists");
     public static readonly ErrorCode WrongCredentials = new("401-3", "WRONG_CREDENTIALS", Status.Error, false, "The user doesn't exist or the wrong credentials have been provided");

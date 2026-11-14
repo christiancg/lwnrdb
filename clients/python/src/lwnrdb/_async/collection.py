@@ -10,6 +10,7 @@ from lwnrdb._async.subscription import AsyncSubscription
 from lwnrdb._async.triggers import AsyncTriggers
 from lwnrdb._internal.collection_ops import CollectionOps
 from lwnrdb._internal.handler_adapter import Callbacks, async_callbacks
+from lwnrdb.document import Document
 from lwnrdb.errors import LwnrdbError
 from lwnrdb.listen import Handler
 from lwnrdb.query.types import Filter, PipelineStep
@@ -51,6 +52,9 @@ class AsyncCollection(Generic[T, R]):
 
     async def find_by_id(self, id: str, *, dirty_read: bool = False) -> R | None:  # noqa: A002
         return await self._ops.find_by_id(id, dirty_read)
+
+    async def update_where(self, condition: Filter, patch: Document) -> int:
+        return await self._ops.update_where(condition, patch)
 
     async def delete(self, id: str) -> None:  # noqa: A002
         await self._ops.delete(id)

@@ -5,8 +5,23 @@ import time
 import base_utils as bu
 from fuzz.oracles import count_of, rows_of
 
-from .workload import (ACCEPTED, BULK_SAVE, CHURNED_INDEX, CLOSED_MESSAGE, DELETE_WHERE, ID_OPS, OUTCOME_ERROR,
-                       OUTCOME_OK, SEVERITY_FAIL, SEVERITY_OBSERVE, TRANSACTION, Divergence, History, WorkloadSchema)
+from .workload import (
+    ACCEPTED,
+    BULK_SAVE,
+    CHURNED_INDEX,
+    CLOSED_MESSAGE,
+    DELETE_WHERE,
+    ID_OPS,
+    OUTCOME_ERROR,
+    OUTCOME_OK,
+    SAVE_WHERE,
+    SEVERITY_FAIL,
+    SEVERITY_OBSERVE,
+    TRANSACTION,
+    Divergence,
+    History,
+    WorkloadSchema,
+)
 
 FULL_SCAN = [{"type": "SKIP", "skip": 0}]
 MAX_VALUES_PER_FIELD = 20
@@ -150,7 +165,8 @@ def atomicity(state: dict, history: History, schema: WorkloadSchema) -> list:
         if entry.op == DELETE_WHERE:
             found.extend(_delete_where_atomicity(state, entries[position + 1:], entry, history.seed))
             continue
-        if entry.op not in (TRANSACTION, BULK_SAVE) or entry.outcome == OUTCOME_OK or state.get(entry.coll) is None:
+        if (entry.op not in (TRANSACTION, BULK_SAVE, SAVE_WHERE) or entry.outcome == OUTCOME_OK
+                or state.get(entry.coll) is None):
             continue
         written = [(doc_id, token) for doc_id, token in zip(entry.ids, entry.values) if token is not None]
         touched = set(entry.ids)
@@ -159,7 +175,7 @@ def atomicity(state: dict, history: History, schema: WorkloadSchema) -> list:
             continue
         landed = sorted(doc_id for doc_id, token in written if _token_of(state, entry.coll, doc_id) == token)
         if 0 < len(landed) < len(written):
-            severity = SEVERITY_FAIL if entry.op == TRANSACTION else SEVERITY_OBSERVE
+            severity = SEVERITY_OBSERVE if entry.op == BULK_SAVE else SEVERITY_FAIL
             found.append(Divergence("O2", history.seed, f"{entry.coll}: {_describe(entry)} landed {len(landed)} of"
                                                          f" {len(written)} writes: {landed}", severity))
     return found

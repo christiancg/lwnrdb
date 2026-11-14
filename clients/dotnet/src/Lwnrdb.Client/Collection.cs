@@ -54,6 +54,12 @@ public sealed class Collection<T>
     public Task<long> DeleteWhereAsync(Expression<Func<T, bool>> predicate, CancellationToken ct = default) =>
         Ops.DeleteWhereAsync(predicate, ct);
 
+    public Task<long> UpdateWhereAsync(Filter condition, object patch, CancellationToken ct = default) =>
+        Ops.UpdateWhereAsync(condition, patch, ct);
+
+    public Task<long> UpdateWhereAsync(Expression<Func<T, bool>> predicate, object patch, CancellationToken ct = default) =>
+        Ops.UpdateWhereAsync(predicate, patch, ct);
+
     public Query<T> Query() => new(Ops, [], false);
 
     public IQueryable<T> AsQueryable() => LwnrdbQueryable<T>.Over(Ops);

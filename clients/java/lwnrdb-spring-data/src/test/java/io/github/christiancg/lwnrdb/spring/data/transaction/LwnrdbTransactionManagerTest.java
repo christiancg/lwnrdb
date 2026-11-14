@@ -9,6 +9,7 @@ import io.github.christiancg.lwnrdb.spring.data.Stack;
 import io.github.christiancg.lwnrdb.spring.data.model.Widget;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,10 +67,10 @@ public class LwnrdbTransactionManagerTest {
             stack.template.findById("w1", Widget.class);
             stack.template.deleteById("w1", Widget.class);
             stack.template.findAll(Widget.class);
+            stack.template.updateWhere(Widget.class, null, Map.of("size", 3));
         });
-        assertEquals(
-                List.of("START_TRANSACTION", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "COMMIT_TRANSACTION"),
-                typesUntil("COMMIT_TRANSACTION"));
+        assertEquals(List.of("START_TRANSACTION", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "SAVE",
+                "COMMIT_TRANSACTION"), typesUntil("COMMIT_TRANSACTION"));
         assertEquals(1, stack.server.acceptedConnections());
     }
 

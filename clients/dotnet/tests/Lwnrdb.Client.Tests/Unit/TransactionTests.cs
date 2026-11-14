@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Lwnrdb.Client.Errors;
 using Lwnrdb.Client.Linq;
@@ -95,7 +96,7 @@ public sealed class TransactionTests : IAsyncLifetime
         using var connection = new Client.Internal.WireConnection(tcp.GetStream(), 1024, "test");
         var pinned = new Client.Internal.PinnedChannel(connection, TimeSpan.FromSeconds(5));
         var refused = await Assert.ThrowsAsync<LwnrdbException>(() =>
-            pinned.SendAsync(Protocol.Operation.CreateCollection, Client.Internal.RequestEncoder.Request("CREATE_COLLECTION", "shop", "orders"), default));
+            pinned.SendAsync(Protocol.Operation.CreateCollection, Client.Internal.RequestEncoder.Request("CREATE_COLLECTION", "shop", "orders"), CancellationToken.None));
         Assert.Contains("not allowed inside a transaction", refused.Message, StringComparison.Ordinal);
         Assert.Equal(0, _server.Count("CREATE_COLLECTION"));
     }
@@ -114,9 +115,11 @@ public sealed class TransactionTests : IAsyncLifetime
         await orders.Query().CountAsync();
         await orders.DeleteWhereAsync(o => o.Paid);
         await orders.DeleteWhereAsync(Lwnrdb.Client.Query.Filters.Field("status").Eq("void"));
+        await orders.UpdateWhereAsync(o => o.Paid, new { Status = "settled" });
+        await orders.UpdateWhereAsync(Lwnrdb.Client.Query.Filters.Field("status").Eq("void"), new { Paid = false });
         var session = Assert.Single(_server.Sessions);
         Assert.Equal(
-            ["START_TRANSACTION", "AGGREGATE", "SAVE", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "DELETE", "DELETE"],
+            ["START_TRANSACTION", "AGGREGATE", "SAVE", "BULK_SAVE", "FIND_BY_ID", "DELETE", "AGGREGATE", "DELETE", "DELETE", "SAVE", "SAVE"],
             session.Requests.Select(request => request["type"]!.GetValue<string>()));
         Assert.Equal("orders", orders.Name);
     }

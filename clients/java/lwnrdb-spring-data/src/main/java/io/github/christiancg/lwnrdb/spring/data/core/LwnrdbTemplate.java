@@ -183,6 +183,11 @@ public class LwnrdbTemplate implements LwnrdbOperations {
     }
 
     @Override
+    public <T> long updateWhere(Class<T> type, @Nullable Filter filter, Object patch) {
+        return translate(() -> store(type).updateWhere(filter == null ? EVERY_DOCUMENT : filter, patch));
+    }
+
+    @Override
     public <T> List<T> delete(Class<T> type, LwnrdbQuerySpec spec) {
         final var matching = find(type, spec);
         final var codec = codec(type);

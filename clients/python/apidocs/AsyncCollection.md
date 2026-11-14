@@ -51,6 +51,13 @@ Args:
 Returns:
     the document, or `None` when there is none
 
+## update_where
+
+Merges `patch` into every document that matches the filter, all or nothing, and returns how many it updated (`0` when
+none matched). Each top-level key of `patch` is added or replaced and every other field is kept. A `patch` that is empty
+or names `_id` is refused with `400-1`, and a filter matching more than the server's `updateMaxMatches` is refused with
+`400-45`; neither updates anything.
+
 ## delete
 
 Deletes one document by its `_id`.

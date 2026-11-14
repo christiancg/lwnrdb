@@ -598,7 +598,7 @@ def timed_run(conn: Conn, script: str):
 def check_refused_in_time(label: str, response: dict, elapsed: float, codes=("400-12", "408-1")):
     check(label, response.get("status") == "ERROR" and response.get("errorCode") in codes,
           f"expected one of {codes}, got {response.get('errorCode')} msg={response.get('message')!r}")
-    check(f"… within scriptTimeoutMs + 2s", elapsed < SHIPPED_TIMEOUT_MS / 1000 + 2, f"took {elapsed:.2f}s")
+    check("… within scriptTimeoutMs + 2s", elapsed < SHIPPED_TIMEOUT_MS / 1000 + 2, f"took {elapsed:.2f}s")
 
 
 def test_private_use_locale_tags_do_not_grow_the_heap(conn: Conn):
@@ -977,6 +977,26 @@ def test_host_writes(conn: Conn):
                           f'db.transaction(() => {{ n = db.deleteWhere(db.name, "{COLL}",'
                           ' { fieldOperatorType: "EQUALS", field: "purge", value: "tx" }); });\n'
                           f'return [n, db.findById(db.name, "{COLL}", "dwt") === null];'), [1, True])
+    check_result("updateWhere merges into every match and returns the count",
+                 conn.run('import db from "db";\n'
+                          f'db.bulkSave(db.name, "{COLL}", [{{ _id: "uw1", bump: true, keep: 1 }},'
+                          ' { _id: "uw2", bump: true, keep: 2 }, { _id: "uw3", bump: false, keep: 3 }]);\n'
+                          f'const n = db.updateWhere(db.name, "{COLL}",'
+                          ' { fieldOperatorType: "EQUALS", field: "bump", value: true }, { state: "bumped" });\n'
+                          f'const one = db.findById(db.name, "{COLL}", "uw1");\n'
+                          f'const three = db.findById(db.name, "{COLL}", "uw3");\n'
+                          'return [n, one.state, one.keep, three.state === undefined];'), [2, "bumped", 1, True])
+    check_result("updateWhere matching nothing returns 0",
+                 conn.run('import db from "db";\n'
+                          f'return db.updateWhere(db.name, "{COLL}",'
+                          ' { fieldOperatorType: "EQUALS", field: "bump", value: "never" }, { state: "x" });'), 0)
+    check_result("updateWhere inside a transaction commits with it",
+                 conn.run('import db from "db";\n'
+                          f'db.save(db.name, "{COLL}", {{ _id: "uwt", bump: "tx" }});\n'
+                          'let n = 0;\n'
+                          f'db.transaction(() => {{ n = db.updateWhere(db.name, "{COLL}",'
+                          ' { fieldOperatorType: "EQUALS", field: "bump", value: "tx" }, { state: "in-tx" }); });\n'
+                          f'return [n, db.findById(db.name, "{COLL}", "uwt").state];'), [1, "in-tx"])
     check_result("a document written by a script is visible to the wire protocol",
                  conn.run('import db from "db";\n'
                           f'db.save(db.name, "{COLL}", {{ _id: "visible", via: "script" }});\nreturn "saved";'),
@@ -1232,6 +1252,7 @@ def test_db_module_arity(conn: Conn):
                         ("db.cursor", f'db.cursor(db.name, "{COLL}")'),
                         ("db.delete", f'db.delete(db.name, "{COLL}")'),
                         ("db.deleteWhere", f'db.deleteWhere(db.name, "{COLL}")'),
+                        ("db.updateWhere", f'db.updateWhere(db.name, "{COLL}", {{ field: "a" }})'),
                         ("db.findById", f'db.findById(db.name, "{COLL}")')):
         check_failed_script(f"{label} with too few arguments is a TypeError",
                             conn.run(f'import db from "db";\n{call};'), "400-9", "TypeError")
@@ -1287,7 +1308,7 @@ def test_db_delete_refuses_a_non_string_id(conn: Conn):
     for label, call in (("db.delete with no id", f'db.delete(db.name, "{COLL}")'),
                         ("db.delete with a number id", f'db.delete(db.name, "{COLL}", 5)'),
                         ("db.findById with a number id", f'db.findById(db.name, "{COLL}", 5)'),
-                        ("db.delete with a number collection", f'db.delete(db.name, 7, "5")')):
+                        ("db.delete with a number collection", 'db.delete(db.name, 7, "5")')):
         check_failed_script(f"{label} is a TypeError", conn.run(f'import db from "db";\n{call};'),
                             "400-9", "TypeError")
     for doc_id in ("undefined", "5"):
@@ -1400,12 +1421,12 @@ def test_procedure_imports(conn: Conn):
                  conn.run("const ns = await import('procedures/lib_money');\nreturn ns.cents(3);"), 300)
     check_status("store a library whose body has a side effect",
                  conn.save_procedure("lib_marker", "import db from 'db';\n"
-                                                   "db.save(db.name, '%s', { _id: 'import-marker', seen: 1 });"
-                                     % COLL), "OK")
+                                                   "db.save(db.name, '" + COLL + "', { _id: 'import-marker', seen: 1 });"),
+                 "OK")
     check_result("a side-effect-only import runs the module body",
                  conn.run("import db from 'db';\n"
                           "import 'procedures/lib_marker';\n"
-                          "return db.findById(db.name, '%s', 'import-marker').seen;" % COLL), 1)
+                          "return db.findById(db.name, '" + COLL + "', 'import-marker').seen;"), 1)
 
     check_status("store a library that imports another library",
                  conn.save_procedure("lib_chain", "import { cents } from 'procedures/lib_money';\n"
@@ -1544,15 +1565,15 @@ def test_procedure_imports(conn: Conn):
 
     check_status("store a library that counts its own evaluations",
                  conn.save_procedure("lib_counter", "import db from 'db';\n"
-                                                    "const prev = db.findById(db.name, '%s', 'eval-count');\n"
+                                                    "const prev = db.findById(db.name, '" + COLL + "', 'eval-count');\n"
                                                     "const seen = (prev === null ? 0 : prev.seen) + 1;\n"
-                                                    "db.save(db.name, '%s', { _id: 'eval-count', seen });\n"
-                                                    "export const marker = seen;" % (COLL, COLL)), "OK")
+                                                    "db.save(db.name, '" + COLL + "', { _id: 'eval-count', seen });\n"
+                                                    "export const marker = seen;"), "OK")
     check_result("an imported module evaluates once per run",
                  conn.run("import db from 'db';\n"
                           "import 'procedures/lib_counter';\n"
                           "await import('procedures/lib_counter');\n"
-                          "return db.findById(db.name, '%s', 'eval-count').seen;" % COLL), 1)
+                          "return db.findById(db.name, '" + COLL + "', 'eval-count').seen;"), 1)
 
     check_status("store a library that never terminates",
                  conn.save_procedure("lib_spin", "while (true) { }"), "OK")
@@ -1575,12 +1596,12 @@ def test_procedure_imports(conn: Conn):
     check_status("store a library that reads through db",
                  conn.save_procedure("lib_reader", "import db from 'db';\n"
                                                    "export function count() {\n"
-                                                   "    return db.aggregate(db.name, '%s', []).length;\n"
-                                                   "}" % COLL), "OK")
+                                                   "    return db.aggregate(db.name, '" + COLL + "', []).length;\n"
+                                                   "}"), "OK")
     check_result("a library reaches the same db binding as its importer",
                  conn.run("import db from 'db';\n"
                           "import { count } from 'procedures/lib_reader';\n"
-                          "return count() === db.aggregate(db.name, '%s', []).length;" % COLL), True)
+                          "return count() === db.aggregate(db.name, '" + COLL + "', []).length;"), True)
 
 
 def test_language_surface(conn: Conn):
@@ -1590,38 +1611,38 @@ def test_language_surface(conn: Conn):
         ("async/await with Promise.all",
          "const values = await Promise.all([1, Promise.resolve(2)]);\nreturn values;", [1, 2]),
         ("Promise.allSettled",
-         "const r = await Promise.allSettled([Promise.resolve(1), Promise.reject(new Error('x'))]);\n"
-         "return r.map(e => e.status);", ["fulfilled", "rejected"]),
+         ("const r = await Promise.allSettled([Promise.resolve(1), Promise.reject(new Error('x'))]);\n"
+         "return r.map(e => e.status);"), ["fulfilled", "rejected"]),
         ("Promise.any and AggregateError",
-         "try { await Promise.any([Promise.reject(new Error('a')), Promise.reject(new Error('b'))]); }\n"
-         "catch (e) { return { name: e.name, count: e.errors.length }; }", {"name": "AggregateError", "count": 2}),
+         ("try { await Promise.any([Promise.reject(new Error('a')), Promise.reject(new Error('b'))]); }\n"
+         "catch (e) { return { name: e.name, count: e.errors.length }; }"), {"name": "AggregateError", "count": 2}),
         ("Promise.withResolvers",
          "const { promise, resolve } = Promise.withResolvers();\nresolve('resolved');\nreturn await promise;",
          "resolved"),
         ("async generators and for await",
-         "async function* g() { yield 1; yield 2; }\nlet total = 0;\nfor await (const v of g()) total += v;\n"
-         "return total;", 3),
+         ("async function* g() { yield 1; yield 2; }\nlet total = 0;\nfor await (const v of g()) total += v;\n"
+         "return total;"), 3),
         ("classes: private fields, getters, static blocks",
-         "class Counter {\n  static created = 0;\n  static { Counter.created = 100; }\n  #count = 0;\n"
+         ("class Counter {\n  static created = 0;\n  static { Counter.created = 100; }\n  #count = 0;\n"
          "  bump() { this.#count++; return this; }\n  get value() { return this.#count; }\n}\n"
          "const c = new Counter().bump().bump();\n"
-         "return { value: c.value, created: Counter.created, isCounter: c instanceof Counter };",
+         "return { value: c.value, created: Counter.created, isCounter: c instanceof Counter };"),
          {"value": 2, "created": 100, "isCounter": True}),
         ("inheritance and super",
-         "class A { greet() { return 'a'; } }\nclass B extends A { greet() { return super.greet() + 'b'; } }\n"
-         "return new B().greet();", "ab"),
+         ("class A { greet() { return 'a'; } }\nclass B extends A { greet() { return super.greet() + 'b'; } }\n"
+         "return new B().greet();"), "ab"),
         ("destructuring, defaults, rest",
-         "const { a, b = 2, ...rest } = { a: 1, c: 3, d: 4 };\nconst [x, , z = 9] = [10, 20];\n"
-         "return { a, b, rest, x, z };", {"a": 1, "b": 2, "rest": {"c": 3, "d": 4}, "x": 10, "z": 9}),
+         ("const { a, b = 2, ...rest } = { a: 1, c: 3, d: 4 };\nconst [x, , z = 9] = [10, 20];\n"
+         "return { a, b, rest, x, z };"), {"a": 1, "b": 2, "rest": {"c": 3, "d": 4}, "x": 10, "z": 9}),
         ("optional chaining and nullish coalescing",
          "const o = { a: { b: null } };\nreturn [o?.a?.b ?? 'fallback', o?.x?.y?.z, o.missing?.()];",
          ["fallback", None, None]),
         ("tagged templates and String.raw",
-         "const tag = (s, ...v) => s.raw.join('|') + '#' + v.join(',');\n"
-         "return [tag`a${1}b`, String.raw`x\\ny`];", ["a|b#1", "x\\ny"]),
-        ("labeled break and continue", "let seen = 0;\nouter: for (let i = 0; i < 3; i++) "
+         ("const tag = (s, ...v) => s.raw.join('|') + '#' + v.join(',');\n"
+         "return [tag`a${1}b`, String.raw`x\\ny`];"), ["a|b#1", "x\\ny"]),
+        ("labeled break and continue", ("let seen = 0;\nouter: for (let i = 0; i < 3; i++) "
                                        "{ for (let j = 0; j < 3; j++) { seen++; if (j === 1) continue outer; "
-                                       "if (i === 2) break outer; } }\nreturn seen;", 5),
+                                       "if (i === 2) break outer; } }\nreturn seen;"), 5),
         ("closures capture per-iteration let",
          "const fns = [];\nfor (let i = 0; i < 3; i++) fns.push(() => i);\nreturn fns.map(f => f());", [0, 1, 2]),
         ("a closure in the for header captures the first iteration",
@@ -1632,41 +1653,41 @@ def test_language_surface(conn: Conn):
          "const out = [];\nfor (let i = 0; i < 4; i++) { const twice = i * 2; out.push(twice); }\nreturn out;",
          [0, 2, 4, 6]),
         ("Map, Set and Set operations",
-         "const m = new Map([['a', 1]]);\nconst s = new Set([1, 2]);\n"
+         ("const m = new Map([['a', 1]]);\nconst s = new Set([1, 2]);\n"
          "return { got: m.get('a'), union: [...s.union(new Set([3]))], "
-         "inter: [...s.intersection(new Set([2, 9]))] };", {"got": 1, "union": [1, 2, 3], "inter": [2]}),
+         "inter: [...s.intersection(new Set([2, 9]))] };"), {"got": 1, "union": [1, 2, 3], "inter": [2]}),
         ("iterator helpers", "return [1, 2, 3, 4].values().map(x => x * 2).take(3).toArray();", [2, 4, 6]),
         ("custom iterable via Symbol.iterator",
-         "class R { constructor(n) { this.n = n; } *[Symbol.iterator]() { for (let i = 0; i < this.n; i++) yield i; } }\n"
-         "return [...new R(3)];", [0, 1, 2]),
+         ("class R { constructor(n) { this.n = n; } *[Symbol.iterator]() { for (let i = 0; i < this.n; i++) yield i; } }\n"
+         "return [...new R(3)];"), [0, 1, 2]),
         ("typed arrays and DataView",
-         "const buf = new ArrayBuffer(8);\nnew DataView(buf).setFloat64(0, 1.5);\n"
-         "return { f: new DataView(buf).getFloat64(0), bytes: new Uint8Array(buf).length };",
+         ("const buf = new ArrayBuffer(8);\nnew DataView(buf).setFloat64(0, 1.5);\n"
+         "return { f: new DataView(buf).getFloat64(0), bytes: new Uint8Array(buf).length };"),
          {"f": 1.5, "bytes": 8}),
         ("resizable ArrayBuffer",
-         "const buf = new ArrayBuffer(4, { maxByteLength: 16 });\nbuf.resize(8);\n"
-         "return { size: buf.byteLength, resizable: buf.resizable };", {"size": 8, "resizable": True}),
+         ("const buf = new ArrayBuffer(4, { maxByteLength: 16 });\nbuf.resize(8);\n"
+         "return { size: buf.byteLength, resizable: buf.resizable };"), {"size": 8, "resizable": True}),
         ("Uint8Array hex helpers",
-         "const bytes = new Uint8Array([1, 2, 255]);\n"
-         "return { hex: bytes.toHex(), back: [...Uint8Array.fromHex('0102ff')] };",
+         ("const bytes = new Uint8Array([1, 2, 255]);\n"
+         "return { hex: bytes.toHex(), back: [...Uint8Array.fromHex('0102ff')] };"),
          {"hex": "0102ff", "back": [1, 2, 255]}),
         ("BigInt arithmetic", "return (2n ** 64n).toString();", "18446744073709551616"),
         ("Symbol and well-known symbols",
-         "const s = Symbol('tag');\nconst o = { [s]: 1, [Symbol.toStringTag]: 'Custom' };\n"
-         "return { viaSymbol: o[s], tag: Object.prototype.toString.call(o), type: typeof s };",
+         ("const s = Symbol('tag');\nconst o = { [s]: 1, [Symbol.toStringTag]: 'Custom' };\n"
+         "return { viaSymbol: o[s], tag: Object.prototype.toString.call(o), type: typeof s };"),
          {"viaSymbol": 1, "tag": "[object Custom]", "type": "symbol"}),
         ("Proxy and Reflect",
-         "const p = new Proxy({ a: 1 }, { get: (t, k) => k in t ? t[k] : 'trapped' });\n"
-         "return { hit: p.a, miss: p.b, keys: Reflect.ownKeys({ x: 1, y: 2 }) };",
+         ("const p = new Proxy({ a: 1 }, { get: (t, k) => k in t ? t[k] : 'trapped' });\n"
+         "return { hit: p.a, miss: p.b, keys: Reflect.ownKeys({ x: 1, y: 2 }) };"),
          {"hit": 1, "miss": "trapped", "keys": ["x", "y"]}),
         ("property descriptors and freeze",
-         "const o = Object.freeze({ a: 1 });\nlet threw = false;\n"
+         ("const o = Object.freeze({ a: 1 });\nlet threw = false;\n"
          "try { o.a = 2; } catch (e) { threw = e instanceof TypeError; }\n"
-         "return { frozen: Object.isFrozen(o), threw, value: o.a };",
+         "return { frozen: Object.isFrozen(o), threw, value: o.a };"),
          {"frozen": True, "threw": True, "value": 1}),
         ("regex: named groups and the d flag",
-         "const m = /(?<year>\\d{4})-(?<month>\\d{2})/d.exec('2024-07');\n"
-         "return { year: m.groups.year, indices: m.indices.groups.month };", {"year": "2024", "indices": [5, 7]}),
+         ("const m = /(?<year>\\d{4})-(?<month>\\d{2})/d.exec('2024-07');\n"
+         "return { year: m.groups.year, indices: m.indices.groups.month };"), {"year": "2024", "indices": [5, 7]}),
         ("regex: lookbehind and unicode property escapes",
          "return [/(?<=a)b/.test('ab'), /\\p{Script=Greek}/u.test('\\u03b1'), /[\\p{ASCII}--[a-z]]/v.test('A')];",
          [True, True, True]),
@@ -1675,66 +1696,66 @@ def test_language_surface(conn: Conn):
         ("RegExp.escape",
          "const re = new RegExp(RegExp.escape('a.b'));\nreturn [re.test('a.b'), re.test('axb')];", [True, False]),
         ("explicit resource management",
-         "const order = [];\n{\n  using first = { [Symbol.dispose]() { order.push('first'); } };\n"
-         "  using second = { [Symbol.dispose]() { order.push('second'); } };\n}\nreturn order;",
+         ("const order = [];\n{\n  using first = { [Symbol.dispose]() { order.push('first'); } };\n"
+         "  using second = { [Symbol.dispose]() { order.push('second'); } };\n}\nreturn order;"),
          ["second", "first"]),
         ("DisposableStack",
-         "const order = [];\n{\n  using stack = new DisposableStack();\n"
-         "  stack.defer(() => order.push('deferred'));\n}\nreturn order;", ["deferred"]),
+         ("const order = [];\n{\n  using stack = new DisposableStack();\n"
+         "  stack.defer(() => order.push('deferred'));\n}\nreturn order;"), ["deferred"]),
         ("Temporal arithmetic",
-         "const date = Temporal.PlainDate.from('2024-01-31');\n"
+         ("const date = Temporal.PlainDate.from('2024-01-31');\n"
          "return { plus: date.add({ months: 1 }).toString(), "
-         "days: Temporal.Duration.from({ hours: 48 }).total('days') };",
+         "days: Temporal.Duration.from({ hours: 48 }).total('days') };"),
          {"plus": "2024-02-29", "days": 2}),
         ("Temporal.Now", "return typeof Temporal.Now.plainDateISO().toString();", "string"),
         ("structuredClone is a deep copy",
-         "const src = { nested: { list: [1, 2] } };\nconst copy = structuredClone(src);\n"
-         "copy.nested.list.push(3);\nreturn { src: src.nested.list.length, copy: copy.nested.list.length };",
+         ("const src = { nested: { list: [1, 2] } };\nconst copy = structuredClone(src);\n"
+         "copy.nested.list.push(3);\nreturn { src: src.nested.list.length, copy: copy.nested.list.length };"),
          {"src": 2, "copy": 3}),
         ("Object.groupBy and Map.groupBy",
-         "const grouped = Object.groupBy([1, 2, 3, 4], n => n % 2 ? 'odd' : 'even');\n"
-         "return { odd: grouped.odd, mapped: Map.groupBy([1, 2], n => n).get(1) };",
+         ("const grouped = Object.groupBy([1, 2, 3, 4], n => n % 2 ? 'odd' : 'even');\n"
+         "return { odd: grouped.odd, mapped: Map.groupBy([1, 2], n => n).get(1) };"),
          {"odd": [1, 3], "mapped": [1]}),
         ("Array.fromAsync", "return await Array.fromAsync([Promise.resolve('a'), 'b']);", ["a", "b"]),
         ("array by-copy methods",
-         "const base = [3, 1, 2];\nreturn { sorted: base.toSorted(), reversed: base.toReversed(), "
-         "replaced: base.with(0, 9), untouched: base };",
+         ("const base = [3, 1, 2];\nreturn { sorted: base.toSorted(), reversed: base.toReversed(), "
+         "replaced: base.with(0, 9), untouched: base };"),
          {"sorted": [1, 2, 3], "reversed": [2, 1, 3], "replaced": [9, 1, 2], "untouched": [3, 1, 2]}),
         ("JSON replacer and reviver",
-         "const text = JSON.stringify({ a: 1, b: 2 }, ['a']);\n"
+         ("const text = JSON.stringify({ a: 1, b: 2 }, ['a']);\n"
          "const revived = JSON.parse('{\"n\":1}', (k, v) => typeof v === 'number' ? v * 10 : v);\n"
-         "return { text, revived: revived.n };", {"text": '{"a":1}', "revived": 10}),
+         "return { text, revived: revived.n };"), {"text": '{"a":1}', "revived": 10}),
         ("error cause and instanceof through the chain",
-         "const e = new RangeError('outer', { cause: 'inner' });\n"
-         "return { cause: e.cause, isRange: e instanceof RangeError, isError: e instanceof Error, name: e.name };",
+         ("const e = new RangeError('outer', { cause: 'inner' });\n"
+         "return { cause: e.cause, isRange: e instanceof RangeError, isError: e instanceof Error, name: e.name };"),
          {"cause": "inner", "isRange": True, "isError": True, "name": "RangeError"}),
         ("try/catch/finally ordering",
-         "const order = [];\ntry { order.push('try'); throw new Error('x'); }\n"
-         "catch { order.push('catch'); } finally { order.push('finally'); }\nreturn order;",
+         ("const order = [];\ntry { order.push('try'); throw new Error('x'); }\n"
+         "catch { order.push('catch'); } finally { order.push('finally'); }\nreturn order;"),
          ["try", "catch", "finally"]),
         ("strict mode is always on",
          "try { undeclaredGlobal = 1; return 'assigned'; } catch (e) { return e.constructor.name; }",
          "ReferenceError"),
         ("Math and number formatting",
-         "return { trunc: Math.trunc(-4.7), imul: Math.imul(3, 4), precise: Math.sumPrecise([0.1, 0.2]), "
-         "big: 1e21.toString(), fixed: (1.005).toFixed(2) };",
+         ("return { trunc: Math.trunc(-4.7), imul: Math.imul(3, 4), precise: Math.sumPrecise([0.1, 0.2]), "
+         "big: 1e21.toString(), fixed: (1.005).toFixed(2) };"),
          {"trunc": -4, "imul": 12, "precise": 0.30000000000000004, "big": "1e+21", "fixed": "1.00"}),
         ("globalThis reflects top-level values",
          "var topLevel = 'visible';\nreturn globalThis.topLevel;", "visible"),
         ("getters, setters and the sequence operator",
-         "const o = { _v: 1, get v() { return this._v; }, set v(n) { this._v = n * 2; } };\n"
-         "o.v = 5;\nreturn (0, o.v);", 10),
+         ("const o = { _v: 1, get v() { return this._v; }, set v(n) { this._v = n * 2; } };\n"
+         "o.v = 5;\nreturn (0, o.v);"), 10),
         ("timers run on the event loop",
          "return await new Promise(resolve => setTimeout(() => resolve('timed'), 5));", "timed"),
         ("microtasks run before timers",
-         "const order = [];\nsetTimeout(() => order.push('timeout'), 0);\n"
+         ("const order = [];\nsetTimeout(() => order.push('timeout'), 0);\n"
          "await Promise.resolve().then(() => order.push('micro'));\n"
-         "await new Promise(r => setTimeout(r, 5));\nreturn order;", ["micro", "timeout"]),
+         "await new Promise(r => setTimeout(r, 5));\nreturn order;"), ["micro", "timeout"]),
         ("clearing an id before it is issued does not cancel that timer",
          "clearTimeout(1);\nreturn await new Promise(resolve => setTimeout(() => resolve('fired'), 0));", "fired"),
         ("clearing ids that name no timer retains nothing and cancels nothing",
-         "for (let i = 1; i <= 200000; i++) clearTimeout(-i);\n"
-         "return await new Promise(resolve => setTimeout(() => resolve('fired'), 0));", "fired"),
+         ("for (let i = 1; i <= 200000; i++) clearTimeout(-i);\n"
+         "return await new Promise(resolve => setTimeout(() => resolve('fired'), 0));"), "fired"),
     ]
     for label, script, expected in cases:
         check_result(label, conn.run(script), expected)
