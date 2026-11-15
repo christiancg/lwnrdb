@@ -4,6 +4,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.NumberTypeAdapter;
 
 public final class JsonElementWriter {
@@ -14,7 +15,7 @@ public final class JsonElementWriter {
         switch (element.getJsonType()) {
             case NULL -> out.append("null");
             case BOOLEAN -> out.append(element.asJsonBoolean().getValue().toString());
-            case STRING -> writeString(element.asJsonString().getValue(), out);
+            case STRING -> writeString(element.asJsonString(), out);
             case CUSTOM -> writeString(((JsonCustom<?>) element).getValue(), out);
             case NUMBER -> NumberTypeAdapter.appendDouble(element.asJsonNumber().doubleValue(), out);
             case ARRAY -> writeArray(element.asJsonArray(), out);
@@ -36,6 +37,16 @@ public final class JsonElementWriter {
         }
         out.append('"');
         JsonStrings.appendEscaped(out, value);
+        out.append('"');
+    }
+
+    private static void writeString(JsonString string, JsonOut out) {
+        if (!string.isPlainAscii()) {
+            writeString(string.getValue(), out);
+            return;
+        }
+        out.append('"');
+        out.appendPlainAscii(string.getValue());
         out.append('"');
     }
 

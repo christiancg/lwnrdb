@@ -106,6 +106,14 @@ public class Utf8CountingJsonOutTest {
     }
 
     @Test
+    public void test_plain_ascii_is_counted_one_byte_per_char() {
+        final var out = new Utf8CountingJsonOut();
+        out.appendPlainAscii("plain ascii~\u007f");
+
+        assertEquals("plain ascii~\u007f".length(), out.length());
+    }
+
+    @Test
     public void test_mark_and_reset_restore_the_count() {
         final var out = new Utf8CountingJsonOut();
         out.append("abc");

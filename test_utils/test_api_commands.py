@@ -585,6 +585,12 @@ def test_rows_of_different_shapes_round_trip(c):
 ESCAPE_CLASSES_REQUEST_VALUE = r'q\"b\\c\u0001n\nd\u007fl\u2028p\u2029e\ud83d\ude00s\ud800'
 ESCAPE_CLASSES_WIRE_VALUE = (b'"v":"q\\"b\\\\c\\u0001n\\nd\x7fl\xe2\x80\xa8p\xe2\x80\xa9e\xf0\x9f\x98\x80s'
                              b'\\ud800"')
+PLAIN_ASCII_REPEATS = 293
+
+
+def raw_reply(c, payload: dict) -> bytes:
+    c.s.sendall((json.dumps(payload) + "\n").encode())
+    return c.f.readline()
 
 
 def test_strings_with_every_escape_class_round_trip(c):
@@ -593,11 +599,24 @@ def test_strings_with_every_escape_class_round_trip(c):
     check_status("the escaped document is saved", c.send_raw(
         '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_SHAPES
         + '","object":{"_id":"escapes","v":"' + ESCAPE_CLASSES_REQUEST_VALUE + '"}}'), "OK")
-    c.s.sendall((json.dumps({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_SHAPES,
-                             "_id": "escapes"}) + "\n").encode())
-    raw = c.f.readline()
+    raw = raw_reply(c, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_SHAPES, "_id": "escapes"})
     check("quotes, backslashes and control characters are escaped, DEL, U+2028/2029 and pairs stay raw, and a lone"
           " surrogate is spelled \\uXXXX", ESCAPE_CLASSES_WIRE_VALUE in raw, detail=repr(raw[:300]))
+    again = raw_reply(c, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_SHAPES, "_id": "escapes"})
+    check("a second read of the same document writes the same bytes", again == raw, detail=repr(again[:300]))
+    filtered = raw_reply(c, {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_SHAPES,
+                             "aggregationSteps": [filter_step("_id", "EQUALS", "escapes")]})
+    check("an AGGREGATE writes the same escaped value", ESCAPE_CLASSES_WIRE_VALUE in filtered,
+          detail=repr(filtered[:300]))
+    plain_value = "plain ascii ~ " * PLAIN_ASCII_REPEATS
+    check_status("a long plain ASCII document is saved", c.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": COLL_SHAPES,
+         "object": {"_id": "plain", "v": plain_value}}), "OK")
+    plain_wire = b'"v":"' + plain_value.encode() + b'"'
+    reads = [raw_reply(c, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL_SHAPES, "_id": "plain"})
+             for _ in range(2)]
+    check("a long plain ASCII value comes back byte for byte on every read", all(plain_wire in r for r in reads),
+          detail=repr(reads[-1][:200]))
     drop_coll(c, COLL_SHAPES)
 
 

@@ -6,6 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
@@ -22,6 +25,10 @@ import org.techhouse.ejson.internal.Utf8JsonOut;
 import org.techhouse.ops.resp.AggregateResponse;
 
 public class JsonElementWriterTest {
+    private static final int CONCURRENT_WRITERS = 8;
+    private static final String MIXED_STRINGS_DOCUMENT = "{\"_id\":\"d1\",\"plain\":\"" + "p".repeat(600)
+            + "\",\"quoted\":\"a\\\"b\",\"wide\":\"é中😀\",\"control\":\"x\\ny\",\"decoded\":\"\\u0041BC\","
+            + "\"list\":[\"one\",\"tw\\\\o\"]}";
     private final EJson eJson = new EJson();
 
     @BeforeEach
@@ -97,5 +104,57 @@ public class JsonElementWriterTest {
 
         assertArrayEquals(written(document).getBytes(StandardCharsets.UTF_8), utf8.toByteArray());
         utf8.release();
+    }
+
+    private static byte[] utf8Written(JsonBaseElement element) {
+        final var out = Utf8JsonOut.acquire(64);
+        try {
+            JsonElementWriter.write(element, out);
+            return out.toByteArray();
+        } finally {
+            out.release();
+        }
+    }
+
+    @Test
+    public void test_a_null_string_value_is_written_as_null() {
+        final var nullString = new JsonString(null);
+
+        assertEquals("null", written(nullString));
+        assertArrayEquals("null".getBytes(StandardCharsets.UTF_8), utf8Written(nullString));
+        assertEquals(4, JsonElementWriter.utf8Length(nullString));
+    }
+
+    @Test
+    public void test_writing_a_document_twice_gives_identical_bytes() {
+        final var document = parsed(MIXED_STRINGS_DOCUMENT);
+        final var expected = written(parsed(MIXED_STRINGS_DOCUMENT)).getBytes(StandardCharsets.UTF_8);
+
+        final var first = utf8Written(document);
+        final var second = utf8Written(document);
+
+        assertArrayEquals(expected, first);
+        assertArrayEquals(expected, second);
+    }
+
+    @Test
+    public void test_concurrent_writers_of_one_document_agree() throws Exception {
+        final var document = parsed(MIXED_STRINGS_DOCUMENT);
+        final var expected = written(parsed(MIXED_STRINGS_DOCUMENT)).getBytes(StandardCharsets.UTF_8);
+        final var start = new CountDownLatch(1);
+        final var writers = new ArrayList<Callable<byte[]>>();
+        for (var i = 0; i < CONCURRENT_WRITERS; i++) {
+            writers.add(() -> {
+                start.await();
+                return utf8Written(document);
+            });
+        }
+        try (var pool = Executors.newFixedThreadPool(CONCURRENT_WRITERS)) {
+            final var results = writers.stream().map(pool::submit).toList();
+            start.countDown();
+            for (final var result : results) {
+                assertArrayEquals(expected, result.get());
+            }
+        }
     }
 }
