@@ -6,6 +6,7 @@ public final class JsonStrings {
 
     private static final char[] HEX = "0123456789abcdef".toCharArray();
     private static final char LAST_CONTROL_CHARACTER = 0x20;
+    private static final char FIRST_NON_ASCII = 0x80;
     private static final int SHORT_ESCAPE_WIDTH = 2;
     private static final int UNICODE_ESCAPE_WIDTH = 6;
 
@@ -138,6 +139,23 @@ public final class JsonStrings {
             return index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1));
         }
         return Character.isLowSurrogate(c) && (index == 0 || !Character.isHighSurrogate(value.charAt(index - 1)));
+    }
+
+    public static boolean isPlainAscii(final char c) {
+        return c >= LAST_CONTROL_CHARACTER && c < FIRST_NON_ASCII && c != '"' && c != '\\';
+    }
+
+    public static boolean isPlainAscii(final String value) {
+        if (value == null) {
+            return false;
+        }
+        final var length = value.length();
+        for (var i = 0; i < length; i++) {
+            if (!isPlainAscii(value.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static boolean needsEscaping(final String value, final int index) {

@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.CharJsonOut;
+import org.techhouse.ejson.internal.JsonElementWriter;
 import org.techhouse.ejson.internal.JsonStrings;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.ejson.internal.Utf8Encoder;
@@ -128,6 +129,31 @@ public class JsonOutEquivalenceTest {
         final var nothing = new CharJsonOut();
         JsonStrings.appendEscaped(nothing, null);
         assertEquals("null", nothing.toString());
+    }
+
+    @Test
+    public void test_a_classified_string_writes_the_same_bytes_as_the_escaper() {
+        final var random = new Random(20261115L);
+        for (var sample = 0; sample < 20_000; sample++) {
+            final var text = randomText(random, 24);
+            final var expected = new StringBuilder("\"");
+            JsonStrings.appendEscaped(expected, text);
+            expected.append('"');
+            final var string = new JsonString(text);
+            assertEquals(JsonStrings.isPlainAscii(text), string.isPlainAscii(), text);
+            final var chars = new CharJsonOut();
+            JsonElementWriter.write(string, chars);
+            final var bytes = Utf8JsonOut.acquire(8);
+            try {
+                JsonElementWriter.write(string, bytes);
+                final var expectedBytes = expected.toString().getBytes(StandardCharsets.UTF_8);
+                assertEquals(expected.toString(), chars.toString(), text);
+                assertArrayEquals(expectedBytes, bytes.toByteArray(), text);
+                assertEquals(expectedBytes.length, JsonElementWriter.utf8Length(string), text);
+            } finally {
+                bytes.release();
+            }
+        }
     }
 
     @Test

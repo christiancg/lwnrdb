@@ -17,6 +17,8 @@ import org.techhouse.ejson.internal.Utf8JsonOut;
 import org.techhouse.test.TestUtils;
 
 public class Utf8JsonOutTest {
+    private static final int LONGER_THAN_ANY_STARTING_BUFFER = 4097;
+
     private static byte[] encoded(String text) {
         final var out = Utf8JsonOut.acquire(16);
         try {
@@ -47,6 +49,31 @@ public class Utf8JsonOutTest {
         try {
             out.append('\ud83d').append('a').append('é');
             assertArrayEquals("?aé".getBytes(StandardCharsets.UTF_8), out.toByteArray());
+        } finally {
+            out.release();
+        }
+    }
+
+    @Test
+    public void test_append_plain_ascii_grows_the_buffer() {
+        final var text = "x".repeat(LONGER_THAN_ANY_STARTING_BUFFER);
+        final var out = Utf8JsonOut.acquire(16);
+        try {
+            out.append("ab");
+            out.appendPlainAscii(text);
+            assertArrayEquals(("ab" + text).getBytes(StandardCharsets.US_ASCII), out.toByteArray());
+        } finally {
+            out.release();
+        }
+    }
+
+    @Test
+    public void test_append_plain_ascii_of_an_empty_string_writes_nothing() {
+        final var out = Utf8JsonOut.acquire(16);
+        try {
+            out.append("ab");
+            out.appendPlainAscii("");
+            assertArrayEquals("ab".getBytes(StandardCharsets.US_ASCII), out.toByteArray());
         } finally {
             out.release();
         }

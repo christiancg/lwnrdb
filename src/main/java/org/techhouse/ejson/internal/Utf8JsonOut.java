@@ -120,7 +120,7 @@ public final class Utf8JsonOut implements JsonOut {
         copyAsciiPrefix(text, i);
         while (i < length) {
             final var c = text.charAt(i);
-            if (isPlainAscii(c)) {
+            if (JsonStrings.isPlainAscii(c)) {
                 if (size == buffer.length) {
                     ensure(length - i);
                 }
@@ -132,16 +132,19 @@ public final class Utf8JsonOut implements JsonOut {
         }
     }
 
+    @Override
+    public void appendPlainAscii(String text) {
+        final var length = text.length();
+        ensure(length);
+        copyAsciiPrefix(text, length);
+    }
+
     private static int plainAsciiPrefixOf(String text, int length) {
         var i = 0;
-        while (i < length && isPlainAscii(text.charAt(i))) {
+        while (i < length && JsonStrings.isPlainAscii(text.charAt(i))) {
             i++;
         }
         return i;
-    }
-
-    private static boolean isPlainAscii(char c) {
-        return c >= ' ' && c < 0x80 && c != '"' && c != '\\';
     }
 
     @SuppressWarnings("deprecation")
