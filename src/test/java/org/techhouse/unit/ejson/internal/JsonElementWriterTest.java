@@ -117,6 +117,15 @@ public class JsonElementWriterTest {
     }
 
     @Test
+    public void test_a_null_string_value_is_written_as_null() {
+        final var nullString = new JsonString(null);
+
+        assertEquals("null", written(nullString));
+        assertArrayEquals("null".getBytes(StandardCharsets.UTF_8), utf8Written(nullString));
+        assertEquals(4, JsonElementWriter.utf8Length(nullString));
+    }
+
+    @Test
     public void test_writing_a_document_twice_gives_identical_bytes() {
         final var document = parsed(MIXED_STRINGS_DOCUMENT);
         final var expected = written(parsed(MIXED_STRINGS_DOCUMENT)).getBytes(StandardCharsets.UTF_8);
