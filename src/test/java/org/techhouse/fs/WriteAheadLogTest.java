@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Configuration;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class WriteAheadLogTest {
@@ -194,6 +195,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_inside_a_group_settles_it_first() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             final var wal = new WriteAheadLog(rf.fx.paths);
@@ -274,6 +276,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_failed_group_force_removes_a_page_file_the_group_created() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             final var wal = new WriteAheadLog(rf.fx.paths);
@@ -291,6 +294,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_failed_take_back_marks_the_log_unapplied() throws Exception {
         final var page = rf.fx.page(0);
         final var old = rf.fx.indexed("b");
@@ -318,6 +322,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_forces_the_unforced_index_logs_with_the_pages() throws Exception {
         final var idxlog = new File(rf.fx.paths.collectionFolder(DB, COLL), COLL + "-tag-String.idxlog");
         try (var recorder = RecordingForcer.install(true)) {
@@ -339,6 +344,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_drops_a_group_base_even_with_no_record_after_it() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             final var wal = new WriteAheadLog(rf.fx.paths);
@@ -359,6 +365,7 @@ public class WriteAheadLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_pk_index_rewrite_on_a_quiet_log_forces_nothing_in_the_log() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             new WriteAheadLog(rf.fx.paths).checkpoint(DB, COLL);

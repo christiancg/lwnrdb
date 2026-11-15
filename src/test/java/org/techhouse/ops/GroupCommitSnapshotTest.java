@@ -31,9 +31,11 @@ import org.techhouse.ops.resp.ReadSnapshotResponse;
 import org.techhouse.ops.resp.StartSnapshotResponse;
 import org.techhouse.ops.snapshot.SnapshotOperationHelper;
 import org.techhouse.ops.snapshot.SnapshotRegistry;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
 public class GroupCommitSnapshotTest {
     private static final long WAIT_MS = GroupCommitFixture.WAIT_MS;
     private static final long BLOCKED_MS = 300L;

@@ -161,9 +161,11 @@ forwarded write still passes the owner's ownership/quorum guard and replication.
 
 Routing a **read** to the owner is what makes the cache distributed: only the owner keeps
 that collection resident, so total cache capacity is the sum of the nodes' budgets. If the
-owner is unreachable and `readFallbackToLocal=true`, the edge serves the read from its own
-complete on-disk replica instead of failing; a write to an unreachable owner returns
-`503-4 OWNER_UNREACHABLE`.
+owner is unreachable (the edge could not connect to it) and `readFallbackToLocal=true`, the edge serves the read from
+its own complete on-disk replica instead of failing; a write to an unreachable owner returns
+`503-4 OWNER_UNREACHABLE`. An owner that was reached but did not answer within `replicationAckTimeoutMs` is not
+unreachable: the read is answered `503-4` too, which every client retries, and never from the edge's copy, which
+can lag the owner's.
 
 A forwarded write can also arrive at the owner **before the collection does**: admin replication
 only waits for a quorum, and the collection's owner need not be in that quorum, so a client that
@@ -717,7 +719,7 @@ rollback are still answered. There is,
 however, **no graceful LEAVE message**: a departing node is detected the same way a crashed
 one is, by missed heartbeats, so peers wait out `deadTimeoutMs` (15s by default) before
 reassigning its collections. During that window writes to those collections fail with
-`503-4 OWNER_UNREACHABLE` (reads fall back locally when `readFallbackToLocal` is on).
+`503-4 OWNER_UNREACHABLE` (reads fall back locally when `readFallbackToLocal` is on and the owner cannot be connected to).
 Adding a LEAVE message so membership reassigns immediately is a worthwhile follow-up; until
 then, drain the node's traffic at the load balancer first if that window matters.
 

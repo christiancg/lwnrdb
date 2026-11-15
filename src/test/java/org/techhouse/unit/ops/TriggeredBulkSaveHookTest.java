@@ -27,6 +27,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TriggerTestSupport;
 
@@ -91,6 +92,7 @@ public class TriggeredBulkSaveHookTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_hook_accepting_every_document_stages_one_run_each_in_one_record() throws Exception {
         final var bulk = bulkOf("hook-ok-a", "hook-ok-b", "hook-ok-c");
 

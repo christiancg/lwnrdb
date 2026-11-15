@@ -27,7 +27,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.test.RequiresFileKeys;
 
+@RequiresFileKeys
 public class DurableShadowTest {
     private static final int WRITERS = 8;
     private static final int APPENDS = 25;

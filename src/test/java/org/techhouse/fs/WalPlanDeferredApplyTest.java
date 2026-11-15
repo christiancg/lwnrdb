@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.LoggedWriteNotAppliedException;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class WalPlanDeferredApplyTest {
@@ -115,6 +116,7 @@ public class WalPlanDeferredApplyTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void aWriterThatFindsTheLogUnappliedIsRefusedAfterApplyingIt() throws Exception {
         failApplyAndTakeBack();
         assertThrows(IOException.class, () -> rf.replace("b", "new-b", 0, PagePlacement.APPEND));

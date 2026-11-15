@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class FieldIndexLogTest {
@@ -219,6 +220,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_an_append_is_not_forced() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -228,6 +230,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_force_unforced_forces_each_log_once_and_forgets_it() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -239,6 +242,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_an_append_racing_the_force_stays_unforced() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -252,6 +256,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_failed_force_keeps_the_log_unforced() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -266,6 +271,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_deleted_log_is_skipped() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);
@@ -276,6 +282,7 @@ public class FieldIndexLogTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_dropped_folder_forgets_its_logs() throws Exception {
         try (var recorder = RecordingForcer.install(true)) {
             appendTo(log);

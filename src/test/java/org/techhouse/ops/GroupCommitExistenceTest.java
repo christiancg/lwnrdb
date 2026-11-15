@@ -10,8 +10,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
 public class GroupCommitExistenceTest {
     private static final String EXISTS = ErrorCode.DOCUMENT_ALREADY_EXISTS.getCode();
     private RecordingForcer recorder;

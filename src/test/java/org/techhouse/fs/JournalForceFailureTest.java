@@ -16,7 +16,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Globals;
+import org.techhouse.test.RequiresDirectorySync;
 
+@RequiresDirectorySync
 public class JournalForceFailureTest {
     private static final String DB = "journalDb";
     private static final String COLL = "journal-coll";

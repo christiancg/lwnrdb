@@ -35,6 +35,7 @@ import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.WriteEffects;
 import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.test.TriggerTestSupport;
@@ -105,6 +106,7 @@ public class CommitTriggerBatchTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_commit_of_many_triggered_saves_stages_every_run_in_one_force() throws Exception {
         final var clientId = transactionSavingTheBatch();
 

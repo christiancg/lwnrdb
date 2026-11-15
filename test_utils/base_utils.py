@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import select
@@ -9,7 +10,132 @@ from typing import Callable, Optional
 
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
+
+WINDOWS = os.name == "nt"
+CTRL_C_TO_CONSOLE_OF = (
+    "import ctypes, sys\n"
+    "kernel32 = ctypes.windll.kernel32\n"
+    "kernel32.FreeConsole()\n"
+    "sys.exit(0 if kernel32.AttachConsole(int(sys.argv[1])) and kernel32.SetConsoleCtrlHandler(None, True)"
+    " and kernel32.GenerateConsoleCtrlEvent(0, 0) else 1)\n"
+)
+PROCESS_SUSPEND_RESUME = 0x0800
+EVERYONE_SID = "*S-1-1-0"
+FILE_APPEND_DATA = 0x0004
+FILE_SHARE_ALL = 0x7
+OPEN_EXISTING = 3
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+def spawn_server(args: list, **popen_kwargs) -> subprocess.Popen:
+    if WINDOWS:
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False)
+        hidden = subprocess.STARTUPINFO()
+        hidden.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        hidden.wShowWindow = 0
+        popen_kwargs.update(creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=hidden)
+    return subprocess.Popen(args, **popen_kwargs)
+
+
+def terminate_server(proc: subprocess.Popen) -> None:
+    if not WINDOWS:
+        proc.terminate()
+    elif proc.poll() is None:
+        stop_pid(proc.pid)
+
+
+def server_pids(port: int) -> list:
+    if WINDOWS:
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True).stdout
+        listening = [line.split() for line in out.splitlines() if "LISTENING" in line]
+        return sorted({int(fields[-1]) for fields in listening if fields[1].endswith(f":{port}")})
+    out = subprocess.run(["pgrep", "-f", "lwnrdb.jar"], capture_output=True, text=True).stdout
+    return [int(pid) for pid in out.split()]
+
+
+def stop_pid(pid: int) -> None:
+    if WINDOWS:
+        subprocess.run([sys.executable, "-c", CTRL_C_TO_CONSOLE_OF, str(pid)], check=False)
+        return
+    import signal
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def kill_pid(pid: int) -> None:
+    if WINDOWS:
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=False, capture_output=True)
+        return
+    import signal
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def _nt_process_call(proc: subprocess.Popen, function: str) -> None:
+    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_SUSPEND_RESUME, False, proc.pid)
+    try:
+        getattr(ctypes.windll.ntdll, function)(handle)
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def server_syncs_writes(conn: "Conn") -> bool:
+    return dig(conn.send({"type": "SERVER_INFO"}), "server.node.syncWrites") is True
+
+
+def append_atomically(path: str, data: bytes) -> None:
+    if not WINDOWS:
+        with open(path, "ab") as fp:
+            fp.write(data)
+        return
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    handle = kernel32.CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_ALL, None, OPEN_EXISTING, 0, None)
+    if handle == INVALID_HANDLE_VALUE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        written = wintypes.DWORD()
+        if not kernel32.WriteFile(handle, data, len(data), ctypes.byref(written), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def deny_access(path: str) -> None:
+    if WINDOWS:
+        rights = "(OI)(CI)(RD,WD,AD,X,DC,DE)" if os.path.isdir(path) else "(RD,WD,AD,DE)"
+        subprocess.run(["icacls", path, "/deny", f"{EVERYONE_SID}:{rights}"], check=True, capture_output=True)
+    else:
+        os.chmod(path, 0o000)
+
+
+def restore_access(path: str, mode: int) -> None:
+    if WINDOWS:
+        subprocess.run(["icacls", path, "/remove:d", EVERYONE_SID], check=True, capture_output=True)
+    else:
+        os.chmod(path, mode)
+
+
+def suspend_process(proc: subprocess.Popen) -> None:
+    if WINDOWS:
+        _nt_process_call(proc, "NtSuspendProcess")
+    else:
+        import signal
+        proc.send_signal(signal.SIGSTOP)
+
+
+def resume_process(proc: subprocess.Popen) -> None:
+    if WINDOWS:
+        _nt_process_call(proc, "NtResumeProcess")
+    else:
+        import signal
+        proc.send_signal(signal.SIGCONT)
 
 WIDTH = 70
 
@@ -474,8 +600,7 @@ def start_server(work_dir: str, log_path: str, jar: Optional[str] = None,
                  port: Optional[int] = None, settle: float = 0.5):
     jar = jar or JAR_PATH
     log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", f"-Xmx{xmx}", "-jar", jar],
-                            stdout=log, stderr=log, cwd=work_dir)
+    proc = spawn_server(["java", f"-Xmx{xmx}", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
     deadline = time.time() + 60.0
     while time.time() < deadline:
         if port_open(host, port):
@@ -493,7 +618,7 @@ def run_until_exit(work_dir: str, log_path: str, jar: Optional[str] = None, xmx:
                    timeout_s: float = 30.0) -> Optional[int]:
     jar = jar or JAR_PATH
     with open(log_path, "ab") as log:
-        proc = subprocess.Popen(["java", f"-Xmx{xmx}", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
+        proc = spawn_server(["java", f"-Xmx{xmx}", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
     try:
         return proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
@@ -506,7 +631,7 @@ def stop_server(proc, host: Optional[str] = None, port: Optional[int] = None,
                 wait_for_port: bool = True) -> None:
     if proc is None:
         return
-    proc.terminate()
+    terminate_server(proc)
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:

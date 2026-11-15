@@ -51,6 +51,9 @@ def rand_str(n):
 
 def get_pid_rss_mb(pid):
     try:
+        if bu.WINDOWS:
+            out = subprocess.check_output(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], text=True)
+            return int(re.sub(r"\D", "", out.strip().split('","')[-1])) / 1024
         out = subprocess.check_output(
             ["ps", "-o", "rss=", "-p", str(pid)], text=True).strip()
         return int(out) / 1024
@@ -61,12 +64,8 @@ def get_pid_rss_mb(pid):
 def find_server_pid():
     if os.environ.get("MEM_TEST_SERVER_PID"):
         return int(os.environ["MEM_TEST_SERVER_PID"])
-    try:
-        out = subprocess.check_output(
-            ["pgrep", "-f", "lwnrdb.jar"], text=True).strip()
-        return int(out.splitlines()[0])
-    except Exception:
-        return None
+    pids = bu.server_pids(PORT)
+    return pids[0] if pids else None
 
 
 def snapshot(c):

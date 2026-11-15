@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import ssl
 
 import pytest
 
 from lwnrdb import AuthenticationError, ConnectionLostError, Credentials, InsecureTlsWarning, ServerAddress, TlsSettings
-from lwnrdb._internal.connection_factory import ConnectionFactory, Streams, open_streams, ssl_context
+from lwnrdb._internal.connection_factory import (
+    ConnectionFactory,
+    ResetTolerantSocket,
+    Streams,
+    connected_socket,
+    open_streams,
+    ssl_context,
+)
 from lwnrdb._internal.request_encoder import RequestEncoder
 from lwnrdb._internal.values_codec import JsonObject
 from lwnrdb.settings import ClientSettings
@@ -80,6 +88,40 @@ async def test_open_streams_connects_plainly(fake: FakeServer) -> None:
     writer.write(b'{"type":"SERVER_INFO"}\n')
     assert b'"OK"' in await reader.readline()
     writer.close()
+
+
+def test_shutting_down_a_socket_that_is_no_longer_connected_does_not_raise() -> None:
+    with ResetTolerantSocket() as raw:
+        raw.shutdown(socket.SHUT_RDWR)
+        assert raw.fileno() != -1
+
+
+async def test_open_streams_turns_keepalive_on(fake: FakeServer) -> None:
+    reader, writer = await open_streams(fake.hosts[0], fake.settings())
+    del reader
+    assert writer.get_extra_info("socket").getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+    writer.close()
+
+
+async def test_a_connect_cancelled_midway_closes_its_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = asyncio.get_running_loop()
+    opened: list[socket.socket] = []
+    connecting = asyncio.Event()
+
+    async def hang(raw: socket.socket, target: object) -> None:
+        del target
+        opened.append(raw)
+        connecting.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(loop, "sock_connect", hang)
+    task = asyncio.create_task(connected_socket("127.0.0.1", free_port()))
+    await connecting.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert isinstance(opened[0], ResetTolerantSocket)
+    assert opened[0].fileno() == -1
 
 
 async def test_a_tls_handshake_the_server_hangs_up_on_is_a_connection_failure() -> None:

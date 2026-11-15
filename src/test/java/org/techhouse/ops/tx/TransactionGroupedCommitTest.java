@@ -37,6 +37,7 @@ import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -45,6 +46,7 @@ public class TransactionGroupedCommitTest {
     private static final long SMALL_PAGE = 4096L;
     private static final int PAYLOAD = 280;
     private static final int VACUUM_LOG_FORCES = 4;
+    private static final String USERNAME = "grouped";
     private static final Configuration configuration = Configuration.getInstance();
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -55,6 +57,7 @@ public class TransactionGroupedCommitTest {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.resetClients();
+        TestUtils.ensureAdminUser(USERNAME);
         recorder = RecordingForcer.install(true);
     }
 
@@ -76,7 +79,7 @@ public class TransactionGroupedCommitTest {
     }
 
     private UUID open() {
-        final var clientId = clientTracker.registerForwardedClient("grouped");
+        final var clientId = clientTracker.registerForwardedClient(USERNAME);
         TestUtils.ensureAdminUser(clientTracker.getAuthenticatedUsername(clientId));
         TransactionOperationHelper.start(clientId);
         return clientId;
@@ -138,6 +141,7 @@ public class TransactionGroupedCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_failed_group_force_keeps_the_fence_and_a_resent_commit_finishes() throws Exception {
         warmUp();
         final var clientId = open();
@@ -167,6 +171,7 @@ public class TransactionGroupedCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_the_finish_record_is_forced_after_the_collection_log() {
         warmUp();
         final var clientId = open();
@@ -185,6 +190,7 @@ public class TransactionGroupedCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_the_same_id_saved_twice_in_one_commit_keeps_one_copy() throws Exception {
         commitSaves("dup", 1);
         warmUp();
@@ -204,6 +210,7 @@ public class TransactionGroupedCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_vacuum_inside_the_commit_reopens_the_group() throws Exception {
         TestUtils.setPrivateField(configuration, "maxPageSize", SMALL_PAGE);
         commitSaves("d", 6);
@@ -245,6 +252,7 @@ public class TransactionGroupedCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_an_op_failing_once_is_retried_inside_the_open_group() throws Exception {
         warmUp();
         final var clientId = open();

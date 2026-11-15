@@ -35,6 +35,7 @@ import org.techhouse.ops.ScriptRunPrune;
 import org.techhouse.ops.ScriptRunRecord;
 import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -91,6 +92,7 @@ public class ScriptRunPruneTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_retention_deletes_the_stale_rows_in_one_record_per_chunk() throws Exception {
         seed("stale", 1500, 1L);
         seed("fresh", 10, CUTOFF + 1L);

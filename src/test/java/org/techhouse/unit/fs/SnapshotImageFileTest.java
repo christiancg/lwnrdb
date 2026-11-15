@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -14,6 +15,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.test.TestGlobals;
 
 public class SnapshotImageFileTest extends FileSystemTestBase {
@@ -64,6 +66,7 @@ public class SnapshotImageFileTest extends FileSystemTestBase {
 
     @Test
     public void test_the_folder_and_file_are_owner_only() throws IOException {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has owner-only permission bits");
         try (var images = fs.snapshotFiles().images(SNAPSHOT_ID, TestGlobals.COLL)) {
             images.append(bytes("{}\n"));
         }

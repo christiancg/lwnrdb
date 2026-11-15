@@ -34,7 +34,7 @@ final class OwnerOnly {
     static void ensureOwnerOnlyFile(Path file) throws IOException {
         final var creation = OwnerOnlyFiles.ensureOwnerOnlyFile(file);
         warnIfDefault(creation, file);
-        if (creation == Creation.OWNER_ONLY) {
+        if (creation != Creation.ALREADY_EXISTED && Files.exists(file)) {
             SyncedWrites.entries(file.toAbsolutePath().getParent());
         }
     }

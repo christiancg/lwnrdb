@@ -1,4 +1,5 @@
 import os
+import select
 import socket
 import ssl
 import stat
@@ -82,12 +83,26 @@ def test_a_dripped_client_hello_is_closed_at_the_handshake_deadline():
               f"after {time.time() - started:.1f}s")
 
 
+def hold_every_unauthenticated_slot() -> list:
+    deadline = time.time() + 10.0
+    while True:
+        holders = [socket.create_connection((HOST, PORT), timeout=10) for _ in range(PRE_AUTH_PER_ADDRESS)]
+        time.sleep(0.3)
+        refused, _, _ = select.select(holders, [], [], 0)
+        if not refused or time.time() > deadline:
+            return holders
+        for holder in holders:
+            holder.close()
+        time.sleep(0.2)
+
+
 def test_one_address_cannot_hold_every_unauthenticated_slot():
     section("One address holds at most maxUnauthenticatedConnectionsPerAddress unauthenticated connections; "
             "the next TLS one is closed before its handshake")
-    holders = [socket.create_connection((HOST, PORT), timeout=10) for _ in range(PRE_AUTH_PER_ADDRESS)]
+    holders = hold_every_unauthenticated_slot()
     try:
-        time.sleep(0.3)
+        refused, _, _ = select.select(holders, [], [], 0)
+        check("Every holder took a slot", not refused, f"{len(refused)} of {len(holders)} closed by the server")
         outcome = None
         try:
             with tls_socket(verify=False) as extra:

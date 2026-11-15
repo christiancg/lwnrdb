@@ -1,9 +1,8 @@
 import os
 import random
-import signal
 import statistics
 import string
-import subprocess
+import tempfile
 import time
 
 import base_utils as bu
@@ -99,27 +98,18 @@ def time_query(c: Conn, value):
 JAR = "target/lwnrdb.jar"
 
 
-SERVER_LOG = "/tmp/lwnrdb-bench.log"
+SERVER_LOG = os.path.join(tempfile.gettempdir(), "lwnrdb-bench.log")
 
 
 def kill_server():
-    try:
-        out = subprocess.check_output(
-            ["pgrep", "-f", "lwnrdb.jar"], text=True).strip()
-        pids = [int(p) for p in out.splitlines() if p.strip()]
-    except subprocess.CalledProcessError:
-        return
+    pids = bu.server_pids(PORT)
     for pid in pids:
-        os.kill(pid, signal.SIGTERM)
+        bu.stop_pid(pid)
     deadline = time.time() + 30.0
     while time.time() < deadline and bu.port_open():
         time.sleep(0.2)
     for pid in pids:
-        try:
-            os.kill(pid, 0)
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+        bu.kill_pid(pid)
     while time.time() < deadline and bu.port_open():
         time.sleep(0.2)
 

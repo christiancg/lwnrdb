@@ -19,6 +19,8 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.test.RequiresDirectorySync;
+import org.techhouse.test.RequiresFileKeys;
 import org.techhouse.test.TestUtils;
 
 public class WriteBatchTest {
@@ -95,6 +97,8 @@ public class WriteBatchTest {
     }
 
     @Test
+    @RequiresDirectorySync
+    @RequiresFileKeys
     public void test_a_mixed_batch_record_replays_whole() throws Exception {
         try (var power = PowerLossFixture.install()) {
             rf = new ReplacerFixture(new File(tmp, "power"), DB, COLL);

@@ -13,6 +13,7 @@ import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class ForceMetricsTest {
@@ -39,6 +40,7 @@ public class ForceMetricsTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_every_successful_force_is_counted_and_timed() throws Exception {
         recorder = RecordingForcer.install(true);
         final var countBefore = ForceMetrics.count();

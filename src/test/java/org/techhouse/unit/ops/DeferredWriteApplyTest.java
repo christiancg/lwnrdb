@@ -42,9 +42,11 @@ import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
 public class DeferredWriteApplyTest {
     private static final String WAL = TestGlobals.COLL + ".wal";
     private static final int DOCUMENTS = 10;

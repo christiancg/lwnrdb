@@ -1682,7 +1682,7 @@ def arrange_a_commit_interrupted_past_its_commit_point(conn: Conn, work_dir: str
     check_status("buffer the audited save", conn.save_doc({"_id": "tx-recovered", "n": 1}, coll=RECOVERED_COLL), "OK")
     check_status("buffer a save into a second collection",
                  conn.save_doc({"_id": "tx-blocker", "n": 1}, coll=FENCED_COLL), "OK")
-    os.chmod(fenced_collection_folder(work_dir), 0o000)
+    bu.deny_access(fenced_collection_folder(work_dir))
     check_code("the commit fences past its commit point",
                conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
 
@@ -1715,7 +1715,7 @@ def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: st
         original = fp.read()
     check("and still names the trigger installed before it", b"audit_unreadable" in original, f"got {original!r}")
 
-    os.chmod(trigger_file, 0o000)
+    bu.deny_access(trigger_file)
     try:
         refused = conn.save_doc({"_id": "ur1", "n": 1}, coll=UNREADABLE_COLL)
         check_code("a write is refused rather than quietly firing no triggers", refused, "ERROR", "500-7")
@@ -1726,7 +1726,7 @@ def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: st
             {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": UNREADABLE_COLL,
              "name": "audit_unreadable"}), "ERROR", "500-30")
     finally:
-        os.chmod(trigger_file, 0o644)
+        bu.restore_access(trigger_file, 0o644)
 
     with open(trigger_file, "rb") as fp:
         after = fp.read()
@@ -2725,7 +2725,7 @@ def main():
         proc.wait(timeout=30)
         proc = None
         interrupted.close()
-        os.chmod(fenced_collection_folder(work_dir), 0o755)
+        bu.restore_access(fenced_collection_folder(work_dir), 0o755)
         check("the durable commit marker outlived the kill", bu.local_commit_markers(work_dir) == 1,
               "with no marker there is nothing for the restart to finish, so what follows would be vacuous")
         proc = bu.start_server(work_dir, log_path)

@@ -33,6 +33,8 @@ import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
+import org.techhouse.test.PlatformSupport;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -51,7 +53,7 @@ public class AdminUsageBatchTest {
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.resetUsageCounters(TestUtils.usageTrackerOf(memoryManagement));
         memoryManagement.takeDirtyUsage();
-        recorder = RecordingForcer.install(true);
+        recorder = RecordingForcer.install(PlatformSupport.directorySync());
     }
 
     @AfterEach
@@ -88,6 +90,7 @@ public class AdminUsageBatchTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_three_hundred_counters_are_one_write_ahead_log_record() throws Exception {
         AdminOperationHelper.flushCollectionUsage(List.of(touched(AccessKind.COLLECTION, null)));
         final var counters = new ArrayList<UsageCounter>();
@@ -179,6 +182,7 @@ public class AdminUsageBatchTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void dropDeletesUsageRowsInOneWrite() throws Exception {
         AdminOperationHelper.flushCollectionUsage(touchedFields(300));
         assertEquals(OperationStatus.OK,
@@ -213,6 +217,7 @@ public class AdminUsageBatchTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void cleanupDeletesExpiredInOneWrite() throws Exception {
         AdminOperationHelper.flushCollectionUsage(touchedFields(300));
         final var before = usageLogForces();

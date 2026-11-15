@@ -22,6 +22,7 @@ import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.admin.TriggerRunRecords;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.test.TriggerTestSupport;
@@ -69,6 +70,7 @@ public class TriggerRunRecordsTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_batch_lands_as_one_record_and_publishes_every_row() throws Exception {
         TriggerRunRecords.insert(stagedChunks(1));
         recorder.clear();
@@ -85,6 +87,7 @@ public class TriggerRunRecordsTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_batch_beyond_one_record_is_written_in_chunks() throws Exception {
         TriggerRunRecords.insert(stagedChunks(1));
         recorder.clear();

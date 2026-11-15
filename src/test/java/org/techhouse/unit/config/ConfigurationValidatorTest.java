@@ -154,6 +154,7 @@ public class ConfigurationValidatorTest {
 
     @Test
     public void test_non_writable_path_fails(@TempDir Path tempDir) {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has permission bits that deny its owner");
         final var readOnly = tempDir.resolve("readonly").toFile();
         assertTrue(readOnly.mkdirs());
         try {

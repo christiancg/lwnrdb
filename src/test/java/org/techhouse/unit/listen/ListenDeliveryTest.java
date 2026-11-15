@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
@@ -167,6 +168,6 @@ public class ListenDeliveryTest {
         final var frame = IocContainer.get(EJson.class)
                 .toJson(new ListenResponse(listenId.toString(), results, ResultHasher.hash(results, false), true));
         assertTrue(frame.contains("界面"), frame);
-        assertArrayEquals((frame + System.lineSeparator()).getBytes(StandardCharsets.UTF_8), pushed.toByteArray());
+        assertArrayEquals((frame + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8), pushed.toByteArray());
     }
 }

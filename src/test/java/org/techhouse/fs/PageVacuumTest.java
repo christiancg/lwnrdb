@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.test.TestUtils;
 
 public class PageVacuumTest {
@@ -116,9 +118,10 @@ public class PageVacuumTest {
     public void theRewrittenPageIsOwnerOnlyAndNoTempFileIsLeft() throws Exception {
         rf.vacuum.vacuum(DB, COLL, 0, pageRows());
 
+        assertFalse(rf.fx.paths.vacuumFile(DB, COLL, 0).exists());
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has owner-only permission bits");
         assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
                 Files.getPosixFilePermissions(rf.fx.page(0).toPath()));
-        assertFalse(rf.fx.paths.vacuumFile(DB, COLL, 0).exists());
     }
 
     @Test

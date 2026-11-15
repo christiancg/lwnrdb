@@ -14,6 +14,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.test.RequiresDirectorySync;
 
 public class SyncedWritesTest {
     @TempDir
@@ -50,6 +51,7 @@ public class SyncedWritesTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_on_forces_the_channel_and_the_path() throws Exception {
         recorder = RecordingForcer.install(true);
         final var file = file();

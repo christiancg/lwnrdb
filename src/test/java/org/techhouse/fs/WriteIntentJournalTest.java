@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Globals;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 
 public class WriteIntentJournalTest {
     private static final String DB = "intentDb";
@@ -215,6 +217,7 @@ public class WriteIntentJournalTest {
 
     @Test
     public void theLogIsCreatedOwnerOnly() throws IOException {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has owner-only permission bits");
         journal.begin(DB, COLL, everyKind());
 
         assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
