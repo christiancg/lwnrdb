@@ -1,6 +1,7 @@
 package org.techhouse.unit.fs;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -10,6 +11,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.fs.TombstoneStore;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.test.TestGlobals;
 
 public class TombstoneStoreTest extends FileSystemTestBase {
@@ -180,6 +182,10 @@ public class TombstoneStoreTest extends FileSystemTestBase {
         assertEquals(2, java.nio.file.Files.readAllLines(tombstoneFile().toPath()).size());
     }
 
+    private static void assumeUnreadableFiles() {
+        assumeTrue(OwnerOnlyFiles.supported(), "only permission bits can make a file unreadable to its owner");
+    }
+
     private <T> T unreadable(java.util.concurrent.Callable<T> read) throws Exception {
         final var file = tombstoneFile();
         assertTrue(file.setReadable(false), "the test needs a readable-toggle filesystem");
@@ -192,6 +198,7 @@ public class TombstoneStoreTest extends FileSystemTestBase {
 
     @Test
     public void test_versionOf_reads_the_file_once() throws Exception {
+        assumeUnreadableFiles();
         fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
         fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "b", 7L);
         assertEquals(5L, fs.tombstones().versionOf(TestGlobals.DB, TestGlobals.COLL, "a"));
@@ -264,6 +271,7 @@ public class TombstoneStoreTest extends FileSystemTestBase {
 
     @Test
     public void test_compact_publishes_the_kept_entries() throws Exception {
+        assumeUnreadableFiles();
         fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "old", 1L);
         fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "new", 100L);
         fs.tombstones().view(TestGlobals.DB, TestGlobals.COLL);
@@ -294,6 +302,7 @@ public class TombstoneStoreTest extends FileSystemTestBase {
 
     @Test
     public void test_a_read_failure_is_not_cached_as_empty() throws Exception {
+        assumeUnreadableFiles();
         java.nio.file.Files.writeString(tombstoneFile().toPath(), "a" + Globals.ID_SEPARATOR + "4\n");
 
         assertThrows(java.io.IOException.class,
@@ -334,6 +343,7 @@ public class TombstoneStoreTest extends FileSystemTestBase {
 
     @Test
     public void test_admin_tombstones_are_deduped_and_resident() throws Exception {
+        assumeUnreadableFiles();
         fs.tombstones().appendAdmin("database||gone", 5L);
         fs.tombstones().appendAdmin("database||gone", 9L);
         fs.tombstones().appendAdmin("collection|db|gone", 3L);

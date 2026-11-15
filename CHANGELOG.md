@@ -50,5 +50,7 @@ The first release. Protocol version 1, storage format version 1.
   backups and restore drills, and a recovery runbook.
 - **Docker image.** For `linux/amd64` and `linux/arm64`, with a trimmed JRE and a health check, published to
   `ghcr.io/christiancg/lwnrdb`.
+- **Windows.** The jar runs on Windows as well as Linux and macOS, with the same data files and wire protocol (lines
+  end in a line feed everywhere); see [On Windows](docs/operations.md#on-windows).
 
 [Unreleased]: https://github.com/christiancg/lwnrdb/commits/main

@@ -205,6 +205,9 @@ def cases() -> list:
     ]
 
 
+GROUP_FORCE_POINTS = {"WAL_GROUP_APPENDED", "WAL_GROUP_FORCED", "GROUP_RUNS_STAGED"}
+
+
 def collection_folder(work_dir: str, coll: str) -> str:
     return os.path.join(work_dir, "db", DB, coll)
 
@@ -332,6 +335,11 @@ def run(work_dir: str, log_path: str, conn_factory, write_config: Callable[[], N
     write_config()
     proc = bu.start_server(work_dir, log_path)
     with conn_factory() as conn:
+        if not bu.server_syncs_writes(conn):
+            rounds = [kept for kept in ([case for case in kill_round if case.point not in GROUP_FORCE_POINTS]
+                                        for kill_round in rounds) if kept]
+            bu.warn("skipped the group-commit kill cases: the server runs without synced writes, so no write group"
+                    " forms")
         seed(conn, rounds)
     for number, kill_round in enumerate(rounds, start=1):
         print(f"\n  Killing the server mid-write, round {number} of {len(rounds)} ...")

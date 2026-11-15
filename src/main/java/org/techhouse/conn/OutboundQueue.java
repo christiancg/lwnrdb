@@ -24,7 +24,7 @@ public class OutboundQueue {
     private static final ResponseBudget sharedBudget = IocContainer.get(ResponseBudget.class);
     private static final long OVERFLOW_CLOSE_GRACE_MS = 1000L;
     private static final int WRITE_CHUNK_BYTES = Globals.INLINE_FRAME_MAX_BYTES;
-    private static final byte[] LINE_END = System.lineSeparator().getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] LINE_END = Globals.NEWLINE.getBytes(StandardCharsets.US_ASCII);
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition idle = lock.newCondition();
     private final ArrayDeque<Frame> pending = new ArrayDeque<>();

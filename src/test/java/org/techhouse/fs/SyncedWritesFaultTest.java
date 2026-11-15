@@ -20,6 +20,8 @@ import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.RequiresDirectorySync;
+import org.techhouse.test.RequiresFileKeys;
 import org.techhouse.test.TestUtils;
 
 public class SyncedWritesFaultTest {
@@ -73,6 +75,7 @@ public class SyncedWritesFaultTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void aFolderSubjectEndsWithASlash() throws Exception {
         recorder = RecordingForcer.install(true);
         final var folder = Files.createDirectories(tmp.resolve("orders"));
@@ -96,6 +99,7 @@ public class SyncedWritesFaultTest {
     }
 
     @Test
+    @RequiresFileKeys
     public void aFailedForceFreezesTheShadowedFile() throws Exception {
         TestUtils.setPrivateField(Configuration.getInstance(), "syncWrites", "true");
         final var data = Files.createDirectories(tmp.resolve("db"));
@@ -115,6 +119,7 @@ public class SyncedWritesFaultTest {
     }
 
     @Test
+    @RequiresFileKeys
     public void theFileSystemInstallsTheShadowAsTheForcer() throws Exception {
         final var data = Files.createDirectories(tmp.resolve("db"));
         Files.writeString(data.resolve("present.dat"), "baseline");

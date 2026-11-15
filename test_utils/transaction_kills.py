@@ -219,11 +219,17 @@ def run(conn_factory, write_config: Callable[[str], None], recover: Callable[[st
             check_status("create the database", send(conn, {"type": "CREATE_DATABASE", "databaseName": DB}), "OK")
             check_status("create the collection", send(conn, {"type": "CREATE_COLLECTION", "databaseName": DB,
                                                               "collectionName": COLL}), "OK")
-        for test in (test_a_commit_halted_at_its_begin_record_is_finished_at_startup,
-                     test_a_commit_halted_at_its_finish_record_keeps_its_document,
-                     test_a_kill_after_a_buffered_save_leaves_nothing,
-                     test_a_grouped_commit_halted_before_its_force_is_finished_at_startup,
-                     test_a_grouped_commit_halted_after_its_force_keeps_one_copy_of_each_document):
+            synced = bu.server_syncs_writes(conn)
+        tests = [test_a_commit_halted_at_its_begin_record_is_finished_at_startup,
+                 test_a_commit_halted_at_its_finish_record_keeps_its_document,
+                 test_a_kill_after_a_buffered_save_leaves_nothing]
+        if synced:
+            tests += [test_a_grouped_commit_halted_before_its_force_is_finished_at_startup,
+                      test_a_grouped_commit_halted_after_its_force_keeps_one_copy_of_each_document]
+        else:
+            bu.warn("skipped the grouped-commit halts: the server runs without synced writes, so no commit forms a"
+                    " write group")
+        for test in tests:
             proc = test(proc, conn_factory, work_dir, log_path, recover)
     finally:
         bu.stop_server(proc)

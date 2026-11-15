@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import socket
 import ssl
 import warnings
@@ -32,22 +33,44 @@ def ssl_context(tls: TlsSettings) -> ssl.SSLContext:
     return context
 
 
+class ResetTolerantSocket(socket.socket):
+    def shutdown(self, how: int, /) -> None:
+        with contextlib.suppress(OSError):
+            super().shutdown(how)
+
+
+async def connected_socket(host: str, port: int) -> socket.socket:
+    loop = asyncio.get_running_loop()
+    failure = OSError(f"{host} resolved to no address")
+    for family, kind, proto, _, target in await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        raw = ResetTolerantSocket(family, kind, proto)
+        try:
+            raw.settimeout(0)
+            await loop.sock_connect(raw, target)
+            return raw
+        except OSError as error:
+            raw.close()
+            failure = error
+        except asyncio.CancelledError:
+            raw.close()
+            raise
+    raise failure
+
+
 async def open_streams(address: ServerAddress, settings: ClientSettings) -> Streams:
     tls = settings.tls
     async with asyncio.timeout(settings.connect_timeout):
-        if tls is None:
-            reader, writer = await asyncio.open_connection(address.host, address.port)
-        else:
-            reader, writer = await asyncio.open_connection(
-                address.host,
-                address.port,
-                ssl=ssl_context(tls),
-                server_hostname=tls.server_hostname or address.host,
+        raw = await connected_socket(address.host, address.port)
+        try:
+            raw.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            if tls is None:
+                return await asyncio.open_connection(sock=raw)
+            return await asyncio.open_connection(
+                sock=raw, ssl=ssl_context(tls), server_hostname=tls.server_hostname or address.host
             )
-    raw = writer.get_extra_info("socket")
-    if raw is not None:
-        raw.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    return reader, writer
+        except BaseException:
+            raw.close()
+            raise
 
 
 class ConnectionFactory:

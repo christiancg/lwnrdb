@@ -23,8 +23,12 @@ import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.test.RequiresDirectorySync;
+import org.techhouse.test.RequiresFileKeys;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
+@RequiresFileKeys
 public class WalRewriteBarrierTest {
     private static final String DB = "barrierDb";
     private static final String COLL = "barrierColl";

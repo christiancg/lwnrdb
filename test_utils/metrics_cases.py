@@ -103,6 +103,7 @@ def test_requests_are_counted_by_operation_status_and_code():
             check_status(f"save {i}", c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
                                               "object": {"_id": f"m{i}", "n": i}}), "OK")
         missing = c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "absent"})
+        synced = bu.dig(c.send({"type": "SERVER_INFO"}), "server.node.syncWrites")
     with Conn() as anonymous:
         refused = anonymous.send({"type": "LIST_DATABASES"})
     after = scrape()
@@ -117,7 +118,11 @@ def test_requests_are_counted_by_operation_status_and_code():
     durations = value(after, "request_duration_seconds_count", operation="SAVE") - value(
         before, "request_duration_seconds_count", operation="SAVE")
     check(f"The SAVE latency histogram counted {SAVES} more", durations == SAVES, f"delta={durations}")
-    check("fsync_total grew across the synced saves", value(after, "fsync_total") > value(before, "fsync_total"))
+    if synced:
+        check("fsync_total grew across the synced saves", value(after, "fsync_total") > value(before, "fsync_total"))
+    else:
+        check("fsync_total stays put on a server running without synced writes",
+              value(after, "fsync_total") == value(before, "fsync_total"))
 
 
 def test_the_connection_gauge_follows_open_connections():

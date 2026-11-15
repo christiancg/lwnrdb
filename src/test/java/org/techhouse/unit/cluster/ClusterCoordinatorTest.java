@@ -29,6 +29,7 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.ClusterTestHarness;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -172,6 +173,7 @@ public class ClusterCoordinatorTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_delete_batch_appends_tombstones_once_deferred() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();

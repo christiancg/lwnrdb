@@ -30,10 +30,12 @@ import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.test.TriggerTestSupport;
 
+@RequiresDirectorySync
 public class GroupCommitSideEffectsTest {
     private static final String ACTOR = "alice";
     private static final String RUNS_WAL = "trigger_runs.wal";

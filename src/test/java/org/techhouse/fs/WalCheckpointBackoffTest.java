@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Globals;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestUtils;
 
 public class WalCheckpointBackoffTest {
@@ -88,6 +89,7 @@ public class WalCheckpointBackoffTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void aSuccessResetsTheStreak() {
         failPkForces();
         checkpoints().idle(0L, 16, FREE);

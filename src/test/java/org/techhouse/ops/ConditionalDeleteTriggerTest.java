@@ -33,6 +33,7 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.test.TriggerTestSupport;
@@ -131,6 +132,7 @@ public class ConditionalDeleteTriggerTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_the_staged_runs_are_one_forced_record() throws Exception {
         installDeletedTrigger(TriggerDefinition.MODE_DOCUMENT);
         final long runForces;

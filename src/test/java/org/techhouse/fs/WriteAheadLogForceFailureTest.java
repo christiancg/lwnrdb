@@ -22,8 +22,12 @@ import org.techhouse.fault.FaultAction;
 import org.techhouse.fault.FaultInjector;
 import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.test.RequiresDirectorySync;
+import org.techhouse.test.RequiresFileKeys;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
+@RequiresFileKeys
 public class WriteAheadLogForceFailureTest {
     private static final String DB = "forceFailDb";
     private static final String COLL = "forceFailColl";

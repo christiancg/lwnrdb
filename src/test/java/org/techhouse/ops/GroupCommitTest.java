@@ -25,6 +25,8 @@ import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.PlatformSupport;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -41,7 +43,7 @@ public class GroupCommitTest {
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        recorder = RecordingForcer.install(true);
+        recorder = RecordingForcer.install(PlatformSupport.directorySync());
         fixture = new GroupCommitFixture(recorder);
         assertEquals(OperationStatus.OK, save("seed", "v0").getStatus());
     }
@@ -85,6 +87,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_writers_queued_behind_one_hold_share_one_force() throws Exception {
         final var responses = runQueued(times(8, number -> save("n" + number, "v" + number)));
 
@@ -97,6 +100,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_each_writer_gets_its_own_response() throws Exception {
         assertEquals(OperationStatus.OK, save("kept", "v0").getStatus());
         final var mismatched = saveRequest("other", "x");
@@ -116,6 +120,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_failed_force_answers_every_writer_with_its_error_and_takes_the_writes_back() throws Exception {
         recorder.failingFor(GroupCommitFixture.WAL);
 
@@ -133,6 +138,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_the_same_id_written_twice_in_one_group_ends_with_the_later_write() throws Exception {
         final var responses = runQueued(List.of(() -> save("seed", "first"), () -> save("seed", "second")));
 
@@ -142,6 +148,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_write_that_runs_deeper_or_follows_on_is_not_grouped() throws Exception {
         assertTrue(GroupCommit.forSave(saveRequest("x", "v")).groupable().getAsBoolean());
         final var nested = saveRequest("x", "v");
@@ -197,6 +204,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_more_writers_than_the_cap_are_served_by_successive_leaders() throws Exception {
         final var count = GroupCommit.MAX_GROUP_OPS + 6;
 
@@ -207,6 +215,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_single_queued_write_forces_once() throws Exception {
         final var responses = runQueued(List.of(() -> save("alone", "v")));
 
@@ -216,6 +225,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_the_lock_is_released_by_the_thread_that_took_it() throws Exception {
         runQueued(times(4, number -> save("r" + number, "v")));
 
@@ -224,6 +234,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_check_that_cannot_read_its_metadata_runs_the_write_alone() {
         assertFalse(GroupCommit.groupable(() -> {
             throw new IllegalStateException("triggers file unreadable");
@@ -236,6 +247,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_save_names_its_object_id_when_the_request_has_none() {
         final var request = saveRequest("from-object", "v");
         assertEquals("from-object", GroupCommit.forSave(request).id());
@@ -257,6 +269,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_dropped_collection_leaves_no_queue() throws Exception {
         final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(queues().containsKey(collId), "the seed save queued itself");
@@ -275,6 +288,7 @@ public class GroupCommitTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_writer_queued_when_its_queue_is_forgotten_is_served() throws Exception {
         final OperationResponse[] response = new OperationResponse[1];
         final Thread writer;

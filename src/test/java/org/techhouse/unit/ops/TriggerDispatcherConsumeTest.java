@@ -24,6 +24,7 @@ import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.ops.req.SaveProcedureRequest;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.test.TriggerTestSupport;
@@ -91,6 +92,7 @@ public class TriggerDispatcherConsumeTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_trigger_that_wrote_consumes_its_run_inside_its_transaction() throws Exception {
         procedure("import db from 'db'; db.save(db.name, '" + TestGlobals.COLL
                 + "', { _id: 'written-by-trigger' }); return 'ok';");

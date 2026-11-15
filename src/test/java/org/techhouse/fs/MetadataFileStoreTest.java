@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -17,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 
 public class MetadataFileStoreTest {
 
@@ -77,6 +79,7 @@ public class MetadataFileStoreTest {
 
     @Test
     public void test_a_delete_that_fails_throws_instead_of_answering_absent(@TempDir File tmp) throws IOException {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has permission bits that deny its owner");
         final var folder = new File(tmp, "locked");
         assertTrue(folder.mkdir());
         final var file = new File(folder, "kept.json");

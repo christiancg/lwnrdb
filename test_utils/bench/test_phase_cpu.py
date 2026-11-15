@@ -1,5 +1,6 @@
 import contextlib
 import io
+import sys
 import unittest
 
 import phase_cpu
@@ -150,7 +151,8 @@ class FollowTest(unittest.TestCase):
     def test_streams_every_line_and_returns_the_exit_status(self):
         seen = []
 
-        status = phase_cpu.follow(["sh", "-c", "echo one; echo two; exit 3"], {}, seen.append)
+        status = phase_cpu.follow([sys.executable, "-c", "print('one'); print('two'); raise SystemExit(3)"], {},
+                                  seen.append)
 
         self.assertEqual(["one\n", "two\n"], seen)
         self.assertEqual(3, status)

@@ -149,8 +149,15 @@ public class OwnerOnlyFilesTest {
         final var deepest = tmp.resolve("x").resolve("y");
         assertEquals(Creation.NOT_SUPPORTED, OwnerOnlyFiles.createDirectories(deepest, false));
         assertTrue(Files.isDirectory(deepest));
-        assertEquals(Creation.NOT_SUPPORTED, OwnerOnlyFiles.ensureOwnerOnlyFile(deepest.resolve("never"), false));
-        assertFalse(Files.exists(deepest.resolve("never")));
+        final var plain = deepest.resolve("plain.dat");
+        assertEquals(Creation.NOT_SUPPORTED, OwnerOnlyFiles.ensureOwnerOnlyFile(plain, false));
+        assertTrue(Files.exists(plain));
+        Files.writeString(plain, "kept");
+        assertEquals(Creation.ALREADY_EXISTED, OwnerOnlyFiles.ensureOwnerOnlyFile(plain, false));
+        assertEquals("kept", Files.readString(plain));
+        final var unreachable = deepest.resolve("missing").resolve("never.dat");
+        assertEquals(Creation.NOT_SUPPORTED, OwnerOnlyFiles.ensureOwnerOnlyFile(unreachable, false));
+        assertFalse(Files.exists(unreachable));
 
         final var file = deepest.resolve("plain.p12");
         try (var out = OwnerOnlyFiles.newOwnerOnlyOutputStream(file, false)) {

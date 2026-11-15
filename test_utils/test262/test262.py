@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import signal
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -440,7 +442,19 @@ class Worker:
             cwd=str(ROOT),
         )
         self.buffer = b""
+        self.chunks = queue.Queue()
+        threading.Thread(target=self.pump, daemon=True).start()
         LIVE_WORKERS.add(self)
+
+    def pump(self):
+        while True:
+            try:
+                chunk = self.process.stdout.read1(1 << 16)
+            except (OSError, ValueError):
+                chunk = b""
+            self.chunks.put(chunk)
+            if not chunk:
+                return
 
     def send(self, job):
         try:
@@ -456,20 +470,15 @@ class Worker:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
-            if not self.wait_readable(remaining):
+            try:
+                chunk = self.chunks.get(timeout=remaining)
+            except queue.Empty:
                 continue
-            chunk = os.read(self.process.stdout.fileno(), 1 << 16)
             if not chunk:
                 raise WorkerDied(self.stderr_tail())
             self.buffer += chunk
         line, _, self.buffer = self.buffer.partition(b"\n")
         return line.decode("utf-8", errors="replace")
-
-    def wait_readable(self, timeout):
-        import select
-
-        readable, _, _ = select.select([self.process.stdout.fileno()], [], [], timeout)
-        return bool(readable)
 
     def stderr_tail(self):
         try:
@@ -481,18 +490,18 @@ class Worker:
 
     def kill(self):
         LIVE_WORKERS.discard(self)
-        for stream in (self.process.stdin, self.process.stdout):
-            try:
-                if stream:
-                    stream.close()
-            except OSError:
-                pass
         if self.process.poll() is None:
             self.process.kill()
         try:
             self.process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
+        for stream in (self.process.stdin, self.process.stdout):
+            try:
+                if stream:
+                    stream.close()
+            except OSError:
+                pass
         self.errors.close()
 
     def close(self):

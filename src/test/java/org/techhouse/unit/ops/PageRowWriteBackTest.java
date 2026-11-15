@@ -37,6 +37,8 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminPageHelper;
 import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.admin.PageRowWriteBack;
+import org.techhouse.test.PlatformSupport;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -52,7 +54,7 @@ public class PageRowWriteBackTest {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIncarnation(INCARNATION);
-        recorder = RecordingForcer.install(true);
+        recorder = RecordingForcer.install(PlatformSupport.directorySync());
     }
 
     @AfterEach
@@ -120,6 +122,7 @@ public class PageRowWriteBackTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_rows_dirty_past_the_interval_are_written_once() throws Exception {
         created(TestGlobals.COLL, "a", 0);
         created(TestGlobals.COLL, "c", 2);
@@ -275,6 +278,7 @@ public class PageRowWriteBackTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_failed_write_back_is_retried_by_the_next_flush() throws Exception {
         created(TestGlobals.COLL, "a", 0);
         recorder.failingFor(
@@ -289,6 +293,7 @@ public class PageRowWriteBackTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_admin_collection_rows_are_written_back() {
         PageRowWriteBack.flushAll();
         recorder.clear();
@@ -342,6 +347,7 @@ public class PageRowWriteBackTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_retry_keeps_pages_touched_while_the_write_back_was_failing() throws Exception {
         created(TestGlobals.COLL, "a", 0);
         recorder.failingFor(

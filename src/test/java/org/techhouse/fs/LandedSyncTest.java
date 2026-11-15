@@ -13,7 +13,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.test.RequiresDirectorySync;
 
+@RequiresDirectorySync
 public class LandedSyncTest {
     private static final String DB = "landedDb";
     private static final String COLL = "landedColl";

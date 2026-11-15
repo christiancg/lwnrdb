@@ -94,13 +94,10 @@ public final class OwnerOnlyFiles {
     }
 
     static Creation ensureOwnerOnlyFile(Path file, boolean posix) {
-        if (!posix) {
-            return Creation.NOT_SUPPORTED;
-        }
         if (Files.exists(file)) {
             return Creation.ALREADY_EXISTED;
         }
-        return createOwnerOnlyFile(file);
+        return posix ? createOwnerOnlyFile(file) : createPlainFile(file, Creation.NOT_SUPPORTED);
     }
 
     public static Creation createNewOwnerOnlyFile(Path file) throws IOException {
@@ -115,8 +112,21 @@ public final class OwnerOnlyFiles {
         try {
             Files.createFile(file, PosixFilePermissions.asFileAttribute(FILE));
             return Creation.OWNER_ONLY;
+        } catch (FileAlreadyExistsException e) {
+            return Creation.ALREADY_EXISTED;
         } catch (IOException | UnsupportedOperationException e) {
-            return Files.exists(file) ? Creation.ALREADY_EXISTED : Creation.DEFAULT_PERMISSIONS;
+            return createPlainFile(file, Creation.DEFAULT_PERMISSIONS);
+        }
+    }
+
+    private static Creation createPlainFile(Path file, Creation created) {
+        try {
+            Files.createFile(file);
+            return created;
+        } catch (FileAlreadyExistsException e) {
+            return Creation.ALREADY_EXISTED;
+        } catch (IOException e) {
+            return created;
         }
     }
 

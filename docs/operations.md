@@ -85,6 +85,39 @@ It needs no password.
 The image runs as the unprivileged `lwnrdb` user, not root. A host directory mounted over `/app/db`, `/app/logs` or
 `/app/certs` must be writable by that user's uid (`docker run --rm --entrypoint id lwnrdb` prints it).
 
+### On Windows
+
+The jar runs unchanged on Windows with a JDK 27 for its architecture (Temurin for x64; Zulu or Liberica for ARM64,
+where Temurin ships no Windows build). Start it from PowerShell the same way:
+
+```powershell
+java -XX:+UseG1GC -XX:G1PeriodicGCInterval=60000 -Djdk.nio.maxCachedBufferSize=262144 -jar lwnrdb.jar
+```
+
+The data folder is the same format on every platform: every line the server writes, to a data file or to a
+connection, ends in a line feed, so a `db` folder or a dump moves between Windows, Linux and macOS as is. A few
+things differ:
+
+- **Durability.** Java cannot sync a folder to the device on Windows, so the server logs the
+  `DURABILITY WARNING: syncWrites=true, but this platform cannot sync a directory` line and runs with
+  `syncWrites=false` (see [Durability](#durability)). Set `syncWrites=false` in `lwnrdb.cfg` to silence it.
+- **File permissions.** The owner-only modes (`0700` folders, `0600` files) are POSIX; on NTFS every file takes the
+  ACL of its folder. Put `filePath`, `logPath` and the TLS keystore under a folder only the account running the
+  server can read.
+- **Firewall.** Windows Defender Firewall blocks inbound connections to `java.exe` until it is allowed: accept the
+  prompt on a desktop, or add a rule for the port
+  (`New-NetFirewallRule -DisplayName lwnrdb -Direction Inbound -Protocol TCP -LocalPort 8989 -Action Allow`).
+- **Stopping.** Ctrl+C in the server's console runs the ordered shutdown (see
+  [Shutdown and restart](#shutdown-and-restart)). Ending the process (`Stop-Process`, Task Manager) is a hard kill;
+  the next start replays the write-ahead log, as after a crash.
+- **Connection threads.** Each client and cluster connection is read by a platform thread rather than a virtual one.
+  On Windows, a JDK virtual thread blocked writing to a socket can stall forever while another virtual thread is
+  blocked reading it, and a response larger than the socket buffer never finished. Size `maxConnections` with one
+  thread per connection in mind.
+- **`--exec` from PowerShell.** Windows PowerShell 5.1 strips the double quotes inside a native command's argument,
+  so `--exec '<json>'` arrives broken. Put the commands in a file and feed it on standard input:
+  `cmd /c "java -jar lwnrdb.jar --exec < commands.jsonl"`.
+
 The integration suites in `test_utils/` authenticate with `base_utils.PASSWORD` (`Tst-Admin-9xQ2mV`): a server the
 suites do not start themselves must have `defaultAdminPassword=Tst-Admin-9xQ2mV` in its `lwnrdb.cfg`, which is what
 CI appends before starting it. The suites that start their own servers write that value into their own config.
@@ -173,7 +206,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `deadTimeoutMs` | Valid number ≥ 1, greater than `suspectTimeoutMs`. Silence before a node is marked DEAD |
 | `replicationAckTimeoutMs` | Valid number ≥ 1. Max wait for the replication quorum |
 | `virtualNodesPerNode` | Valid number ≥ 1. Virtual nodes per node on the consistent-hash ring |
-| `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
+| `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner cannot be connected to. An owner that was reached but did not answer within `replicationAckTimeoutMs` gets the read answered `503-4` (retryable) instead |
 | `scriptRoutingEnabled` | `true` or `false` (default `true`). Whether a script ([`RUN_SCRIPT`](protocol.md#run_script), [`CALL_PROCEDURE`](protocol.md#call_procedure)) may be placed on another live node instead of running where it arrived. Only a node that is alive **and** caught up on admin metadata is chosen. `scriptsEnabled` and the `script*` sandbox keys must be uniform across the cluster, and every node rolled, before enabling it — see [docs/clustering.md](clustering.md) → *Scripts* |
 | `scriptLocalityWeight` | Integer `0`–`100` (default `50`). How strongly placement prefers a node owning the scoped database's collections: score is `(weight / 100) * share - loadRatio`, higher wins, and `0` places purely by load. Only meaningful for databases with few collections. A **local** decision — it need not be uniform across the cluster |
 | `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore). The TLS is **mutual**: every node presents the keystore's certificate and the cluster listener accepts only peers whose certificate that same keystore trusts, so all nodes must share one keystore (or one CA). A clustered node with this off logs a `SECURITY WARNING` at startup |

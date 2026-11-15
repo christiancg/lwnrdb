@@ -6,6 +6,8 @@ import { join } from "node:path";
 const ROOT = join(import.meta.dirname, "..");
 const CONSUMERS = join(ROOT, "consumers");
 const TSC = join(ROOT, "node_modules", "typescript", "bin", "tsc");
+const NPM_CLI = process.env.npm_execpath;
+const NPM: readonly string[] = NPM_CLI === undefined ? ["npm"] : [process.execPath, NPM_CLI];
 
 const CHECKS: Readonly<Record<string, readonly string[]>> = {
     esm: [process.execPath, "index.mjs"],
@@ -20,15 +22,14 @@ function run(command: readonly string[], cwd: string): void {
 
 const packDirectory = mkdtempSync(join(tmpdir(), "lwnrdb-client-pack-"));
 try {
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    run([npm, "pack", "--silent", "--pack-destination", packDirectory], ROOT);
+    run([...NPM, "pack", "--silent", "--pack-destination", packDirectory], ROOT);
     const tarball = readdirSync(packDirectory).find((file) => file.endsWith(".tgz"));
     if (tarball === undefined) {
         throw new Error("npm pack produced no tarball");
     }
     for (const [consumer, check] of Object.entries(CHECKS)) {
         const folder = join(CONSUMERS, consumer);
-        run([npm, "install", "--no-save", "--no-package-lock", "--silent", join(packDirectory, tarball)], folder);
+        run([...NPM, "install", "--no-save", "--no-package-lock", "--silent", join(packDirectory, tarball)], folder);
         run(check, folder);
         process.stdout.write(`${consumer} consumer passed\n`);
     }

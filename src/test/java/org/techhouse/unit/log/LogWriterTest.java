@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -18,6 +19,7 @@ import java.util.Objects;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -76,9 +78,10 @@ public class LogWriterTest {
     }
 
     @Test
-    public void test_handles_failed_log_directory_creation()
+    public void test_handles_failed_log_directory_creation(@TempDir Path tmp)
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        String testLogPath = "/invalid/path/that/cant/be/created";
+        final var notAFolder = Files.createFile(tmp.resolve("not-a-folder"));
+        String testLogPath = notAFolder.resolve("cant").resolve("be-created").toString();
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "logPath", testLogPath);
 

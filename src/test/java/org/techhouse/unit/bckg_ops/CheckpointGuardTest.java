@@ -20,6 +20,8 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.test.PlatformSupport;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -37,7 +39,7 @@ public class CheckpointGuardTest {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "name"));
-        recorder = RecordingForcer.install(true);
+        recorder = RecordingForcer.install(PlatformSupport.directorySync());
     }
 
     @AfterEach
@@ -69,6 +71,7 @@ public class CheckpointGuardTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_with_pending_ids_logs_them_instead_of_writing_a_marker() throws Exception {
         checkpointEveryWrite();
 
@@ -81,6 +84,7 @@ public class CheckpointGuardTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_checkpoint_with_nothing_pending_writes_no_marker() throws Exception {
         save("indexed");
         pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
@@ -115,6 +119,7 @@ public class CheckpointGuardTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_shutdown_keeps_the_log_of_a_collection_with_pending_ids() {
         save("pending");
         recorder.clear();

@@ -34,7 +34,6 @@ final class FileLocks {
     private static final byte CARRIAGE_RETURN = '\r';
     private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
     private static final int SCAN_CHUNK = 8192;
-    private static final byte LINE_END = (byte) Globals.NEWLINE.charAt(Globals.NEWLINE.length() - 1);
 
     private FileLocks() {
     }
@@ -92,11 +91,11 @@ final class FileLocks {
                         var writer = new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8),
                                 Globals.BUFFER_SIZE)) {
                     if (midLine) {
-                        writer.newLine();
+                        writer.write(Globals.NEWLINE);
                     }
                     for (final var row : rows) {
                         writer.append(toLine.apply(row));
-                        writer.newLine();
+                        writer.write(Globals.NEWLINE);
                     }
                     writer.flush();
                     if (forced) {
@@ -364,7 +363,7 @@ final class FileLocks {
                 return -1;
             }
             reader.seek(length - 1);
-            if (reader.readByte() == LINE_END) {
+            if (reader.readByte() == LINE_FEED) {
                 return -1;
             }
             final var buffer = new byte[SCAN_CHUNK];
@@ -375,7 +374,7 @@ final class FileLocks {
                 reader.seek(start);
                 reader.readFully(buffer, 0, read);
                 for (var i = read - 1; i >= 0; i--) {
-                    if (buffer[i] == LINE_END) {
+                    if (buffer[i] == LINE_FEED) {
                         return start + i + 1;
                     }
                 }

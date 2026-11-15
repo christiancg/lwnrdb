@@ -76,7 +76,7 @@ public final class Globals {
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";
-    public static final String NEWLINE = System.lineSeparator();
+    public static final String NEWLINE = "\n";
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
     public static final int PROTOCOL_VERSION = 1;
     public static final int STORAGE_FORMAT_VERSION = 1;

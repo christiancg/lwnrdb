@@ -3382,7 +3382,9 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
   two nodes of three and write to the survivor.
 - `503-3` — the write committed on its owner, but not enough replicas acknowledged it within
   `replicationAckTimeoutMs`. It is not rolled back; anti-entropy brings the replicas up to date.
-- `503-4` — the owner could not be reached, and the request provably never reached it.
+- `503-4` — the owner could not be reached, and the request provably never reached it. A forwarded read also
+  answers it when the owner was reached but did not answer within `replicationAckTimeoutMs`, instead of reading the
+  edge's copy: arm `PEER_REPLY` `DROP` with match `FORWARD_REQUEST` on the owner and read through another node.
 - `503-8` — a forwarded write whose owner did not report an outcome. It may already have applied, so check
   before retrying. Also a write that applied on its owner but whose ownership moved before it could replicate:
   it is on that node and anti-entropy spreads it, so it is not answered `421-1`. Reproduce it with the fault seam

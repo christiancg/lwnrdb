@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 
 public class FieldIndexStoreTest {
     private static final String DB = "storedb";
@@ -145,6 +147,7 @@ public class FieldIndexStoreTest {
 
     @Test
     public void test_a_rewrite_creates_its_file_owner_only(@TempDir File tmp) throws IOException {
+        assumeTrue(OwnerOnlyFiles.supported(), "only a POSIX file system has owner-only permission bits");
         final var fixture = fixture(tmp);
 
         rewrite(fixture, List.of(entry("alpha", "a")));

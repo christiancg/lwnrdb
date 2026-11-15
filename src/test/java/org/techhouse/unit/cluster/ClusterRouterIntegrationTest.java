@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.techhouse.test.ClusterTestHarness.SECRET;
 import static org.techhouse.test.ClusterTestHarness.node;
 
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +25,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
@@ -95,6 +98,7 @@ public class ClusterRouterIntegrationTest {
 
     @Test
     public void test_forwarded_aggregate_runs_the_script_on_the_owner() throws Exception {
+        TestUtils.setPrivateField(Configuration.getInstance(), "replicationAckTimeoutMs", 30_000L);
         cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
@@ -157,6 +161,31 @@ public class ClusterRouterIntegrationTest {
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("x");
         assertNull(router.forward(request, rawFind(coll, "x"), false, ClusterTestHarness.ACTING_ADMIN, null));
+    }
+
+    @Test
+    public void test_a_read_the_owner_never_answers_is_retryable_not_served_locally() throws Exception {
+        try (var silent = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            cluster.configureMembership(2, node("self", 19990), node("other", silent.getLocalPort()));
+            TestUtils.setPrivateField(Configuration.getInstance(), "replicationAckTimeoutMs", 300L);
+            final var coll = collectionOwnedByOther();
+            final var find = new FindByIdRequest(TestGlobals.DB, coll);
+            find.set_id("slow");
+            final var aggregate = new AggregateRequest(TestGlobals.DB, coll);
+            aggregate.setAggregationSteps(List.of());
+            final var rawAggregate = "{\"type\":\"AGGREGATE\",\"databaseName\":\"" + TestGlobals.DB
+                    + "\",\"collectionName\":\"" + coll + "\",\"aggregationSteps\":[]}";
+
+            final var findAnswer = router.forward(find, rawFind(coll, "slow"), false, ClusterTestHarness.ACTING_ADMIN,
+                    null);
+            final var aggregateAnswer = router.forward(aggregate, rawAggregate, false, ClusterTestHarness.ACTING_ADMIN,
+                    null);
+
+            assertNotNull(findAnswer, "a slow owner is not an unreachable one, so the read must not run here");
+            assertTrue(findAnswer.contains(ErrorCode.OWNER_UNREACHABLE.getCode()), findAnswer);
+            assertNotNull(aggregateAnswer, "a slow owner is not an unreachable one, so the read must not run here");
+            assertTrue(aggregateAnswer.contains(ErrorCode.OWNER_UNREACHABLE.getCode()), aggregateAnswer);
+        }
     }
 
     @Test

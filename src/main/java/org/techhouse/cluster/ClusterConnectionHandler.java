@@ -189,7 +189,7 @@ public class ClusterConnectionHandler implements Runnable {
         writerLock.lock();
         try {
             writer.write(eJson.toJson(response));
-            writer.newLine();
+            writer.write(Globals.NEWLINE);
             writer.flush();
         } finally {
             writerLock.unlock();

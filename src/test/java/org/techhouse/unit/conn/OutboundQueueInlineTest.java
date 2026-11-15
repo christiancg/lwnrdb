@@ -90,7 +90,7 @@ public class OutboundQueueInlineTest {
 
     @Test
     public void aResponseExactlyAtTheInlineLimitIsWrittenInline() throws Exception {
-        final var exact = "y".repeat(Globals.INLINE_FRAME_MAX_BYTES - System.lineSeparator().length());
+        final var exact = "y".repeat(Globals.INLINE_FRAME_MAX_BYTES - Globals.NEWLINE.length());
         final var write = respond(exact);
         assertNotEquals(OutboundQueue.InlineWrite.NONE, write);
 

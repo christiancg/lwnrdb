@@ -51,6 +51,7 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.resp.DeleteManyResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.test.TriggerTestSupport;
@@ -177,6 +178,7 @@ public class ConditionalDeleteClusterTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void test_a_durable_conditional_delete_replicates_once_and_fires_per_document() throws Exception {
         final var response = deleteWhereNBelowThree();
 

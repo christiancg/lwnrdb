@@ -42,9 +42,11 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
 public class GroupCommitClusterTest {
     private static final String SUBJECT = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);

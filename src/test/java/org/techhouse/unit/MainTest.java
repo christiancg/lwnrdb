@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -29,6 +30,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.conn.WriteStallWatchdog;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.ex.InvalidPortException;
+import org.techhouse.fs.io.OwnerOnlyFiles;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.ScriptRunHistory;
@@ -211,6 +213,7 @@ public class MainTest {
 
     @Test
     public void aLogThatCannotBeReplayedRefusesStartWithOneFatalLineInsteadOfAnException() throws Exception {
+        assumeTrue(OwnerOnlyFiles.supported(), "only permission bits can make a file unreadable to its owner");
         TestUtils.standardTearDown();
         TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
         TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);

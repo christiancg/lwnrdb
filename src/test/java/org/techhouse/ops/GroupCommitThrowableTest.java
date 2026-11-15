@@ -21,6 +21,7 @@ import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.RecordingForcer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -63,6 +64,7 @@ public class GroupCommitThrowableTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void aThrowingBatchFailsItsWritesAndElectsNoLooper() throws Exception {
         final CompletableFuture<OperationResponse> throwing;
         final CompletableFuture<OperationResponse> other;
@@ -87,6 +89,7 @@ public class GroupCommitThrowableTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void aBatchThrowingAfterACommitAnswersTheSettledWriteAsDurable() throws Exception {
         final var responses = fixture.runQueued(List.of(() -> fixture.save("kept", "v"),
                 () -> GroupCommit.run(TestGlobals.DB, TestGlobals.COLL, write("bad", _ -> () -> {
@@ -101,6 +104,7 @@ public class GroupCommitThrowableTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void aBatchThrowingInsideTheSettleWindowSettlesHoldingTheWriteLock() throws Exception {
         TestUtils.setPrivateField(faultInjector, "enabled", true);
         TestUtils.setPrivateField(faultInjector, "halt", (IntConsumer) _ -> {
@@ -133,6 +137,7 @@ public class GroupCommitThrowableTest {
     }
 
     @Test
+    @RequiresDirectorySync
     public void everyConcurrentSaveIsAnswered() throws Exception {
         final var saves = new ArrayList<CompletableFuture<OperationResponse>>();
         for (var index = 0; index < CONCURRENT_SAVES; index++) {

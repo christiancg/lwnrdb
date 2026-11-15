@@ -16,6 +16,7 @@ import java.util.TreeSet;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.techhouse.analyze.AnalyzeResult;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.OutboundQueue;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -149,7 +150,7 @@ public class ResponseBytesTest {
         final var queue = TestUtils.inlineOutbound(queued);
         for (final var response : fixture()) {
             writer.write(eJson.toJson(response));
-            writer.newLine();
+            writer.write(Globals.NEWLINE);
             queue.offer(OutboundQueue.frameOf(response));
         }
         writer.flush();

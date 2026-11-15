@@ -11,7 +11,9 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.BoundedLineReader;
+import org.techhouse.conn.SocketReaderThreads;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -38,14 +40,14 @@ public class PeerConnection {
             throw e;
         }
         final var reader = new BoundedLineReader(socket.getInputStream(), socket::setSoTimeout);
-        this.readerThread = Thread.ofVirtual().name("cluster-peer-reader").start(() -> readLoop(reader));
+        this.readerThread = SocketReaderThreads.start("cluster-peer-reader", () -> readLoop(reader));
     }
 
     private void write(ClusterMessage message) throws IOException {
         writerLock.lock();
         try {
             writer.write(eJson.toJson(message));
-            writer.newLine();
+            writer.write(Globals.NEWLINE);
             writer.flush();
         } finally {
             writerLock.unlock();

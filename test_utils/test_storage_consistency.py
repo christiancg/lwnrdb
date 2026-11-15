@@ -154,6 +154,7 @@ def write_config(work_dir: str, max_memory: str = "256mb", faults: bool = False)
 
 
 DURABILITY_WARNING = "DURABILITY WARNING: syncWrites=false"
+DEVICE_SYNC_FALLBACK = "this platform cannot sync a directory"
 
 
 def test_the_durability_warning_follows_sync_writes():
@@ -169,11 +170,17 @@ def test_the_durability_warning_follows_sync_writes():
                 with admin_conn() as conn:
                     check_status(f"a write is acknowledged with syncWrites={synced}",
                                  conn.send({"type": "CREATE_DATABASE", "databaseName": f"synced{int(synced)}"}), "OK")
+                    effective = bu.server_syncs_writes(conn)
             finally:
                 bu.stop_server(proc)
-            warned = DURABILITY_WARNING in bu.read_log(log_path)[offset:]
-            check(f"the durability warning is {'absent' if synced else 'logged'} with syncWrites={synced}",
-                  warned != synced)
+            logged = bu.read_log(log_path)[offset:]
+            warned = DURABILITY_WARNING in logged
+            if synced and not effective:
+                check("a platform that cannot sync a folder logs the fallback and runs unsynced",
+                      DEVICE_SYNC_FALLBACK in logged and warned, "SERVER_INFO reports syncWrites=false")
+            else:
+                check(f"the durability warning is {'absent' if synced else 'logged'} with syncWrites={synced}",
+                      warned != synced)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -253,8 +260,7 @@ def pk_index_ids(index_file: str) -> set:
 
 def append_torn_pk_line(work_dir: str, db=DB, coll=COLL) -> None:
     bu.damage_after_the_last_checkpoint(os.path.dirname(pk_index_file(work_dir, db, coll)))
-    with open(pk_index_file(work_dir, db, coll), "a", encoding="utf-8") as fp:
-        fp.write("torn pk index line\n")
+    bu.append_atomically(pk_index_file(work_dir, db, coll), b"torn pk index line\n")
 
 
 def seed(conn: Conn, work_dir: str):
@@ -702,7 +708,11 @@ def test_a_stray_copy_of_a_held_id_is_cut_at_startup(conn: Conn, work_dir: str):
     page = os.path.join(work_dir, "db", DB, REBUILD_STRAY_COLL, page_files(work_dir, DB, REBUILD_STRAY_COLL)[0])
     with open(page, "rb") as fp:
         records = [line for line in fp.read().split(b"\n") if line.startswith(b"{")]
-    check("the stray copy is gone from the page", len(records) == len(REBUILD_IDS), f"records={records}")
+    if bu.server_syncs_writes(conn):
+        check("the stray copy is gone from the page", len(records) == len(REBUILD_IDS), f"records={records}")
+    else:
+        check("without synced writes the stray copy is kept, since it may be an update whose record was lost",
+              len(records) == len(REBUILD_IDS) + 1, f"records={records}")
     scanned = sorted(doc["_id"] for doc in conn.aggregate(REBUILD_STRAY_COLL, []).get("results") or [])
     check("a scan returns every id once", scanned == sorted(REBUILD_IDS), f"ids={scanned}")
     check_status("the indexed version still reads", conn.find("alpha", coll=REBUILD_STRAY_COLL), "OK")
@@ -1451,7 +1461,7 @@ def arrange_a_killed_commit_with_repeated_ids(conn: Conn, work_dir: str):
     check_status("buffer the delete of r2", conn.send(
         {"type": "DELETE", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r2"}), "OK")
     check_status("buffer the op that will not apply", conn.save({"_id": "blocker", "v": 1}, coll=REPLAY_FENCE_COLL), "OK")
-    os.chmod(replay_fence_folder(work_dir), 0o000)
+    bu.deny_access(replay_fence_folder(work_dir))
     check_code("the commit fences past its commit point",
                conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
 
@@ -1466,12 +1476,12 @@ def test_a_fenced_commit_finishes_once_the_fault_clears(conn: Conn, work_dir: st
     with admin_conn() as holder:
         check_status("start the transaction", holder.send({"type": "START_TRANSACTION"}), "OK")
         check_status("buffer a save", holder.save({"_id": "redriven", "v": 1}, coll=REDRIVE_COLL), "OK")
-        os.chmod(folder, 0o000)
+        bu.deny_access(folder)
         try:
             check_code("the commit fences past its commit point",
                        holder.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
         finally:
-            os.chmod(folder, 0o755)
+            bu.restore_access(folder, 0o755)
         landed = bu.wait_until(lambda: conn.find("redriven", coll=REDRIVE_COLL).get("status") == "OK", 20, 0.3)
         check("the fence is re-driven in the background and the document lands, with no restart", bool(landed),
               f"got {conn.find('redriven', coll=REDRIVE_COLL)}")
@@ -1482,7 +1492,7 @@ def test_a_fenced_commit_finishes_once_the_fault_clears(conn: Conn, work_dir: st
 
 
 def release_the_replay_fence(work_dir: str):
-    os.chmod(replay_fence_folder(work_dir), 0o755)
+    bu.restore_access(replay_fence_folder(work_dir), 0o755)
     check("the commit marker outlived the kill", bu.local_commit_markers(work_dir) == 1,
           "with no marker the restart has nothing to replay, so the checks after it would be vacuous")
 
@@ -2193,6 +2203,9 @@ GROUP_FORCE_COLL = "group_force_window"
 
 def test_a_paused_group_force_lets_point_reads_through_and_holds_scans(conn: Conn):
     section("While a write group's log force is paused, FIND_BY_ID answers the grouped value and a scan waits")
+    if not bu.server_syncs_writes(conn):
+        bu.warn("skipped: the server runs without synced writes on this platform, so no write group forces")
+        return
     check_status("create the grouped collection", conn.create_coll(GROUP_FORCE_COLL), "OK")
     for i in range(4):
         check_status(f"seed g{i}", conn.save({"_id": f"g{i}", "v": "old"}, coll=GROUP_FORCE_COLL), "OK")
@@ -2451,7 +2464,7 @@ def stop_the_node_under_a_connected_writer(proc) -> list:
     thread = threading.Thread(target=hammer_until_refused, args=(acknowledged,), daemon=True)
     thread.start()
     bu.wait_until(lambda: len(acknowledged) >= 50, timeout_s=30, interval_s=0.05)
-    proc.terminate()
+    bu.terminate_server(proc)
     thread.join(60)
     proc.wait(timeout=60)
     return list(acknowledged)
@@ -2603,7 +2616,7 @@ def dirty_every_collection(conn: Conn):
 def test_a_sigterm_with_many_dirty_logs_exits_within_its_budget(proc, log_path: str, offset: int):
     section(f"a SIGTERM with {SHUTDOWN_COLLECTIONS} dirty write-ahead logs stops within shutdownTimeoutMs")
     started = time.monotonic()
-    proc.terminate()
+    bu.terminate_server(proc)
     try:
         proc.wait(timeout=60)
     except subprocess.TimeoutExpired:
@@ -2934,7 +2947,7 @@ def test_an_idle_log_is_checkpointed_in_the_background(conn: Conn, work_dir: str
     section(f"an idle log is checkpointed in the background (walIdleCheckpointMs={IDLE_CHECKPOINT_MS})")
     check_status("an idle collection is written",
                  conn.save({"_id": "idle", "k": "v"}, db=CHECKPOINT_DB, coll=shutdown_coll(0)), "OK")
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + (15 if bu.server_syncs_writes(conn) else 60)
     left = logs_with_records(work_dir, CHECKPOINT_DB)
     while left and time.monotonic() < deadline:
         time.sleep(0.25)

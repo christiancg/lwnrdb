@@ -189,9 +189,14 @@ public class ServerInfoHelperTest {
         TestUtils.setPrivateField(adminAntiEntropyService, "started", true);
         final var completed = TestUtils.getPrivateField(adminAntiEntropyService, "adminSyncCompleted",
                 AtomicBoolean.class);
+        final var original = completed.get();
+        try {
+            completed.set(false);
 
-        assertFalse(completed.get());
-        assertEquals("READY", serverAs(READER).get("state").asJsonString().getValue());
+            assertEquals("READY", serverAs(READER).get("state").asJsonString().getValue());
+        } finally {
+            completed.set(original);
+        }
     }
 
     @Test

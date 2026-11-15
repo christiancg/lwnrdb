@@ -26,9 +26,11 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.test.RequiresDirectorySync;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
+@RequiresDirectorySync
 public class GroupCommitLoneWriteTest {
     private static final long WAIT_MS = GroupCommitFixture.WAIT_MS;
     private static final long BLOCKED_MS = 300L;
