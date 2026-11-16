@@ -143,6 +143,9 @@ public final class Globals {
     public static final double TRANSIENT_LOAD_HEAP_FRACTION = 0.25;
     public static final int SAME_TIER_EVICTION_RATIO = 4;
     public static final int REFUSED_INDEX_FOLD_DIVISOR = 8;
+    public static final int RESIDENT_INDEX_FOLD_CEILING = 4;
+    public static final long IDLE_INDEX_FOLD_QUIET_MS = 1000L;
+    public static final int IDLE_INDEX_FOLDS_PER_PASS = 4;
     public static final int WAL_SYNC_CHECKPOINT_FACTOR = 2;
     public static final int WAL_PREALLOCATE_MIN_BYTES = 64 * 1024;
     public static final int WAL_PREALLOCATE_MAX_BYTES = 1024 * 1024;

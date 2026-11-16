@@ -107,7 +107,14 @@ final class FieldIndexLog {
         append(base, log, changes, 1);
     }
 
-    static boolean append(File base, File log, List<IndexLogChange> changes, int foldDivisor) throws IOException {
+    record AppendOutcome(boolean due, long logBytes, long baseBytes) {
+        boolean pastResidentCeiling() {
+            return logBytes >= Globals.RESIDENT_INDEX_FOLD_CEILING
+                    * Math.max(baseBytes, Globals.FIELD_INDEX_LOG_MIN_BYTES);
+        }
+    }
+
+    static AppendOutcome append(File base, File log, List<IndexLogChange> changes, int foldDivisor) throws IOException {
         final var content = encode(changes);
         final var known = logLengths.get(log.getAbsolutePath());
         final long logBytes;
@@ -116,7 +123,9 @@ final class FieldIndexLog {
         } else {
             logBytes = known != null ? known : log.length();
         }
-        return logBytes >= Math.max(baseLengthOf(base) / foldDivisor, Globals.FIELD_INDEX_LOG_MIN_BYTES);
+        final var baseBytes = baseLengthOf(base);
+        return new AppendOutcome(logBytes >= Math.max(baseBytes / foldDivisor, Globals.FIELD_INDEX_LOG_MIN_BYTES),
+                logBytes, baseBytes);
     }
 
     private static long appendContent(File base, File log, ByteArrayOutputStream content, Long known)

@@ -392,4 +392,41 @@ public class FieldIndexLogTest {
 
         assertFalse(Files.readString(log.toPath()).contains("torn"), "the torn line is cut before the append");
     }
+
+    private static List<IndexLogChange> paddedChanges(int count) {
+        final var changes = new ArrayList<IndexLogChange>(count);
+        for (var i = 0; i < count; i++) {
+            changes.add(change(i + "p".repeat(1000), List.of("id" + i), List.of()));
+        }
+        return changes;
+    }
+
+    @Test
+    public void test_an_append_reports_the_log_and_base_lengths() throws IOException {
+        FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a"), entry("beta", "b")));
+
+        final var small = FieldIndexLog.append(base, log, List.of(change("gamma", List.of("c"), List.of())), 1);
+        final var due = FieldIndexLog.append(base, log, paddedChanges(70), 1);
+        final var ceiling = FieldIndexLog.append(base, log, paddedChanges(200), 1);
+
+        assertEquals(log.length(), ceiling.logBytes());
+        assertEquals(base.length(), ceiling.baseBytes());
+        assertTrue(small.logBytes() < due.logBytes());
+        assertTrue(due.due());
+        assertFalse(due.pastResidentCeiling(), "a log between its base and four times it is due but not urgent");
+        assertTrue(ceiling.pastResidentCeiling());
+    }
+
+    @Test
+    public void test_a_log_below_the_threshold_is_not_due() throws IOException {
+        FieldIndexStore.replaceType(base, log, List.of(entry("alpha", "a")));
+
+        final var outcome = FieldIndexLog.append(base, log, paddedChanges(10), 1);
+        final var unchanged = FieldIndexLog.append(base, log, List.of(), 1);
+
+        assertFalse(outcome.due());
+        assertFalse(outcome.pastResidentCeiling());
+        assertEquals(outcome.logBytes(), unchanged.logBytes(), "an empty append reports the remembered length");
+        assertNull(store.appendIndexLog(DB, COLL, FIELD, "String", List.of(), List.of(entry("alpha", "a")), 1));
+    }
 }

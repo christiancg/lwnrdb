@@ -2974,6 +2974,84 @@ def run_checkpoint_phase():
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+FOLD_DB = "fold_db"
+FOLD_COLL = "folded"
+FOLD_DOCS = 2000
+FOLD_ROUND_STRIDE = 10_000
+FOLD_MIN_LOG_BYTES = 64 * 1024
+FOLD_QUIET_TIMEOUT_S = 15.0
+
+
+def fold_log_file(work_dir: str) -> str:
+    return os.path.join(work_dir, "db", FOLD_DB, FOLD_COLL, f"{FOLD_COLL}-n-Number.idxlog")
+
+
+def save_fold_round(conn: Conn, round_number: int) -> dict:
+    objects = [{"_id": f"f{i}", "n": round_number * FOLD_ROUND_STRIDE + i} for i in range(FOLD_DOCS)]
+    return conn.send({"type": "BULK_SAVE", "databaseName": FOLD_DB, "collectionName": FOLD_COLL, "objects": objects})
+
+
+def fold_index_equals_scan(conn: Conn, round_number: int) -> bool:
+    low = round_number * FOLD_ROUND_STRIDE + FOLD_DOCS // 2
+    steps = (bu.filter_step("n", "GREATER_THAN_EQUALS", low), bu.filter_step("n", "EQUALS", low + 7))
+    for step in steps:
+        indexed = sorted(conn.ids(FOLD_COLL, [step], db=FOLD_DB))
+        scanned = sorted(conn.ids(FOLD_COLL, FULL_SCAN + [step], db=FOLD_DB))
+        if not indexed or indexed != scanned:
+            return False
+    return len(conn.ids(FOLD_COLL, [steps[0]], db=FOLD_DB)) == FOLD_DOCS - FOLD_DOCS // 2
+
+
+def test_a_resident_index_folds_once_writes_go_quiet(conn: Conn, work_dir: str):
+    section("A resident index's log folds once its writes go quiet, not on every batch")
+    check_status("create the fold database", conn.send({"type": "CREATE_DATABASE", "databaseName": FOLD_DB}), "OK")
+    check_status("create the fold collection", conn.create_coll(FOLD_COLL, db=FOLD_DB), "OK")
+    check_status("seed the fold collection", save_fold_round(conn, 0), "OK")
+    check_status("index n", conn.create_index("n", coll=FOLD_COLL, db=FOLD_DB), "OK")
+    for round_number in (1, 2):
+        check_status(f"update every n, round {round_number}", save_fold_round(conn, round_number), "OK")
+    bu.wait_until(lambda: background_idle(conn), 30.0, interval_s=0.05)
+    log_file = fold_log_file(work_dir)
+    log_bytes = os.path.getsize(log_file) if os.path.exists(log_file) else 0
+    check("the log is past its fold threshold right after the last write", log_bytes >= FOLD_MIN_LOG_BYTES,
+          f"{log_bytes} bytes")
+    check("the log folds once the index is quiet",
+          bu.wait_until(lambda: not os.path.exists(log_file), FOLD_QUIET_TIMEOUT_S, interval_s=0.1))
+    check("the index answers what a scan does after the idle fold", fold_index_equals_scan(conn, 2))
+
+
+def test_an_index_log_left_unfolded_at_shutdown_replays_at_startup(proc, work_dir: str, log_path: str):
+    section("An index log a stop left unfolded is replayed at startup")
+    with admin_conn() as conn:
+        check_status("update every n, round 3", save_fold_round(conn, 3), "OK")
+        bu.wait_until(lambda: background_idle(conn), 30.0, interval_s=0.05)
+    bu.stop_server(proc)
+    check("the stop inside the quiet window leaves the log unfolded", os.path.exists(fold_log_file(work_dir)))
+    proc = bu.start_server(work_dir, log_path)
+    with admin_conn() as conn:
+        check("the replayed log answers what a scan does", fold_index_equals_scan(conn, 3))
+    return proc
+
+
+def run_idle_index_fold_phase():
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-idle-fold-")
+    log_path = os.path.join(work_dir, "server.log")
+    bu.write_config(work_dir, PORT, maxMemory="256mb")
+    proc = bu.start_server(work_dir, log_path)
+    try:
+        with admin_conn() as conn:
+            test_a_resident_index_folds_once_writes_go_quiet(conn, work_dir)
+        bu.stop_server(proc)
+        proc = None
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            check("the index answers what a scan does after a restart", fold_index_equals_scan(conn, 2))
+        proc = test_an_index_log_left_unfolded_at_shutdown_replays_at_startup(proc, work_dir, log_path)
+    finally:
+        bu.stop_server(proc)
+    shutil.rmtree(work_dir, ignore_errors=True)
+
+
 PLACEMENT_DB = "placement_db"
 PLACEMENT_LARGE_COLL = "large_docs"
 PLACEMENT_LARGE_DOCS = 6
@@ -3473,6 +3551,7 @@ def main():
         run_pending_frame_phase()
         run_stale_pending_frame_phase()
         run_checkpoint_phase()
+        run_idle_index_fold_phase()
         run_page_placement_phase()
         run_many_page_relocation_kill_phase()
         run_kill_during_bulk_repair_phase()

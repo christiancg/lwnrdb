@@ -59,7 +59,7 @@ public final class FieldIndexFolds {
         }
     }
 
-    private static void settle(DeferredFold fold, PendingFold.Outcome outcome) {
+    static void settle(DeferredFold fold, PendingFold.Outcome outcome) {
         if (outcome == PendingFold.Outcome.EMPTIED) {
             final var pending = fold.pending();
             cache.evictFieldIndex(pending.dbName(), pending.collName(), fold.identifier());

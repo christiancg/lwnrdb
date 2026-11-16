@@ -50,6 +50,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.admin.DeferredWrites;
 import org.techhouse.ops.auth.AuthFailureThrottle;
+import org.techhouse.ops.index.IdleIndexFolds;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.utils.ReflectionUtils;
@@ -69,6 +70,7 @@ public class TestUtils {
     public static void standardTearDown() throws NoSuchFieldException, IllegalAccessException {
         deleteDir(new File(TestGlobals.PATH));
         clearCache();
+        IdleIndexFolds.forgetDatabase(TestGlobals.DB);
         discardQueuedBackgroundEvents(IocContainer.get(BackgroundTaskManager.class));
     }
 

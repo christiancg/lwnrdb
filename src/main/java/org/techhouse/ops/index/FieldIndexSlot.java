@@ -306,6 +306,10 @@ final class FieldIndexSlot {
         cache.forgetFieldIndexTypeAbsent(dbName, collName, identifier);
         fold = fs.appendIndexLog(dbName, collName, fieldName, fileLabel, changes(), entries,
                 resident == null && cache.isFieldIndexTypeRefused(dbName, collName, identifier));
+        if (resident != null && fold != null && !fold.pastResidentCeiling()) {
+            IdleIndexFolds.markDue(dbName, collName, fieldName, fileLabel, identifier);
+            fold = null;
+        }
         return true;
     }
 

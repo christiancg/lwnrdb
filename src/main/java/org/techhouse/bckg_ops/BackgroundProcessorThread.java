@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.PageRowWriteBack;
+import org.techhouse.ops.index.IdleIndexFolds;
 
 public class BackgroundProcessorThread implements Runnable {
     private static final int MAX_BATCH = 256;
@@ -56,6 +57,7 @@ public class BackgroundProcessorThread implements Runnable {
                 if (first == null) {
                     flushPageRows();
                     checkpointIdleLogs();
+                    foldIdleIndexes();
                     continue;
                 }
                 batch.add(first);
@@ -100,6 +102,14 @@ public class BackgroundProcessorThread implements Runnable {
             IdleLogCheckpoint.runDue(System.currentTimeMillis());
         } catch (Exception | Error e) {
             logger.error("Error while checkpointing idle write-ahead logs: ", e);
+        }
+    }
+
+    private void foldIdleIndexes() {
+        try {
+            IdleIndexFolds.runDue(System.currentTimeMillis());
+        } catch (Exception | Error e) {
+            logger.error("Error while folding the logs of quiet field indexes: ", e);
         }
     }
 
