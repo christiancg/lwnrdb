@@ -1,8 +1,10 @@
 package org.techhouse.bckg_ops;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.PageRowWriteBack;
 import org.techhouse.ops.index.IdleIndexFolds;
@@ -40,6 +42,7 @@ public class BackgroundProcessorThread implements Runnable {
 
     private void workLoop() {
         final var batch = new ArrayList<Event>(MAX_BATCH);
+        var lastBatchEndedNanos = System.nanoTime() - Globals.BACKGROUND_LINGER_BUSY_WINDOW_NANOS;
         while (!Thread.currentThread().isInterrupted()) {
             runMaintenance();
             batch.clear();
@@ -62,6 +65,7 @@ public class BackgroundProcessorThread implements Runnable {
                 }
                 batch.add(first);
                 lanes.fill(ownLane, batch, MAX_BATCH);
+                lingerForCompany(batch, lastBatchEndedNanos);
             }
             var requeued = 0;
             try {
@@ -74,9 +78,18 @@ public class BackgroundProcessorThread implements Runnable {
                 logger.error("Error while processing background task: ", e);
             } finally {
                 inFlight.addAndGet(requeued - batch.size());
+                lastBatchEndedNanos = System.nanoTime();
                 idleSignal.signal();
             }
             flushPageRows();
+        }
+    }
+
+    private void lingerForCompany(List<Event> batch, long lastBatchEndedNanos) {
+        final var now = System.nanoTime();
+        if (BatchLinger.applies(lastBatchEndedNanos, now, batch.size())) {
+            lanes.fillUntil(ownLane, batch, MAX_BATCH, Globals.BACKGROUND_LINGER_EVENTS,
+                    now + Globals.BACKGROUND_LINGER_NANOS);
         }
     }
 

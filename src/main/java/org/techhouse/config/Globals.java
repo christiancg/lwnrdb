@@ -146,6 +146,9 @@ public final class Globals {
     public static final int RESIDENT_INDEX_FOLD_CEILING = 4;
     public static final long IDLE_INDEX_FOLD_QUIET_MS = 1000L;
     public static final int IDLE_INDEX_FOLDS_PER_PASS = 4;
+    public static final long BACKGROUND_LINGER_NANOS = 500_000L;
+    public static final int BACKGROUND_LINGER_EVENTS = 64;
+    public static final long BACKGROUND_LINGER_BUSY_WINDOW_NANOS = 2_000_000L;
     public static final int WAL_SYNC_CHECKPOINT_FACTOR = 2;
     public static final int WAL_PREALLOCATE_MIN_BYTES = 64 * 1024;
     public static final int WAL_PREALLOCATE_MAX_BYTES = 1024 * 1024;
