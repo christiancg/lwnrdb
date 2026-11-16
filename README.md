@@ -184,8 +184,9 @@ With `clusterEnabled=false`, the default, a node is a plain standalone server. T
 
 Every query except `FIND_BY_ID` is a pipeline of steps. A `FILTER` uses the field indexes it can, combining several of
 them when needed, and reads only the matching documents. Without a usable index it scans the collection one page at a
-time instead of loading it whole. `SORT`, `GROUP_BY`, `JOIN` and `DISTINCT` can use an index too when they are the first
-step, and a `COUNT` after indexed filters is answered without reading any document.
+time instead of loading it whole. `SORT`, `GROUP_BY` and `DISTINCT` can use an index too when they are the first step,
+a `JOIN` uses the index of the remote field, and a `COUNT` after indexed filters is answered without reading any
+document.
 
 Indexes hold scalar values. Objects and arrays have their own hash indexes, which only help `FILTER` equality and `IN`.
 
