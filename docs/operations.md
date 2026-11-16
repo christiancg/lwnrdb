@@ -467,7 +467,9 @@ The JVM heap holds four budgets, and the process needs more than the heap:
   two capped at a quarter of the heap each by default.
 
 The image gives the JVM 70% of the container's memory limit (`-XX:MaxRAMPercentage=70`), so on a container the only
-number to choose is that limit. The startup log warns when the budgets cannot fit the heap.
+number to choose is that limit. The startup log warns when the budgets cannot fit the heap. A cached small document
+costs about 3 KB of heap, so plan the cache around the data you query most; the README's
+[performance section](../README.md#performance) shows what the server does at 100,000 documents in 4 GB.
 
 ### Memory management
 
@@ -507,7 +509,7 @@ collection takes:
 | Dead bytes in its pages | An update or delete leaves its old copy as blank space; a page is vacuumed once a quarter of it is dead, so pages hold up to about a third more than their live bytes |
 | Its primary-key index, `pk.idx` | One short row per write since the last compaction |
 | Its write-ahead log, `{collection}.wal` | `walCheckpointBytes` (8 MB) before a background checkpoint, twice that before the writer checkpoints itself |
-| Each field index | The `.idx` file, plus an `.idxlog` of changes that is folded back once it reaches the size of the `.idx` (at least 64 KB) |
+| Each field index | The `.idx` file, plus an `.idxlog` of changes, measured against the larger of the `.idx` and 64 KB. An index held in the cache folds its log back into the `.idx` once the log has reached that size and the index has had no writes for a second, and at the latest once the log reaches 4 times it. An index too large to cache folds at an eighth of it, and any other index at that size |
 
 And the server as a whole takes:
 
