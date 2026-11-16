@@ -59,6 +59,64 @@ compete on raw IOPS.
 **Still open.** Widening the JS engine's host surface as new database features need it — the
 engine itself is closed (see [docs/simplejs.md](docs/simplejs.md) → *Engine status*).
 
+## Performance
+
+LWNRDB is built for indexed reads on a dataset that mostly fits in memory. It is not built to win on write throughput or
+bulk loading. The numbers below come from the project's own [benchmark](test_utils/bench/README.md), which runs one
+engine at a time in Docker. Every engine gets the same CPU and memory limits, a cache sized by its vendor's rule, the
+same durability guarantee, and answers that are checked.
+
+**Setup (2026-11-16):**
+- **Host:** Apple M5 under Docker Desktop.
+- **Engines:** 2 CPUs and 4 GB each. PostgreSQL 18, MySQL 8.4, MongoDB 8.0.
+- **Data:** 100,000 documents of about 512 bytes, with `category` and `price` indexed.
+- **Load:** 8 client processes.
+- **Durability:** synced, so every engine syncs each write before acknowledging it.
+
+| Operations per second | LWNRDB | PostgreSQL | MySQL | MongoDB |
+|---|---|---|---|---|
+| Insert one document | 23,025 | **36,692** | 27,379 | 14,076 |
+| Read one document by id | 93,263 | **95,974** | 63,517 | 38,936 |
+| Replace one document by id | 15,925 | **33,851** | 13,099 | 13,419 |
+| Delete one document by id | 24,076 | **40,041** | 17,533 | 18,522 |
+| Equality on an indexed field, `LIMIT 50` | **25,697** | 24,174 | 17,065 | 24,399 |
+| Range on an indexed field, sorted, `LIMIT 50` | 23,552 | **28,297** | 14,534 | 24,154 |
+| Count of a range on an indexed field | **24,238** | 539 | 379 | 176 |
+| Count with an unindexed filter (full scan) | 118 | 100 | **129** | 49 |
+| Bulk load, documents per second | 105,000 | 220,400 | 134,400 | **413,200** |
+
+**What that means in practice:**
+- **Indexed reads are where LWNRDB is strongest.**
+  - A count over an indexed range is answered from the index alone, 45x faster than PostgreSQL, with a p99 of 3.3 ms
+    against 47 ms.
+  - Equality queries are the fastest of the four.
+  - Lookups by id match PostgreSQL, with the lowest p99 (0.17 ms) and the least CPU per lookup.
+- **Writes are slower.**
+  - With synced writes LWNRDB reaches 47-63% of PostgreSQL's single-document write rate, and its p99 is several
+    times higher: 1.5 ms per insert and 6 ms per replace, against 0.3 ms.
+  - It is ahead of MySQL and MongoDB on replaces and deletes.
+  - With relaxed durability (no sync per write) LWNRDB inserts 42,000 and deletes 50,000 documents per second, about
+    twice its synced rate. PostgreSQL still leads every write, and MongoDB overtakes LWNRDB on inserts and replaces.
+- **Bulk loading is the slowest phase:** about half of PostgreSQL's rate and a quarter of MongoDB's. A longer load of
+  400,000 documents settles at about 110,000 documents per second synced and 140,000 relaxed, once the JIT has
+  warmed up.
+- **Disk:** it is the smallest on disk, 92 MB for the dataset, against 574 MB for PostgreSQL and 258 MB for MongoDB.
+- **Memory is the real limit.**
+  - A cached small document costs about 3 KB of heap.
+  - The container peaked at 1.4 GB, against 0.9 GB for PostgreSQL.
+  - A dataset larger than the cache still works: an index too large to cache is answered from its files, and lookups
+    by id stream the primary-key index. But those paths are slower, so give the server enough memory for the data
+    you query most. See [sizing](docs/operations.md#sizing).
+
+**Not measured yet:**
+- datasets well beyond 100,000 documents under a mixed workload (bulk loads of 400,000 and index builds over 1,000,000
+  have been run);
+- more than 8 concurrent clients;
+- long runs;
+- clustered throughput.
+
+Treat the table as a guide to what LWNRDB is shaped for, not as a promise for your workload.
+
 ## Wire protocol
 
 Clients send line-delimited JSON requests over TCP (optionally TLS) and the server answers each with one JSON line. The
