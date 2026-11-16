@@ -20,9 +20,10 @@ public final class PendingFold {
     private final long logLength;
     private final List<? extends FieldIndexEntry<?>> survivors;
     private final IndexTypeReader source;
+    private final boolean pastResidentCeiling;
 
     private PendingFold(String dbName, String collName, String fieldName, String typeLabel, File indexFile,
-            List<? extends FieldIndexEntry<?>> survivors, IndexTypeReader source) {
+            List<? extends FieldIndexEntry<?>> survivors, IndexTypeReader source, boolean pastResidentCeiling) {
         this.dbName = dbName;
         this.collName = collName;
         this.fieldName = fieldName;
@@ -33,16 +34,21 @@ public final class PendingFold {
         this.logLength = logFile.length();
         this.survivors = survivors;
         this.source = source;
+        this.pastResidentCeiling = pastResidentCeiling;
     }
 
     static PendingFold ofSurvivors(String dbName, String collName, String fieldName, String typeLabel, File indexFile,
-            List<? extends FieldIndexEntry<?>> survivors) {
-        return new PendingFold(dbName, collName, fieldName, typeLabel, indexFile, survivors, null);
+            List<? extends FieldIndexEntry<?>> survivors, boolean pastResidentCeiling) {
+        return new PendingFold(dbName, collName, fieldName, typeLabel, indexFile, survivors, null, pastResidentCeiling);
     }
 
     static PendingFold ofSource(String dbName, String collName, String fieldName, String typeLabel, File indexFile,
             IndexTypeReader source) {
-        return new PendingFold(dbName, collName, fieldName, typeLabel, indexFile, null, source);
+        return new PendingFold(dbName, collName, fieldName, typeLabel, indexFile, null, source, true);
+    }
+
+    public boolean pastResidentCeiling() {
+        return pastResidentCeiling;
     }
 
     public String dbName() {

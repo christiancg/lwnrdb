@@ -226,6 +226,91 @@ public class IndexHelperFoldTest {
         assertFalse(logOf(FIELD).exists());
     }
 
+    private List<Long> foldedLogLengths() throws Exception {
+        final var spied = spy(realFs);
+        TestUtils.setPrivateStaticField(FieldIndexFolds.class, "fs", spied);
+        final var lengths = new CopyOnWriteArrayList<Long>();
+        doAnswer(invocation -> {
+            lengths.add(logOf(FIELD).length());
+            return invocation.callRealMethod();
+        }).when(spied).fold(any());
+        return lengths;
+    }
+
+    private void saveAndMaintain(int round) throws Exception {
+        saveRound(round);
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, ids());
+    }
+
+    private String identifier() {
+        return Cache.getIndexIdentifier(FIELD, String.class);
+    }
+
+    @Test
+    public void test_a_resident_type_past_its_base_is_marked_due_and_not_folded() throws Exception {
+        indexTheField();
+        final var folded = foldedLogLengths();
+        saveAndMaintain(1);
+        assertNotNull(cache.residentFieldIndex(TestGlobals.DB, TestGlobals.COLL, identifier()));
+
+        saveAndMaintain(2);
+
+        assertTrue(folded.isEmpty(), "a resident type under four times its base waits for the index to go quiet");
+        assertTrue(logOf(FIELD).length() >= Globals.FIELD_INDEX_LOG_MIN_BYTES, "the log is past its fold threshold");
+    }
+
+    @Test
+    public void test_a_resident_type_past_four_times_its_base_folds_after_unlock() throws Exception {
+        indexTheField();
+        final var folded = foldedLogLengths();
+
+        for (var round = 1; round <= 8 && folded.isEmpty(); round++) {
+            saveAndMaintain(round);
+        }
+
+        assertEquals(1, folded.size(), "the resident type folds once its log passes the ceiling");
+        assertTrue(folded.getFirst() >= Globals.RESIDENT_INDEX_FOLD_CEILING * Globals.FIELD_INDEX_LOG_MIN_BYTES,
+                "only a log at four times its base folds right after the batch");
+        assertFalse(logOf(FIELD).exists());
+        assertFalse(locks.holdsCollectionLock(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    @Test
+    public void test_a_type_loaded_from_disk_in_the_batch_still_folds_after_unlock() throws Exception {
+        indexTheField();
+        final var folded = foldedLogLengths();
+        saveAndMaintain(1);
+        cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, FIELD);
+
+        saveAndMaintain(2);
+
+        assertEquals(1, folded.size(), "a type read from disk folds as soon as its log reaches its base");
+        assertTrue(folded.getFirst() < Globals.RESIDENT_INDEX_FOLD_CEILING * Globals.FIELD_INDEX_LOG_MIN_BYTES);
+        assertFalse(logOf(FIELD).exists());
+    }
+
+    @Test
+    public void test_a_refused_type_keeps_the_eighth_threshold() throws Exception {
+        final var refused = appendBetweenAnEighthAndAllOfTheBase("refused", true);
+        final var logOnly = realFs.appendIndexLogOnly(TestGlobals.DB, TestGlobals.COLL, "logonly", "String",
+                addedKeys(BASE_ENTRIES / 5), () -> null);
+
+        assertNotNull(refused, "a refused type is due at an eighth of its base");
+        assertNotNull(logOnly);
+        assertTrue(logOnly.pastResidentCeiling(), "a log-only fold is never deferred");
+        indexTheField();
+        TestUtils.setPrivateField(configuration, "maxMemoryBytes", Globals.CACHE_DISABLED);
+        cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, FIELD);
+        final var folded = foldedLogLengths();
+
+        for (var round = 1; round <= 3 && folded.isEmpty(); round++) {
+            saveAndMaintain(round);
+        }
+
+        assertEquals(1, folded.size(), "a type that cannot be cached folds right after its batch");
+        assertFalse(logOf(FIELD).exists());
+    }
+
     @Test
     public void aFoldWhoseSourceCannotBeReadKeepsTheLog() throws Exception {
         final var pending = realFs.appendIndexLogOnly(TestGlobals.DB, TestGlobals.COLL, FIELD, "String",

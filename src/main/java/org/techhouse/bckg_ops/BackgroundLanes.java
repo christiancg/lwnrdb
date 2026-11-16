@@ -132,6 +132,29 @@ public final class BackgroundLanes {
         }
     }
 
+    void fillUntil(int lane, List<Event> batch, int maxBatch, int target, long deadlineNanos) {
+        final var queue = queues.get(lane);
+        final var goal = Math.min(target, maxBatch);
+        while (batch.size() < goal) {
+            final var remaining = deadlineNanos - System.nanoTime();
+            if (remaining <= 0) {
+                return;
+            }
+            final Event next;
+            try {
+                next = queue.poll(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (next == null) {
+                return;
+            }
+            batch.add(leaving(next));
+            fill(lane, batch, maxBatch);
+        }
+    }
+
     Event stealFor(int ownLane, List<Event> batch, int maxBatch) {
         final var now = System.nanoTime();
         final var unserved = TimeUnit.MILLISECONDS.toNanos(Globals.BACKGROUND_STEAL_AFTER_MS);

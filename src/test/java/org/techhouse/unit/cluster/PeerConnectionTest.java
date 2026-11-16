@@ -9,6 +9,7 @@ import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -30,7 +31,7 @@ public class PeerConnectionTest {
 
     @Test
     public void test_send_request_completes_on_response() throws Exception {
-        try (var listener = new ServerSocket(0)) {
+        try (var listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             final var responder = Thread.ofVirtual().start(() -> respondOnce(listener));
             try (var socket = new Socket("127.0.0.1", listener.getLocalPort())) {
                 final var connection = new PeerConnection(socket);
@@ -44,7 +45,7 @@ public class PeerConnectionTest {
 
     @Test
     public void test_send_request_times_out_when_no_response() throws Exception {
-        try (var listener = new ServerSocket(0)) {
+        try (var listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             final var holder = Thread.ofVirtual().start(() -> acceptAndHold(listener));
             try (var socket = new Socket("127.0.0.1", listener.getLocalPort())) {
                 final var connection = new PeerConnection(socket);
@@ -61,7 +62,7 @@ public class PeerConnectionTest {
     @SuppressWarnings("BusyWait")
     public void test_reader_closes_connection_on_eof() throws Exception {
         final PeerConnection connection;
-        try (var listener = new ServerSocket(0)) {
+        try (var listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             final var closer = Thread.ofVirtual().start(() -> acceptAndClose(listener));
             final var socket = new Socket("127.0.0.1", listener.getLocalPort());
             connection = new PeerConnection(socket);

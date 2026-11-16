@@ -120,6 +120,20 @@ public class FieldIndexEntryEscapingTest {
     }
 
     @Test
+    public void test_plain_index_chars_are_exactly_the_ascii_chars_escape_leaves_alone() {
+        for (var code = 0; code <= Character.MAX_VALUE; code++) {
+            final var c = (char) code;
+            final var token = String.valueOf(c);
+            final var leftAlone = token.equals(FieldIndexEntry.escapeIndexToken(token));
+            if (code < 0x80) {
+                assertEquals(leftAlone, FieldIndexEntry.isPlainIndexChar(c), "char " + code);
+            } else {
+                assertFalse(FieldIndexEntry.isPlainIndexChar(c), "char " + code);
+            }
+        }
+    }
+
+    @Test
     public void test_pk_index_id_with_newline_round_trips() {
         final var original = new PkIndexEntry("db", "coll", "we\nird", 10L, 20L, 0L, 5L);
         final var line = original.toFileEntry();

@@ -50,10 +50,12 @@ final class FieldIndexStore {
                 replaceType(indexFile, logFile, survivors);
                 return null;
             }
-            if (!FieldIndexLog.append(indexFile, logFile, changes, foldDivisor)) {
+            final var outcome = FieldIndexLog.append(indexFile, logFile, changes, foldDivisor);
+            if (!outcome.due()) {
                 return null;
             }
-            return PendingFold.ofSurvivors(dbName, collName, fieldName, typeLabel, indexFile, survivors);
+            return PendingFold.ofSurvivors(dbName, collName, fieldName, typeLabel, indexFile, survivors,
+                    outcome.pastResidentCeiling());
         } finally {
             lock.unlock();
         }
@@ -67,8 +69,9 @@ final class FieldIndexStore {
         }
         final var lock = FileLocks.lockWrite(indexFile);
         try {
-            if (!FieldIndexLog.append(indexFile, FilePaths.logFileOf(indexFile), changes,
-                    Globals.REFUSED_INDEX_FOLD_DIVISOR)) {
+            if (!FieldIndexLog
+                    .append(indexFile, FilePaths.logFileOf(indexFile), changes, Globals.REFUSED_INDEX_FOLD_DIVISOR)
+                    .due()) {
                 return null;
             }
             return PendingFold.ofSource(dbName, collName, fieldName, typeLabel, indexFile, foldSource);
