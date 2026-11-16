@@ -144,7 +144,7 @@ Authenticate first with [`AUTHENTICATE`](docs/protocol.md#authenticate).
 - [TLS](docs/operations.md#tls--secure-connections): encrypt connections before exposing the server beyond your machine.
 - [Backups](README.md#client-shell-exec-dumprestore): `--dump` and `--restore`. A dump reads each database from one
   consistent snapshot, so you can take it while your application keeps writing.
-- [Consistency guarantees and known limitations](README.md#consistency-guarantees-and-known-limitations): what survives
+- [Guarantees](README.md#guarantees): what survives
   a crash or a power loss, and what does not.
 - [Upgrading](docs/compatibility.md): when a new release can take over your data folder as it is, and when it needs a
   dump and restore.
