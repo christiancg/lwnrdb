@@ -23,13 +23,27 @@ final class IndexLineWriter {
 
     void write(FieldIndexEntry<?> entry) throws IOException {
         size = 0;
-        appendToken(FieldIndexEntry.fileKeyOf(entry.getValue()));
+        appendEscaped(FieldIndexEntry.indexKeyOf(entry.getValue()));
         for (final var id : entry.getIds()) {
             append(SEPARATOR);
-            appendToken(FieldIndexEntry.escapeIndexToken(id));
+            appendEscaped(id);
         }
         append(NEWLINE);
         out.write(line, 0, size);
+    }
+
+    private void appendEscaped(String raw) {
+        final var start = size;
+        ensure(raw.length());
+        for (var i = 0; i < raw.length(); i++) {
+            final var c = raw.charAt(i);
+            if (!FieldIndexEntry.isPlainIndexChar(c)) {
+                size = start;
+                appendToken(FieldIndexEntry.escapeIndexToken(raw));
+                return;
+            }
+            line[size++] = (byte) c;
+        }
     }
 
     private void appendToken(String token) {

@@ -16,6 +16,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     private static final char SEPARATOR_CHAR = Globals.ID_SEPARATOR.charAt(0);
     private static final int ESCAPE_HEADROOM = 8;
     private static final int UNICODE_ESCAPE_DIGITS = 4;
+    private static final char FIRST_NON_ASCII = 0x80;
     private T value;
     private Set<String> ids;
 
@@ -69,10 +70,13 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
         return builder.toString();
     }
 
+    public static boolean isPlainIndexChar(char c) {
+        return c < FIRST_NON_ASCII && c != ESCAPE_CHAR && c != '\n' && c != '\r' && c != SEPARATOR_CHAR;
+    }
+
     private static boolean needsEscaping(String raw, int index) {
         final var current = raw.charAt(index);
-        return current == ESCAPE_CHAR || current == '\n' || current == '\r' || current == SEPARATOR_CHAR
-                || JsonStrings.isLoneSurrogate(raw, index);
+        return !isPlainIndexChar(current) && (current < FIRST_NON_ASCII || JsonStrings.isLoneSurrogate(raw, index));
     }
 
     public static String unescapeIndexToken(String escaped) {

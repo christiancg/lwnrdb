@@ -10,9 +10,11 @@ public final class CaseFolding {
         while (i < left.length() && j < right.length()) {
             final var leftCodePoint = left.codePointAt(i);
             final var rightCodePoint = right.codePointAt(j);
-            final var diff = Integer.compare(fold(leftCodePoint), fold(rightCodePoint));
-            if (diff != 0) {
-                return diff;
+            if (leftCodePoint != rightCodePoint) {
+                final var diff = Integer.compare(fold(leftCodePoint), fold(rightCodePoint));
+                if (diff != 0) {
+                    return diff;
+                }
             }
             i += Character.charCount(leftCodePoint);
             j += Character.charCount(rightCodePoint);
