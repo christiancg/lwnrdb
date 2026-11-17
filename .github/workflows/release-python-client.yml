@@ -70,4 +70,4 @@ jobs:
         run: |
           PRERELEASE=""
           case "${VERSION#python-client-v}" in *[a-z]*) PRERELEASE="--prerelease" ;; esac
-          gh release create "${VERSION}" --title "Python client ${VERSION#python-client-v}" --generate-notes ${PRERELEASE}
+          gh release create "${VERSION}" --title "Python client ${VERSION#python-client-v}" --generate-notes --latest=false ${PRERELEASE}
